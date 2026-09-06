@@ -55,7 +55,7 @@ set `HIPPO_BIND=0.0.0.0` and `HIPPO_ALLOWED_HOSTS` in `.env`.
 | Evals | `/evals` | Question sets (yours or generated) and the history of every run: accuracy, exact match, F1, recall. |
 | Set | `/evals/sets/{id}` | The questions of one set (add, delete), run it, see past runs. |
 | Run | `/evals/runs/{id}` | One run: summary cards and a per-question table (answer, verdict, metrics, latency). Every row links to its analysis. |
-| Analyze | `/analyze/{result_id}` or `/analyze?question=...` | The deep dive: candidate facts, the filter's reply, seeds, a picture of the graph, ranked passages with a one-sentence "why", and a panel to tweak settings and re-run the search without touching anything. |
+| Analyze | `/analyze/{result_id}`, or the "Analyze this question" link on any answer | The deep dive: candidate facts, the filter's reply, seeds, a picture of the graph, ranked passages with a one-sentence "why", and a panel to tweak settings and re-run the search without touching anything. |
 | Changesets | `/changesets` | Edits you saved from the analyze page (setting changes, entity boosts, edge weights, synonyms). Apply or delete them. |
 | Settings | `/settings` | Ollama and Neo4j status, model downloads, the retrieval knobs with one-line explanations. |
 
