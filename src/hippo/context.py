@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from .config import Config, load_config
 from .hipporag.graph_index import GraphIndex
 from .jobs import Jobs
+from .models import ModelManager
 from .ollama import Ollama
 from .store import Store
 
@@ -27,6 +28,7 @@ class AppContext:
     store: Store
     ollama: Ollama
     jobs: Jobs = field(default_factory=Jobs)
+    models: ModelManager | None = None  # created on first use (needs ollama + jobs)
     _graph: GraphIndex | None = None
     _graph_lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -42,6 +44,10 @@ class AppContext:
             timeout_seconds=config.llm_timeout_seconds,
         )
         return cls(config=config, store=store, ollama=ollama)
+
+    def __post_init__(self) -> None:
+        if self.models is None:
+            self.models = ModelManager(self.ollama, self.jobs)
 
     def graph(self) -> GraphIndex:
         """The current in-memory graph. Reloads from Neo4j if the graph version moved on."""

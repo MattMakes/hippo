@@ -1,0 +1,51 @@
+{% set r = run %}
+{% if run.status == 'running' %}
+<div class="callout warn">Running… {{ run.progress_done }}/{{ run.progress_total }} questions answered. This page refreshes itself.</div>
+{% elif run.status == 'failed' %}
+<div class="callout bad">The run failed: {{ run.error }}</div>
+{% endif %}
+
+<section class="card">
+  <h2>Summary{% if other %} <span class="muted">vs {{ other.name | short(30) }}</span>{% endif %}</h2>
+  {% if other %}
+  <table class="table compact">
+    <thead><tr><th>Metric</th><th class="num">{{ run.name | short(24) }}</th><th class="num">{{ other.name | short(24) }}</th></tr></thead>
+    <tbody>
+    {% for key, label, help in cards %}
+    <tr><td title="{{ help }}">{{ label }}</td><td class="num">{{ run.summary[key] | fmt(2) }}</td><td class="num">{{ other.summary[key] | fmt(2) }}</td></tr>
+    {% endfor %}
+    <tr><td>Correct / partial / incorrect</td><td class="num">{{ run.summary.correct }} / {{ run.summary.partial }} / {{ run.summary.incorrect }}</td><td class="num">{{ other.summary.correct }} / {{ other.summary.partial }} / {{ other.summary.incorrect }}</td></tr>
+    </tbody>
+  </table>
+  {% else %}
+  <dl class="stats">
+    {% for key, label, help in cards %}
+    <div title="{{ help }}"><dt>{{ label }}</dt><dd>{{ run.summary[key] | fmt(2) if key not in ('dpr_fallbacks',) else run.summary[key] }}</dd></div>
+    {% endfor %}
+    <div title="judge verdicts"><dt>correct / partial / wrong</dt><dd>{{ run.summary.correct }} / {{ run.summary.partial }} / {{ run.summary.incorrect }}</dd></div>
+  </dl>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Questions</h2><span class="muted">click a row to analyze it</span></div>
+  <div class="scroll-x"><table class="table results">
+    <thead><tr><th>#</th><th>Question</th><th>Expected</th><th>Answer</th><th>Verdict</th><th class="num">EM</th><th class="num">F1</th><th class="num">Gold rank</th><th>Via</th><th class="num">ms</th></tr></thead>
+    <tbody>
+    {% for res in results %}
+    <tr>
+      <td class="muted">{{ res.ordinal + 1 }}</td>
+      <td><a href="/analyze/{{ res.id }}">{{ res.question | short(90) }}</a> {% if res.kind == 'multihop' %}<span class="badge">multi-hop</span>{% endif %}</td>
+      <td>{{ res.expected_answer | short(60) }}</td>
+      <td>{% if res.error %}<span class="pill bad" title="{{ res.error }}">error</span>{% else %}{{ res.answer | short(80) }}{% endif %}</td>
+      <td>{% if res.verdict %}<span class="pill {{ 'ok' if res.verdict == 'correct' else ('warn' if res.verdict == 'partially_correct' else 'bad') }}" title="{{ res.judge_reason }}">{{ res.verdict | replace('_', ' ') }}</span>{% endif %}</td>
+      <td class="num">{{ res.exact_match | fmt(1) }}</td>
+      <td class="num">{{ res.f1 | fmt(2) }}</td>
+      <td class="num">{{ res.gold_rank if res.gold_rank else '–' }}</td>
+      <td class="muted small">{{ 'embeddings' if res.recall and res.recall.get('fallback') else 'graph' }}</td>
+      <td class="num muted">{{ res.latency_ms | round | int if res.latency_ms else '–' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>

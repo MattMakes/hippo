@@ -414,3 +414,22 @@ __all__ = [
     "ENTITY",
     "PASSAGE",
 ]
+
+
+def trace_from_dict(data: dict[str, Any]) -> Trace:
+    """Rebuild a Trace from the JSON we stored with an evaluation result."""
+    trace = Trace(
+        question=data.get("question", ""),
+        settings=dict(data.get("settings", {})),
+        graph_version=int(data.get("graph_version", 0)),
+        used_dpr_fallback=bool(data.get("used_dpr_fallback", False)),
+        fallback_reason=data.get("fallback_reason", ""),
+        filter=dict(data.get("filter", {})),
+        timing_ms=dict(data.get("timing_ms", {})),
+    )
+    trace.fact_candidates = [FactCandidate(**c) for c in data.get("fact_candidates", [])]
+    trace.seed_entities = [SeedEntity(**s) for s in data.get("seed_entities", [])]
+    trace.seed_passages = [SeedPassage(**s) for s in data.get("seed_passages", [])]
+    trace.top_nodes = [TopNode(**n) for n in data.get("top_nodes", [])]
+    trace.passages = [RankedPassage(**p) for p in data.get("passages", [])]
+    return trace

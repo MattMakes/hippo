@@ -1,0 +1,17 @@
+<a class="pill {{ 'ok' if status.neo4j else 'bad' }}" href="/settings" title="Neo4j at {{ status.neo4j_uri }}">
+  <span class="dot"></span> Neo4j
+</a>
+<a class="pill {{ 'ok' if status.ollama and status.models_ready else ('warn' if status.ollama else 'bad') }}" href="/settings"
+   title="Ollama at {{ status.ollama_url }}{% if not status.models_ready %} · models missing{% endif %}">
+  <span class="dot"></span> Ollama
+</a>
+{% if status.is_pulling %}
+  {% for name, p in status.pulling.items() if not p.done %}
+  <span class="pill warn" title="{{ p.status }}">
+    ⬇ {{ name }} {% if p.total %}{{ (p.completed, p.total) | pct }}%{% endif %}
+  </span>
+  {% endfor %}
+{% endif %}
+{% if status.jobs %}
+  <span class="pill info" title="{{ status.jobs | join(', ') }}">⏳ {{ status.jobs | length }} job{{ 's' if status.jobs | length != 1 }}</span>
+{% endif %}

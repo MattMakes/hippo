@@ -1,0 +1,11 @@
+{% set src = source if source is defined else s %}
+{% if src.status == 'ready' %}
+  <span class="pill ok"><span class="dot"></span>ready</span>
+{% elif src.status == 'failed' %}
+  <span class="pill bad" title="{{ src.error }}"><span class="dot"></span>failed</span>
+  {% if src.error %}<div class="muted small">{{ src.error | short(160) }}</div>{% endif %}
+{% else %}
+  <span class="pill warn"><span class="dot"></span>{{ src.status }}</span>
+  <div class="muted small">{{ src.stage }}{% if src.progress_total %} · {{ src.progress_done }}/{{ src.progress_total }}{% endif %}</div>
+  {% if src.progress_total %}<div class="progress"><span style="width: {{ (src.progress_done, src.progress_total) | pct }}%"></span></div>{% endif %}
+{% endif %}

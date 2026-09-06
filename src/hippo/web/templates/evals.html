@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Evals{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Evaluations</h1>
+  <p class="muted">Question sets are lists of questions with the answers you expect. A run asks every question, lets the model judge the answers, and keeps everything so you can compare runs and dig into any single question.</p>
+</div>
+{% if error %}<div class="callout bad">{{ error }}</div>{% endif %}
+
+<div class="grid two">
+  <section class="card">
+    <h2>Create a question set</h2>
+    <form method="post" action="/evals/sets" class="stack">
+      <input type="text" name="name" placeholder="Name, e.g. Onboarding questions">
+      <textarea name="questions" rows="6" placeholder="One per line:  question | expected answer&#10;Where is Acme Robotics headquartered? | Boulder&#10;Who designed the Orion arm? | Marcus Lee"></textarea>
+      <p class="muted small">Or paste a JSON list of {"text", "expected_answer"} objects. To have questions written for you, open a source and press “Make sample questions”.</p>
+      <button class="btn primary" type="submit">Create set</button>
+    </form>
+  </section>
+  <section class="card">
+    <h2>What the numbers mean</h2>
+    <dl class="defs">
+      {% for key, label, help in cards %}<div><dt>{{ label }}</dt><dd class="muted">{{ help }}</dd></div>{% endfor %}
+    </dl>
+  </section>
+</div>
+
+<div id="evals-tables" hx-get="/partials/evals/tables" hx-trigger="every 3s" hx-swap="innerHTML">
+  {% include "partials/evals_tables.html" %}
+</div>
+{% endblock %}

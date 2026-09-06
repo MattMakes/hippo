@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Ask{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Ask your memory</h1>
+  <p class="muted">A question goes in; the graph finds the passages; the model reads them and answers. Every answer links to an analysis of how it was found.</p>
+</div>
+
+<form class="ask-form card" hx-post="/ask" hx-target="#answer" hx-swap="innerHTML" hx-indicator="#ask-spinner">
+  <label class="sr-only" for="question">Question</label>
+  <textarea id="question" name="question" rows="2" placeholder="e.g. In which state is the company founded by Priya Natarajan headquartered?" required>{{ question }}</textarea>
+  <div class="row">
+    <button class="btn primary" type="submit">Ask</button>
+    <span id="ask-spinner" class="spinner htmx-indicator">thinking with {{ config.llm_model }}…</span>
+  </div>
+</form>
+
+<div id="answer">
+  {% if not status.stats.passages %}
+  <div class="empty">
+    <p>The memory is empty. <a href="/">Add a document</a> (or load the sample) and come back.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  // Submit on Cmd/Ctrl+Enter, like a chat box.
+  document.getElementById('question').addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); htmx.trigger(e.target.form, 'submit'); }
+  });
+  {% if question %}htmx.trigger(document.querySelector('.ask-form'), 'submit');{% endif %}
+</script>
+{% endblock %}

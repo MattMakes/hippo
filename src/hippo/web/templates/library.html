@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Library{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Library</h1>
+  <p class="muted">Everything hippo remembers. Add a document, a book, a code repository or some pasted text; it is read, split into passages, and turned into a graph of facts.</p>
+</div>
+{% if error %}<div class="callout bad">{{ error }}</div>{% endif %}
+
+<div class="grid two">
+  <section class="card">
+    <h2>Add files</h2>
+    <form method="post" action="/sources/upload" enctype="multipart/form-data" class="stack">
+      <input type="file" name="files" multiple required>
+      <p class="muted small">Text, Markdown, PDF, Word, EPUB, HTML, source code, or a .zip of any of those (a zipped repo works).</p>
+      <button class="btn primary" type="submit">Upload</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Add a git repository</h2>
+    <form method="post" action="/sources/repo" class="stack">
+      <input type="url" name="url" placeholder="https://github.com/owner/repo" required>
+      <p class="muted small">Cloned once (shallow). Text and code files are indexed; build folders and binaries are skipped.</p>
+      <button class="btn primary" type="submit">Clone & index</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Paste text</h2>
+    <form method="post" action="/sources/text" class="stack">
+      <input type="text" name="name" placeholder="A name for this text">
+      <textarea name="text" rows="4" placeholder="Paste notes, an article, meeting minutes…" required></textarea>
+      <button class="btn primary" type="submit">Remember this</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Try the sample</h2>
+    <p class="muted">A one-page field guide about a small robotics company, written so that its facts link across sections. Good for a first multi-hop question.</p>
+    <form method="post" action="/sources/sample"><button class="btn" type="submit">Load the sample</button></form>
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Sources</h2>
+    <span class="muted">{{ sources | length }} total</span>
+  </div>
+  <div class="scroll-x" id="sources" hx-get="/partials/sources" hx-trigger="every 3s" hx-swap="innerHTML">
+    {% include "partials/source_rows.html" %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ run.name }}{% endblock %}
+{% block content %}
+<div class="page-head row spread">
+  <div>
+    <p class="muted"><a href="/evals">Evals</a> › <a href="/evals/sets/{{ run.set_id }}">{{ run.set_name }}</a> › run</p>
+    <h1>{{ run.name }}</h1>
+    <p class="muted">Started {{ run.started_at[:16] | replace('T', ' ') }}{% if run.finished_at %} · finished {{ run.finished_at[:16] | replace('T', ' ') }}{% endif %}
+      · settings: <span class="mono">k={{ run.settings.linking_top_k }} damping={{ run.settings.damping }} passage_weight={{ run.settings.passage_node_weight }} specificity={{ 'on' if run.settings.node_specificity else 'off' }}</span></p>
+  </div>
+  {% if siblings %}
+  <form method="get" class="row">
+    <label class="muted" for="compare">Compare with</label>
+    <select id="compare" name="compare" onchange="this.form.submit()">
+      <option value="">– another run of this set –</option>
+      {% for s in siblings %}<option value="{{ s.id }}" {{ 'selected' if other and other.id == s.id }}>{{ s.name | short(40) }}</option>{% endfor %}
+    </select>
+  </form>
+  {% endif %}
+</div>
+
+<div id="run-body" {% if run.status == 'running' %}hx-get="/partials/runs/{{ run.id }}" hx-trigger="every 3s" hx-swap="innerHTML"{% endif %}>
+  {% include "partials/run_body.html" %}
+</div>
+{% endblock %}

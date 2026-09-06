@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Analyze{% endblock %}
+{% block head %}<script src="/static/vendor/cytoscape.min.js" defer></script><script src="/static/analyze.js" defer></script>{% endblock %}
+{% block content %}
+{% if error %}
+<div class="page-head"><h1>Analyze</h1></div>
+<div class="callout bad">{{ error }}</div>
+{% else %}
+{% set kept = trace.fact_candidates | selectattr('kept') | list %}
+{% set seeds = trace.seed_entities | selectattr('kept') | list %}
+<div class="page-head">
+  <p class="muted">{% if result %}<a href="/evals">Evals</a> › <a href="/evals/runs/{{ result.run_id }}">{{ result.run_name }}</a> › question {{ result.ordinal + 1 }}{% else %}<a href="/ask">Ask</a> › analysis{% endif %}</p>
+  <h1 class="question">{{ question }}</h1>
+</div>
+{% if graph_changed %}<div class="callout warn">The graph has changed since this search ran (a source was added, removed, or a changeset applied). The story below is what happened then; simulations run on the graph as it is now.</div>{% endif %}
+
+<section class="card">
+  <div class="grid two">
+    <div>
+      <h3>Answer given</h3>
+      <p class="answer">{{ answer.answer if answer else '–' }}</p>
+      {% if answer and answer.thought %}<details><summary>How the model reasoned</summary><p class="pre muted">{{ answer.thought }}</p></details>{% endif %}
+    </div>
+    <div>
+      {% if result %}
+      <h3>Expected</h3>
+      <p><b>{{ result.expected_answer or '(no expected answer given)' }}</b></p>
+      <p class="row">
+        {% if result.verdict %}<span class="pill {{ 'ok' if result.verdict == 'correct' else ('warn' if result.verdict == 'partially_correct' else 'bad') }}">{{ result.verdict | replace('_', ' ') }}</span>{% endif %}
+        <span class="badge">EM {{ result.exact_match | fmt(1) }}</span>
+        <span class="badge">F1 {{ result.f1 | fmt(2) }}</span>
+        {% if result.gold_rank %}<span class="badge">gold passage at rank {{ result.gold_rank }}</span>{% elif gold_ids %}<span class="badge bad">gold passage not in top {{ trace.settings.retrieval_top_k }}</span>{% endif %}
+        <span class="badge">{{ (result.latency_ms or 0) | round | int }} ms</span>
+      </p>
+      {% if result.judge_reason %}<p class="muted small">Judge: {{ result.judge_reason }}</p>{% endif %}
+      {% else %}
+      <h3>Not from an evaluation</h3>
+      <p class="muted">This is an ad-hoc question, so there is no expected answer or judge verdict. <a href="/evals">Put it in a question set</a> to track it over time.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% if history | length > 1 %}
+  <details>
+    <summary>This question across {{ history | length }} runs</summary>
+    <table class="table compact">
+      <thead><tr><th>Run</th><th>Answer</th><th>Verdict</th><th class="num">Gold rank</th></tr></thead>
+      <tbody>{% for h in history %}<tr><td><a href="/analyze/{{ h.id }}">{{ h.run_name | short(40) }}</a></td><td>{{ h.answer | short(70) }}</td><td>{{ h.verdict | replace('_', ' ') }}</td><td class="num">{{ h.gold_rank or '–' }}</td></tr>{% endfor %}</tbody>
+    </table>
+  </details>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>What the search did</h2>
+  {% if trace.used_dpr_fallback %}
+  <div class="callout warn"><b>No graph search.</b> {{ trace.fallback_reason | capitalize }}, so passages were ranked by embedding similarity alone.</div>
+  {% else %}
+  <p class="muted">1. The question was compared with every fact. 2. The model kept the facts that matter. 3. Their entities became seeds. 4. Activation spread through the graph (damping {{ trace.settings.damping }}). 5. Passages were ranked by how much activation reached them.</p>
+  {% endif %}
+
+  <h3>Step 1–2 · candidate facts <span class="muted small">top {{ trace.fact_candidates | length }} by similarity; the first {{ trace.settings.linking_top_k }} were shown to the model</span></h3>
+  <div class="scroll-x"><table class="table compact facts-table">
+    <thead><tr><th>#</th><th>Fact</th><th class="num">Score</th><th>Sent</th><th>Kept</th><th>Why</th><th>In passages</th><th>Simulate</th></tr></thead>
+    <tbody>
+    {% for c in explanation.facts %}
+    <tr class="{{ 'kept' if c.kept }}">
+      <td class="muted">{{ c.rank }}</td>
+      <td class="triple"><b>{{ c.triple[0] }}</b> <i>{{ c.triple[1] }}</i> <b>{{ c.triple[2] }}</b></td>
+      <td class="num">{{ c.score | fmt(3) }}</td>
+      <td>{{ '✓' if c.sent_to_filter else '' }}</td>
+      <td>{{ '✓' if c.kept else '' }}</td>
+      <td class="muted small">{{ c.reason }}</td>
+      <td class="muted small">{{ c.passages | map(attribute='title') | join(', ') | short(60) }}</td>
+      <td><select class="fact-mode" data-fact-id="{{ c.fact_id }}"><option value="">as is</option><option value="in">force in</option><option value="out">force out</option></select></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if trace.filter.raw_response %}<details><summary>The model's raw reply to the filter prompt{% if trace.filter.replayed %} (replayed from an earlier run){% endif %}</summary><p class="pre mono small muted">{{ trace.filter.raw_response }}</p></details>{% endif %}
+
+  {% if not trace.used_dpr_fallback %}
+  <h3>Step 3 · seed entities <span class="muted small">weight = mean over kept facts of (fact score ÷ passages mentioning the entity) × boost; only the top {{ trace.settings.linking_top_k }} are kept</span></h3>
+  <div class="scroll-x"><table class="table compact">
+    <thead><tr><th>Entity</th><th class="num">Seed weight</th><th class="num">Fact score sum</th><th class="num">Facts</th><th class="num">Passages</th><th>Boost (simulate)</th><th>From facts</th></tr></thead>
+    <tbody>
+    {% for s in trace.seed_entities %}
+    <tr class="{{ 'kept' if s.kept else 'muted' }}">
+      <td><b>{{ s.name }}</b>{% if not s.kept %} <span class="muted small">(cut: outside top-k)</span>{% endif %}</td>
+      <td class="num">{{ s.weight | fmt(3) }}</td>
+      <td class="num">{{ s.fact_score_sum | fmt(3) }}</td>
+      <td class="num">{{ s.occurrences }}</td>
+      <td class="num">{{ s.passage_count }}</td>
+      <td><input class="boost-input" type="number" step="0.1" min="0" value="{{ s.boost }}" data-entity-id="{{ s.entity_id }}" data-original="{{ s.boost }}" style="width: 80px"></td>
+      <td class="muted small">{{ s.from_fact_ids | length }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted small">Passages also seed the search a little by their own similarity to the question (× {{ trace.settings.passage_node_weight }}): {% for p in trace.seed_passages[:5] %}{{ p.title }} ({{ p.weight | fmt(3) }}){{ ', ' if not loop.last }}{% endfor %}.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>The part of the graph that lit up</h2><span class="muted small">circles are entities, squares are passages; bigger = more activation; blue ring = seed; green ring = gold passage. Click a node.</span></div>
+  <div class="graph-wrap">
+    <div id="graph" class="graph"></div>
+    <aside id="graph-side" class="graph-side muted">Click a node to see its neighbours and edge weights.</aside>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Ranked passages <span class="muted small">and why each one got there</span></h2>
+  {% for p in explanation.passages %}
+  <article class="passage {{ 'gold' if p.passage_id in gold_ids }}">
+    <header>
+      <span class="rank">#{{ p.rank }}</span><b>{{ p.title }}</b>
+      {% if p.passage_id in gold_ids %}<span class="pill ok">gold</span>{% endif %}
+      <span class="muted small">score {{ p.score | fmt(4) }} · embedding rank {{ p.dpr_rank }}</span>
+    </header>
+    <p class="why">{{ p.why }}</p>
+    <details><summary class="small">Show text</summary><p class="pre small">{{ passage_text.get(p.passage_id, '') }}</p></details>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="card" id="simulate">
+  <h2>Tweak &amp; simulate</h2>
+  <p class="muted">Change a knob, force a fact in or out, boost an entity, or change an edge, then press Simulate. The graph search reruns in milliseconds without calling the model (unless you ask it to). Nothing is saved until you turn the edits into a changeset.</p>
+  <div class="grid two">
+    <div class="stack">
+      <h3>Retrieval settings</h3>
+      <div class="knob"><label for="ov-linking_top_k">linking_top_k</label><input id="ov-linking_top_k" type="number" min="0" max="50" step="1" value="{{ trace.settings.linking_top_k }}" data-original="{{ trace.settings.linking_top_k }}"><span class="muted small">facts pulled / entities seeded</span></div>
+      <div class="knob"><label for="ov-passage_node_weight">passage_node_weight</label><input id="ov-passage_node_weight" type="number" min="0" max="5" step="0.01" value="{{ trace.settings.passage_node_weight }}" data-original="{{ trace.settings.passage_node_weight }}"><span class="muted small">how much passages seed themselves</span></div>
+      <div class="knob"><label for="ov-damping">damping</label><input id="ov-damping" type="number" min="0.05" max="0.95" step="0.05" value="{{ trace.settings.damping }}" data-original="{{ trace.settings.damping }}"><span class="muted small">how far activation travels</span></div>
+      <div class="knob"><label for="ov-node_specificity">node_specificity</label><input id="ov-node_specificity" type="checkbox" {{ 'checked' if trace.settings.node_specificity }} data-original="{{ '1' if trace.settings.node_specificity else '0' }}"><span class="muted small">divide seed weight by passage count</span></div>
+      <div class="knob"><label for="ov-rerun-filter">re-run the fact filter</label><input id="ov-rerun-filter" type="checkbox"><span class="muted small">ask the model again instead of replaying its earlier choice (slower)</span></div>
+      <div class="knob"><label for="ov-reanswer">re-generate the answer</label><input id="ov-reanswer" type="checkbox"><span class="muted small">read the new top passages and answer again (slower)</span></div>
+    </div>
+    <div class="stack">
+      <h3>Graph edits</h3>
+      <p class="muted small">Boost any entity (1 = unchanged):</p>
+      <div class="row"><input id="boost-search" type="text" placeholder="search an entity name…" list="entity-options" style="max-width: 260px"><input id="boost-value" type="number" step="0.1" min="0" value="1.5" style="width: 80px"><button class="btn small" id="boost-add" type="button">Add boost</button></div>
+      <ul id="extra-boosts" class="edits"></ul>
+      <p class="muted small">Change or add an edge between two nodes (weight 0 removes it; a new entity–entity edge acts like a synonym link):</p>
+      <div class="row">
+        <select id="edge-a" style="max-width: 220px"></select>
+        <select id="edge-b" style="max-width: 220px"></select>
+        <input id="edge-weight" type="number" step="0.1" min="0" value="1" style="width: 80px">
+        <button class="btn small" id="edge-add" type="button">Add edge edit</button>
+      </div>
+      <div class="row"><input id="edge-search" type="text" placeholder="add another entity to the lists…" list="entity-options" style="max-width: 260px"><button class="btn small" id="edge-search-add" type="button">Add to lists</button></div>
+      <ul id="edge-edits" class="edits"></ul>
+      <datalist id="entity-options"></datalist>
+    </div>
+  </div>
+  <div class="row" style="margin-top: 1rem">
+    <button class="btn primary" id="simulate-btn" type="button">Simulate</button>
+    <button class="btn" id="reset-btn" type="button">Reset</button>
+    <span id="simulate-status" class="muted"></span>
+  </div>
+  <div id="sim-results" hidden>
+    <h3>Result</h3>
+    <div id="sim-summary" class="row"></div>
+    <div id="sim-answer" hidden></div>
+    <div class="scroll-x"><table class="table compact"><thead><tr><th>Passage</th><th class="num">Before</th><th class="num">After</th><th>Change</th></tr></thead><tbody id="sim-diff"></tbody></table></div>
+    <p class="muted small" id="sim-seeds"></p>
+    <div class="row" style="margin-top: .75rem">
+      <input id="cs-name" type="text" placeholder="Name this changeset" style="max-width: 260px">
+      <input id="cs-note" type="text" placeholder="Why (optional)" style="max-width: 320px">
+      <button class="btn" id="save-changeset" type="button" disabled>Save as changeset</button>
+      <span class="muted small">Only settings, boosts and edge edits are saved; forcing facts in or out is specific to this one question.</span>
+    </div>
+  </div>
+</section>
+
+<script id="analyze-data" type="application/json">{{ {
+  "question": question,
+  "resultId": result.id if result else None,
+  "traceKey": trace_key,
+  "goldIds": gold_ids | list,
+  "subgraph": explanation.subgraph,
+  "settings": trace.settings,
+  "baselinePassages": trace.passages[:10] | map(attribute='title') | list
+} | tojson }}</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Changesets{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Changesets</h1>
+  <p class="muted">Edits you saved while analyzing a question. A draft does nothing until you apply it; applying writes the edits into the graph (settings, entity boosts, pinned edge weights, synonym links) and every search from then on uses them.</p>
+</div>
+{% if not changesets %}<div class="empty">No changesets yet. Analyze a question, simulate a tweak, and save it.</div>{% endif %}
+{% for c in changesets %}
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h2>{{ c.name }} <span class="pill {{ 'ok' if c.status == 'applied' else 'info' }}">{{ c.status }}</span></h2>
+      <p class="muted small">Created {{ c.created_at[:16] | replace('T', ' ') }}{% if c.applied_at %} · applied {{ c.applied_at[:16] | replace('T', ' ') }}{% endif %}{% if c.from_result_id %} · from <a href="/analyze/{{ c.from_result_id }}">this analysis</a>{% endif %}{% if c.note %} · {{ c.note }}{% endif %}</p>
+    </div>
+    <div class="row">
+      {% if c.status != 'applied' %}<button class="btn primary small" data-post="/api/changesets/{{ c.id }}/apply" data-message="Applied" data-refresh="600">Apply to the graph</button>{% endif %}
+      <button class="btn small danger" data-delete="/api/changesets/{{ c.id }}" data-confirm="Delete this changeset? (An applied one stays applied; only the record goes.)">Delete</button>
+    </div>
+  </div>
+  <ul class="ops">{% for line in c.described %}<li>{{ line }}</li>{% endfor %}</ul>
+  <details><summary class="small">Raw operations</summary><p class="pre mono small muted">{{ c.ops | tojson(indent=2) }}</p></details>
+</section>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Settings</h1></div>
+{% if saved %}<div class="callout ok">Saved. New searches use these settings right away.</div>{% endif %}
+
+<div class="grid two">
+  <section class="card">
+    <h2>Ollama <span class="pill {{ 'ok' if status.ollama else 'bad' }}"><span class="dot"></span>{{ 'up' if status.ollama else 'not reachable' }}</span></h2>
+    <p class="muted">{{ status.ollama_url }}</p>
+    <table class="table compact">
+      <thead><tr><th>Model</th><th>Used for</th><th>Status</th></tr></thead>
+      <tbody>
+      {% for name, ok in status.models.items() %}
+        {% set p = status.pulling.get(name) %}
+        <tr>
+          <td><code>{{ name }}</code></td>
+          <td class="muted">{{ 'reading, extracting facts, filtering, answering, judging' if name == config.llm_model else 'embeddings (turning text into vectors)' }}</td>
+          <td>
+            {% if ok %}<span class="pill ok"><span class="dot"></span>installed</span>
+            {% elif p and not p.done %}<span class="pill warn">⬇ {{ p.status }} {% if p.total %}{{ (p.completed, p.total) | pct }}%{% endif %}</span>
+            {% elif p and p.error %}<span class="pill bad" title="{{ p.error }}">failed</span>
+            {% else %}<span class="pill bad">missing</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% if not status.models_ready %}
+    <div class="row">
+      <button class="btn" data-post="/api/models/pull" data-refresh="2500">Pull missing models now</button>
+      <span class="muted">Downloads a few GB the first time; the header shows progress.</span>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h2>Neo4j <span class="pill {{ 'ok' if status.neo4j else 'bad' }}"><span class="dot"></span>{{ 'up' if status.neo4j else 'not reachable' }}</span></h2>
+    <p class="muted">{{ status.neo4j_uri }} · <a href="http://localhost:7474" target="_blank" rel="noopener">open Neo4j Browser</a> to explore the graph by hand</p>
+    {% if status.stats %}
+    <dl class="stats">
+      {% for key in ['sources', 'passages', 'entities', 'facts', 'synonym_edges', 'mention_edges'] %}
+      <div><dt>{{ key | replace('_', ' ') }}</dt><dd>{{ status.stats[key] }}</dd></div>
+      {% endfor %}
+    </dl>
+    {% endif %}
+    {% if status.embed_model_mismatch %}
+    <div class="callout warn">The graph was built with <code>{{ status.embed_model_built }}</code> but this server uses <code>{{ config.embed_model }}</code>. Vectors from two models cannot be compared: re-index your sources or switch the embed model back.</div>
+    {% endif %}
+  </section>
+</div>
+
+<section class="card">
+  <h2>Retrieval settings</h2>
+  <p class="muted">These are HippoRAG's knobs. The defaults are the paper's. Change one, then use the Analyze page to see what it did.</p>
+  <form method="post" action="/settings" class="settings-form">
+    {% for key, value in settings.items() %}
+    <div class="field">
+      <label for="s-{{ key }}"><code>{{ key }}</code></label>
+      {% if value is sameas true or value is sameas false %}
+        <input type="checkbox" id="s-{{ key }}" name="{{ key }}" {{ 'checked' if value }}>
+      {% elif value is integer %}
+        <input type="number" id="s-{{ key }}" name="{{ key }}" value="{{ value }}" min="0" step="1">
+      {% else %}
+        <input type="number" id="s-{{ key }}" name="{{ key }}" value="{{ value }}" min="0" max="1" step="0.01">
+      {% endif %}
+      <span class="help muted">{{ help[key] }}</span>
+    </div>
+    {% endfor %}
+    <button class="btn primary" type="submit">Save settings</button>
+  </form>
+</section>
+{% endblock %}

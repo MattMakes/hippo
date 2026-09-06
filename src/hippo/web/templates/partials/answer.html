@@ -1,0 +1,43 @@
+{% if error %}
+<div class="callout bad">{{ error }}</div>
+{% else %}
+<section class="card answer-card">
+  <div class="card-head">
+    <h2>Answer</h2>
+    <a class="btn small" href="/analyze?question={{ question | urlencode }}">Analyze this question →</a>
+  </div>
+  <p class="answer">{{ answer.answer }}</p>
+  {% if answer.thought %}
+  <details><summary>How the model reasoned</summary><p class="muted pre">{{ answer.thought }}</p></details>
+  {% endif %}
+  <p class="meta muted">
+    {% if trace.used_dpr_fallback %}Found by embedding similarity only ({{ trace.fallback_reason }}).{% else %}
+    Found through the graph: {{ trace.fact_candidates | selectattr('kept') | list | length }} fact(s) kept, {{ trace.seed_entities | selectattr('kept') | list | length }} seed entities, PPR damping {{ trace.settings.damping }}.{% endif %}
+    {{ (trace.timing_ms.total or 0) | round | int }} ms.
+  </p>
+</section>
+
+{% set kept = trace.fact_candidates | selectattr('kept') | list %}
+{% if kept %}
+<section class="card">
+  <h3>Facts the model kept</h3>
+  <ul class="facts">
+    {% for c in kept %}<li><span class="triple"><b>{{ c.triple[0] }}</b> <i>{{ c.triple[1] }}</i> <b>{{ c.triple[2] }}</b></span> <span class="muted">score {{ c.score | fmt(2) }}</span></li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <h3>Passages the model read</h3>
+  {% for p in passages %}
+  <article class="passage">
+    <header>
+      <span class="rank">#{{ p.ranked.rank }}</span>
+      <b>{{ p.ranked.title }}</b>
+      <span class="muted">{{ p.ranked.source_name }} · score {{ p.ranked.score | fmt(4) }} · embedding rank {{ p.ranked.dpr_rank }}</span>
+    </header>
+    <p class="pre">{{ p.text }}</p>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}

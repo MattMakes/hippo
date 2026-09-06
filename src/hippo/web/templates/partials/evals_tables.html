@@ -1,0 +1,46 @@
+<section class="card">
+  <div class="card-head"><h2>Question sets</h2><span class="muted">{{ sets | length }}</span></div>
+  {% if not sets %}<div class="empty">No question sets yet.</div>{% else %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Name</th><th>Origin</th><th>Source</th><th>Status</th><th class="num">Questions</th><th class="num">Runs</th><th></th></tr></thead>
+    <tbody>
+    {% for qs in sets %}
+    <tr>
+      <td><a href="/evals/sets/{{ qs.id }}"><b>{{ qs.name | short(50) }}</b></a></td>
+      <td><span class="badge">{{ qs.origin }}</span></td>
+      <td>{% if qs.source_id %}<a href="/sources/{{ qs.source_id }}">{{ qs.source_name | short(30) }}</a>{% else %}<span class="muted">–</span>{% endif %}</td>
+      <td>{% include "partials/set_status.html" %}</td>
+      <td class="num">{{ qs.question_count }}</td>
+      <td class="num">{{ qs.run_count }}</td>
+      <td><button class="btn small danger" data-delete="/api/evals/sets/{{ qs.id }}" data-confirm="Delete '{{ qs.name }}' and all of its runs?">Delete</button></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Run history</h2><span class="muted">{{ runs | length }}</span></div>
+  {% if not runs %}<div class="empty">No runs yet. Open a question set and press “Run”.</div>{% else %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Run</th><th>Set</th><th>Started</th><th>Status</th><th class="num">Accuracy</th><th class="num">EM</th><th class="num">F1</th><th class="num">Recall@5</th><th class="num">Gold in top 5</th><th></th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+    <tr>
+      <td><a href="/evals/runs/{{ r.id }}"><b>{{ r.name | short(40) }}</b></a></td>
+      <td><a href="/evals/sets/{{ r.set_id }}">{{ r.set_name | short(30) }}</a></td>
+      <td class="muted">{{ r.started_at[:16] | replace('T', ' ') }}</td>
+      <td>{% include "partials/run_status.html" %}</td>
+      <td class="num">{{ r.summary.accuracy | fmt(2) }}</td>
+      <td class="num">{{ r.summary.exact_match | fmt(2) }}</td>
+      <td class="num">{{ r.summary.f1 | fmt(2) }}</td>
+      <td class="num">{{ r.summary['recall@5'] | fmt(2) }}</td>
+      <td class="num">{{ r.summary.gold_in_top5 | fmt(2) }}</td>
+      <td><button class="btn small danger" data-delete="/api/evals/runs/{{ r.id }}" data-confirm="Delete this run and its results?">Delete</button></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+</section>

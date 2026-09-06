@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}hippo{% endblock %} · hippo</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/"><span class="brand-mark">🦛</span> hippo</a>
+  <nav class="nav">
+    <a href="/" class="{{ 'active' if nav == 'library' }}">Library</a>
+    <a href="/ask" class="{{ 'active' if nav == 'ask' }}">Ask</a>
+    <a href="/evals" class="{{ 'active' if nav == 'evals' }}">Evals</a>
+    <a href="/changesets" class="{{ 'active' if nav == 'changesets' }}">Changesets</a>
+    <a href="/settings" class="{{ 'active' if nav == 'settings' }}">Settings</a>
+  </nav>
+  <div id="status-strip" class="status-strip" hx-get="/partials/status" hx-trigger="every 6s" hx-swap="innerHTML">
+    {% include "partials/status.html" %}
+  </div>
+</header>
+<main class="page">
+  {% block content %}{% endblock %}
+</main>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

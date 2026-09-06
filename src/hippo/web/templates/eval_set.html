@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ question_set.name }}{% endblock %}
+{% block content %}
+<div class="page-head row spread">
+  <div>
+    <p class="muted"><a href="/evals">Evals</a> › question set{% if question_set.source_id %} about <a href="/sources/{{ question_set.source_id }}">{{ question_set.source_name }}</a>{% endif %}</p>
+    <h1>{{ question_set.name }}</h1>
+  </div>
+  <form method="post" action="/evals/sets/{{ question_set.id }}/run" class="row">
+    <input type="text" name="name" placeholder="Run name (optional)" style="width: 220px">
+    <button class="btn primary" type="submit" {% if not questions or question_set.status == 'generating' %}disabled{% endif %}>Run this set</button>
+  </form>
+</div>
+{% if error %}<div class="callout bad">{{ error }}</div>{% endif %}
+{% if question_set.status == 'generating' %}
+<div class="callout warn" hx-get="/evals/sets/{{ question_set.id }}" hx-trigger="every 3s" hx-select="main" hx-target="main" hx-swap="outerHTML">Still writing questions… {{ question_set.stage }} {% if question_set.progress_total %}({{ question_set.progress_done }}/{{ question_set.progress_total }}){% endif %}</div>
+{% elif question_set.status == 'failed' %}
+<div class="callout bad">Generating questions failed: {{ question_set.error }}</div>
+{% endif %}
+
+<section class="card">
+  <div class="card-head"><h2>Questions</h2><span class="muted">{{ questions | length }}</span></div>
+  {% if not questions %}<div class="empty">No questions yet.</div>{% else %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>#</th><th>Question</th><th>Expected answer</th><th>Kind</th><th>Gold passages</th><th></th></tr></thead>
+    <tbody>
+    {% for q in questions %}
+    <tr>
+      <td class="muted">{{ q.ordinal + 1 }}</td>
+      <td>{{ q.text }}{% if q.notes %}<div class="muted small">{{ q.notes }}</div>{% endif %}</td>
+      <td>{{ q.expected_answer }}</td>
+      <td><span class="badge">{{ q.kind }}</span></td>
+      <td class="muted">{{ q.gold_passage_ids | length or '–' }}</td>
+      <td><button class="btn small danger" data-delete="/api/evals/questions/{{ q.id }}">Delete</button></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+  <details class="add-question">
+    <summary>Add a question</summary>
+    <form method="post" action="/evals/sets/{{ question_set.id }}/questions" class="stack">
+      <input type="text" name="text" placeholder="Question" required>
+      <input type="text" name="expected_answer" placeholder="Expected answer">
+      <select name="kind"><option value="single">single-hop</option><option value="multihop">multi-hop</option></select>
+      <button class="btn" type="submit">Add</button>
+    </form>
+  </details>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Runs of this set</h2><span class="muted">{{ runs | length }}</span></div>
+  {% if not runs %}<div class="empty">Not run yet.</div>{% else %}
+  <div class="scroll-x"><table class="table">
+    <thead><tr><th>Run</th><th>Started</th><th>Status</th><th class="num">Accuracy</th><th class="num">EM</th><th class="num">F1</th><th class="num">Recall@5</th><th>Settings</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+    <tr>
+      <td><a href="/evals/runs/{{ r.id }}"><b>{{ r.name | short(40) }}</b></a></td>
+      <td class="muted">{{ r.started_at[:16] | replace('T', ' ') }}</td>
+      <td>{% include "partials/run_status.html" %}</td>
+      <td class="num">{{ r.summary.accuracy | fmt(2) }}</td>
+      <td class="num">{{ r.summary.exact_match | fmt(2) }}</td>
+      <td class="num">{{ r.summary.f1 | fmt(2) }}</td>
+      <td class="num">{{ r.summary['recall@5'] | fmt(2) }}</td>
+      <td class="muted small mono">k={{ r.settings.linking_top_k }} d={{ r.settings.damping }} p={{ r.settings.passage_node_weight }}{% if not r.settings.node_specificity %} no-spec{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+</section>
+{% endblock %}

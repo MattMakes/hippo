@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ source.name }}{% endblock %}
+{% block content %}
+<div class="page-head row spread">
+  <div>
+    <p class="muted"><a href="/">Library</a> › {{ source.kind }}</p>
+    <h1>{{ source.name }}</h1>
+  </div>
+  <div class="row">
+    <a class="btn" href="/evals?source={{ source.id }}">Question sets</a>
+    <button class="btn" data-post="/api/sources/{{ source.id }}/generate-questions" data-body='{"max_single": 8, "max_multihop": 4}' data-message="Making questions… this takes a minute" data-then="/evals" data-refresh="1500" {% if source.status != 'ready' %}disabled title="Wait until indexing has finished"{% endif %}>Make sample questions</button>
+    <button class="btn" data-post="/api/sources/{{ source.id }}/reindex" data-message="Re-indexing" data-refresh="800" {% if busy %}disabled{% endif %}>Reindex</button>
+    <button class="btn danger" data-delete="/api/sources/{{ source.id }}" data-confirm="Forget '{{ source.name }}' and everything learned from it?" data-then="/">Delete</button>
+  </div>
+</div>
+
+<div class="grid three">
+  <section class="card">
+    <h3>Status</h3>
+    <div hx-get="/partials/sources/{{ source.id }}/status" hx-trigger="every 2s" hx-swap="innerHTML">{% include "partials/source_status.html" %}</div>
+  </section>
+  <section class="card">
+    <h3>In the graph</h3>
+    <dl class="stats">
+      <div><dt>passages</dt><dd>{{ source.passages }}</dd></div>
+      <div><dt>fact links</dt><dd>{{ source.fact_links }}</dd></div>
+      {% if source.meta.documents %}<div><dt>documents</dt><dd>{{ source.meta.documents }}</dd></div>{% endif %}
+    </dl>
+  </section>
+  <section class="card">
+    <h3>Details</h3>
+    <p class="muted small">Added {{ source.created_at[:16] | replace('T', ' ') }}<br>
+    {% for key, value in source.meta.items() if key not in ('counts', 'documents', 'chunks') %}{{ key }}: {{ value | short(60) }}<br>{% endfor %}</p>
+  </section>
+</div>
+
+{% if question_sets %}
+<section class="card">
+  <h2>Question sets about this source</h2>
+  <ul>{% for qs in question_sets %}<li><a href="/evals/sets/{{ qs.id }}">{{ qs.name }}</a> <span class="muted">· {{ qs.question_count }} questions · {{ qs.run_count }} runs</span></li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="card-head">
+    <h2>Passages</h2>
+    {% if pages > 1 %}<span class="row muted">page {{ page }} of {{ pages }}
+      {% if page > 1 %}<a class="btn small" href="?page={{ page - 1 }}">←</a>{% endif %}
+      {% if page < pages %}<a class="btn small" href="?page={{ page + 1 }}">→</a>{% endif %}</span>{% endif %}
+  </div>
+  {% if not passages %}<div class="empty">No passages yet{% if source.status not in ('ready', 'failed') %} — indexing is still running{% endif %}.</div>{% endif %}
+  {% for p in passages %}
+  <article class="passage">
+    <header><span class="rank">#{{ p.ordinal + 1 }}</span><b>{{ p.title }}</b><span class="muted">{{ p.text | length }} chars · {{ p.triples | length }} facts</span></header>
+    <p class="pre">{{ p.text }}</p>
+    {% if p.extraction_error %}<div class="callout bad small">Extraction failed: {{ p.extraction_error }}</div>{% endif %}
+    {% if p.triples or p.entities %}
+    <details>
+      <summary>What the model extracted</summary>
+      {% if p.entities %}<p class="muted small">Entities: {{ p.entities | join(', ') }}</p>{% endif %}
+      <ul class="facts">{% for t in p.triples %}<li class="triple"><b>{{ t[0] }}</b> <i>{{ t[1] }}</i> <b>{{ t[2] }}</b></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}

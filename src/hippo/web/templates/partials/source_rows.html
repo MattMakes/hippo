@@ -1,0 +1,23 @@
+{% if not sources %}
+<div class="empty">Nothing here yet. Upload something above, or load the sample.</div>
+{% else %}
+<table class="table">
+  <thead><tr><th>Name</th><th>Kind</th><th>Status</th><th class="num">Passages</th><th class="num">Facts</th><th>Added</th><th></th></tr></thead>
+  <tbody>
+  {% for s in sources %}
+  <tr>
+    <td><a href="/sources/{{ s.id }}"><b>{{ s.name | short(60) }}</b></a></td>
+    <td><span class="badge">{{ s.kind }}</span></td>
+    <td>{% include "partials/source_status.html" with context %}</td>
+    <td class="num">{{ s.passages }}</td>
+    <td class="num">{{ s.fact_links }}</td>
+    <td class="muted">{{ s.created_at[:16] | replace('T', ' ') }}</td>
+    <td class="row">
+      <a class="btn small" href="/ask" title="Ask a question">Ask</a>
+      <button class="btn small danger" data-delete="/api/sources/{{ s.id }}" data-confirm="Forget '{{ s.name }}' and everything learned from it?">Delete</button>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}

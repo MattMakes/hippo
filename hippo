@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# The hippo launcher: a thin wrapper around `docker compose` so you never have
+# to remember flags.
+#
+#   ./hippo up [--build]   start everything (detects an Ollama on this machine)
+#   ./hippo down           stop everything (data is kept in the docker volumes)
+#   ./hippo logs           follow the app's logs
+#   ./hippo pull-models    download the LLM and embedding model into Ollama
+#   ./hippo test           run the unit tests inside the app container
+#   ./hippo ps             show what is running
+#
+# Anything else is passed straight to the `hippo` CLI inside the container,
+# e.g. `./hippo ask "Who designed the Orion arm?"` or `./hippo sources`.
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+OLLAMA_HOST_URL="http://localhost:11434"
+
+# ------------------------------------------------------------ helpers
+
+say() { printf '%s\n' "$*"; }
+
+die() {
+  say "error: $*" >&2
+  exit 1
+}
+
+need_docker() {
+  command -v docker >/dev/null 2>&1 \
+    || die "docker is not installed. Get Docker Desktop from https://docs.docker.com/get-docker/ and try again."
+  docker info >/dev/null 2>&1 \
+    || die "docker is installed but not running (or you lack permission to use it). Start Docker Desktop, or add yourself to the 'docker' group."
+  docker compose version >/dev/null 2>&1 \
+    || die "'docker compose' (v2) is missing. Update Docker, or install the compose plugin: https://docs.docker.com/compose/install/"
+}
+
+host_has_ollama() {
+  # curl exits non-zero when nothing answers; that is the "no Ollama here" case.
+  command -v curl >/dev/null 2>&1 && curl -s --max-time 2 "$OLLAMA_HOST_URL/api/tags" >/dev/null 2>&1
+}
+
+print_urls() {
+  say ""
+  say "hippo is up:"
+  say "  UI             http://localhost:8000"
+  say "  Neo4j browser  http://localhost:7474   (user: neo4j / password: hippo-password)"
+  say "  MCP            http://localhost:8000/mcp"
+  say ""
+  say "First time? Open the UI, click 'Load the sample', then ask: Who designed the Orion arm?"
+  say "Models are downloaded on first start; watch the header of the UI, or run: ./hippo pull-models"
+}
+
+# `docker compose` with the ollama profile switched on when we are using the container.
+compose() {
+  if [ "${USE_OLLAMA_PROFILE:-0}" = "1" ]; then
+    docker compose --profile ollama "$@"
+  else
+    docker compose "$@"
+  fi
+}
+
+# ----------------------------------------------------------- commands
+
+cmd_up() {
+  need_docker
+  local build_flag=""
+  if [ "${1:-}" = "--build" ]; then
+    build_flag="--build"
+  fi
+  mkdir -p data
+
+  if host_has_ollama; then
+    say "Found Ollama on this machine at $OLLAMA_HOST_URL; the app will use it."
+    export OLLAMA_URL="http://host.docker.internal:11434"
+    export USE_OLLAMA_PROFILE=0
+  else
+    say "No Ollama found on this machine; starting the ollama container as well."
+    export OLLAMA_URL="http://ollama:11434"
+    export USE_OLLAMA_PROFILE=1
+  fi
+
+  # shellcheck disable=SC2086  (build_flag is either empty or "--build")
+  compose up -d $build_flag
+  print_urls
+}
+
+cmd_down() {
+  need_docker
+  # Include the profile so the ollama container is stopped too, if it was started.
+  docker compose --profile ollama down
+  say "Stopped. Your data is still in the docker volumes; './hippo up' brings it back."
+}
+
+cmd_logs() {
+  need_docker
+  docker compose logs -f app
+}
+
+cmd_pull_models() {
+  need_docker
+  docker compose exec app hippo pull-models
+}
+
+cmd_test() {
+  need_docker
+  # The image holds only the app (no tests, no pytest), so mount this folder into a throwaway
+  # container. NEO4J_URI is blanked on purpose: the tests then use the in-memory fakes instead
+  # of wiping your real memory (the store fixture empties whatever database it is pointed at).
+  docker compose run --rm --no-deps -e NEO4J_URI= -v "$PWD:/src" app \
+    sh -c 'pip install -q pytest && cd /src && python -m pytest tests/unit -q -p no:cacheprovider'
+}
+
+cmd_ps() {
+  need_docker
+  docker compose --profile ollama ps
+}
+
+cmd_cli() {
+  need_docker
+  docker compose exec app hippo "$@"
+}
+
+usage() {
+  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# --------------------------------------------------------------- main
+
+case "${1:-}" in
+  up) shift; cmd_up "$@" ;;
+  down) cmd_down ;;
+  logs) cmd_logs ;;
+  pull-models) cmd_pull_models ;;
+  test) cmd_test ;;
+  ps) cmd_ps ;;
+  -h|--help|help|"") usage ;;
+  *) cmd_cli "$@" ;;
+esac

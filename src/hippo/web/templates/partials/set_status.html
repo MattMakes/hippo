@@ -1,0 +1,8 @@
+{% if qs.status == 'generating' %}
+  <span class="pill warn"><span class="dot"></span>generating</span>
+  <div class="muted small">{{ qs.stage }}{% if qs.progress_total %} · {{ qs.progress_done }}/{{ qs.progress_total }}{% endif %}</div>
+{% elif qs.status == 'failed' %}
+  <span class="pill bad" title="{{ qs.error }}"><span class="dot"></span>failed</span>
+{% else %}
+  <span class="pill ok"><span class="dot"></span>ready</span>
+{% endif %}

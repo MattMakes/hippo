@@ -1,0 +1,222 @@
+"""simulate(): what-if searches over the sample corpus, and the pure diff/overrides helpers."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from hippo.analysis.simulate import Overrides, diff_traces, replay_filter, simulate, trace_from_dict
+from hippo.ask import search
+from hippo.hipporag.indexer import Chunk, index_source
+from hippo.hipporag.retriever import Trace
+
+QUESTION = "In which state is the company founded by Priya Natarajan headquartered?"
+
+
+def index_sample(ctx, sample_text: str) -> str:
+    """Index samples/acme_robotics.md as one passage per '## ' section. Returns the source id."""
+    source_id = ctx.store.create_source("sample", "Acme Robotics")
+    chunks = []
+    for ordinal, section in enumerate(sample_text.split("## ")[1:]):
+        title, _, body = section.partition("\n")
+        chunks.append(Chunk(ordinal, title.strip(), body.strip()))
+    index_source(ctx.store, ctx.ollama, source_id, chunks, workers=2)
+    ctx.store.update_source(source_id, status="ready")
+    return source_id
+
+
+@pytest.fixture
+def baseline(ctx, sample_text) -> Trace:
+    index_sample(ctx, sample_text)
+    return search(ctx, QUESTION)
+
+
+def ranks(trace: Trace) -> dict[str, int]:
+    return {p.title: p.rank for p in trace.passages}
+
+
+def scores(trace: Trace) -> dict[str, float]:
+    return {p.title: p.score for p in trace.passages}
+
+
+def chat_calls(fake_ollama) -> int:
+    """How many chat requests the fake model has answered so far (embeddings do not count)."""
+    return len(fake_ollama.calls)
+
+
+# ------------------------------------------------------------- settings
+
+
+def test_damping_change_moves_scores_and_the_diff_lists_ranks(ctx, fake_ollama, baseline):
+    calls_before = chat_calls(fake_ollama)
+    sim = simulate(ctx, QUESTION, Overrides(settings={"damping": 0.9}), baseline)
+    assert chat_calls(fake_ollama) == calls_before, "a replayed simulation must not call the LLM"
+
+    assert sim.answer is None
+    assert sim.baseline is baseline
+    assert sim.trace.settings["damping"] == 0.9
+    assert sim.trace.settings["linking_top_k"] == baseline.settings["linking_top_k"]
+    assert sim.trace.filter["replayed"] is True
+    assert sim.trace.kept_fact_ids() == baseline.kept_fact_ids()
+    assert scores(sim.trace) != scores(baseline)
+    assert ranks(sim.trace) != ranks(baseline)
+
+    diff = sim.diff
+    titles = {row["title"] for row in diff["passages"]}
+    assert titles == {p.title for p in baseline.passages[:10]} | {p.title for p in sim.trace.passages[:10]}
+    for row in diff["passages"]:
+        assert row["before_rank"] == ranks(baseline).get(row["title"])
+        assert row["after_rank"] == ranks(sim.trace).get(row["title"])
+        assert row["change"] in {"up", "down", "same", "new", "dropped"}
+    after_ranks = [row["after_rank"] for row in diff["passages"] if row["after_rank"] is not None]
+    assert after_ranks == sorted(after_ranks)
+    assert any(row["change"] in {"up", "down"} for row in diff["passages"])
+    assert diff["fallback_before"] is False and diff["fallback_after"] is False
+    assert diff["kept_facts_before"] == diff["kept_facts_after"]
+    assert [s["name"] for s in diff["seeds_before"]] == [s.name for s in baseline.seed_entities if s.kept]
+    json.dumps(diff)
+
+
+# ---------------------------------------------------------- force in/out
+
+
+def test_force_exclude_of_a_kept_fact_removes_its_seed(ctx, baseline):
+    lives_in = next(c for c in baseline.fact_candidates if c.kept and c.triple[1] == "lives in")
+    assert lives_in.triple == ["priya natarajan", "lives in", "denver"]
+    assert "denver" in {s.name for s in baseline.seed_entities if s.kept}
+
+    sim = simulate(ctx, QUESTION, Overrides(force_exclude=[lives_in.fact_id]), baseline)
+    excluded = next(c for c in sim.trace.fact_candidates if c.fact_id == lives_in.fact_id)
+    assert excluded.kept is False and excluded.reason == "forced out"
+    assert "denver" not in {s.name for s in sim.trace.seed_entities}
+    assert "denver" in {s["name"] for s in sim.diff["seeds_before"]}
+    assert "denver" not in {s["name"] for s in sim.diff["seeds_after"]}
+    assert len(sim.diff["kept_facts_after"]) == len(sim.diff["kept_facts_before"]) - 1
+
+
+def test_force_include_of_a_dropped_fact_adds_its_seed(ctx, baseline):
+    hq = next(c for c in baseline.fact_candidates if c.triple[1] == "is headquartered in")
+    assert not hq.kept
+    sim = simulate(ctx, QUESTION, Overrides(force_include=[hq.fact_id]), baseline)
+    included = next(c for c in sim.trace.fact_candidates if c.fact_id == hq.fact_id)
+    assert included.kept and included.reason == "forced in"
+    assert "boulder" in {s.name for s in sim.trace.seed_entities}
+
+
+# -------------------------------------------------------------- edge edits
+
+
+def test_edge_edit_with_weight_zero_drops_the_passage(ctx, baseline):
+    seed = max(baseline.seed_entities, key=lambda s: s.weight)  # 'denver'
+    index = ctx.graph()
+    # The passage this seed is mentioned in that is not already rank 1.
+    linked = [
+        p
+        for p in baseline.passages
+        if index.edge_between(seed.vertex, index.idx_of[p.passage_id]) is not None and p.rank > 1
+    ]
+    victim = linked[0]
+
+    sim = simulate(
+        ctx,
+        QUESTION,
+        Overrides(edge_edits=[{"a": seed.entity_id, "b": victim.passage_id, "weight": 0}]),
+        baseline,
+    )
+    assert ranks(sim.trace)[victim.title] > victim.rank
+    row = next(r for r in sim.diff["passages"] if r["passage_id"] == victim.passage_id)
+    assert row["before_rank"] == victim.rank
+    assert row["change"] in {"down", "dropped"}
+    # The real graph is untouched: a plain simulation ranks it where it was.
+    again = simulate(ctx, QUESTION, Overrides(), baseline)
+    assert ranks(again.trace)[victim.title] == victim.rank
+
+
+# ------------------------------------------------------------- node boosts
+
+
+def test_node_boost_changes_the_seed_weight(ctx, baseline):
+    seed = min((s for s in baseline.seed_entities if s.kept), key=lambda s: s.weight)
+    sim = simulate(ctx, QUESTION, Overrides(node_boosts={seed.entity_id: 3.0}), baseline)
+    boosted = next(s for s in sim.trace.seed_entities if s.entity_id == seed.entity_id)
+    assert boosted.boost == 3.0
+    assert boosted.weight == pytest.approx(seed.weight * 3.0)
+    assert sim.trace.seed_entities[0].entity_id == seed.entity_id  # now the strongest seed
+
+
+# ------------------------------------------------ baseline / filter / answer
+
+
+def test_without_a_baseline_the_llm_filter_runs_once_and_is_replayed(ctx, fake_ollama, baseline):
+    calls_before = chat_calls(fake_ollama)
+    sim = simulate(ctx, QUESTION, Overrides(settings={"damping": 0.9}))
+    assert chat_calls(fake_ollama) == calls_before + 1  # one filter call for the fresh baseline
+    assert sim.baseline is not None and sim.baseline.filter["replayed"] is False
+    assert sim.trace.filter["replayed"] is True
+    assert sim.baseline.kept_fact_ids() == baseline.kept_fact_ids()
+    assert sim.trace.settings["damping"] == 0.9 and sim.baseline.settings["damping"] == 0.5
+
+
+def test_rerun_filter_calls_the_llm_again(ctx, fake_ollama, baseline):
+    calls_before = chat_calls(fake_ollama)
+    sim = simulate(ctx, QUESTION, Overrides(rerun_filter=True), baseline)
+    assert chat_calls(fake_ollama) == calls_before + 1
+    assert sim.trace.filter["replayed"] is False
+    assert sim.trace.kept_fact_ids() == baseline.kept_fact_ids()  # the fake is deterministic
+
+
+def test_reanswer_produces_an_answer(ctx, baseline):
+    sim = simulate(ctx, QUESTION, Overrides(reanswer=True), baseline)
+    assert sim.answer is not None
+    assert sim.answer.answer
+    assert sim.answer.passage_ids
+
+
+def test_stored_trace_json_round_trips_into_a_baseline(ctx, baseline):
+    restored = trace_from_dict(json.loads(json.dumps(baseline.to_dict())))
+    assert restored.to_dict() == baseline.to_dict()
+    sim = simulate(ctx, QUESTION, Overrides(), restored)
+    assert ranks(sim.trace) == ranks(baseline)
+
+
+# ------------------------------------------------------------ pure helpers
+
+
+def test_replay_filter_only_returns_triples_that_are_candidates_again():
+    trace = Trace(question="q", settings={}, graph_version=1)
+    trace.filter = {"kept_triples": [["a", "r", "b"], ["c", "r", "d"]]}
+    kept, raw = replay_filter(trace)("q", [["c", "r", "d"], ["x", "r", "y"]])
+    assert kept == [["c", "r", "d"]] and raw == "replayed"
+
+
+def test_overrides_from_dict_and_to_ops():
+    overrides = Overrides.from_dict(
+        {
+            "settings": {"damping": 0.7},
+            "force_include": ["fact-1"],
+            "force_exclude": ["fact-2"],
+            "node_boosts": {"entity-a": "1.5"},
+            "edge_edits": [{"a": "entity-a", "b": "passage-b", "weight": "0"}],
+            "rerun_filter": 1,
+        }
+    )
+    assert overrides.node_boosts == {"entity-a": 1.5}
+    assert overrides.edge_edits == [{"a": "entity-a", "b": "passage-b", "weight": 0.0}]
+    assert overrides.rerun_filter is True and overrides.reanswer is False
+
+    ops = overrides.to_ops()
+    assert ops == [
+        {"op": "set_setting", "name": "damping", "value": 0.7},
+        {"op": "set_node_boost", "entity_id": "entity-a", "boost": 1.5},
+        {"op": "set_edge_weight", "a": "entity-a", "b": "passage-b", "weight": 0.0},
+    ]
+    assert not any("fact" in json.dumps(op) for op in ops)  # force in/out never become ops
+    assert Overrides.from_dict(None) == Overrides()
+
+
+def test_diff_traces_handles_a_missing_baseline():
+    after = Trace(question="q", settings={}, graph_version=1)
+    diff = diff_traces(None, after)
+    assert diff["passages"] == [] and diff["fallback_before"] is None
+    assert diff["seeds_before"] == [] and diff["kept_facts_before"] == []
