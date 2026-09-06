@@ -7,6 +7,8 @@ these tests use the sample corpus and short sentences in that shape.
 
 from __future__ import annotations
 
+import pytest
+
 from hippo.hipporag.openie import Extraction, clean_triples, extract, extract_many, valid_triples
 from hippo.ollama import Ollama
 from tests.fakes.fake_ollama import FakeOllama
@@ -183,3 +185,72 @@ def test_extract_many_with_zero_workers_still_runs(ollama: Ollama) -> None:
 
 def test_extract_many_of_nothing_returns_nothing(ollama: Ollama) -> None:
     assert extract_many(ollama, []) == []
+
+
+def test_extract_many_keeps_order_and_progress_with_more_passages_than_workers(ollama: Ollama) -> None:
+    # Only a few passages are queued at a time; the results must still come back complete and in order.
+    passages = [(f"p-{i}", "Boulder is located in Colorado.") for i in range(10)]
+    progress: list[tuple[int, int]] = []
+
+    results = extract_many(ollama, passages, workers=1, on_progress=lambda d, t: progress.append((d, t)))
+
+    assert [r.passage_id for r in results] == [pid for pid, _ in passages]
+    assert all(r.clean_triples == [("boulder", "is located in", "colorado")] for r in results)
+    assert progress == [(i, 10) for i in range(1, 11)]
+
+
+def test_extract_many_stops_promptly_and_never_touches_the_rest_of_the_queue(ollama: Ollama) -> None:
+    from hippo.hipporag.openie import Stopped
+
+    passages = [(f"p-{i}", "Boulder is located in Colorado.") for i in range(200)]
+    checks = 0
+
+    def should_stop() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 5
+
+    with pytest.raises(Stopped):
+        extract_many(ollama, passages, workers=2, should_stop=should_stop)
+
+    # With the whole repo queued up front every passage would be dequeued and checked (200 calls);
+    # a bounded queue means only the handful in flight ever get looked at.
+    assert checks < 20
+
+
+def test_extract_turns_an_unexpected_exception_into_an_error_instead_of_raising(
+    ollama: Ollama, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*args, **kwargs):
+        raise ValueError("not JSON at all")
+
+    monkeypatch.setattr(ollama, "chat_json", broken)
+
+    extraction = extract(ollama, "p", COMPANY_PARAGRAPH)  # must not raise
+
+    assert extraction.error == "ValueError: not JSON at all"
+    assert extraction.triples == [] and extraction.clean_triples == []
+
+
+def test_extract_many_survives_one_passage_that_makes_the_model_client_blow_up(
+    ollama: Ollama, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_chat_json = ollama.chat_json
+
+    def flaky(messages, schema, **kwargs):
+        if "Portland" in messages[-1]["content"]:
+            raise RuntimeError("odd reply")
+        return real_chat_json(messages, schema, **kwargs)
+
+    monkeypatch.setattr(ollama, "chat_json", flaky)
+    passages = [
+        ("p-a", "Boulder is located in Colorado."),
+        ("p-b", "Portland is located in Oregon."),
+        ("p-c", "Denver is located in Colorado."),
+    ]
+
+    results = extract_many(ollama, passages, workers=2)
+
+    assert [r.passage_id for r in results] == ["p-a", "p-b", "p-c"]
+    assert results[0].error is None and results[2].error is None
+    assert results[1].error == "RuntimeError: odd reply"

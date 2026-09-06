@@ -85,6 +85,8 @@ def run_question(ctx: AppContext, question_row: dict[str, Any], settings: dict[s
     try:
         trace = search(ctx, text, settings)
         result["trace"] = trace.to_dict()
+        # Stored as its own property too: the run table lists results without their (big) traces.
+        result["used_dpr_fallback"] = trace.used_dpr_fallback
         ranked_ids = trace.passage_ids()
         result["recall"] = metrics.recall_at_k(gold_ids, ranked_ids)
         result["gold_rank"] = metrics.gold_rank(gold_ids, ranked_ids)
@@ -132,6 +134,7 @@ def _empty_result() -> Result:
         "gold_rank": None,
         "latency_ms": None,
         "trace": {},
+        "used_dpr_fallback": False,
         "error": None,
     }
 
@@ -162,7 +165,7 @@ def summarize(results: list[Result]) -> dict[str, Any]:
         "gold_in_top5": _mean(
             [1.0 if r.get("gold_rank") and r["gold_rank"] <= GOLD_TOP else 0.0 for r in with_gold]
         ),
-        "dpr_fallbacks": sum(1 for r in results if (r.get("trace") or {}).get("used_dpr_fallback")),
+        "dpr_fallbacks": sum(1 for r in results if r.get("used_dpr_fallback")),
         "mean_latency_ms": _mean([r["latency_ms"] for r in results if r.get("latency_ms") is not None]),
     }
     for k in metrics.DEFAULT_KS:

@@ -28,8 +28,8 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
   every non-alphanumeric character with a space, collapse whitespace.
 * Entity ids are `entity-` + md5(cleaned phrase), exactly `compute_mdhash_id(phrase, "entity-")`.
 * `min_max_normalize` returns all ones when every score is identical, as the reference does.
-* Only phrases with more than two letters/digits get synonym edges
-  (`len(re.sub('[^A-Za-z0-9]', '', entity)) > 2`).
+* Only phrases with more than two letters/digits get synonym edges (the reference:
+  `len(re.sub('[^A-Za-z0-9]', '', entity)) > 2`; hippo counts Unicode letters/digits too, see adaptation 14).
 
 ### OpenIE (`openie.py` vs `information_extraction/openie_openai.py` + `prompts/templates/ner.py`, `triple_extraction.py`)
 
@@ -121,7 +121,10 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
    same `max(fact count, 1.0 if mention, synonym score)` rule. Two things the
    reference does not have: a `TUNED` edge weight that replaces that number, and a
    per-entity `boost` multiplier on seed weights. Both are 1:1 / absent unless you
-   apply a changeset, so a fresh memory behaves like the reference.
+   apply a changeset, so a fresh memory behaves like the reference. Every graph version bump (each index job, including every `hippo_remember` call, and every
+   applied changeset) triggers a full reload whose cost grows with the number of stored vectors;
+   while one thread reloads, other callers keep using the previous graph (the trace records
+   which `graph_version` it used).
 6. **No query-instruction prefixes beyond the embedding model's own.** With
    NV-Embed-v2 the reference embeds the question twice, with different instructions
    for facts (`Given a question, retrieve relevant triplet facts...`) and for
@@ -140,9 +143,10 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
 9. **Fallback when every seed is zero.** The reference raises `StateConsistencyError`
    when the reset vector sums to 0. That can only happen in hippo when someone boosts
    every seed to 0 in a simulation, so we fall back to DPR and say so in the trace.
-10. **Traces.** hippo records the top 20 candidate facts and the top 40 PPR nodes for
-    the Analyze page. Only the top `linking_top_k` are sent to the filter; recording
-    more changes nothing in the ranking.
+10. **Traces.** hippo records at least the top 20 candidate facts (exactly
+    `max(20, linking_top_k)`, so every fact shown to the filter is in the trace) and the top
+    40 PPR nodes for the Analyze page. Exactly the top `linking_top_k` are sent to the
+    filter, as in the reference's `rerank_facts`; recording more changes nothing in the ranking.
 11. **OpenIE failures.** If the model fails on one passage, hippo stores the passage
     with no facts (still reachable through dense retrieval) and records the error on
     it, instead of failing the whole index run.
@@ -152,3 +156,7 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
 13. **Evaluation.** Exact match and F1 use the reference's MRQA-style normalisation
     (`evals/metrics.py`). The LLM judge, question generation, simulations and
     changesets are hippo's own and have no counterpart in the reference.
+14. **Synonym gate counts Unicode letters.** The reference's regex `[^A-Za-z0-9]` strips every
+    non-ASCII character, so a name like `東京都` or `москва` never gets synonym edges. hippo uses
+    `str.isalnum`, which counts letters and digits in any script, so non-Latin names are linked
+    like Latin ones. For English text the two rules agree exactly.

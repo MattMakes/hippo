@@ -5,11 +5,19 @@
 {% if error %}
 <div class="page-head"><h1>Analyze</h1></div>
 <div class="callout bad">{{ error }}</div>
+{% if retry_question %}
+<form method="post" action="/analyze" class="card row">
+  <input type="hidden" name="question" value="{{ retry_question }}">
+  <span>{{ retry_question }}</span>
+  <button class="btn primary" type="submit">Analyze it again</button>
+  <span class="muted small">runs the search and the model once more</span>
+</form>
+{% endif %}
 {% else %}
 {% set kept = trace.fact_candidates | selectattr('kept') | list %}
 {% set seeds = trace.seed_entities | selectattr('kept') | list %}
 <div class="page-head">
-  <p class="muted">{% if result %}<a href="/evals">Evals</a> › <a href="/evals/runs/{{ result.run_id }}">{{ result.run_name }}</a> › question {{ result.ordinal + 1 }}{% else %}<a href="/ask">Ask</a> › analysis{% endif %}</p>
+  <p class="muted">{% if result %}<a href="/evals">Evals</a> › <a href="/evals/runs/{{ result.run_id }}">{{ result.run_name }}</a> › question {{ result.ordinal + 1 }}{% else %}<a href="/ask">Ask</a> › analysis · <a href="{{ ask_url }}">ask this again</a>{% endif %}</p>
   <h1 class="question">{{ question }}</h1>
 </div>
 {% if graph_changed %}<div class="callout warn">The graph has changed since this search ran (a source was added, removed, or a changeset applied). The story below is what happened then; simulations run on the graph as it is now.</div>{% endif %}

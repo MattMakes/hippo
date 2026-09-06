@@ -35,8 +35,15 @@ Other launcher commands: `./hippo down`, `./hippo logs`, `./hippo pull-models`,
 `./hippo test`, `./hippo ps`. Anything else is passed to the CLI inside the
 container, e.g. `./hippo sources` or `./hippo ask "Where is Boulder?"`.
 
-The Neo4j browser is at http://localhost:7474 (user `neo4j`, password
-`hippo-password`) if you want to look at the graph directly.
+The Neo4j browser is at http://localhost:7474 (user `neo4j`; the password is
+the `NEO4J_PASSWORD` line of `.env`, which `./hippo up` fills in with a random
+value on the first run and prints) if you want to look at the graph directly.
+
+Everything listens on this machine only: compose binds ports 8000 (the UI,
+API and MCP), 7474/7687 (Neo4j) and 11434 (Ollama) to `127.0.0.1`. hippo has
+no login and Ollama has no password, so if you want to open the UI from
+another computer, put a proxy that asks for a password in front of it, then
+set `HIPPO_BIND=0.0.0.0` and `HIPPO_ALLOWED_HOSTS` in `.env`.
 
 ## A tour
 
@@ -152,18 +159,22 @@ reads a `.env` file automatically). Defaults live in `src/hippo/config.py`.
 | --- | --- | --- |
 | `NEO4J_URI` | `bolt://localhost:7687` | Where the graph lives (`bolt://neo4j:7687` inside compose). |
 | `NEO4J_USER` | `neo4j` | Neo4j user. |
-| `NEO4J_PASSWORD` | `hippo-password` | Neo4j password. |
+| `NEO4J_PASSWORD` | `hippo-password` | Neo4j password. `./hippo up` writes a random one to `.env` on the first run; Neo4j keeps the password it was created with. |
 | `OLLAMA_URL` | `http://localhost:11434` | Where the models run. `./hippo up` sets this for you. |
 | `HIPPO_LLM_MODEL` | `qwen3:8b` | The chat model: extracts facts, filters facts, answers, judges. |
 | `HIPPO_EMBED_MODEL` | `nomic-embed-text` | The embedding model. Changing it means re-indexing everything. |
 | `HIPPO_NUM_CTX` | `8192` | Context window asked of Ollama (qwen3's default 4k is too small). |
 | `HIPPO_LLM_TIMEOUT` | `600` | Seconds to wait for one LLM reply. |
 | `HIPPO_DATA_DIR` | `./data` | Uploaded files and cloned repos (`/app/data` in the container). |
+| `HIPPO_MAX_UPLOAD_BYTES` | `50000000` | Biggest upload or pasted text (50 MB); bigger ones are refused. |
+| `HIPPO_MAX_TEXT_CHARS` | `20000000` | Most text one source may turn into (20 M characters, about 13,000 passages); past that the source fails as "too large". Zips are also limited to 5,000 readable files and 50 MB unpacked. |
 | `HIPPO_OPENIE_WORKERS` | `2` | Parallel LLM calls while extracting facts. |
 | `HIPPO_CHUNK_SIZE` | `1500` | Passage size in characters. |
 | `HIPPO_CHUNK_OVERLAP` | `150` | Overlap between neighbouring passages. |
-| `HIPPO_HOST` | `0.0.0.0` | Web server bind address. |
+| `HIPPO_HOST` | `127.0.0.1` | Address `hippo serve` listens on (this machine only; hippo has no login). docker-compose sets `0.0.0.0` inside the container and publishes the port on `HIPPO_BIND`. |
 | `HIPPO_PORT` | `8000` | Web server port. |
+| `HIPPO_BIND` | `127.0.0.1` | (compose only) The address port 8000 is published on. `0.0.0.0` opens it to the network; do that only behind an authenticating proxy. |
+| `HIPPO_ALLOWED_HOSTS` | *(empty)* | Extra host names or IPs the UI and `/mcp` answer to, comma-separated (`localhost`, `127.0.0.1` and `[::1]` always work). hippo has no login, so other names are refused to stop websites you visit from reaching your memory; add your LAN name or IP here if you open hippo from another machine, or `*` to switch the check off. |
 
 Retrieval knobs (`linking_top_k`, `passage_node_weight`, `damping`,
 `node_specificity`, `synonymy_threshold`, `retrieval_top_k`, `qa_top_k`) are
@@ -174,8 +185,8 @@ stored in Neo4j and changed on the Settings page, not through the environment.
 You need Python 3.11+, a Neo4j 5 you can reach, and Ollama.
 
 ```bash
-# 1. Neo4j: Neo4j Desktop, or just the database container:
-docker run -d -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/hippo-password neo4j:5.26-community
+# 1. Neo4j: Neo4j Desktop, or just the database container (pick your own password):
+docker run -d -p 127.0.0.1:7474:7474 -p 127.0.0.1:7687:7687 -e NEO4J_AUTH=neo4j/hippo-password neo4j:5.26-community
 # 2. Ollama: https://ollama.com, then make sure it is running.
 # 3. hippo:
 python -m venv .venv && source .venv/bin/activate
@@ -184,7 +195,8 @@ hippo pull-models        # downloads qwen3:8b and nomic-embed-text
 hippo serve              # http://localhost:8000
 ```
 
-Set `NEO4J_URI` / `OLLAMA_URL` if they are not on localhost.
+Set `NEO4J_URI` / `OLLAMA_URL` if they are not on localhost, and `NEO4J_PASSWORD`
+to whatever you gave Neo4j.
 
 ## Development & tests
 

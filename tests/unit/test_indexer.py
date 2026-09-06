@@ -237,3 +237,127 @@ def test_a_chunk_with_no_facts_still_becomes_a_passage(store, ollama, source_id:
     counts = index_source(store, ollama, source_id, [Chunk(0, "Chatter", "Nothing here matches a relation.")])
     assert counts == {"passages": 1, "entities": 0, "facts": 0, "synonyms": 0}
     assert store.get_source(source_id)["passages"] == 1
+
+
+# ------------------------------------------------- store round-trips & the lock
+
+
+class CountingStore:
+    """Wraps a store and counts the two 'which of these ids exist?' queries."""
+
+    def __init__(self, store) -> None:
+        self._store = store
+        self.calls = {"existing_entity_ids": 0, "existing_fact_ids": 0}
+
+    def __getattr__(self, name: str):
+        target = getattr(self._store, name)
+        if name not in self.calls:
+            return target
+
+        def counted(ids):
+            self.calls[name] += 1
+            return target(ids)
+
+        return counted
+
+
+def test_the_existence_queries_run_once_per_index_run_not_once_per_id(
+    store, ollama, source_id, chunks
+) -> None:
+    """31 entities used to mean 31 UNWIND queries each carrying all 31 ids (a comprehension called the store per element)."""
+    counting = CountingStore(store)
+    counts = index_source(counting, ollama, source_id, chunks)
+    assert counts["entities"] == 31 and counts["facts"] == 34
+    assert counting.calls == {"existing_entity_ids": 1, "existing_fact_ids": 1}
+
+
+def test_re_indexing_re_checks_the_known_ids_under_the_lock_with_one_more_query(
+    store, ollama, source_id, chunks
+) -> None:
+    index_source(store, ollama, source_id, chunks)
+    counting = CountingStore(store)
+    index_source(counting, ollama, source_id, chunks)
+    # One query before embedding, one under the lock to see whether a delete pruned any of the known ids.
+    assert counting.calls == {"existing_entity_ids": 2, "existing_fact_ids": 2}
+
+
+class PrunedMeanwhileStore(CountingStore):
+    """
+    Plays the race: the first existence check says `entity`/`fact` exist (so they are not embedded),
+    then a delete prunes them before the writes. Later checks tell the truth.
+    """
+
+    def __init__(self, store, entity: str, fact: str) -> None:
+        super().__init__(store)
+        self.pretend = {"existing_entity_ids": entity, "existing_fact_ids": fact}
+
+    def __getattr__(self, name: str):
+        target = super().__getattr__(name)
+        if name not in self.calls:
+            return target
+
+        def lying_once(ids):
+            found = target(ids)
+            return found | {self.pretend[name]} if self.calls[name] == 1 else found
+
+        return lying_once
+
+
+def test_ids_pruned_between_the_check_and_the_write_are_written_again(
+    store, ollama, source_id, chunks
+) -> None:
+    boulder = entity_id("boulder")
+    from hippo.hipporag.text import fact_id
+
+    hq = fact_id("acme robotics", "is headquartered in", "boulder")
+    lying = PrunedMeanwhileStore(store, boulder, hq)
+
+    counts = index_source(lying, ollama, source_id, chunks)
+
+    assert counts == {"passages": 8, "entities": 31, "facts": 34, "synonyms": 0}  # nothing lost
+    assert store.existing_entity_ids([boulder]) == {boulder}
+    assert store.existing_fact_ids([hq]) == {hq}
+    (row,) = store.get_entities([boulder])
+    assert row["passage_count"] == 2
+    ids, vectors = store.load_entity_embeddings()
+    assert len(vectors[ids.index(boulder)]) == DIM  # embedded under the lock, like the others
+    assert store.get_facts([hq])[0]["passage_ids"] == [passage_id(source_id, chunks[0])]
+
+
+def test_the_write_phase_holds_the_graph_write_lock_and_releases_it_after(
+    store, ollama, source_id, chunks
+) -> None:
+    import threading
+
+    from hippo.hipporag.indexer import GRAPH_WRITE_LOCK
+
+    def other_thread_can_take_the_lock() -> bool:
+        result: list[bool] = []
+
+        def try_it() -> None:
+            got = GRAPH_WRITE_LOCK.acquire(blocking=False)
+            result.append(got)
+            if got:
+                GRAPH_WRITE_LOCK.release()
+
+        thread = threading.Thread(target=try_it)
+        thread.start()
+        thread.join(5)
+        return result[0]
+
+    seen: dict[str, bool] = {}
+    for method in ("add_entities", "add_facts", "link_passage_entities", "link_passage_facts"):
+        original = getattr(store, method)
+
+        def spy(rows, method=method, original=original):
+            seen[method] = other_thread_can_take_the_lock()
+            return original(rows)
+
+        setattr(store, method, spy)
+
+    index_source(store, ollama, source_id, chunks)
+
+    assert seen == {
+        m: False for m in ("add_entities", "add_facts", "link_passage_entities", "link_passage_facts")
+    }
+    assert other_thread_can_take_the_lock() is True

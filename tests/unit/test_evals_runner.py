@@ -87,10 +87,12 @@ def test_run_question_returns_every_field_add_result_wants(ctx, set_id):
         "gold_rank",
         "latency_ms",
         "trace",
+        "used_dpr_fallback",
         "error",
     }
     assert expected_keys <= set(result)
     assert result["error"] is None
+    assert result["used_dpr_fallback"] is False  # the graph search found seeds
     assert result["trace"]["settings"]["qa_top_k"] == 5
     assert result["judge_score"] in (0.0, 0.5, 1.0)
 
@@ -153,6 +155,7 @@ def test_summarize_is_pure_and_skips_missing_numbers():
             "gold_rank": 1,
             "latency_ms": 100.0,
             "trace": {"used_dpr_fallback": False},
+            "used_dpr_fallback": False,
             "error": None,
         },
         {
@@ -163,7 +166,8 @@ def test_summarize_is_pure_and_skips_missing_numbers():
             "recall": {"recall@1": 0.0, "recall@5": 0.0},
             "gold_rank": None,
             "latency_ms": 300.0,
-            "trace": {"used_dpr_fallback": True},
+            "trace": None,  # store.list_results rows have no trace; the flag stands on its own
+            "used_dpr_fallback": True,
             "error": None,
         },
         {  # no expected answer, no gold passages, and it errored: contributes only to counts
@@ -194,6 +198,14 @@ def test_summarize_is_pure_and_skips_missing_numbers():
     assert summary["gold_in_top5"] == 0.5
     assert summary["dpr_fallbacks"] == 1
     assert summary["mean_latency_ms"] == 200.0
+
+
+def test_a_question_on_an_empty_memory_is_marked_as_a_fallback(ctx):
+    row = {"id": "x", "text": "Where is Acme?", "expected_answer": "", "gold_passage_ids": []}
+    result = run_question(ctx, row, ctx.store.get_settings())
+    assert result["used_dpr_fallback"] is True
+    assert result["trace"]["fallback_reason"] == "the memory is empty"
+    assert summarize([result])["dpr_fallbacks"] == 1
 
 
 def test_summarize_of_nothing():

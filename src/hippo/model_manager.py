@@ -1,5 +1,5 @@
 """
-Making sure the Ollama models are installed.
+Making sure the Ollama models are installed (the LLM and the embedding model).
 
 On startup (and from the Settings page) hippo checks that the LLM and the
 embedding model are present and pulls the missing ones in the background,

@@ -251,3 +251,94 @@ def test_read_zip_keeps_going_when_one_member_is_broken(tmp_path: Path) -> None:
     path = tmp_path / "bundle.zip"
     path.write_bytes(build_zip({"bad.pdf": b"not a pdf", "good.txt": b"Fine text."}))
     assert [d.title for d in read_zip(path, "bundle.zip")] == ["good.txt"]
+
+
+# ---------------------------------------------------------------- budgets
+# A small file can unpack into a huge amount of text (epub, zip, pdf streams). Every reader
+# counts what it produces against a TextBudget and stops with TooLarge, which is a ReadError
+# that read_zip does *not* swallow as "one broken member".
+
+
+def test_text_budget_raises_too_large_once_the_total_passes_the_limit() -> None:
+    budget = readers.TextBudget(limit=10)
+    budget.add(6, "a.txt")
+    budget.add(4, "b.txt")  # exactly at the limit is fine
+    with pytest.raises(readers.TooLarge, match="too large"):
+        budget.add(1, "c.txt")
+    assert issubclass(readers.TooLarge, readers.ReadError)
+
+
+def test_read_bytes_counts_plain_text_against_the_budget() -> None:
+    budget = readers.TextBudget(limit=5)
+    with pytest.raises(readers.TooLarge, match="notes.md"):
+        readers.read_bytes(b"more than five", "notes.md", budget=budget)
+    assert readers.read_bytes(b"tiny", "notes.md", budget=readers.TextBudget(limit=5))
+
+
+def test_read_zip_shares_one_budget_across_members_and_does_not_swallow_it(tmp_path: Path) -> None:
+    path = tmp_path / "bundle.zip"
+    path.write_bytes(build_zip({"a.txt": b"x" * 40, "b.txt": b"y" * 40}))
+    assert len(read_zip(path, "bundle.zip", readers.TextBudget(limit=80))) == 2
+    with pytest.raises(readers.TooLarge):
+        read_zip(path, "bundle.zip", readers.TextBudget(limit=79))
+
+
+def test_read_zip_refuses_too_many_members_or_too_much_unpacked_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "bundle.zip"
+    path.write_bytes(
+        build_zip({"a.txt": b"x" * 30, "b.txt": b"y" * 30, "c.txt": b"z" * 30, "junk.png": b"\x00"})
+    )
+    monkeypatch.setattr(readers, "MAX_ZIP_MEMBERS", 2)
+    with pytest.raises(readers.TooLarge, match="3 readable files"):
+        read_zip(path, "bundle.zip")
+    monkeypatch.setattr(readers, "MAX_ZIP_MEMBERS", 5_000)
+    monkeypatch.setattr(readers, "MAX_ZIP_TOTAL_BYTES", 89)
+    with pytest.raises(readers.TooLarge, match="unpack to 90 bytes"):
+        read_zip(path, "bundle.zip")
+    monkeypatch.setattr(readers, "MAX_ZIP_TOTAL_BYTES", 90)
+    assert len(read_zip(path, "bundle.zip")) == 3
+
+
+def test_epub_chapters_count_one_by_one_and_oversized_chapters_are_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "book.epub"
+    path.write_bytes(minimal_epub())
+    # The first chapter in spine order (b.xhtml) already breaks a tiny budget.
+    with pytest.raises(readers.TooLarge, match="b.xhtml"):
+        read_file(path, readers.TextBudget(limit=10))
+    # Chapters bigger than MAX_FILE_BYTES are skipped without being read: a.xhtml ("Second") is one byte
+    # longer than b.xhtml ("First"), so a cap of exactly b's size keeps chapter one and drops chapter two.
+    with zipfile.ZipFile(io.BytesIO(minimal_epub())) as book:
+        monkeypatch.setattr(readers, "MAX_FILE_BYTES", book.getinfo("OEBPS/b.xhtml").file_size)
+    (doc,) = read_file(path)
+    assert "chapter one" in doc.text and "chapter two" not in doc.text
+
+
+def test_pdf_pages_count_against_the_budget(tmp_path: Path) -> None:
+    path = tmp_path / "guide.pdf"
+    path.write_bytes(minimal_pdf("Acme Robotics is headquartered in Boulder."))
+    with pytest.raises(readers.TooLarge):
+        read_file(path, readers.TextBudget(limit=10))
+
+
+def test_docx_with_a_huge_document_body_is_refused_before_parsing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "guide.docx"
+    path.write_bytes(minimal_docx())
+    monkeypatch.setattr(readers, "MAX_DOCX_XML_BYTES", 100)
+    with pytest.raises(readers.TooLarge, match="document body"):
+        read_file(path)
+
+
+def test_walk_repo_does_not_swallow_too_large(tmp_path: Path) -> None:
+    from hippo.ingest.repos import walk_repo
+
+    (tmp_path / "a.md").write_text("x" * 40)
+    (tmp_path / "b.md").write_text("y" * 40)
+    assert len(walk_repo(tmp_path, readers.TextBudget(limit=80))) == 2
+    with pytest.raises(readers.TooLarge):
+        walk_repo(tmp_path, readers.TextBudget(limit=79))

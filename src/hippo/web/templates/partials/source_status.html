@@ -7,5 +7,5 @@
 {% else %}
   <span class="pill warn"><span class="dot"></span>{{ src.status }}</span>
   <div class="muted small">{{ src.stage }}{% if src.progress_total %} · {{ src.progress_done }}/{{ src.progress_total }}{% endif %}</div>
-  {% if src.progress_total %}<div class="progress"><span style="width: {{ (src.progress_done, src.progress_total) | pct }}%"></span></div>{% endif %}
+  {% if src.progress_total %}<div class="progress"><span style="width: {{ src.progress_done | pct(src.progress_total) }}%"></span></div>{% endif %}
 {% endif %}

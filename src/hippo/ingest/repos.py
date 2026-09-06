@@ -102,15 +102,21 @@ def _explain_git_failure(url: str, stderr: str) -> str:
     )
 
 
-def walk_repo(root: Path) -> list[Document]:
-    """Read every supported text file under `root`. Titles are paths relative to the root."""
+def walk_repo(root: Path, budget: readers.TextBudget | None = None) -> list[Document]:
+    """
+    Read every supported text file under `root`. Titles are paths relative to the root.
+    `budget` caps the text of the whole checkout (see readers.TextBudget); the default is MAX_TEXT_CHARS.
+    """
     root = root.resolve()
     if not root.is_dir():
         raise RepoError(f"{root} is not a folder")
+    budget = budget or readers.TextBudget()
     docs: list[Document] = []
     for path in _walk_files(root):
         try:
-            docs.extend(readers.read_path(path, path.relative_to(root).as_posix()))
+            docs.extend(readers.read_path(path, path.relative_to(root).as_posix(), budget))
+        except readers.TooLarge:
+            raise  # the whole repo is over budget; do not treat it as one bad file
         except Exception as err:  # noqa: BLE001 - one unreadable file must not sink the repo
             log.warning("Skipping %s: %s", path, err)
     return docs

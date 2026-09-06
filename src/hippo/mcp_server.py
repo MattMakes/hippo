@@ -33,6 +33,7 @@ lists; the mcp library runs them in a worker thread and serialises the result.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -43,6 +44,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .ask import ask, search
 from .context import AppContext
+from .web.security import ANY_HOST
 
 log = logging.getLogger(__name__)
 
@@ -209,18 +211,34 @@ def mount(app: FastAPI, ctx: AppContext) -> MCPServer:
     """Serve the MCP server at /mcp inside a FastAPI app. Call this after every other route is added."""
     server = build_server(ctx)
     # Stateless: every request stands alone, so no session ids to lose when the container restarts.
-    # DNS-rebinding protection is off because inside Docker the Host header is whatever the user
-    # typed (localhost:8000, a LAN name, ...) and we would otherwise reject them all.
     mcp_app = server.streamable_http_app(
         streamable_http_path=MCP_PATH,
         stateless_http=True,
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        transport_security=transport_security(ctx.config.allowed_hosts),
     )
     _wrap_lifespan(app, server)
     # The MCP app's own route is /mcp, so mounting it at "/" keeps the URL http://host:8000/mcp.
     # Starlette tries routes in order, so this catch-all only sees paths nothing else claimed.
     app.mount("/", mcp_app, name="mcp")
     return server
+
+
+def transport_security(allowed_hosts: Iterable[str]) -> TransportSecuritySettings:
+    """
+    The MCP library's own DNS-rebinding check, fed the same host list as the web app's guard
+    (hippo.web.security) so the two can never disagree. Its lists are exact strings with an
+    optional ':*' port wildcard, so every host goes in twice: bare and with any port.
+    """
+    hosts = list(allowed_hosts)
+    if ANY_HOST in hosts:  # the user switched the check off
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts + [f"{h}:*" for h in hosts],
+        allowed_origins=[
+            f"{scheme}://{h}{port}" for scheme in ("http", "https") for h in hosts for port in ("", ":*")
+        ],
+    )
 
 
 def _wrap_lifespan(app: FastAPI, server: MCPServer) -> None:

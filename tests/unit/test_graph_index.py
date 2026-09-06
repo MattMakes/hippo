@@ -373,3 +373,16 @@ def test_edited_graph_changes_ppr(index: GraphIndex, tiny: Tiny) -> None:
     after = index.ppr(reset, damping=0.5, graph=edited)
     assert after[index.idx_of[tiny.b]] < before[index.idx_of[tiny.b]]
     assert after.sum() == pytest.approx(1.0)
+
+
+# -------------------------------------------------------- stale vertices
+
+
+def test_neighbors_of_a_vertex_that_is_not_in_the_graph_is_empty(index: GraphIndex) -> None:
+    # A trace recorded before a reload can name a vertex that no longer exists. igraph would
+    # raise (and an igraph error in a worker thread can abort the process); we answer "none".
+    assert index.neighbors(index.num_nodes) == []
+    assert index.neighbors(index.num_nodes + 1000) == []
+    assert index.neighbors(-1) == []
+    assert index.neighbors(index.num_nodes, index.graph_with_edits([])) == []
+    assert index.neighbors(0) != []  # a real vertex still has its neighbours

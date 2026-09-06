@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from jinja2 import Undefined
 
 from ..context import AppContext
 from ..status import system_status
@@ -20,10 +21,15 @@ from ..status import system_status
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
+# htmx treats 286 as "swap this, then stop polling". Partials answer with it when nothing is in
+# flight, so idle pages stop replacing their tables under the user's cursor every few seconds.
+STOP_POLLING = 286
+
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 def _pct(done: Any, total: Any) -> int:
+    """Percentage for progress bars: {{ done | pct(total) }} -> 0..100 (0 when total is missing)."""
     try:
         done, total = float(done or 0), float(total or 0)
     except (TypeError, ValueError):
@@ -38,7 +44,9 @@ def _short(text: Any, length: int = 80) -> str:
 
 def _fmt(value: Any, digits: int = 3) -> str:
     """Numbers as short strings for tables: 0.1234 -> '0.123', None -> '–'."""
-    if value is None or value == "":
+    # A run that is still going has an empty summary, so run.summary.accuracy is Jinja's
+    # Undefined: show a dash instead of crashing on float(Undefined).
+    if value is None or value == "" or isinstance(value, Undefined):
         return "–"
     try:
         return f"{float(value):.{digits}f}"

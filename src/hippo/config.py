@@ -13,10 +13,25 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_ALLOWED_HOSTS: tuple[str, ...] = ("localhost", "127.0.0.1", "[::1]")
+
 
 def _env(name: str, default: str) -> str:
     value = os.environ.get(name)
     return value if value not in (None, "") else default
+
+
+def parse_allowed_hosts(text: str) -> tuple[str, ...]:
+    """
+    Turn HIPPO_ALLOWED_HOSTS ("mybox, 192.168.1.5") into the full list: the local defaults
+    plus what the user added. Ports are never part of an entry; "*" means "any host".
+    """
+    extra = [item.strip() for item in text.split(",") if item.strip()]
+    hosts = list(DEFAULT_ALLOWED_HOSTS)
+    for host in extra:
+        if host not in hosts:
+            hosts.append(host)
+    return tuple(hosts)
 
 
 @dataclass(frozen=True)
@@ -41,9 +56,20 @@ class Config:
     chunk_size_chars: int = 1500  # ~350 tokens: small enough that 5 passages fit in the QA prompt
     chunk_overlap_chars: int = 150
 
+    # Size limits (a memory is not a file server; huge inputs mostly cost hours of LLM time).
+    max_upload_bytes: int = 50_000_000  # biggest upload or pasted text; bigger ones are refused
+    max_text_chars: int = (
+        20_000_000  # most text one source may turn into; past it the source fails as too large
+    )
+
     # Web server.
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"  # this machine only; hippo has no login. docker-compose sets 0.0.0.0 inside the container.
     port: int = 8000
+    # Host names the web app answers to. Browsers send the address they used in the
+    # Host header; anything else is refused so a page on attacker.example cannot point its
+    # own DNS name at this machine and read the memory (a "DNS rebinding" attack).
+    # HIPPO_ALLOWED_HOSTS adds names or IPs (comma-separated); "*" turns the check off.
+    allowed_hosts: tuple[str, ...] = DEFAULT_ALLOWED_HOSTS
 
 
 def load_config() -> Config:
@@ -61,6 +87,9 @@ def load_config() -> Config:
         openie_workers=int(_env("HIPPO_OPENIE_WORKERS", str(Config.openie_workers))),
         chunk_size_chars=int(_env("HIPPO_CHUNK_SIZE", str(Config.chunk_size_chars))),
         chunk_overlap_chars=int(_env("HIPPO_CHUNK_OVERLAP", str(Config.chunk_overlap_chars))),
+        max_upload_bytes=int(_env("HIPPO_MAX_UPLOAD_BYTES", str(Config.max_upload_bytes))),
+        max_text_chars=int(_env("HIPPO_MAX_TEXT_CHARS", str(Config.max_text_chars))),
         host=_env("HIPPO_HOST", Config.host),
         port=int(_env("HIPPO_PORT", str(Config.port))),
+        allowed_hosts=parse_allowed_hosts(_env("HIPPO_ALLOWED_HOSTS", "")),
     )

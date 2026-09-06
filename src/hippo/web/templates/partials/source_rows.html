@@ -14,7 +14,7 @@
     <td class="muted">{{ s.created_at[:16] | replace('T', ' ') }}</td>
     <td class="row">
       <a class="btn small" href="/ask" title="Ask a question">Ask</a>
-      <button class="btn small danger" data-delete="/api/sources/{{ s.id }}" data-confirm="Forget '{{ s.name }}' and everything learned from it?">Delete</button>
+      <button class="btn small danger" data-delete="/api/sources/{{ s.id }}" data-confirm="Forget '{{ s.name }}' and everything learned from it?" {% if busy_ids is defined and s.id in busy_ids %}disabled title="Wait until indexing has finished"{% endif %}>Delete</button>
     </td>
   </tr>
   {% endfor %}

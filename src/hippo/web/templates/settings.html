@@ -19,7 +19,7 @@
           <td class="muted">{{ 'reading, extracting facts, filtering, answering, judging' if name == config.llm_model else 'embeddings (turning text into vectors)' }}</td>
           <td>
             {% if ok %}<span class="pill ok"><span class="dot"></span>installed</span>
-            {% elif p and not p.done %}<span class="pill warn">⬇ {{ p.status }} {% if p.total %}{{ (p.completed, p.total) | pct }}%{% endif %}</span>
+            {% elif p and not p.done %}<span class="pill warn">⬇ {{ p.status }} {% if p.total %}{{ p.completed | pct(p.total) }}%{% endif %}</span>
             {% elif p and p.error %}<span class="pill bad" title="{{ p.error }}">failed</span>
             {% else %}<span class="pill bad">missing</span>{% endif %}
           </td>

@@ -8,7 +8,7 @@
 {% if status.is_pulling %}
   {% for name, p in status.pulling.items() if not p.done %}
   <span class="pill warn" title="{{ p.status }}">
-    ⬇ {{ name }} {% if p.total %}{{ (p.completed, p.total) | pct }}%{% endif %}
+    ⬇ {{ name }} {% if p.total %}{{ p.completed | pct(p.total) }}%{% endif %}
   </span>
   {% endfor %}
 {% endif %}

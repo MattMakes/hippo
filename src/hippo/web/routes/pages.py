@@ -8,6 +8,8 @@ the MCP server call, then hand the result to a template.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
@@ -15,8 +17,10 @@ from ... import ask as ask_service
 from ...ollama import OllamaError
 from ...status import system_status
 from ...store.base import DEFAULT_SETTINGS, validate_settings
+from ..adhoc import remember_adhoc
 from ..render import ctx_of, render
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 SETTING_HELP = {
@@ -54,15 +58,26 @@ def ask_submit(request: Request, question: str = Form("")):
         return render(request, "partials/answer.html", error="Type a question first.")
     try:
         trace, answer = ask_service.ask(ctx, question)
+        graph = ctx.graph()
     except OllamaError as exc:
         return render(request, "partials/answer.html", error=str(exc))
-    graph = ctx.graph()
+    except Exception as exc:  # noqa: BLE001 - htmx drops a 500 silently, so show the problem instead
+        log.exception("ask failed")
+        return render(request, "partials/answer.html", error=f"{type(exc).__name__}: {exc}")
     passages = []
     for ranked in trace.passages[: int(trace.settings.get("qa_top_k", 5))]:
         passage = graph.passage_by_id(ranked.passage_id)
         passages.append({"ranked": ranked, "text": passage.text if passage else ranked.preview})
+    # Keep the trace so "Analyze this question" explains this very answer instead of asking again.
+    trace_key = remember_adhoc(trace, {"answer": answer.answer, "thought": answer.thought})
     return render(
-        request, "partials/answer.html", question=question, trace=trace, answer=answer, passages=passages
+        request,
+        "partials/answer.html",
+        question=question,
+        trace=trace,
+        answer=answer,
+        passages=passages,
+        trace_key=trace_key,
     )
 
 

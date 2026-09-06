@@ -12,11 +12,16 @@ Given the chunks of one source, this file:
 5. bumps the graph version so the in-memory graph reloads
 
 The whole thing is one function, `index_source`, called from a background job.
+
+Step 3 writes nodes first and links them afterwards, and the store's
+`remove_orphans` deletes any entity or fact that has no link. So writing and
+orphan removal must never overlap: see GRAPH_WRITE_LOCK below.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -30,6 +35,14 @@ log = logging.getLogger(__name__)
 
 SYNONYM_MAX_NEIGHBOURS = 100  # the reference stops after 100 neighbours per entity
 SYNONYM_QUERY_BATCH = 1000
+
+# The rule: hold this lock while you write entities/facts and their links, and hold it
+# while you delete passages (which ends with remove_orphans). Then an orphan sweep can never
+# run in the gap between "entity written" and "entity linked to its passage", and a delete
+# that lands between our "does it exist?" check and our write is seen by the re-check we do
+# under the lock. It is an RLock so a holder may call helpers that take it again. Ollama calls
+# (embedding) happen *before* taking the lock: the lock is for database writes only.
+GRAPH_WRITE_LOCK = threading.RLock()
 
 # Called as on_progress(stage, done, total). `stage` is a short phrase for the UI.
 Progress = Callable[[str, int, int], None]
@@ -123,34 +136,49 @@ def index_source(
             triples[fid] = (s, p, o)
             statements.append((ex.passage_id, fid))
 
-    new_entity_ids = [eid for eid in names if eid not in store.existing_entity_ids(list(names))]
+    # Ask the store once which ids it already has (one query, not one per id), then embed
+    # only the new ones. Both are done before taking the lock: embedding is the slow part.
+    known_entities = store.existing_entity_ids(list(names))
+    new_entity_ids = [eid for eid in names if eid not in known_entities]
     new_entity_vectors = ollama.embed([names[eid] for eid in new_entity_ids], kind="document")
-    store.add_entities(
-        [
-            {"id": eid, "name": names[eid], "embedding": vec.tolist()}
-            for eid, vec in zip(new_entity_ids, new_entity_vectors, strict=True)
-        ]
-    )
-
-    new_fact_ids = [fid for fid in triples if fid not in store.existing_fact_ids(list(triples))]
+    known_facts = store.existing_fact_ids(list(triples))
+    new_fact_ids = [fid for fid in triples if fid not in known_facts]
     new_fact_vectors = ollama.embed([fact_text(*triples[fid]) for fid in new_fact_ids], kind="document")
-    store.add_facts(
-        [
-            {
-                "id": fid,
-                "subject": s,
-                "predicate": p,
-                "object": o,
-                "subject_id": entity_id(s),
-                "object_id": entity_id(o),
-                "embedding": vec.tolist(),
-            }
-            for fid, vec in zip(new_fact_ids, new_fact_vectors, strict=True)
-            for (s, p, o) in [triples[fid]]
-        ]
-    )
-    store.link_passage_entities(mentions)
-    store.link_passage_facts(statements)
+
+    with GRAPH_WRITE_LOCK:
+        # A delete may have pruned some of the "known" ids while we were embedding. Under the
+        # lock nothing else can change, so re-check those and write them too.
+        new_entity_ids, new_entity_vectors = _add_vanished(
+            store.existing_entity_ids, known_entities, new_entity_ids, new_entity_vectors, names, ollama
+        )
+        store.add_entities(
+            [
+                {"id": eid, "name": names[eid], "embedding": vec.tolist()}
+                for eid, vec in zip(new_entity_ids, new_entity_vectors, strict=True)
+            ]
+        )
+        store.link_passage_entities(mentions)  # link right away: a linked entity is never an orphan
+
+        fact_texts = {fid: fact_text(*triple) for fid, triple in triples.items()}
+        new_fact_ids, new_fact_vectors = _add_vanished(
+            store.existing_fact_ids, known_facts, new_fact_ids, new_fact_vectors, fact_texts, ollama
+        )
+        store.add_facts(
+            [
+                {
+                    "id": fid,
+                    "subject": s,
+                    "predicate": p,
+                    "object": o,
+                    "subject_id": entity_id(s),
+                    "object_id": entity_id(o),
+                    "embedding": vec.tolist(),
+                }
+                for fid, vec in zip(new_fact_ids, new_fact_vectors, strict=True)
+                for (s, p, o) in [triples[fid]]
+            ]
+        )
+        store.link_passage_facts(statements)
     progress("saving entities and facts", 1, 1)
 
     # 4. Synonym edges for the new entities.
@@ -169,6 +197,29 @@ def index_source(
         "facts": len(new_fact_ids),
         "synonyms": len(synonyms),
     }
+
+
+def _add_vanished(
+    existing_ids: Callable[[list[str]], set[str]],
+    known: set[str],
+    new_ids: list[str],
+    new_vectors: np.ndarray,
+    text_of: dict[str, str],
+    ollama: Ollama,
+) -> tuple[list[str], np.ndarray]:
+    """
+    Call with GRAPH_WRITE_LOCK held. `known` are the ids we skipped because the store had them;
+    if a delete removed some meanwhile, embed those now and return them along with the new ones.
+    Nothing was skipped -> nothing to re-check, no extra query.
+    """
+    if not known:
+        return new_ids, new_vectors
+    vanished = sorted(known - existing_ids(sorted(known)))
+    if not vanished:
+        return new_ids, new_vectors
+    log.info("%d ids were deleted while we were embedding; adding them again", len(vanished))
+    vectors = ollama.embed([text_of[i] for i in vanished], kind="document")
+    return new_ids + vanished, np.concatenate([new_vectors, vectors]) if len(new_ids) else vectors
 
 
 class EmbeddingMismatch(ValueError):

@@ -10,7 +10,7 @@
     <a class="btn" href="/evals?source={{ source.id }}">Question sets</a>
     <button class="btn" data-post="/api/sources/{{ source.id }}/generate-questions" data-body='{"max_single": 8, "max_multihop": 4}' data-message="Making questions… this takes a minute" data-then="/evals" data-refresh="1500" {% if source.status != 'ready' %}disabled title="Wait until indexing has finished"{% endif %}>Make sample questions</button>
     <button class="btn" data-post="/api/sources/{{ source.id }}/reindex" data-message="Re-indexing" data-refresh="800" {% if busy %}disabled{% endif %}>Reindex</button>
-    <button class="btn danger" data-delete="/api/sources/{{ source.id }}" data-confirm="Forget '{{ source.name }}' and everything learned from it?" data-then="/">Delete</button>
+    <button class="btn danger" data-delete="/api/sources/{{ source.id }}" data-confirm="Forget '{{ source.name }}' and everything learned from it?" data-then="/" {% if busy %}disabled title="Wait until indexing has finished"{% endif %}>Delete</button>
   </div>
 </div>
 

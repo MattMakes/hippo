@@ -116,6 +116,7 @@
   function renderEdits() {
     $('extra-boosts').innerHTML = [...extraBoosts.entries()].map(([id, b]) => `<li>boost <b>${escapeHtml(b.name)}</b> × ${b.boost} <span class="x" data-remove-boost="${id}">✕</span></li>`).join('');
     $('edge-edits').innerHTML = edgeEdits.map((e, i) => `<li><b>${escapeHtml(e.aLabel)}</b> — <b>${escapeHtml(e.bLabel)}</b> weight ${e.weight} <span class="x" data-remove-edge="${i}">✕</span></li>`).join('');
+    markStale();
   }
   document.addEventListener('click', (e) => {
     const b = e.target.closest('[data-remove-boost]');
@@ -152,7 +153,28 @@
     };
   }
 
+  // "Save as changeset" must save exactly what the diff on screen came from. lastOps holds the
+  // ops of the last simulation and simulatedInputs a snapshot of the inputs it used; any edit
+  // after that makes them stale, and Save stays off until the user simulates again.
   let lastOps = null;
+  let simulatedInputs = null;
+  function markStale() {
+    lastOps = null;
+    simulatedInputs = null;
+    $('save-changeset').disabled = true;
+    if (!$('sim-results').hidden) $('simulate-status').textContent = 'inputs changed – simulate again before saving';
+  }
+  // The inputs live in three places: the tweak panel (#simulate), the fact in/out selects in the
+  // candidates table and the boost inputs in the seeds table.
+  for (const eventName of ['input', 'change']) {
+    document.addEventListener(eventName, (e) => {
+      if (!e.target.closest('#simulate, .fact-mode, .boost-input')) return;
+      // The changeset name and note live inside #sim-results; typing them is not an edit.
+      if (e.target.closest('#sim-results')) return;
+      markStale();
+    });
+  }
+
   $('simulate-btn').addEventListener('click', async () => {
     const overrides = collectOverrides();
     const status = $('simulate-status');
@@ -163,6 +185,7 @@
       const out = await hippo.api('POST', '/api/simulate', body);
       renderSimulation(out);
       lastOps = out.ops;
+      simulatedInputs = JSON.stringify(overrides);
       $('save-changeset').disabled = !(out.ops && out.ops.length);
       status.textContent = `done in ${Math.round(out.trace.timing_ms?.total || 0)} ms`;
     } catch (err) { status.textContent = ''; }
@@ -197,7 +220,13 @@
   }
 
   $('save-changeset').addEventListener('click', async () => {
-    if (!lastOps || !lastOps.length) return;
+    // Belt and braces for any input path the listeners above miss: compare the inputs now with
+    // the ones the last simulation ran on.
+    if (!lastOps || !lastOps.length || JSON.stringify(collectOverrides()) !== simulatedInputs) {
+      markStale();
+      hippo.toast('Simulate first, so what you save is what you saw', 'bad');
+      return;
+    }
     const name = $('cs-name').value.trim() || `Changeset from "${data.question.slice(0, 40)}"`;
     const out = await hippo.api('POST', '/api/changesets', { name, ops: lastOps, from_result_id: data.resultId, note: $('cs-note').value.trim() });
     hippo.toast('Saved. Apply it from the Changesets page.', 'ok');

@@ -271,3 +271,14 @@ def test_reindexing_replaces_passages_whose_text_changed(ctx):
     assert ctx.store.get_source(source_id)["status"] == "ready"
     assert "dallas" in {e["name"] for e in ctx.store.load_entities()}
     assert "austin" not in {e["name"] for e in ctx.store.load_entities()}
+
+
+def test_reindex_all_clears_every_source_then_indexes_each_again(ctx: AppContext) -> None:
+    sample = pipeline.add_sample(ctx)
+    note = pipeline.add_text(ctx, "note", "Zed Corp is located in Austin.")
+    wait(ctx)
+    assert pipeline.reindex_all(ctx) == 2
+    wait(ctx)
+    assert {s["status"] for s in ctx.store.list_sources()} == {"ready"}
+    assert ctx.store.get_source(sample)["passages"] == 8
+    assert ctx.store.get_source(note)["passages"] == 1

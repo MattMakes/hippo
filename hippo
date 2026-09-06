@@ -17,6 +17,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 OLLAMA_HOST_URL="http://localhost:11434"
+DEFAULT_NEO4J_PASSWORD="hippo-password"   # what docker-compose.yml falls back to when .env has none
 
 # ------------------------------------------------------------ helpers
 
@@ -41,12 +42,69 @@ host_has_ollama() {
   command -v curl >/dev/null 2>&1 && curl -s --max-time 2 "$OLLAMA_HOST_URL/api/tags" >/dev/null 2>&1
 }
 
+# The NEO4J_PASSWORD line of .env, or the compose default when there is none.
+neo4j_password() {
+  local value=""
+  if [ -f .env ]; then
+    value="$(sed -n 's/^NEO4J_PASSWORD=//p' .env | tail -n 1)"
+  fi
+  printf '%s\n' "${value:-$DEFAULT_NEO4J_PASSWORD}"
+}
+
+random_password() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 16
+  else
+    # `head -c` reads exactly 32 bytes and exits 0, so this is safe under `pipefail`.
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+
+# The compose project name decides the volume name (<project>_neo4j_data).
+neo4j_volume_exists() {
+  local project
+  project="${COMPOSE_PROJECT_NAME:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]')}"
+  docker volume inspect "${project}_neo4j_data" >/dev/null 2>&1
+}
+
+# Make sure .env has a NEO4J_PASSWORD. On the first run we write a random one;
+# after that the same line is used every time, because Neo4j only reads the
+# password when its data volume is created and would refuse a new one later.
+ensure_neo4j_password() {
+  if [ -f .env ] && grep -q '^NEO4J_PASSWORD=.' .env; then
+    return
+  fi
+  if [ -f .env ]; then
+    # Drop an empty "NEO4J_PASSWORD=" line (as in .env.example) so the file ends up with one line.
+    { grep -v '^NEO4J_PASSWORD=$' .env || true; } > .env.tmp && mv .env.tmp .env
+  fi
+  local password
+  if neo4j_volume_exists; then
+    # A database already exists, made with the old fixed password: keep using it.
+    password="$DEFAULT_NEO4J_PASSWORD"
+    say "Your Neo4j database was created with the default password; writing NEO4J_PASSWORD=$password to .env."
+    say "To change it later: ./hippo down, docker volume rm the neo4j_data volume (this erases the memory), edit .env, ./hippo up."
+  else
+    password="$(random_password)"
+    say "First run: wrote a random NEO4J_PASSWORD to .env. Keep that file; Neo4j only accepts it because it was set on first start."
+  fi
+  {
+    printf '\n# Neo4j password, written by ./hippo up. Keep it: the database only accepts this one.\n'
+    printf 'NEO4J_PASSWORD=%s\n' "$password"
+  } >> .env
+}
+
 print_urls() {
+  local password
+  password="$(neo4j_password)"
   say ""
-  say "hippo is up:"
+  say "hippo is up (ports are open to this machine only):"
   say "  UI             http://localhost:8000"
-  say "  Neo4j browser  http://localhost:7474   (user: neo4j / password: hippo-password)"
+  say "  Neo4j browser  http://localhost:7474   (user: neo4j / password: $password, from .env)"
   say "  MCP            http://localhost:8000/mcp"
+  if [ "$password" = "$DEFAULT_NEO4J_PASSWORD" ]; then
+    say "  warning: Neo4j is using the default password; set NEO4J_PASSWORD in .env for a fresh database."
+  fi
   say ""
   say "First time? Open the UI, click 'Load the sample', then ask: Who designed the Orion arm?"
   say "Models are downloaded on first start; watch the header of the UI, or run: ./hippo pull-models"
@@ -70,6 +128,7 @@ cmd_up() {
     build_flag="--build"
   fi
   mkdir -p data
+  ensure_neo4j_password
 
   if host_has_ollama; then
     say "Found Ollama on this machine at $OLLAMA_HOST_URL; the app will use it."

@@ -36,6 +36,25 @@ window.hippo = (() => {
     return Number.isFinite(n) ? n.toFixed(digits) : String(value);
   }
 
+  // htmx swaps nothing on a 4xx/5xx or a network failure, so without this a failed poll or a
+  // crashed /ask would leave the page silently unchanged. One toast per failure makes it visible.
+  document.body.addEventListener('htmx:responseError', (e) => {
+    toast(`${e.detail.xhr.status} ${e.detail.xhr.statusText || 'error'} from ${e.detail.pathInfo.requestPath}`, 'bad');
+  });
+  document.body.addEventListener('htmx:sendError', (e) => {
+    toast(`Cannot reach hippo (${e.detail.pathInfo.requestPath}). Is the server still running?`, 'bad');
+  });
+
+  // Polled tables are replaced wholesale. If that happens between mousedown and mouseup on a
+  // Delete button, the click lands on the new table and does nothing; a focused button or link
+  // inside the target means the user is mid-click, so skip that one swap (the next poll catches up).
+  document.body.addEventListener('htmx:beforeSwap', (e) => {
+    const active = document.activeElement;
+    if (active && active !== document.body && e.detail.target && e.detail.target.contains(active)) {
+      e.detail.shouldSwap = false;
+    }
+  });
+
   document.addEventListener('click', async (event) => {
     const post = event.target.closest('[data-post]');
     if (post) {

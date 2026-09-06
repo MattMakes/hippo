@@ -253,8 +253,12 @@ class GraphIndex:
         return self.passages[self.passage_position(vertex)]
 
     def neighbors(self, vertex: int, graph: ig.Graph | None = None) -> list[tuple[int, float]]:
-        """(neighbour vertex, edge weight) pairs."""
+        """(neighbour vertex, edge weight) pairs. An unknown vertex simply has none."""
         graph = graph or self.graph
+        if vertex < 0 or vertex >= graph.vcount():
+            # A stale trace can name a vertex that no longer exists. igraph would raise, and an igraph
+            # error inside a web worker thread can take the whole process down, so say "no neighbours".
+            return []
         out = []
         for edge_id in graph.incident(vertex):
             e = graph.es[edge_id]

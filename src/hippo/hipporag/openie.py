@@ -14,8 +14,9 @@ part in a fact.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
 from .. import prompts
@@ -64,6 +65,9 @@ def extract(ollama: Ollama, passage_id: str, text: str) -> Extraction:
     except OllamaError as exc:
         log.warning("OpenIE failed for passage %s: %s", passage_id, exc)
         result.error = str(exc)
+    except Exception as exc:  # noqa: BLE001 - one odd reply must not sink the whole index run
+        log.warning("OpenIE failed for passage %s: %s", passage_id, exc, exc_info=True)
+        result.error = f"{type(exc).__name__}: {exc}"
     return result
 
 
@@ -82,20 +86,37 @@ def extract_many(
     Extract from many (passage_id, text) pairs with a few parallel workers. Results keep the input order.
     `should_stop()` is checked before each passage; when it returns True, `Stopped` is raised.
     """
+    workers = max(1, workers)
     results: dict[str, Extraction] = {}
+    todo = deque(passages)
+    in_flight: set[Future[Extraction]] = set()
 
     def extract_unless_stopped(pid: str, text: str) -> Extraction:
         if should_stop and should_stop():
             raise Stopped(f"stopped before passage {pid}")
         return extract(ollama, pid, text)
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(extract_unless_stopped, pid, text): pid for pid, text in passages}
-        for done, future in enumerate(as_completed(futures), start=1):
-            extraction = future.result()
-            results[extraction.passage_id] = extraction
-            if on_progress:
-                on_progress(done, len(passages))
+    def top_up() -> None:
+        # Only a few passages are queued at any time. Python waits for every queued item at exit
+        # (and on an error), so a queue holding the whole repo would keep the process alive for hours.
+        while todo and len(in_flight) < workers * 2:
+            pid, text = todo.popleft()
+            in_flight.add(pool.submit(extract_unless_stopped, pid, text))
+
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        top_up()
+        while in_flight:
+            finished, in_flight = wait(in_flight, return_when=FIRST_COMPLETED)
+            for future in finished:
+                extraction = future.result()  # re-raises Stopped
+                results[extraction.passage_id] = extraction
+                if on_progress:
+                    on_progress(len(results), len(passages))
+            top_up()
+    finally:
+        # Drop what is still queued; the calls already running finish on their own in the background.
+        pool.shutdown(wait=False, cancel_futures=True)
     return [results[pid] for pid, _ in passages]
 
 

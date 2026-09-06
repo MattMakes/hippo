@@ -14,7 +14,7 @@ from hippo.web.routes.evals import parse_question_lines
 
 @pytest.fixture
 def client(ctx):
-    with TestClient(create_app(ctx)) as client:
+    with TestClient(create_app(ctx), base_url="http://localhost") as client:
         yield client
 
 
@@ -132,6 +132,8 @@ def test_creating_running_and_comparing_a_question_set(client, ctx):
     ctx.jobs.wait_all()
     page = client.get(f"/evals/runs/{run_id}?compare={second}")
     assert page.status_code == 200 and "vs second" in page.text and "/analyze/" in page.text
+    assert "vs second" in client.get(f"/partials/runs/{run_id}?compare={second}").text
+    assert ">graph<" in page.text and ">embeddings<" not in page.text  # the graph search answered
     assert "first" in client.get("/evals").text
     assert client.get(f"/api/evals/runs/{run_id}").json()["results"][0]["verdict"] == "correct"
 
@@ -160,3 +162,19 @@ def test_running_an_empty_set_is_refused(client, ctx):
     response = client.post(f"/evals/sets/{set_id}/run", data={"name": "x"}, follow_redirects=False)
     assert "error=" in response.headers["location"]
     assert client.post("/api/evals/sets/nope/run", json={}).status_code == 404
+
+
+def test_run_table_says_which_questions_fell_back_to_embeddings(client, ctx):
+    # An empty memory has no facts, so every question falls back to plain embedding search.
+    set_id = client.post(
+        "/api/evals/sets",
+        json={"name": "empty", "questions": [{"text": "Where is Acme?", "expected_answer": "Boulder"}]},
+    ).json()["set_id"]
+    run_id = client.post(f"/api/evals/sets/{set_id}/run", json={}).json()["run_id"]
+    ctx.jobs.wait_all()
+    run = ctx.store.get_run(run_id)
+    assert run["summary"]["dpr_fallbacks"] == 1
+    page = client.get(f"/evals/runs/{run_id}")
+    assert page.status_code == 200
+    assert ">embeddings<" in page.text and ">graph<" not in page.text
+    assert ctx.store.list_results(run_id)[0]["used_dpr_fallback"] is True

@@ -1,13 +1,19 @@
-"""The web foundation: app factory, Ask page, Settings page, status and graph endpoints."""
+"""The web foundation: app factory, Ask page, Settings page, status and graph endpoints, and the request guard."""
 
 from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
 
+from hippo.config import Config
+from hippo.context import AppContext
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.web.app import create_app
+from hippo.web.routes import pages
 from hippo.web.routes.pages import parse_settings_form
+
+MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+MCP_LIST_TOOLS = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
 
 
 def sample_chunks(sample_text: str) -> list[Chunk]:
@@ -22,7 +28,8 @@ def sample_chunks(sample_text: str) -> list[Chunk]:
 def client(ctx, sample_text):
     source_id = ctx.store.create_source("sample", "Acme guide")
     index_source(ctx.store, ctx.ollama, source_id, sample_chunks(sample_text))
-    with TestClient(create_app(ctx)) as client:
+    # The default base_url would send "Host: testserver", which the guard refuses like any foreign name.
+    with TestClient(create_app(ctx), base_url="http://localhost") as client:
         yield client
 
 
@@ -30,6 +37,34 @@ def test_ask_page_renders_with_the_question_prefilled(client):
     response = client.get("/ask?q=Who+designed+the+Orion+arm%3F")
     assert response.status_code == 200
     assert "Who designed the Orion arm?" in response.text
+    # The auto-submit is an htmx "load" trigger, not an inline script: htmx is loaded with defer and
+    # would not exist yet when an inline script runs (the page used to throw a ReferenceError).
+    assert 'hx-trigger="submit, load"' in response.text
+    assert "htmx.trigger(document.querySelector" not in response.text
+    assert 'hx-trigger="submit"' in client.get("/ask").text
+
+
+def test_asking_keeps_the_trace_so_analyze_does_not_ask_the_model_again(client, fake_ollama):
+    response = client.post("/ask", data={"question": "Where is Acme Robotics headquartered?"})
+    href = response.text.split('href="/analyze?key=')[1].split('"')[0]
+    key, _, rest = href.partition("&")
+    assert rest.startswith("question=Where")
+    calls_before = len(fake_ollama.calls)
+    page = client.get(f"/analyze?key={key}&{rest}")
+    assert page.status_code == 200 and "What the search did" in page.text
+    assert "Boulder" in page.text  # the answer the user just saw, not a fresh one
+    assert len(fake_ollama.calls) == calls_before
+
+
+def test_unexpected_error_while_asking_is_shown_not_swallowed(client, monkeypatch):
+    def broken(ctx, question):
+        raise RuntimeError("Neo4j went away")
+
+    monkeypatch.setattr(pages.ask_service, "ask", broken)
+    # htmx ignores a 500 body, so the error must come back as a normal page fragment.
+    response = client.post("/ask", data={"question": "anything"}, headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    assert "callout bad" in response.text and "RuntimeError: Neo4j went away" in response.text
 
 
 def test_asking_returns_an_answer_with_facts_and_passages(client):
@@ -117,3 +152,86 @@ def test_startup_marks_jobs_interrupted_by_a_restart_as_failed(ctx):
     with TestClient(create_app(ctx)):
         source = ctx.store.get_source(stuck)
     assert source["status"] == "failed" and "restart" in source["error"]
+
+
+# ---------------------------------------------------------------- the request guard
+
+
+def test_cross_site_posts_are_refused_and_plant_nothing(client, ctx):
+    before = len(ctx.store.list_sources())
+    for headers in (
+        {"Origin": "https://evil.example"},
+        {"Origin": "null"},
+        {"Referer": "https://evil.example/page.html"},
+        {"Sec-Fetch-Site": "cross-site"},
+    ):
+        response = client.post("/sources/text", data={"name": "planted", "text": "x"}, headers=headers)
+        assert response.status_code == 403, headers
+    assert client.post("/api/sources/sample", headers={"Origin": "https://evil.example"}).status_code == 403
+    assert len(ctx.store.list_sources()) == before
+
+
+def test_same_site_and_headerless_posts_still_work(client, ctx):
+    for headers in (
+        {},
+        {"Origin": "http://localhost:8000", "Sec-Fetch-Site": "same-origin"},
+        {"Referer": "http://localhost:8000/", "Sec-Fetch-Site": "same-site"},
+        {"Origin": "http://127.0.0.1:8000"},
+    ):
+        response = client.post(
+            "/sources/text",
+            data={"name": "mine", "text": "Zed Corp is in Austin."},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 303, headers
+    ctx.jobs.wait_all()
+    assert len([s for s in ctx.store.list_sources() if s["name"] == "mine"]) == 4
+
+
+def test_foreign_host_header_is_refused_everywhere(client):
+    for host in ("evil.example", "evil.example:8000", "localhost.evil.example"):
+        assert client.get("/", headers={"Host": host}).status_code == 400, host
+        assert client.post("/api/search", json={"question": "x"}, headers={"Host": host}).status_code == 400
+        assert (
+            client.post("/mcp", json=MCP_LIST_TOOLS, headers={**MCP_HEADERS, "Host": host}).status_code == 400
+        )
+    assert "HIPPO_ALLOWED_HOSTS" in client.get("/", headers={"Host": "evil.example"}).text
+
+
+def test_local_host_headers_are_accepted_on_pages_and_mcp(client):
+    for host in ("localhost", "localhost:8000", "127.0.0.1:8000", "[::1]:8000", "[::1]"):
+        assert client.get("/", headers={"Host": host}).status_code == 200, host
+        # The MCP library runs its own Host check, built from the same list.
+        response = client.post("/mcp", json=MCP_LIST_TOOLS, headers={**MCP_HEADERS, "Host": host})
+        assert response.status_code == 200, (host, response.text)
+
+
+def test_allowed_hosts_can_be_extended_or_switched_off(ctx, tmp_path):
+    def app_for(hosts: tuple[str, ...]):
+        config = Config(data_dir=tmp_path / "data", allowed_hosts=hosts)
+        return create_app(AppContext(config=config, store=ctx.store, ollama=ctx.ollama))
+
+    with TestClient(app_for(("localhost", "mybox")), base_url="http://mybox:8000") as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/", headers={"Host": "otherbox"}).status_code == 400
+    with TestClient(app_for(("*",)), base_url="http://anything.example") as client:
+        assert client.get("/").status_code == 200
+        assert client.post("/mcp", json=MCP_LIST_TOOLS, headers=MCP_HEADERS).status_code == 200
+
+
+def test_get_analyze_never_runs_the_model(client, fake_ollama):
+    calls_before = len(fake_ollama.calls)
+    response = client.get("/analyze?question=Who+designed+the+Orion+arm%3F")
+    assert response.status_code == 404
+    assert "Analyze it again" in response.text and 'action="/analyze"' in response.text
+    assert len(fake_ollama.calls) == calls_before
+    assert client.get("/analyze?key=expired&question=x").status_code == 404
+    # The same request as a POST is the one that does the work.
+    response = client.post(
+        "/analyze", data={"question": "Who designed the Orion arm?"}, follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert "key=" in response.headers["location"] and "question=Who" in response.headers["location"]
+    assert len(fake_ollama.calls) > calls_before
+    assert client.get(response.headers["location"]).status_code == 200

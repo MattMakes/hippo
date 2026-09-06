@@ -35,6 +35,9 @@ EMBED_PREFIXES: dict[str, tuple[str, str]] = {
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
+CONNECT_TIMEOUT = 10.0  # seconds to reach Ollama at all; an unreachable host should fail fast
+PULL_READ_TIMEOUT = 300.0  # seconds without any download progress before a model pull is given up
+
 
 class OllamaError(RuntimeError):
     """Raised when Ollama is unreachable, a model is missing, or a reply cannot be used."""
@@ -55,7 +58,11 @@ class Ollama:
         self.llm_model = llm_model
         self.embed_model = embed_model
         self.num_ctx = num_ctx
-        self.client = client or httpx.Client(base_url=self.base_url, timeout=timeout_seconds)
+        self.timeout_seconds = timeout_seconds
+        # Waiting long for a reply is fine (local models are slow); waiting long to *connect* is not.
+        self.client = client or httpx.Client(
+            base_url=self.base_url, timeout=httpx.Timeout(timeout_seconds, connect=CONNECT_TIMEOUT)
+        )
         self._capabilities: dict[str, set[str]] = {}
         self._embedding_dim: int | None = None
 
@@ -83,14 +90,25 @@ class Ollama:
 
     def pull(self, name: str) -> Iterator[dict[str, Any]]:
         """Stream Ollama's pull progress: dicts with `status`, and `completed`/`total` bytes while downloading."""
-        with self.client.stream(
-            "POST", "/api/pull", json={"model": name, "stream": True}, timeout=None
-        ) as resp:
-            if resp.status_code != 200:
-                raise OllamaError(f"Ollama could not pull {name}: HTTP {resp.status_code}")
-            for line in resp.iter_lines():
-                if line.strip():
-                    yield json.loads(line)
+        # No overall limit (a 6 GB download takes as long as it takes), but a stalled download must
+        # end as an error rather than leave the pull job "running" forever.
+        timeout = httpx.Timeout(None, connect=CONNECT_TIMEOUT, read=PULL_READ_TIMEOUT)
+        try:
+            with self.client.stream(
+                "POST", "/api/pull", json={"model": name, "stream": True}, timeout=timeout
+            ) as resp:
+                if resp.status_code != 200:
+                    raise OllamaError(f"Ollama could not pull {name}: HTTP {resp.status_code}")
+                for line in resp.iter_lines():
+                    if line.strip():
+                        yield json.loads(line)
+        except httpx.TimeoutException as exc:
+            raise OllamaError(
+                f"Ollama stopped sending data while pulling {name} (nothing for {PULL_READ_TIMEOUT:.0f}s); "
+                "check the network and try again"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise OllamaError(f"Ollama at {self.base_url} could not pull {name}: {exc}") from exc
 
     def ensure_model(self, name: str, on_progress: Callable[[dict[str, Any]], None] | None = None) -> None:
         """Pull `name` if it is not installed. Calls `on_progress(event)` as the download moves along."""
@@ -195,12 +213,22 @@ class Ollama:
         return self._capabilities[name]
 
     def _request(self, method: str, path: str, *, json: Any = None, attempts: int = 3) -> httpx.Response:
-        """One HTTP call with a little patience: network hiccups and 5xx replies are retried."""
+        """
+        One HTTP call with a little patience: network hiccups and 5xx replies are retried.
+
+        A reply that did not arrive in time is *not* retried: the model will not be faster the
+        second time, and three tries would turn one long wait into three.
+        """
         last_error: Exception | None = None
         for attempt in range(attempts):
             try:
                 resp = self.client.request(method, path, json=json)
-            except httpx.HTTPError as exc:
+            except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:
+                raise OllamaError(
+                    f"Ollama did not answer {method} {path} within {self.timeout_seconds:.0f}s; "
+                    "raise HIPPO_LLM_TIMEOUT or use a smaller model"
+                ) from exc
+            except httpx.HTTPError as exc:  # connection refused/reset, ConnectTimeout: worth another go
                 last_error = exc
                 log.warning(
                     "Ollama request %s %s failed (%s), attempt %d/%d",

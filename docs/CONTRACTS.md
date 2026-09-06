@@ -23,12 +23,13 @@ src/hippo/config.py               Config + load_config()
 src/hippo/ollama.py               Ollama(client): chat_json/chat_text/embed/embed_one/ensure_model/missing_models/pull/is_up
 src/hippo/prompts.py              every prompt + JSON schema (*_messages(...) builders)
 src/hippo/context.py              AppContext(config, store, ollama, jobs); ctx.graph() -> GraphIndex; ctx.invalidate_graph()
-src/hippo/jobs.py                 Jobs.start(key, fn) -> bool; is_running(key); running_keys(); wait_all()
+src/hippo/jobs.py                 Jobs.start(key, fn) -> bool; is_running(key); running_keys(); cancel(key); is_cancelled(key); wait(key, timeout); wait_all()
 src/hippo/ask.py                  search(ctx, question, settings=None) -> Trace; ask(ctx, q) -> (Trace, Answer); answer_from_trace(ctx, trace)
 src/hippo/store/                  Store (Neo4j). Read store/__init__.py for the graph shape; read each file for the methods.
 src/hippo/hipporag/text.py        clean_phrase, entity_id, fact_id, fact_text, make_id, min_max_normalize, is_meaningful_phrase
 src/hippo/hipporag/openie.py      extract(ollama, passage_id, text) -> Extraction; extract_many(...)
-src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text); index_source(store, ollama, source_id, chunks, *, synonymy_threshold, workers, on_progress)
+src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text); index_source(store, ollama, source_id, chunks, *, synonymy_threshold, workers, on_progress, should_stop)
+                                  GRAPH_WRITE_LOCK: held while entities/facts are written and linked, and by anything that ends in remove_orphans
 src/hippo/hipporag/graph_index.py GraphIndex.load(store); .ppr(); .neighbors(); .edge_between(); .graph_with_edits(); Passage; Fact; Edge; EdgeEdit
 src/hippo/hipporag/retriever.py   Retriever(index, ollama).retrieve(question, settings, *, fact_filter, force_include, force_exclude, node_boosts, graph) -> Trace
 src/hippo/hipporag/answerer.py    answer_question(ollama, question, [(id,title,text)]) -> Answer(answer, thought, raw, passage_ids)
@@ -54,11 +55,14 @@ created_at, updated_at, passages (count), fact_links (count).
 
 ```
 readers.py   Document(title: str, text: str, path: str, is_code: bool)
-             read_file(path: Path) -> list[Document]      # .txt .md .markdown .rst .html .htm .pdf .docx .epub, plus any code/text file
-             read_zip(path: Path, name: str) -> list[Document]   # every supported file inside, ignoring junk dirs
+             read_file(path: Path, budget=None) -> list[Document]      # .txt .md .markdown .rst .html .htm .pdf .docx .epub, plus any code/text file
+             read_zip(path: Path, name: str, budget=None) -> list[Document]   # every supported file inside, ignoring junk dirs
              is_supported(path: Path) -> bool; is_probably_binary(data: bytes) -> bool
              IGNORED_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", "target", ".idea", ".vscode", "vendor"}
              MAX_FILE_BYTES = 2_000_000
+             TextBudget(limit=MAX_TEXT_CHARS).add(chars, where)   # one per source; raises TooLarge(ReadError) past the limit, which
+                                                                 # readers never swallow (pdf pages, epub chapters and zip members count as they go)
+             MAX_TEXT_CHARS = 20_000_000; MAX_ZIP_MEMBERS = 5_000; MAX_ZIP_TOTAL_BYTES = 50_000_000 (unpacked); MAX_DOCX_XML_BYTES = 20_000_000
 chunker.py   chunk_document(doc: Document, size_chars: int, overlap_chars: int) -> list[Chunk]
              prose: split on markdown headings first (title becomes "Doc › Heading"), then pack paragraphs into <= size chunks, splitting
                     long paragraphs on sentence ends; overlap = tail of previous chunk (whole sentences). Chunk titles: "Title (part N)" when a
@@ -67,17 +71,28 @@ chunker.py   chunk_document(doc: Document, size_chars: int, overlap_chars: int) 
              ordinal counts up across the whole document list for a source (chunk_documents(docs, size, overlap) -> list[Chunk] does that).
 repos.py     is_git_url(url) -> bool  (https://, http://, git@, ssh:// forms only)
              clone_repo(url, dest: Path, timeout=300) -> Path   # git clone --depth 1 --single-branch; raise RepoError with a friendly message
-             walk_repo(root: Path) -> list[Document]          # uses readers; skips IGNORED_DIRS, hidden dirs, files > MAX_FILE_BYTES, binaries
+             walk_repo(root: Path, budget=None) -> list[Document]   # uses readers; skips IGNORED_DIRS, hidden dirs, files > MAX_FILE_BYTES, binaries
 pipeline.py  add_text(ctx, name, text) -> source_id                 # kind 'text', saves text under data_dir/sources/<id>/
              add_upload(ctx, filename, data: bytes) -> source_id    # kind 'file' or 'archive' (.zip); saves the file under data_dir/sources/<id>/
+             both raise ValueError past max_upload_bytes(ctx) (HIPPO_MAX_UPLOAD_BYTES, 50 MB); the same check serves forms, JSON and MCP
              add_repo(ctx, url) -> source_id                        # kind 'repo'
              add_sample(ctx) -> source_id                           # kind 'sample': samples/acme_robotics.md
              start_indexing(ctx, source_id) -> bool                 # background job "index:<source_id>": read -> chunk -> index_source
                                                                     # status flow: reading -> indexing -> ready | failed (error text kept)
                                                                     # stage/progress_done/progress_total updated through on_progress
                                                                     # meta gets {"chunks": n, "documents": n, "counts": {...}}
-             delete_source(ctx, source_id) -> None                  # store.delete_source + bump_graph_version + remove files
+                                                                    # reads with TextBudget(max_text_chars(ctx)); > MAX_CHUNKS (20,000) passages
+                                                                    # or TooLarge from a reader -> 'failed' with "TooLarge: too large: ..."
+                                                                    # on failure the passages written so far are cleared; when the job is
+                                                                    # cancelled (delete_source) it ends 'failed' / stage 'cancelled';
+                                                                    # if the Source row is gone at the end: remove_orphans + bump_graph_version
+             delete_source(ctx, source_id) -> None                  # cancels + waits for this source's own job, then (under GRAPH_WRITE_LOCK)
+                                                                    # store.delete_source + bump_graph_version + remove files
              reindex(ctx, source_id) -> bool                        # delete passages of this source, then start_indexing again
+             reindex_all(ctx) -> int                                # clear every source, then one job per source
+             Busy(ValueError)                                       # raised by delete_source / reindex / reindex_all while ANY other index:* job
+                                                                    # runs (their remove_orphans would eat the running job's unlinked nodes);
+                                                                    # the routes answer 409 with the message
              every add_* also calls start_indexing.
 ```
 
@@ -102,7 +117,7 @@ question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_sing
 runner.py          start_run(ctx, set_id, name=None, settings=None) -> run_id   # Jobs key "run:<run_id>"
                    run_question(ctx, question_row, settings) -> dict          # search -> answer_from_trace -> judge -> metrics; returns the
                                                                              # dict that store.add_result wants (answer, thought, verdict,
-                                                                             # judge_score, judge_reason, exact_match, f1, recall, gold_rank,
+                                                                             # judge_score, judge_reason, exact_match, f1, recall, gold_rank, used_dpr_fallback,
                                                                              # latency_ms, trace(dict), error)
                    summarize(results: list[dict]) -> dict   # accuracy (mean judge_score), correct/partial/incorrect counts, exact_match,
                                                             # f1, recall@k means, mean_gold_rank, gold_in_top5 rate, dpr_fallbacks, mean_latency_ms
@@ -143,39 +158,78 @@ changesets.py  save(ctx, name, ops, from_result_id=None, note="") -> changeset_i
 ### `src/hippo/web/` — the UI (FastAPI + Jinja2 + HTMX + vanilla JS; Cytoscape for the graph picture)
 
 ```
+security.py    HostAndOriginGuard: refuses foreign Host headers and cross-site writes (CSRF); adhoc.py: the small cache of ad-hoc analyses
 app.py         create_app(ctx: AppContext | None = None) -> FastAPI   # ctx default: AppContext.from_env(); on startup: store.ensure_schema(),
                kick off "pull-models" job if Ollama is up and models are missing (Ollama.missing_models / ensure_model), mount /static,
                include routers, mount MCP at /mcp (hippo.mcp_server.mount)
-routes/pages.py   HTML pages (all extend templates/base.html, which shows Neo4j/Ollama status + model pull progress in the header)
-    GET /                          Library: sources table (name, kind, status+stage+progress, passages, facts, created); upload forms
-                                   (file, zip, paste text, git URL, "Load the sample"); delete buttons; auto-refresh rows while indexing (HTMX poll)
-    GET /sources/{id}              Source detail: meta, progress, passages (paged) with the entities/triples the LLM extracted,
-                                   "Make sample questions" button (-> generation job), question sets about this source, "Reindex", "Delete"
-    GET /ask                       Ask: a question box; result shows answer, thought, top passages with scores, kept facts, seeds;
-                                   link "Analyze this question" (-> /analyze?question=...)
-    GET /evals                     Question sets (with counts, origin, status) + create set form (name, paste "question | answer" lines, or JSON)
-                                   + run history table (all runs: name, set, date, status/progress, accuracy, EM, F1, recall@5, gold in top5)
-    GET /evals/sets/{id}           One set: questions (editable: add/delete), "Run this set" button (name), runs of this set, past results per question
-    GET /evals/runs/{id}           One run: summary cards, per-question table (question, expected, answer, verdict, EM, F1, gold rank, fallback?,
-                                   latency); each row links to /analyze/{result_id}; "Compare with" dropdown of other runs of the same set
-    GET /analyze/{result_id}       The deep dive for one stored result (see below)
-    GET /analyze?question=...      Same page for an ad-hoc question (runs search now; no expected answer)
-    GET /changesets                List + detail (ops described in words), Apply / Delete buttons
-    GET /settings                  Ollama status (url, models installed vs required, pull progress, "Pull now"), Neo4j status + stats,
-                                   retrieval settings form (the DEFAULT_SETTINGS keys with one-line explanations), embed model warning
-routes/api.py     JSON endpoints used by the pages' JS and by curl:
-    POST /api/sources/text | /api/sources/upload | /api/sources/repo | /api/sources/sample ; DELETE /api/sources/{id}; POST /api/sources/{id}/reindex
-    GET  /api/sources/{id} (status/progress JSON for polling)
+Every page extends templates/base.html (Neo4j/Ollama status + model pull progress in the header). Routes are
+grouped by feature, one file each, and every file has a `router` (HTML pages and the HTMX form posts / partials
+they use) and, where it has JSON endpoints, an `api` router. app.py includes them in this order:
+pages.router, sources.router, sources.api, evals.router, evals.api, analyze.router, analyze.api, api.router.
+The /api prefix is built per file: api.py's router has prefix="/api", sources.py's api has prefix="/api/sources",
+and evals.py / analyze.py spell "/api/..." in every path; that is why the same prefix shows up in four modules.
+
+routes/pages.py   the pages that fit nowhere else
+    GET  /partials/status              header partial: Neo4j/Ollama/model-pull status, polled by every page
+    GET  /ask, POST /ask               Ask: a question box; the POST runs the search + answer and renders the same page with the
+                                       answer, thought, top passages with scores, kept facts, seeds; link "Analyze this question"
+    GET  /settings, POST /settings     Ollama status (url, models installed vs required, pull progress, "Pull now"), Neo4j status +
+                                       stats, retrieval settings form (the DEFAULT_SETTINGS keys with one-line explanations),
+                                       embed model warning; the POST saves the settings and renders the same page
+routes/sources.py  the Library
+    GET  /                             sources table (name, kind, status+stage+progress, passages, facts, created); upload forms
+                                       (file, zip, paste text, git URL, "Load the sample"); delete buttons
+    GET  /partials/sources             the sources table, polled while something is indexing (HTMX)
+    GET  /sources/{id}                 Source detail: meta, progress, passages (paged) with the entities/triples the LLM extracted,
+                                       "Make sample questions" button (-> generation job), question sets about this source, "Reindex", "Delete"
+    GET  /partials/sources/{id}/status the progress block of the source page, polled while it is busy (HTMX)
+    POST /sources/upload | /sources/text | /sources/repo | /sources/sample     the Library forms; redirect back to / (with ?error=)
+    api (prefix /api/sources):
+    GET    /api/sources                list every source (same rows as store.list_sources)
+    POST   /api/sources/text {name, text} | /api/sources/upload (multipart file) | /api/sources/repo {url} | /api/sources/sample
+                                       -> {source_id}; 400 with {error} when refused (unsupported type, empty, too big)
+    POST   /api/sources/reindex-all    -> {started: n}
+    GET    /api/sources/{id}           status/progress JSON for polling
+    DELETE /api/sources/{id}           -> {deleted}; 409 with {error} while another source is being indexed (pipeline.Busy)
+    POST   /api/sources/{id}/reindex   -> {started: bool}; 409 as above
+routes/evals.py    question sets and runs
+    GET  /evals                        Question sets (with counts, origin, status) + create set form (name, paste "question | answer"
+                                       lines, or JSON) + run history table (all runs: name, set, date, status/progress, accuracy, EM, F1,
+                                       recall@5, gold in top5)
+    GET  /partials/evals/tables        the two tables of /evals, polled while a run or a generation is going (HTMX)
+    GET  /evals/sets/{id}              One set: questions (editable: add/delete), "Run this set" button (name), runs of this set,
+                                       past results per question
+    GET  /evals/runs/{id}              One run: summary cards, per-question table (question, expected, answer, verdict, EM, F1, gold rank,
+                                       fallback?, latency); each row links to /analyze/{result_id}; "Compare with" dropdown of other runs
+    GET  /partials/runs/{id}           the body of the run page, polled while the run is going (HTMX)
+    POST /evals/sets | /evals/sets/{id}/questions | /evals/sets/{id}/run     the forms of those pages
+    api:
+    GET/POST /api/evals/sets           list sets; create {name, questions:[{text, expected_answer}]} -> {set_id}
+    GET/DELETE /api/evals/sets/{id}    one set with its questions; delete it (and its runs)
+    POST   /api/evals/sets/{id}/questions ; DELETE /api/evals/questions/{id}
+    POST   /api/sources/{id}/generate-questions {max_single, max_multihop} -> {set_id}; 409 while that source is still indexing
+    POST   /api/evals/sets/{id}/run {name, settings?} -> {run_id}
+    GET    /api/evals/runs             every run (history)
+    GET/DELETE /api/evals/runs/{id}    one run with its summary and progress; delete it
+routes/analyze.py  the deep dive and changesets
+    GET  /analyze?question=&key=       Analyze an ad-hoc question: `key` names an analysis cached by the Ask page / POST /analyze
+                                       (the last ADHOC_LIMIT, until restart); an expired key shows a 404 page with "analyze it again"
+    POST /analyze                      run search + answer for a question typed now, cache it, redirect to GET /analyze?key=
+    GET  /analyze/{result_id}          the same page for one stored eval result (see below)
+    GET  /changesets                   List + detail (ops described in words), Apply / Delete buttons
+    api:
+    POST   /api/simulate {question, result_id?, overrides} -> {trace, diff, answer?, explanation}
+    GET/POST /api/changesets           list; save {name, ops, from_result_id?, note?} -> {changeset_id}
+    POST   /api/changesets/{id}/apply ; DELETE /api/changesets/{id}
+routes/api.py      (router prefix /api) everything about the whole memory rather than one feature
+    GET  /api/status                   {neo4j, ollama, models, jobs, stats}
+    GET/PUT /api/settings              the retrieval settings
+    POST /api/models/pull              start the model download job
     POST /api/ask {question} -> {answer, thought, trace}
     POST /api/search {question} -> {trace}
-    POST /api/evals/sets {name, questions:[{text, expected_answer}]} ; DELETE /api/evals/sets/{id}; POST /api/evals/sets/{id}/questions ; DELETE /api/evals/questions/{id}
-    POST /api/sources/{id}/generate-questions {max_single, max_multihop} -> {set_id}
-    POST /api/evals/sets/{id}/run {name, settings?} -> {run_id} ; GET /api/evals/runs/{id} (progress) ; DELETE /api/evals/runs/{id}
-    POST /api/simulate {question, result_id?, overrides} -> {trace, diff, answer?, explanation}
-    POST /api/changesets {name, ops, from_result_id?, note?} ; POST /api/changesets/{id}/apply ; DELETE /api/changesets/{id}
-    GET/PUT /api/settings ; POST /api/models/pull ; GET /api/status {neo4j, ollama, models, jobs, stats}
-    GET  /api/entities?q=  (search entities by name, for the "add synonym" / "boost" pickers)
-    GET  /api/graph/neighborhood?node_id=&depth=1  (small subgraph JSON for the graph picture)
+    GET  /api/entities?q=              search entities by name, for the boost / edge-edit pickers
+    GET  /api/graph/neighborhood?node_id=&depth=1     small subgraph JSON for the graph picture
+Mounted, not routes: /static (files), /mcp (the MCP server), /api/docs (FastAPI's own docs).
 The Analyze page shows, top to bottom:
     1. the question, expected answer (if any), the answer given, judge verdict/reason, metrics; "History" of this question across runs
     2. "What the search did": a step-by-step story: candidates (table: rank, triple, score, sent?, kept?, reason), the filter's raw reply,
@@ -185,7 +239,9 @@ The Analyze page shows, top to bottom:
     4. ranked passages with the explanation sentence ("why") and rank/score/DPR rank; gold ones marked
     5. "Tweak & simulate" panel: sliders/inputs for linking_top_k, passage_node_weight, damping, node_specificity; checkboxes on each
        candidate fact (force in/out); entity boost inputs on seeds (+ entity search to boost any entity); edge edits (pick two nodes,
-       set weight; "add synonym" helper); toggles "re-run the LLM filter" and "re-generate the answer"; "Simulate" button (JS -> POST
+       set weight; a new entity-entity edge behaves like a synonym link, and Overrides.to_ops emits set_edge_weight for it: the
+       add_synonym op is only reachable by hand-writing ops to POST /api/changesets); toggles "re-run the LLM filter" and
+       "re-generate the answer"; "Simulate" button (JS -> POST
        /api/simulate) renders the diff table (before rank -> after rank with arrows), new seeds, new answer; "Save as changeset" button
        (name + note) -> POST /api/changesets with Overrides.to_ops(); note under it: fact in/out toggles are per-question and not saved.
 templates/     base.html, library.html, source.html, ask.html, evals.html, eval_set.html, eval_run.html, analyze.html, changesets.html,
@@ -202,7 +258,7 @@ mcp_server.py  build_server(ctx) -> MCPServer (mcp>=2: from mcp.server.mcpserver
                       hippo_ask(question) -> {answer, thought, sources:[...]}
                       hippo_remember(name, text) -> {source_id} (adds a text source and indexes it)
                       hippo_sources() -> list of sources with status
-               mount(app: FastAPI, ctx)   # streamable HTTP at /mcp, stateless_http=True, transport security allowing any host
+               mount(app: FastAPI, ctx)   # streamable HTTP at /mcp, stateless_http=True; DNS-rebinding protection on, hosts from config.allowed_hosts (HIPPO_ALLOWED_HOSTS)
                                           # (it runs inside docker; users connect at http://localhost:8000/mcp); wire session_manager.run()
                                           # into the FastAPI lifespan
                run_stdio(ctx)             # for `hippo mcp`
@@ -214,12 +270,14 @@ cli.py         main(argv=None): subcommands  serve (uvicorn), mcp (stdio), pull-
 
 ```
 Dockerfile               python:3.12-slim, git installed (for repo cloning), pip install ., runs `hippo serve`
-docker-compose.yml       services: neo4j (neo4j:5.26-community, ports 7474/7687, NEO4J_AUTH=neo4j/hippo-password, volume, healthcheck,
-                         APOC not needed), app (build ., port 8000, depends_on neo4j healthy, env for NEO4J_*/OLLAMA_URL/HIPPO_*,
-                         volume ./data:/app/data, extra_hosts host.docker.internal:host-gateway),
-                         ollama (image ollama/ollama, profile "ollama", port 11434, volume) — only started when the host has no Ollama
-hippo (bash launcher)    ./hippo up | down | logs | pull-models | test ; `up` checks host Ollama at :11434 -> sets OLLAMA_URL to
-                         http://host.docker.internal:11434, else starts with --profile ollama; prints the URLs at the end
+docker-compose.yml       services: neo4j (neo4j:5.26-community, ports 127.0.0.1:7474/7687, NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-hippo-password},
+                         volume, healthcheck, APOC not needed), app (build ., port ${HIPPO_BIND:-127.0.0.1}:8000, depends_on neo4j healthy,
+                         env for NEO4J_*/OLLAMA_URL/HIPPO_*, volume ./data:/app/data, extra_hosts host.docker.internal:host-gateway),
+                         ollama (image ollama/ollama, profile "ollama", port 127.0.0.1:11434, volume) — only started when the host has no Ollama
+                         every port is loopback-only: hippo has no login and Ollama no password
+hippo (bash launcher)    ./hippo up | down | logs | pull-models | test ; `up` writes a random NEO4J_PASSWORD into .env on the first run
+                         (keeps the default when a neo4j_data volume already exists), checks host Ollama at :11434 -> sets OLLAMA_URL to
+                         http://host.docker.internal:11434, else starts with --profile ollama; prints the URLs and the password at the end
 .env.example             every env var with a comment
 .github/workflows/ci.yml lint (ruff) + unit tests with fakes + the same tests against a neo4j:5 service container (NEO4J_URI set)
 README.md                the ELI5 guide (what/why, 3-step quick start, a tour of the pages, how HippoRAG works in plain words with a

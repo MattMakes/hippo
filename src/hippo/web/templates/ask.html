@@ -6,7 +6,8 @@
   <p class="muted">A question goes in; the graph finds the passages; the model reads them and answers. Every answer links to an analysis of how it was found.</p>
 </div>
 
-<form class="ask-form card" hx-post="/ask" hx-target="#answer" hx-swap="innerHTML" hx-indicator="#ask-spinner">
+{# "load" fires once htmx has processed the form (after the deferred bundle ran), so /ask?q=... asks straight away. #}
+<form class="ask-form card" hx-post="/ask" hx-target="#answer" hx-swap="innerHTML" hx-indicator="#ask-spinner" hx-trigger="submit{% if question %}, load{% endif %}">
   <label class="sr-only" for="question">Question</label>
   <textarea id="question" name="question" rows="2" placeholder="e.g. In which state is the company founded by Priya Natarajan headquartered?" required>{{ question }}</textarea>
   <div class="row">
@@ -25,10 +26,10 @@
 {% endblock %}
 {% block scripts %}
 <script>
-  // Submit on Cmd/Ctrl+Enter, like a chat box.
+  // Submit on Cmd/Ctrl+Enter, like a chat box. htmx is loaded with "defer", so it only exists once the
+  // document is parsed; this handler runs later (on a keypress), by which time it is there.
   document.getElementById('question').addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); htmx.trigger(e.target.form, 'submit'); }
   });
-  {% if question %}htmx.trigger(document.querySelector('.ask-form'), 'submit');{% endif %}
 </script>
 {% endblock %}

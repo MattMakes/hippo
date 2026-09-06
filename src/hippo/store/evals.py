@@ -194,7 +194,9 @@ class EvalQueries(Neo4jBase):
     def add_result(self, run_id: str, question_id: str, result: dict[str, Any]) -> str:
         """
         result: {answer, thought, verdict, judge_score, judge_reason, exact_match, f1, recall (dict), gold_rank,
-                 latency_ms, trace (dict), error}
+                 latency_ms, trace (dict), used_dpr_fallback (bool), error}
+        used_dpr_fallback is also inside the trace; it gets its own property because list_results
+        leaves the traces out and the run table still wants to say "graph" or "embeddings" per row.
         """
         result_id = new_id()
         self.run(
@@ -204,7 +206,7 @@ class EvalQueries(Neo4jBase):
                                     judge_score: $judge_score, judge_reason: $judge_reason,
                                     exact_match: $exact_match, f1: $f1, recall_json: $recall_json,
                                     gold_rank: $gold_rank, latency_ms: $latency_ms, trace_json: $trace_json,
-                                    error: $error, created_at: $now})
+                                    used_dpr_fallback: $used_dpr_fallback, error: $error, created_at: $now})
             MERGE (r)-[:RESULT]->(res)
             MERGE (res)-[:FOR]->(q)
             """,
@@ -223,6 +225,7 @@ class EvalQueries(Neo4jBase):
             gold_rank=result.get("gold_rank"),
             latency_ms=result.get("latency_ms"),
             trace_json=json.dumps(result.get("trace", {})),
+            used_dpr_fallback=bool(result.get("used_dpr_fallback", False)),
             error=result.get("error"),
         )
         return result_id
@@ -300,6 +303,7 @@ RESULT_DEFAULTS: dict[str, Any] = {
     "gold_rank": None,
     "latency_ms": None,
     "trace_json": "{}",
+    "used_dpr_fallback": False,  # results stored before this property existed show as "graph"
     "error": None,
     "created_at": "",
 }

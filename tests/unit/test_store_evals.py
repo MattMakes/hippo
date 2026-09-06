@@ -219,6 +219,7 @@ def full_result(trace: dict) -> dict:
         "gold_rank": 1,
         "latency_ms": 12.5,
         "trace": trace,
+        "used_dpr_fallback": bool(trace.get("used_dpr_fallback", False)),
         "error": None,
     }
 
@@ -249,6 +250,7 @@ def test_add_result_and_get_result_round_trip_the_trace(store) -> None:
     assert row["recall"] == {"recall@1": 1.0, "recall@5": 1.0}
     assert (row["gold_rank"], row["latency_ms"], row["error"]) == (1, 12.5, None)
     assert row["trace"] == trace
+    assert row["used_dpr_fallback"] is False
     assert (row["question_id"], row["question"], row["expected_answer"]) == (qid, "Where is Acme?", "Boulder")
     assert (row["kind"], row["gold_passage_ids"], row["ordinal"]) == ("single", ["p1"], 0)
     assert (row["run_id"], row["run_name"]) == (run_id, "R")
@@ -264,6 +266,7 @@ def test_add_result_fills_in_defaults(store) -> None:
     assert (row["answer"], row["thought"], row["verdict"], row["judge_reason"]) == ("", "", "", "")
     assert row["judge_score"] is None and row["gold_rank"] is None and row["latency_ms"] is None
     assert row["recall"] == {} and row["trace"] == {}
+    assert row["used_dpr_fallback"] is False
     assert row["error"] == "timed out"
 
 
@@ -281,6 +284,17 @@ def test_list_results_follows_question_order_without_traces(store) -> None:
     assert all(r["trace"] is None for r in rows)
     assert rows[0]["recall"] == {"recall@1": 1.0, "recall@5": 1.0}
     assert store.list_results("nope") == []
+
+
+def test_the_fallback_flag_survives_without_the_trace(store) -> None:
+    set_id = store.create_question_set("Q")
+    (qid, _) = store.add_questions(set_id, QUESTIONS)
+    run_id = store.create_run(set_id, "R", {})
+    store.add_result(
+        run_id, qid, full_result({"used_dpr_fallback": True, "fallback_reason": "the memory is empty"})
+    )
+    (row,) = store.list_results(run_id)
+    assert row["trace"] is None and row["used_dpr_fallback"] is True
 
 
 def test_results_for_question_are_newest_first_across_runs(store, clock) -> None:

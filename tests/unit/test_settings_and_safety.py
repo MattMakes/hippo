@@ -51,7 +51,7 @@ def test_stores_refuse_bad_settings_and_keep_the_old_value(store):
 
 
 def test_api_and_form_reject_bad_settings_with_a_message(ctx):
-    with TestClient(create_app(ctx)) as client:
+    with TestClient(create_app(ctx), base_url="http://localhost") as client:
         response = client.put("/api/settings", json={"damping": 7})
         assert response.status_code == 400 and "damping" in response.text
         response = client.post("/settings", data={"damping": "7"})
@@ -128,7 +128,9 @@ def test_reindex_everything_endpoint_reindexes_each_source(ctx):
     pipeline.add_sample(ctx)
     pipeline.add_text(ctx, "note", "Zed Corp is located in Austin.")
     ctx.jobs.wait_all()
-    with TestClient(create_app(ctx)) as client:  # the app closes the store on shutdown, so assert inside
+    with TestClient(
+        create_app(ctx), base_url="http://localhost"
+    ) as client:  # the app closes the store on shutdown, so assert inside
         assert client.post("/api/sources/reindex-all").json()["started"] == 2
         ctx.jobs.wait_all()
         assert all(s["status"] == "ready" for s in ctx.store.list_sources())

@@ -14,6 +14,11 @@ Rules of thumb used here:
   NUL bytes (a README, a Makefile, a LICENSE...). Everything else is skipped.
 * Inside zips we ignore the usual junk folders (.git, node_modules, ...),
   hidden folders, and anything bigger than MAX_FILE_BYTES.
+* Every reader counts the text it produces against a `TextBudget` and stops
+  with `TooLarge` past MAX_TEXT_CHARS. A small file can unpack into gigabytes
+  of text (an epub or zip "bomb"), and every 1500 characters cost two LLM
+  calls later, so the cap is on the text that comes out, not the bytes that
+  go in. Zips also have a member-count and a total-size budget.
 """
 
 from __future__ import annotations
@@ -42,6 +47,12 @@ IGNORED_DIRS = {
     "vendor",
 }
 MAX_FILE_BYTES = 2_000_000
+# Text budget per source (all files together). 20 M chars is ~13,000 passages, about the most
+# a local model can index in a day; pipeline.py passes the configured value (HIPPO_MAX_TEXT_CHARS).
+MAX_TEXT_CHARS = 20_000_000
+MAX_ZIP_MEMBERS = 5_000  # readable members per archive
+MAX_ZIP_TOTAL_BYTES = 50_000_000  # unpacked size of the readable members together
+MAX_DOCX_XML_BYTES = 20_000_000  # size of word/document.xml; python-docx parses it whole
 
 # Prose: chunked by headings/paragraphs/sentences.
 PROSE_EXTENSIONS = {".txt", ".md", ".markdown", ".rst", ".text"}
@@ -76,6 +87,30 @@ class Document:
 
 class ReadError(ValueError):
     """The file exists but we could not get text out of it."""
+
+
+class TooLarge(ReadError):
+    """The source holds more text than we are willing to index. Never swallowed: it fails the whole source."""
+
+
+@dataclass
+class TextBudget:
+    """
+    A running count of the characters a source has produced so far.
+    `add` raises TooLarge once the count passes `limit`. One budget is shared
+    by every file of a source, so the total is what is capped.
+    """
+
+    limit: int = MAX_TEXT_CHARS
+    used: int = 0
+
+    def add(self, chars: int, where: str) -> None:
+        self.used += chars
+        if self.used > self.limit:
+            raise TooLarge(
+                f"too large: more than {self.limit:,} characters of text (reached at {where}). "
+                "Split the source into smaller parts, or raise HIPPO_MAX_TEXT_CHARS."
+            )
 
 
 # ------------------------------------------------------------- questions
@@ -123,27 +158,33 @@ def is_supported(path: Path) -> bool:
 # --------------------------------------------------------------- reading
 
 
-def read_file(path: Path) -> list[Document]:
+def read_file(path: Path, budget: TextBudget | None = None) -> list[Document]:
     """Read one file from disk. The document title is the file name."""
-    return read_path(path, path.name)
+    return read_path(path, path.name, budget)
 
 
-def read_path(path: Path, title: str) -> list[Document]:
+def read_path(path: Path, title: str, budget: TextBudget | None = None) -> list[Document]:
     """Like read_file, but you choose the title (repos use the path relative to the root)."""
     data = path.read_bytes()
-    return read_bytes(data, title, path=str(path))
+    return read_bytes(data, title, path=str(path), budget=budget)
 
 
-def read_bytes(data: bytes, name: str, path: str | None = None) -> list[Document]:
-    """Read from memory. `name` decides the format (by extension) and becomes the title."""
+def read_bytes(
+    data: bytes, name: str, path: str | None = None, budget: TextBudget | None = None
+) -> list[Document]:
+    """
+    Read from memory. `name` decides the format (by extension) and becomes the title.
+    `budget` is shared across the files of one source; without one, this file gets a fresh budget.
+    """
+    budget = budget or TextBudget()
     suffix = _suffix(name)
     where = path or name
     if suffix == ".pdf":
-        text = _read_pdf(data)
+        text = _read_pdf(data, budget, where)
     elif suffix == ".docx":
         text = _read_docx(data)
     elif suffix == ".epub":
-        text = _read_epub(data)
+        text = _read_epub(data, budget, where)
     elif suffix in (".html", ".htm"):
         text = html_to_text(_decode(data, strict=False))
     elif suffix in PROSE_EXTENSIONS or suffix in CODE_EXTENSIONS:
@@ -159,22 +200,46 @@ def read_bytes(data: bytes, name: str, path: str | None = None) -> list[Document
     text = text.strip()
     if not text:
         return []
+    if suffix not in (".pdf", ".epub"):  # those two counted page by page / chapter by chapter
+        budget.add(len(text), where)
     return [Document(title=name, text=text, path=where, is_code=suffix in CODE_EXTENSIONS)]
 
 
-def read_zip(path: Path, name: str) -> list[Document]:
+def read_zip(path: Path, name: str, budget: TextBudget | None = None) -> list[Document]:
     """Read every supported member of a zip. Titles are the member paths inside the archive."""
+    budget = budget or TextBudget()
     docs: list[Document] = []
     with zipfile.ZipFile(path) as archive:
-        for member in sorted(archive.infolist(), key=lambda m: m.filename):
-            if not _wanted_zip_member(member):
-                continue
+        members = [m for m in sorted(archive.infolist(), key=lambda m: m.filename) if _wanted_zip_member(m)]
+        check_zip_budgets(members, name)
+        for member in members:
             try:
                 data = archive.read(member)
-                docs.extend(read_bytes(data, member.filename, path=f"{name}:{member.filename}"))
+                docs.extend(
+                    read_bytes(data, member.filename, path=f"{name}:{member.filename}", budget=budget)
+                )
+            except TooLarge:
+                raise  # the whole source is over budget; do not treat it as one bad member
             except Exception as err:  # noqa: BLE001 - one broken member must not sink the archive
                 log.warning("Skipping %s in %s: %s", member.filename, name, err)
     return docs
+
+
+def check_zip_budgets(members: list[zipfile.ZipInfo], name: str) -> None:
+    """
+    Refuse an archive before reading it when its readable members are too many or, unpacked,
+    too big. `file_size` is the unpacked size from the zip's own table, so this costs nothing.
+    """
+    if len(members) > MAX_ZIP_MEMBERS:
+        raise TooLarge(
+            f"too large: {name} holds {len(members):,} readable files; the limit is {MAX_ZIP_MEMBERS:,}"
+        )
+    total = sum(m.file_size for m in members)
+    if total > MAX_ZIP_TOTAL_BYTES:
+        raise TooLarge(
+            f"too large: the readable files in {name} unpack to {total:,} bytes; "
+            f"the limit is {MAX_ZIP_TOTAL_BYTES:,}"
+        )
 
 
 def _wanted_zip_member(member: zipfile.ZipInfo) -> bool:
@@ -191,14 +256,20 @@ def _wanted_zip_member(member: zipfile.ZipInfo) -> bool:
 # --------------------------------------------------------- rich formats
 
 
-def _read_pdf(data: bytes) -> str:
+def _read_pdf(data: bytes, budget: TextBudget, where: str) -> str:
     from pypdf import PdfReader
 
+    pages: list[str] = []
     try:
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted:
             reader.decrypt("")  # many "encrypted" PDFs just have an empty owner password
-        pages = [(page.extract_text() or "").strip() for page in reader.pages]
+        for page in reader.pages:
+            text = (page.extract_text() or "").strip()
+            budget.add(len(text), where)  # page by page, so a bloated PDF stops early
+            pages.append(text)
+    except TooLarge:
+        raise
     except Exception as err:  # pypdf raises many different types
         raise ReadError(f"could not read PDF: {err}") from err
     return "\n\n".join(p for p in pages if p)
@@ -207,6 +278,7 @@ def _read_pdf(data: bytes) -> str:
 def _read_docx(data: bytes) -> str:
     import docx
 
+    _check_docx_size(data)
     try:
         document = docx.Document(io.BytesIO(data))
     except Exception as err:
@@ -227,6 +299,20 @@ def _read_docx(data: bytes) -> str:
     return "\n\n".join(blocks)
 
 
+def _check_docx_size(data: bytes) -> None:
+    """A .docx is a zip; python-docx parses word/document.xml in one go, so look at its size first."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as package:
+            for member in package.infolist():
+                if member.filename == "word/document.xml" and member.file_size > MAX_DOCX_XML_BYTES:
+                    raise TooLarge(
+                        f"too large: the document body is {member.file_size:,} bytes of XML; "
+                        f"the limit is {MAX_DOCX_XML_BYTES:,}"
+                    )
+    except zipfile.BadZipFile as err:
+        raise ReadError(f"could not read .docx: {err}") from err
+
+
 def _heading_level(style_name: str) -> int:
     if style_name.lower() == "title":
         return 1
@@ -236,12 +322,20 @@ def _heading_level(style_name: str) -> int:
     return 0
 
 
-def _read_epub(data: bytes) -> str:
+def _read_epub(data: bytes, budget: TextBudget, where: str) -> str:
     """An epub is a zip of XHTML chapters; read them in reading (spine) order."""
+    texts: list[str] = []
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as book:
-            chapters = _epub_chapter_names(book)
-            texts = [html_to_text(_decode(book.read(name), strict=False)) for name in chapters]
+            for name in _epub_chapter_names(book):
+                if book.getinfo(name).file_size > MAX_FILE_BYTES:
+                    log.warning(
+                        "Skipping chapter %s of %s: bigger than %d bytes", name, where, MAX_FILE_BYTES
+                    )
+                    continue
+                text = html_to_text(_decode(book.read(name), strict=False))
+                budget.add(len(text), f"{where}:{name}")  # chapter by chapter, so a bloated book stops early
+                texts.append(text)
     except zipfile.BadZipFile as err:
         raise ReadError(f"could not read .epub: {err}") from err
     return "\n\n".join(t for t in texts if t.strip())

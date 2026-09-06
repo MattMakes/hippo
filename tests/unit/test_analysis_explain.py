@@ -151,3 +151,78 @@ def test_explain_uses_an_edited_graph_when_given(ctx, trace):
     edited = index.graph_with_edits([EdgeEdit(seed_id, first.passage_id, 0.0)])
     after = explain(index, trace, graph=edited).passages[0]
     assert seed_id not in {s["entity_id"] for s in after.linked_seeds}
+
+
+# ------------------------------------------ the graph changed since the trace
+
+
+def test_explain_ignores_the_vertex_numbers_recorded_in_the_trace(ctx, trace):
+    # Vertex numbers are positions in the graph *as it was*; only ids are stable. A trace whose
+    # numbers are all nonsense must explain exactly like the original.
+    from hippo.hipporag.retriever import trace_from_dict
+
+    index = ctx.graph()
+    scrambled = trace_from_dict(trace.to_dict())
+    for seed in scrambled.seed_entities:
+        seed.vertex = 999_999
+    for top in scrambled.top_nodes:
+        top.vertex = 999_999
+    for seed_passage in scrambled.seed_passages:
+        seed_passage.vertex = 999_999
+
+    assert explain(index, scrambled).to_dict() == explain(index, trace).to_dict()
+
+
+def test_explain_after_a_source_was_deleted_skips_the_missing_seed_and_says_so(store, ollama, sample_text):
+    from hippo.hipporag.graph_index import GraphIndex
+    from hippo.hipporag.retriever import Retriever
+    from hippo.store.base import DEFAULT_SETTINGS
+
+    # Index the extra source *first* so its entities get the low vertex numbers: once it is
+    # deleted, every sample vertex number in the old trace points past the end of the graph.
+    extra = store.create_source("text", "Extra")
+    index_source(store, ollama, extra, [Chunk(0, "Priya's studies", "Priya Natarajan studied at Stanford.")])
+    index_sample_into(store, ollama, sample_text)
+    old_index = GraphIndex.load(store)
+    keep_all = lambda question, candidates: (candidates, "kept all")  # noqa: E731
+    old_trace = Retriever(old_index, ollama).retrieve(
+        QUESTION, {**DEFAULT_SETTINGS, "linking_top_k": 50}, fact_filter=keep_all
+    )
+    seeds = {s.name: s for s in old_trace.seed_entities if s.kept and s.weight > 0}
+    assert {"stanford", "priya natarajan", "acme robotics"} <= set(seeds)  # only 'stanford' will vanish
+
+    store.delete_source(extra)
+    new_index = GraphIndex.load(store)
+    assert new_index.num_nodes < old_index.num_nodes
+    # Some recorded vertex numbers now point past the end of the graph, others at different nodes.
+    assert any(top.vertex >= new_index.num_nodes for top in old_trace.top_nodes)
+    assert seeds["acme robotics"].vertex != new_index.idx_of[seeds["acme robotics"].entity_id]
+
+    explanation = explain(new_index, old_trace)  # must not raise
+
+    node_ids = {n["id"] for n in explanation.subgraph["nodes"]}
+    assert seeds["stanford"].entity_id not in node_ids
+    assert seeds["priya natarajan"].entity_id in node_ids
+    assert all(node_id in new_index.idx_of for node_id in node_ids)
+    for edge in explanation.subgraph["edges"]:
+        assert new_index.edge_between(new_index.idx_of[edge["source"]], new_index.idx_of[edge["target"]])
+    company = next(p for p in explanation.passages if p.title == "The company")
+    assert "priya natarajan" in {s["name"] for s in company.linked_seeds}
+    assert "stanford" not in {s["name"] for s in company.linked_seeds}
+    for p in explanation.passages:
+        assert p.why.endswith(".")
+        if p.title == "Priya's studies":  # the deleted source's own passage
+            assert p.why == "This passage is no longer in the graph."
+        else:
+            assert "Seed 'stanford' is no longer in the graph and was ignored." in p.why
+    json.dumps(explanation.to_dict())
+
+
+def index_sample_into(store, ollama, sample_text: str) -> str:
+    source_id = store.create_source("sample", "Acme Robotics")
+    chunks = []
+    for ordinal, section in enumerate(sample_text.split("## ")[1:]):
+        title, _, body = section.partition("\n")
+        chunks.append(Chunk(ordinal, title.strip(), body.strip()))
+    index_source(store, ollama, source_id, chunks, workers=2)
+    return source_id

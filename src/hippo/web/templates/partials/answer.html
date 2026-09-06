@@ -4,7 +4,8 @@
 <section class="card answer-card">
   <div class="card-head">
     <h2>Answer</h2>
-    <a class="btn small" href="/analyze?question={{ question | urlencode }}">Analyze this question →</a>
+    {# The key replays the trace shown here; the question lets an expired key be re-run on request. #}
+    <a class="btn small" href="/analyze?key={{ trace_key }}&question={{ question | urlencode }}">Analyze this question →</a>
   </div>
   <p class="answer">{{ answer.answer }}</p>
   {% if answer.thought %}

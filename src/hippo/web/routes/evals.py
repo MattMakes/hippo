@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from ...evals import question_maker, runner
 from ...store.base import validate_settings
-from ..render import ctx_of, render
+from ..render import STOP_POLLING, ctx_of, render
 
 router = APIRouter()
 
@@ -55,9 +55,13 @@ def evals_page(request: Request, source: str = "", error: str = ""):
 
 @router.get("/partials/evals/tables")
 def evals_tables_partial(request: Request):
+    """Both tables, polled by the Evals page while questions are being written or a run is going."""
     ctx = ctx_of(request)
+    sets = ctx.store.list_question_sets()
+    runs = ctx.store.list_runs()
+    busy = any(qs["status"] == "generating" for qs in sets) or any(r["status"] == "running" for r in runs)
     return render(
-        request, "partials/evals_tables.html", sets=ctx.store.list_question_sets(), runs=ctx.store.list_runs()
+        request, "partials/evals_tables.html", sets=sets, runs=runs, status_code=200 if busy else STOP_POLLING
     )
 
 
@@ -100,7 +104,8 @@ def run_page(request: Request, run_id: str, compare: str = ""):
 
 
 @router.get("/partials/runs/{run_id}")
-def run_partial(request: Request, run_id: str):
+def run_partial(request: Request, run_id: str, compare: str = ""):
+    """The run page body, polled while the run is going; answers 286 once it is over so polling stops."""
     ctx = ctx_of(request)
     run = ctx.store.get_run(run_id)
     if run is None:
@@ -111,7 +116,8 @@ def run_partial(request: Request, run_id: str):
         run=run,
         results=ctx.store.list_results(run_id),
         cards=SUMMARY_CARDS,
-        other=None,
+        other=ctx.store.get_run(compare) if compare else None,
+        status_code=200 if run["status"] == "running" else STOP_POLLING,
     )
 
 

@@ -7,7 +7,9 @@
 
 <section class="card">
   <h2>Summary{% if other %} <span class="muted">vs {{ other.name | short(30) }}</span>{% endif %}</h2>
-  {% if other %}
+  {% if not run.summary %}
+  <p class="muted">No summary yet: the numbers appear when every question has been answered{% if run.status == 'failed' %} (this run stopped early){% endif %}.</p>
+  {% elif other %}
   <table class="table compact">
     <thead><tr><th>Metric</th><th class="num">{{ run.name | short(24) }}</th><th class="num">{{ other.name | short(24) }}</th></tr></thead>
     <tbody>
@@ -42,7 +44,7 @@
       <td class="num">{{ res.exact_match | fmt(1) }}</td>
       <td class="num">{{ res.f1 | fmt(2) }}</td>
       <td class="num">{{ res.gold_rank if res.gold_rank else '–' }}</td>
-      <td class="muted small">{{ 'embeddings' if res.recall and res.recall.get('fallback') else 'graph' }}</td>
+      <td class="muted small">{{ 'embeddings' if res.used_dpr_fallback else 'graph' }}</td>
       <td class="num muted">{{ res.latency_ms | round | int if res.latency_ms else '–' }}</td>
     </tr>
     {% endfor %}

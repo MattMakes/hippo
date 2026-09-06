@@ -68,13 +68,20 @@ class Jobs:
         return not thread.is_alive()
 
     def is_running(self, key: str) -> bool:
+        # No lock here on purpose: start() and cancel() call this while holding it, and a single
+        # dict.get is safe without one.
         thread = self._running.get(key)
         return thread is not None and thread.is_alive()
 
     def running_keys(self) -> list[str]:
-        return [k for k, t in self._running.items() if t.is_alive()]
+        # Under the lock: a job's runner pops from this dict when it finishes, and iterating a
+        # dict while another thread changes its size raises RuntimeError.
+        with self._lock:
+            return [k for k, t in self._running.items() if t.is_alive()]
 
     def wait_all(self, timeout: float | None = None) -> None:
         """Mostly for tests: block until every job has finished."""
-        for thread in list(self._running.values()):
+        with self._lock:
+            threads = list(self._running.values())
+        for thread in threads:  # join outside the lock: the runner needs it to finish
             thread.join(timeout)

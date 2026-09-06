@@ -8,18 +8,18 @@ call /api/simulate; the edits you like can be saved as a changeset and
 applied to the graph from /changesets.
 
 Ad-hoc analyses (a question typed in, not a stored result) keep their trace
-in a small in-memory cache so simulations can replay the LLM's fact filter
-without paying for it again.
+in a small in-memory cache (hippo.web.adhoc) so the page shows the answer
+the user just saw and simulations can replay the LLM's fact filter without
+paying for it again. Only POST /analyze runs the search and the model: a GET
+never does, so a link (or an <img src>) cannot start LLM work.
 """
 
 from __future__ import annotations
 
-import threading
-from collections import OrderedDict
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -32,29 +32,11 @@ from ...analysis.simulate import Overrides
 from ...analysis.simulate import simulate as run_simulation
 from ...hipporag.retriever import Trace, trace_from_dict
 from ...ollama import OllamaError
-from ...store.base import new_id
+from ..adhoc import ADHOC_LIMIT, recall_adhoc, remember_adhoc
 from ..render import ctx_of, render
 
 router = APIRouter()
 api = APIRouter(prefix="/api")
-
-_ADHOC: OrderedDict[str, dict[str, Any]] = OrderedDict()  # trace_key -> {"trace": dict, "answer": dict}
-_ADHOC_LOCK = threading.Lock()
-ADHOC_LIMIT = 50
-
-
-def remember_adhoc(trace: Trace, answer: dict[str, Any] | None) -> str:
-    key = new_id()
-    with _ADHOC_LOCK:
-        _ADHOC[key] = {"trace": trace.to_dict(), "answer": answer}
-        while len(_ADHOC) > ADHOC_LIMIT:
-            _ADHOC.popitem(last=False)
-    return key
-
-
-def recall_adhoc(key: str) -> dict[str, Any] | None:
-    with _ADHOC_LOCK:
-        return _ADHOC.get(key)
 
 
 # ---------------------------------------------------------------- pages
@@ -62,21 +44,39 @@ def recall_adhoc(key: str) -> dict[str, Any] | None:
 
 @router.get("/analyze")
 def analyze_adhoc(request: Request, question: str = "", key: str = ""):
-    """Analyze a question typed in right now (or one analysed a moment ago, by cache key)."""
-    ctx = ctx_of(request)
+    """Show the analysis cached under `key` (from the Ask page). Never runs the model: see analyze_submit."""
     cached = recall_adhoc(key) if key else None
     if cached is None:
         question = question.strip()
         if not question:
             return RedirectResponse("/ask", status_code=303)
-        try:
-            trace, answer = ask_service.ask(ctx, question)
-        except OllamaError as exc:
-            return render(request, "analyze.html", nav="ask", error=str(exc), question=question)
-        key = remember_adhoc(trace, {"answer": answer.answer, "thought": answer.thought})
-        return RedirectResponse(f"/analyze?key={key}", status_code=303)
+        return render(
+            request,
+            "analyze.html",
+            nav="ask",
+            error=f"That analysis is no longer in memory (hippo keeps the last {ADHOC_LIMIT}, until it restarts).",
+            question=question,
+            retry_question=question,
+            status_code=404,
+        )
     trace = trace_from_dict(cached["trace"])
     return _render_analysis(request, trace, result=None, answer=cached["answer"], history=[], trace_key=key)
+
+
+@router.post("/analyze")
+def analyze_submit(request: Request, question: str = Form("")):
+    """Run the search and the model for a question typed in right now, then show the analysis."""
+    ctx = ctx_of(request)
+    question = question.strip()
+    if not question:
+        return RedirectResponse("/ask", status_code=303)
+    try:
+        trace, answer = ask_service.ask(ctx, question)
+    except OllamaError as exc:
+        return render(request, "analyze.html", nav="ask", error=str(exc), question=question)
+    key = remember_adhoc(trace, {"answer": answer.answer, "thought": answer.thought})
+    # The question rides along so an expired key can offer "analyze it again".
+    return RedirectResponse(f"/analyze?key={key}&question={quote(question)}", status_code=303)
 
 
 @router.get("/analyze/{result_id}")

@@ -110,7 +110,8 @@ class FakeStore:
         bad = set(fields) - allowed
         if bad:
             raise ValueError(f"unknown source fields: {sorted(bad)}")
-        self.sources[source_id].update(fields, updated_at=now_iso())
+        if source_id in self.sources:  # Neo4j: MATCH finds nothing for a deleted source, so no error
+            self.sources[source_id].update(fields, updated_at=now_iso())
 
     def _source_row(self, source: dict[str, Any]) -> dict[str, Any]:
         row = dict(source)
@@ -179,7 +180,8 @@ class FakeStore:
     # --------------------------------------------------------- passages
     def add_passages(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
-            assert row["source_id"] in self.sources, "MATCH (s:Source) would find nothing"
+            if row["source_id"] not in self.sources:
+                continue  # Neo4j: MATCH (s:Source) finds nothing, so the row is silently skipped
             existing = self.passages.get(row["id"], {})
             self.passages[row["id"]] = {
                 **existing,
@@ -194,6 +196,8 @@ class FakeStore:
     def save_extraction(
         self, passage_id: str, entities: list[str], triples: list[list[str]], error: str | None
     ) -> None:
+        if passage_id not in self.passages:
+            return  # Neo4j: MATCH finds nothing (the passage was deleted meanwhile)
         self.passages[passage_id].update(
             entities_json=json.dumps(entities), triples_json=json.dumps(triples), extraction_error=error
         )
@@ -270,9 +274,8 @@ class FakeStore:
 
     def add_facts(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
-            assert row["subject_id"] in self.entities and row["object_id"] in self.entities, (
-                "MATCH (a:Entity),(b:Entity) would find nothing"
-            )
+            if row["subject_id"] not in self.entities or row["object_id"] not in self.entities:
+                continue  # Neo4j: MATCH (a:Entity), (b:Entity) finds nothing, so the row is silently skipped
             f = self.facts.setdefault(
                 row["id"],
                 {
@@ -522,6 +525,7 @@ class FakeStore:
             "gold_rank": result.get("gold_rank"),
             "latency_ms": result.get("latency_ms"),
             "trace_json": json.dumps(result.get("trace", {})),
+            "used_dpr_fallback": bool(result.get("used_dpr_fallback", False)),
             "error": result.get("error"),
             "created_at": now_iso(),
         }
@@ -529,6 +533,7 @@ class FakeStore:
 
     def _result_row(self, res: dict[str, Any], with_trace: bool) -> dict[str, Any]:
         row = dict(res)
+        row.setdefault("used_dpr_fallback", False)  # same fallback as RESULT_DEFAULTS in the real store
         row["recall"] = json.loads(row.pop("recall_json") or "{}")
         trace_json = row.pop("trace_json")
         row["trace"] = json.loads(trace_json or "{}") if with_trace else None

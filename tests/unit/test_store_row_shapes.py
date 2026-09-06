@@ -32,6 +32,7 @@ def test_run_result_set_and_changeset_rows_fill_in_missing_keys():
         and result["gold_rank"] is None
         and result["trace"] == {}
         and result["recall"] == {}
+        and result["used_dpr_fallback"] is False  # results stored before the property existed
     )
     question_set = _set_row({"qs": {"id": "qs1", "name": "s"}, "question_count": 0, "run_count": 0})
     assert question_set["status"] == "ready" and question_set["error"] is None

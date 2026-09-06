@@ -41,7 +41,7 @@ from .text import min_max_normalize
 
 log = logging.getLogger(__name__)
 
-TRACE_CANDIDATES = 20  # how many top facts we record in the trace (only linking_top_k go to the filter)
+TRACE_CANDIDATES = 20  # the trace records at least this many top facts (more when linking_top_k is larger)
 TRACE_TOP_NODES = 40  # how many top PPR nodes we record
 TRACE_SEED_PASSAGES = 10  # how many of the strongest embedding-similarity passages we record as seed passages
 
@@ -203,8 +203,12 @@ class Retriever:
         dpr_rank_of = {int(p): r + 1 for r, p in enumerate(dpr_order)}
 
         fact_scores = min_max_normalize(index.fact_embeddings @ q) if len(index.facts) else np.zeros(0)
-        fact_order = np.argsort(-fact_scores, kind="stable")[:TRACE_CANDIDATES]
-        sent = [int(i) for i in fact_order[:link_top_k]] if link_top_k > 0 else []
+        full_order = np.argsort(-fact_scores, kind="stable")
+        # Exactly linking_top_k facts go to the filter, like the reference's `rerank_facts`. The trace
+        # keeps a few more (at least TRACE_CANDIDATES) so the Analyze page can show the near misses,
+        # and always every fact that was sent.
+        sent = [int(i) for i in full_order[:link_top_k]] if link_top_k > 0 else []
+        fact_order = full_order[: max(TRACE_CANDIDATES, link_top_k)]
 
         # 2. Recognition memory: the LLM (or a replay) picks the facts that matter.
         t = time.time()

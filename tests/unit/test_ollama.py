@@ -333,3 +333,54 @@ def test_is_up_is_false_when_the_server_cannot_be_reached() -> None:
 def test_base_url_loses_its_trailing_slash(fake_ollama: FakeOllama) -> None:
     client = Ollama("http://fake-ollama/", LLM, EMBED, client=fake_ollama.client())
     assert client.base_url == "http://fake-ollama"
+
+
+# --------------------------------------------------------------- timeouts
+
+
+def test_a_read_timeout_is_not_retried_and_names_the_knob_to_raise() -> None:
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        raise httpx.ReadTimeout("the model is still thinking", request=request)
+
+    client = Ollama("http://fake-ollama", LLM, EMBED, client=client_for(handler), timeout_seconds=42)
+    with pytest.raises(OllamaError, match="HIPPO_LLM_TIMEOUT") as info:
+        client.chat_text([{"role": "user", "content": "hi"}])
+
+    assert "42s" in str(info.value) and "/api/chat" in str(info.value)
+    # One capability lookup (which swallows its own timeout), one chat: no retries of either.
+    assert paths == ["/api/show", "/api/chat"]
+
+
+def test_a_connect_timeout_is_still_retried(fake_ollama: FakeOllama) -> None:
+    flaky = Flaky(fake_ollama, failures=1, error=httpx.ConnectTimeout("slow to connect"))
+    client = Ollama("http://fake-ollama", LLM, EMBED, client=client_for(flaky))
+    assert client.embed(["hello"]).shape == (1, DIM)
+    assert flaky.attempts == 2
+
+
+def test_the_default_client_waits_long_for_replies_but_not_to_connect() -> None:
+    client = Ollama("http://fake-ollama", LLM, EMBED, timeout_seconds=123)
+    assert client.client.timeout.read == 123
+    assert client.client.timeout.connect == 10.0
+    assert client.timeout_seconds == 123
+
+
+def test_a_stalled_pull_raises_instead_of_hanging_forever() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("no bytes for a long time", request=request)
+
+    client = Ollama("http://fake-ollama", LLM, EMBED, client=client_for(handler))
+    with pytest.raises(OllamaError, match="stopped sending data"):
+        list(client.pull("nope:1b"))
+
+
+def test_a_pull_that_cannot_connect_raises_an_ollama_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = Ollama("http://fake-ollama", LLM, EMBED, client=client_for(handler))
+    with pytest.raises(OllamaError, match="could not pull"):
+        list(client.pull("nope:1b"))

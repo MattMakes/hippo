@@ -346,3 +346,33 @@ def test_seed_weights_are_plain_floats(retriever: Retriever) -> None:
     trace = retriever.retrieve(DIRECT, settings())
     for seed in trace.seed_entities:
         assert type(seed.weight) is float and not isinstance(seed.vertex, np.integer)
+
+
+# ------------------------------------------------- candidates vs trace size
+
+
+def test_a_large_linking_top_k_sends_that_many_facts_to_the_filter(retriever: Retriever) -> None:
+    # The reference's rerank_facts shows exactly linking_top_k facts to the LLM; the trace's own
+    # cap (TRACE_CANDIDATES) must not shrink that list.
+    seen: list[list[list[str]]] = []
+
+    def pass_through(question: str, candidates: list[list[str]]) -> tuple[list[list[str]], str]:
+        seen.append(candidates)
+        return candidates, "kept all"
+
+    trace = retriever.retrieve(DIRECT, settings(linking_top_k=30), fact_filter=pass_through)
+
+    expected = min(30, len(retriever.index.facts))
+    assert expected > TRACE_CANDIDATES, "the sample must have more facts than the trace cap for this test"
+    assert len(seen[0]) == expected
+    assert sum(c.sent_to_filter for c in trace.fact_candidates) == expected
+    # Every fact that went to the filter appears in the trace, so the Analyze page can show it.
+    assert len(trace.fact_candidates) == max(TRACE_CANDIDATES, expected)
+    assert all(c.sent_to_filter for c in trace.fact_candidates[:expected])
+    assert [c.rank for c in trace.fact_candidates] == list(range(1, len(trace.fact_candidates) + 1))
+
+
+def test_a_small_linking_top_k_still_records_the_trace_cap(retriever: Retriever) -> None:
+    trace = retriever.retrieve(DIRECT, settings(linking_top_k=3))
+    assert sum(c.sent_to_filter for c in trace.fact_candidates) == 3
+    assert len(trace.fact_candidates) == TRACE_CANDIDATES

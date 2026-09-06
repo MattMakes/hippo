@@ -39,7 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     serve = sub.add_parser("serve", help="start the web app and the MCP endpoint")
-    serve.add_argument("--host", default=None, help="bind address (default: HIPPO_HOST or 0.0.0.0)")
+    serve.add_argument(
+        "--host",
+        default=None,
+        help="bind address (default: HIPPO_HOST or 127.0.0.1; hippo has no login, so open it up only behind a proxy)",
+    )
     serve.add_argument("--port", type=int, default=None, help="port (default: HIPPO_PORT or 8000)")
 
     sub.add_parser("mcp", help="run the MCP server over stdio")

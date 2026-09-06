@@ -12,7 +12,7 @@ MULTIHOP = "In which state is the company founded by Priya Natarajan headquarter
 
 @pytest.fixture
 def client(ctx):
-    with TestClient(create_app(ctx)) as client:
+    with TestClient(create_app(ctx), base_url="http://localhost") as client:
         client.post("/sources/sample", follow_redirects=False)
         ctx.jobs.wait_all()
         yield client
@@ -34,10 +34,12 @@ def result_id(client, ctx) -> str:
 
 
 def test_adhoc_analysis_redirects_to_a_cached_key_and_renders(client):
-    response = client.get(f"/analyze?question={MULTIHOP}", follow_redirects=False)
+    # A POST does the search; the GET it redirects to only shows the cached trace.
+    response = client.post("/analyze", data={"question": MULTIHOP}, follow_redirects=False)
     assert response.status_code == 303 and "key=" in response.headers["location"]
     page = client.get(response.headers["location"])
     assert page.status_code == 200
+    assert "ask this again" in page.text and "/ask?q=" in page.text
     for text in (
         "What the search did",
         "candidate facts",
@@ -48,6 +50,7 @@ def test_adhoc_analysis_redirects_to_a_cached_key_and_renders(client):
     ):
         assert text in page.text
     assert client.get("/analyze", follow_redirects=False).status_code == 303  # no question -> back to Ask
+    assert client.post("/analyze", data={"question": " "}, follow_redirects=False).status_code == 303
 
 
 def test_stored_result_analysis_shows_expected_answer_verdict_and_gold(client, result_id):
@@ -136,3 +139,15 @@ def test_changeset_api_validates_ops(client):
         client.post("/api/changesets", json={"name": "bad", "ops": [{"op": "nonsense"}]}).status_code == 400
     )
     assert client.post("/api/changesets/nope/apply").status_code == 404
+
+
+def test_analysis_of_an_old_result_survives_the_graph_changing(client, ctx, result_id):
+    """A stored trace remembers vertex numbers that shift when sources come and go; the page must not crash."""
+    from hippo.ingest import pipeline
+
+    extra = pipeline.add_text(ctx, "extra", "Zed Corp is located in Austin. Austin is located in Texas.")
+    ctx.jobs.wait_all()
+    assert client.delete(f"/api/sources/{extra}").status_code == 200
+    page = client.get(f"/analyze/{result_id}")
+    assert page.status_code == 200
+    assert "graph has changed" in page.text

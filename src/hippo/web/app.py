@@ -1,10 +1,11 @@
 """
 The FastAPI application.
 
-`create_app()` builds the app: it wires the shared AppContext, serves the
-static files, includes the page and API routers, mounts the MCP server at
-/mcp, and on startup makes sure Neo4j has its schema and Ollama has its
-models (pulling them in the background if not).
+`create_app()` builds the app: it wires the shared AppContext, guards every
+request against other websites (security.py), serves the static files,
+includes the page and API routers, mounts the MCP server at /mcp, and on
+startup makes sure Neo4j has its schema and Ollama has its models (pulling
+them in the background if not).
 
 Run it with `hippo serve` or `uvicorn hippo.web.app:create_app --factory`.
 """
@@ -20,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from ..context import AppContext
 from .render import STATIC_DIR
 from .routes import analyze, api, evals, pages, sources
+from .security import HostAndOriginGuard
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +37,8 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
 
     app = FastAPI(title="hippo", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
     app.state.ctx = ctx
+    # Wraps every route below, the static files and the mounted MCP app (see security.py).
+    app.add_middleware(HostAndOriginGuard, allowed_hosts=ctx.config.allowed_hosts)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(pages.router)
     app.include_router(sources.router)

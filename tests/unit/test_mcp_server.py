@@ -154,7 +154,7 @@ def test_mount_serves_mcp_inside_fastapi(indexed_ctx: AppContext):
 
     mcp_server.mount(app, indexed_ctx)
 
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://localhost") as client:
         # Existing routes still win over the catch-all mount.
         assert client.get("/hello").json() == {"ok": True}
 
@@ -163,6 +163,19 @@ def test_mount_serves_mcp_inside_fastapi(indexed_ctx: AppContext):
         assert response.status_code == 200, response.text
         names = {t["name"] for t in _first_json_rpc_result(response.text)["tools"]}
         assert names == TOOL_NAMES
+        # DNS-rebinding protection is on: a foreign Host is refused by the MCP library itself.
+        response = client.post("/mcp", json=body, headers={**MCP_HEADERS, "Host": "evil.example:8000"})
+        assert response.status_code == 421
+        response = client.post("/mcp", json=body, headers={**MCP_HEADERS, "Host": "127.0.0.1:8000"})
+        assert response.status_code == 200
+
+
+def test_transport_security_is_built_from_the_allowed_hosts():
+    settings = mcp_server.transport_security(("localhost", "[::1]"))
+    assert settings.enable_dns_rebinding_protection is True
+    assert set(settings.allowed_hosts) == {"localhost", "localhost:*", "[::1]", "[::1]:*"}
+    assert {"http://localhost", "http://localhost:*", "https://[::1]:*"} <= set(settings.allowed_origins)
+    assert mcp_server.transport_security(("localhost", "*")).enable_dns_rebinding_protection is False
 
 
 def _first_json_rpc_result(text: str) -> dict:
