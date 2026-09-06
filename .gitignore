@@ -1,0 +1,18 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# hippo runtime data (uploads, cloned repos, neo4j/ollama volumes)
+data/
+.env
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
