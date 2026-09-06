@@ -37,6 +37,17 @@ CONSTRAINTS = [
 ]
 
 
+def with_defaults(node: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    """
+    Neo4j does not store a property whose value is null, so a node created with `error: null`
+    comes back without an `error` key at all. Every row-shaping function runs its node through
+    this so callers (and the in-memory FakeStore) always see the same keys.
+    """
+    shaped = dict(defaults)
+    shaped.update(node)
+    return shaped
+
+
 def new_id() -> str:
     """A short random id for app records (sources, runs, ...). Graph nodes use content hashes instead."""
     return uuid4().hex[:12]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .base import Neo4jBase, new_id, now_iso
+from .base import Neo4jBase, new_id, now_iso, with_defaults
 
 
 class EvalQueries(Neo4jBase):
@@ -269,8 +269,44 @@ class EvalQueries(Neo4jBase):
 # ------------------------------------------------------------- row shaping
 
 
+SET_DEFAULTS: dict[str, Any] = {
+    "origin": "manual",
+    "status": "ready",
+    "stage": "",
+    "progress_done": 0,
+    "progress_total": 0,
+    "error": None,
+    "created_at": "",
+}
+RUN_DEFAULTS: dict[str, Any] = {
+    "status": "done",
+    "started_at": "",
+    "finished_at": None,
+    "settings_json": "{}",
+    "summary_json": "{}",
+    "progress_done": 0,
+    "progress_total": 0,
+    "error": None,
+}
+RESULT_DEFAULTS: dict[str, Any] = {
+    "answer": "",
+    "thought": "",
+    "verdict": "",
+    "judge_score": None,
+    "judge_reason": "",
+    "exact_match": None,
+    "f1": None,
+    "recall_json": "{}",
+    "gold_rank": None,
+    "latency_ms": None,
+    "trace_json": "{}",
+    "error": None,
+    "created_at": "",
+}
+
+
 def _set_row(row: dict[str, Any]) -> dict[str, Any]:
-    qs = dict(row["qs"])
+    qs = with_defaults(dict(row["qs"]), SET_DEFAULTS)
     qs["source_id"] = row.get("source_id")
     qs["source_name"] = row.get("source_name")
     qs["question_count"] = int(row.get("question_count", 0))
@@ -279,7 +315,7 @@ def _set_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_row(row: dict[str, Any]) -> dict[str, Any]:
-    run = dict(row["r"])
+    run = with_defaults(dict(row["r"]), RUN_DEFAULTS)
     run["settings"] = json.loads(run.pop("settings_json", None) or "{}")
     run["summary"] = json.loads(run.pop("summary_json", None) or "{}")
     run["set_id"] = row.get("set_id")
@@ -288,7 +324,7 @@ def _run_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _result_row(row: dict[str, Any], with_trace: bool) -> dict[str, Any]:
-    res = dict(row["res"])
+    res = with_defaults(dict(row["res"]), RESULT_DEFAULTS)
     res["recall"] = json.loads(res.pop("recall_json", None) or "{}")
     trace_json = res.pop("trace_json", None)
     res["trace"] = json.loads(trace_json or "{}") if with_trace else None

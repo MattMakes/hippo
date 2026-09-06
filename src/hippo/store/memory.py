@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .base import Neo4jBase, new_id, now_iso
+from .base import Neo4jBase, new_id, now_iso, with_defaults
 
 BATCH = 200  # rows per write query; keeps transactions small and progress visible
 
@@ -110,22 +110,34 @@ class MemoryQueries(Neo4jBase):
         'running' and question sets still 'generating' are marked failed so the UI does not wait forever.
         """
         message = "interrupted by a restart; run it again"
-        rows = self.run(
+        now = now_iso()
+        sources = self.run_one(
             """
-            OPTIONAL MATCH (s:Source) WHERE s.status IN ['reading', 'indexing']
+            MATCH (s:Source) WHERE s.status IN ['reading', 'indexing']
             SET s.status = 'failed', s.error = $message, s.updated_at = $now
-            WITH count(s) AS sources
-            OPTIONAL MATCH (r:EvalRun {status: 'running'})
-            SET r.status = 'failed', r.error = $message, r.finished_at = $now
-            WITH sources, count(r) AS runs
-            OPTIONAL MATCH (qs:QuestionSet {status: 'generating'})
-            SET qs.status = 'failed', qs.error = $message
-            RETURN sources + runs + count(qs) AS total
+            RETURN count(s) AS n
             """,
             message=message,
-            now=now_iso(),
+            now=now,
         )
-        return int(rows[0]["total"]) if rows else 0
+        runs = self.run_one(
+            """
+            MATCH (r:EvalRun {status: 'running'})
+            SET r.status = 'failed', r.error = $message, r.finished_at = $now
+            RETURN count(r) AS n
+            """,
+            message=message,
+            now=now,
+        )
+        sets = self.run_one(
+            """
+            MATCH (qs:QuestionSet {status: 'generating'})
+            SET qs.status = 'failed', qs.error = $message
+            RETURN count(qs) AS n
+            """,
+            message=message,
+        )
+        return sum(int((row or {}).get("n", 0)) for row in (sources, runs, sets))
 
     def remove_orphans(self) -> None:
         self.run("MATCH (f:Fact) WHERE NOT (f)<-[:STATES]-() DETACH DELETE f")
@@ -390,8 +402,20 @@ class MemoryQueries(Neo4jBase):
 # ------------------------------------------------------------- row shaping
 
 
+SOURCE_DEFAULTS: dict[str, Any] = {
+    "status": "queued",
+    "stage": "",
+    "progress_done": 0,
+    "progress_total": 0,
+    "error": None,
+    "meta_json": "{}",
+    "created_at": "",
+    "updated_at": "",
+}
+
+
 def _source_row(row: dict[str, Any]) -> dict[str, Any]:
-    source = dict(row["s"])
+    source = with_defaults(dict(row["s"]), SOURCE_DEFAULTS)
     source["meta"] = json.loads(source.pop("meta_json", None) or "{}")
     source["passages"] = int(row.get("passages", 0))
     source["fact_links"] = int(row.get("fact_links", 0))
@@ -399,7 +423,7 @@ def _source_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _passage_row(row: dict[str, Any]) -> dict[str, Any]:
-    passage = dict(row)
+    passage = with_defaults(dict(row), {"extraction_error": None, "title": "", "text": "", "ordinal": 0})
     passage["entities"] = json.loads(passage.pop("entities_json", None) or "[]")
     passage["triples"] = json.loads(passage.pop("triples_json", None) or "[]")
     return passage

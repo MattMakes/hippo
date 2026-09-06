@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .base import Neo4jBase, new_id, now_iso
+from .base import Neo4jBase, new_id, now_iso, with_defaults
 
 
 class ChangesetQueries(Neo4jBase):
@@ -83,7 +83,17 @@ class ChangesetQueries(Neo4jBase):
         self.run("MATCH (a {id: $a})-[t:TUNED]->(b {id: $b}) DELETE t", a=lo, b=hi)
 
 
+CHANGESET_DEFAULTS: dict[str, Any] = {
+    "note": "",
+    "status": "draft",
+    "ops_json": "[]",
+    "created_at": "",
+    "applied_at": None,
+    "from_result_id": None,
+}
+
+
 def _changeset_row(row: dict[str, Any]) -> dict[str, Any]:
-    changeset = dict(row["c"])
+    changeset = with_defaults(dict(row["c"]), CHANGESET_DEFAULTS)
     changeset["ops"] = json.loads(changeset.pop("ops_json", None) or "[]")
     return changeset
