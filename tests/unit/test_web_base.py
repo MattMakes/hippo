@@ -109,3 +109,11 @@ def test_entity_search_and_neighborhood(client):
 def test_status_partial_renders_pills(client):
     text = client.get("/partials/status").text
     assert "Neo4j" in text and "Ollama" in text
+
+
+def test_startup_marks_jobs_interrupted_by_a_restart_as_failed(ctx):
+    stuck = ctx.store.create_source("text", "stuck")
+    ctx.store.update_source(stuck, status="indexing", stage="extracting facts")
+    with TestClient(create_app(ctx)):
+        source = ctx.store.get_source(stuck)
+    assert source["status"] == "failed" and "restart" in source["error"]

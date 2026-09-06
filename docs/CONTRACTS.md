@@ -113,7 +113,7 @@ runner.py          start_run(ctx, set_id, name=None, settings=None) -> run_id   
 ### `src/hippo/analysis/` — digging into one question
 
 ```
-explain.py     explain(index: GraphIndex, trace: Trace, *, top_passages=10) -> Explanation
+explain.py     explain(index: GraphIndex, trace: Trace, *, top_passages=10, graph=None) -> Explanation   # graph: an edited igraph from a simulation
                Explanation.passages: for each of the top passages: passage_id, title, rank, score, dpr_rank,
                    linked_seeds: [{entity_id, name, seed_weight, edge_weight}]  (seed entities this passage MENTIONS),
                    path: [names] shortest path from the strongest seed to this passage when not directly linked (cutoff 3, by igraph),
@@ -125,12 +125,12 @@ simulate.py    Overrides(settings: dict = {}, force_include: list[str] = [], for
                          edge_edits: list[dict(a, b, weight)] = [], rerun_filter: bool = False, reanswer: bool = False)
                Overrides.from_dict(d); Overrides.to_ops() -> list[op dicts]  (settings -> set_setting; node_boosts -> set_node_boost;
                          edge_edits -> set_edge_weight)   # force_include/exclude are per-question and never become graph ops
-               simulate(ctx, question, overrides, baseline: Trace | None) -> Simulation(trace, answer: Answer | None, diff)
+               simulate(ctx, question, overrides, baseline: Trace | None) -> Simulation(trace, answer: Answer | None, diff, baseline)
                    - settings = baseline.settings (or store settings) merged with overrides.settings
                    - fact filter: replay baseline.filter["kept_triples"] unless rerun_filter (then the LLM runs again)
                    - graph = index.graph_with_edits([EdgeEdit(...)]) when edge_edits
                    - answer only when overrides.reanswer (costs an LLM call)
-               diff_traces(before, after) -> {"passages": [{passage_id, title, before_rank, after_rank, change}], "seeds_before": [...],
+               diff_traces(before: Trace | None, after) -> {"passages": [{passage_id, title, before_rank, after_rank, change}], "seeds_before": [...],
                    "seeds_after": [...], "fallback_before", "fallback_after", "kept_facts_before", "kept_facts_after"}
                    passages listed = union of top 10 of both, sorted by after_rank (missing rank -> None, shown as "–")
 changesets.py  save(ctx, name, ops, from_result_id=None, note="") -> changeset_id
@@ -145,7 +145,7 @@ changesets.py  save(ctx, name, ops, from_result_id=None, note="") -> changeset_i
 ```
 app.py         create_app(ctx: AppContext | None = None) -> FastAPI   # ctx default: AppContext.from_env(); on startup: store.ensure_schema(),
                kick off "pull-models" job if Ollama is up and models are missing (Ollama.missing_models / ensure_model), mount /static,
-               include routers, mount MCP at /mcp (hippo.mcp_server.mount_mcp)
+               include routers, mount MCP at /mcp (hippo.mcp_server.mount)
 routes/pages.py   HTML pages (all extend templates/base.html, which shows Neo4j/Ollama status + model pull progress in the header)
     GET /                          Library: sources table (name, kind, status+stage+progress, passages, facts, created); upload forms
                                    (file, zip, paste text, git URL, "Load the sample"); delete buttons; auto-refresh rows while indexing (HTMX poll)

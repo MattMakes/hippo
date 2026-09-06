@@ -257,3 +257,17 @@ def test_start_indexing_does_not_start_twice(ctx: AppContext) -> None:
     assert (
         second is False or ctx.store.get_source(source_id)["status"] == "ready"
     )  # the first may finish fast
+
+
+def test_reindexing_replaces_passages_whose_text_changed(ctx):
+    source_id = pipeline.add_text(ctx, "notes", "Zed Corp is located in Austin.")
+    ctx.jobs.wait_all()
+    first = ctx.store.passage_ids_for_source(source_id)
+    (pipeline.source_dir(ctx, source_id) / "text.md").write_text("Zed Corp is located in Dallas.")
+    assert pipeline.reindex(ctx, source_id) is True
+    ctx.jobs.wait_all()
+    second = ctx.store.passage_ids_for_source(source_id)
+    assert second and second != first, "the old passage must be gone and the new text indexed"
+    assert ctx.store.get_source(source_id)["status"] == "ready"
+    assert "dallas" in {e["name"] for e in ctx.store.load_entities()}
+    assert "austin" not in {e["name"] for e in ctx.store.load_entities()}

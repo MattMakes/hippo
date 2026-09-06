@@ -43,7 +43,8 @@ def new_id() -> str:
 
 
 def now_iso() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    # Microseconds so rows created in the same second still sort "newest first".
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 class Neo4jBase:

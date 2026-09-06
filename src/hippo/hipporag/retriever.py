@@ -333,6 +333,8 @@ class Retriever:
             trace.used_dpr_fallback = True
             trace.fallback_reason = "every seed weight is zero"
             trace.passages = self._ranked(dpr_scores, dpr_scores, dpr_order, dpr_rank_of, retrieval_top_k)
+            trace.top_nodes = []
+            timing["total"] = (time.time() - started) * 1000
             trace.timing_ms = timing
             return trace
 
@@ -406,6 +408,7 @@ def match_triples(kept: list[list[str]], candidates: list[list[str]]) -> list[in
 __all__ = [
     "Retriever",
     "Trace",
+    "trace_from_dict",
     "FactCandidate",
     "SeedEntity",
     "SeedPassage",

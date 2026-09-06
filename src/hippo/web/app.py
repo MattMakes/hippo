@@ -52,6 +52,9 @@ def startup(ctx: AppContext) -> None:
     """Prepare the database schema and kick off model downloads. Never raises: the UI shows what is missing."""
     if ctx.store.ping():
         ctx.store.ensure_schema()
+        interrupted = ctx.store.mark_interrupted_jobs()
+        if interrupted:
+            log.warning("%d job(s) were interrupted by the last shutdown and are marked failed", interrupted)
     else:
         log.warning("Neo4j at %s is not reachable yet; the Settings page will say so", ctx.config.neo4j_uri)
     if ctx.ollama.is_up():

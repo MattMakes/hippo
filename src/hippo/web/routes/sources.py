@@ -137,7 +137,10 @@ def list_sources(request: Request) -> list[dict[str, Any]]:
 
 @api.post("/text")
 def add_text(request: Request, body: TextBody):
-    return {"source_id": pipeline.add_text(ctx_of(request), body.name, body.text)}
+    try:
+        return {"source_id": pipeline.add_text(ctx_of(request), body.name, body.text)}
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
 
 @api.post("/upload")

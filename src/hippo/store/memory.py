@@ -88,6 +88,45 @@ class MemoryQueries(Neo4jBase):
         self.run("MATCH (s:Source {id: $id}) DETACH DELETE s", id=source_id)
         self.remove_orphans()
 
+    def delete_passages_for_source(self, source_id: str) -> None:
+        """Forget a source's passages (and whatever only they supported) but keep the Source row, for re-indexing."""
+        while True:
+            row = self.run_one(
+                """
+                MATCH (s:Source {id: $id})<-[:FROM]-(p:Passage)
+                WITH p LIMIT 500
+                DETACH DELETE p
+                RETURN count(*) AS deleted
+                """,
+                id=source_id,
+            )
+            if not row or row["deleted"] == 0:
+                break
+        self.remove_orphans()
+
+    def mark_interrupted_jobs(self) -> int:
+        """
+        After a restart, nothing is running any more: sources still 'reading'/'indexing', runs still
+        'running' and question sets still 'generating' are marked failed so the UI does not wait forever.
+        """
+        message = "interrupted by a restart; run it again"
+        rows = self.run(
+            """
+            OPTIONAL MATCH (s:Source) WHERE s.status IN ['reading', 'indexing']
+            SET s.status = 'failed', s.error = $message, s.updated_at = $now
+            WITH count(s) AS sources
+            OPTIONAL MATCH (r:EvalRun {status: 'running'})
+            SET r.status = 'failed', r.error = $message, r.finished_at = $now
+            WITH sources, count(r) AS runs
+            OPTIONAL MATCH (qs:QuestionSet {status: 'generating'})
+            SET qs.status = 'failed', qs.error = $message
+            RETURN sources + runs + count(qs) AS total
+            """,
+            message=message,
+            now=now_iso(),
+        )
+        return int(rows[0]["total"]) if rows else 0
+
     def remove_orphans(self) -> None:
         self.run("MATCH (f:Fact) WHERE NOT (f)<-[:STATES]-() DETACH DELETE f")
         self.run("MATCH (e:Entity) WHERE NOT (e)<-[:MENTIONS]-() DETACH DELETE e")

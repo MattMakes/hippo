@@ -130,6 +130,32 @@ class FakeStore:
         self.sources.pop(source_id, None)
         self.remove_orphans()
 
+    def delete_passages_for_source(self, source_id: str) -> None:
+        pids = {pid for pid, p in self.passages.items() if p["source_id"] == source_id}
+        for pid in pids:
+            del self.passages[pid]
+        self.mentions = {m for m in self.mentions if m[0] not in pids}
+        self.statements = {s for s in self.statements if s[0] not in pids}
+        self.tuned = {k: v for k, v in self.tuned.items() if k[0] not in pids and k[1] not in pids}
+        self.remove_orphans()
+
+    def mark_interrupted_jobs(self) -> int:
+        message = "interrupted by a restart; run it again"
+        total = 0
+        for s in self.sources.values():
+            if s["status"] in ("reading", "indexing"):
+                s.update(status="failed", error=message, updated_at=now_iso())
+                total += 1
+        for r in self.runs.values():
+            if r["status"] == "running":
+                r.update(status="failed", error=message, finished_at=now_iso())
+                total += 1
+        for qs in self.question_sets.values():
+            if qs["status"] == "generating":
+                qs.update(status="failed", error=message)
+                total += 1
+        return total
+
     def remove_orphans(self) -> None:
         stated = {fid for _, fid in self.statements}
         for fid in [f for f in self.facts if f not in stated]:
