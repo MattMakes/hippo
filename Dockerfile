@@ -22,5 +22,10 @@ RUN pip install --no-cache-dir .
 ENV HIPPO_DATA_DIR=/app/data
 RUN mkdir -p /app/data
 
+# Run as an ordinary user: git clones and PDF/docx/epub parsing of untrusted files should not happen as root,
+# and files written to the bind-mounted ./data get uid 1000 (usually your own uid) instead of root.
+RUN useradd --system --uid 1000 --create-home hippo && chown -R hippo:hippo /app
+USER hippo
+
 EXPOSE 8000
 CMD ["hippo", "serve"]

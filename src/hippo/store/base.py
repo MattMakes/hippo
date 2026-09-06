@@ -77,7 +77,8 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT eval_result_id IF NOT EXISTS FOR (n:EvalResult) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT changeset_id IF NOT EXISTS FOR (n:Changeset) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT settings_id IF NOT EXISTS FOR (n:Settings) REQUIRE n.id IS UNIQUE",
-    "CREATE INDEX entity_name IF NOT EXISTS FOR (n:Entity) ON (n.name)",
+    # A TEXT index (not the default RANGE one) is what `CONTAINS` searches can use.
+    "CREATE TEXT INDEX entity_name IF NOT EXISTS FOR (n:Entity) ON (n.name)",
 ]
 
 
@@ -104,7 +105,10 @@ def now_iso() -> str:
 
 class Neo4jBase:
     def __init__(self, uri: str, user: str, password: str, database: str = "neo4j"):
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        # Short timeouts: when Neo4j is unreachable a page should say so in seconds, not hang for a minute.
+        self.driver = GraphDatabase.driver(
+            uri, auth=(user, password), connection_timeout=5.0, connection_acquisition_timeout=10.0
+        )
         self.database = database
         self._bootstrapped = False  # schema created and interrupted jobs cleaned, once per process
 
@@ -181,11 +185,11 @@ class Neo4jBase:
         return row["value"] if row else None
 
     def set_meta(self, key: str, value: Any) -> None:
+        # `SET s += $map` works on every Neo4j 5.x (the dynamic `s[$key] = ...` form needs 5.24+).
         self.run(
-            "MERGE (s:Settings {id: 'global'}) ON CREATE SET s += $defaults, s.graph_version = 0 SET s[$key] = $value",
+            "MERGE (s:Settings {id: 'global'}) ON CREATE SET s += $defaults, s.graph_version = 0 SET s += $change",
             defaults=DEFAULT_SETTINGS,
-            key=key,
-            value=value,
+            change={key: value},
         )
 
     # ------------------------------------------------- graph version counter

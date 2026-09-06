@@ -18,7 +18,7 @@ The graph looks like this (open http://localhost:7474 to browse it):
                         [:STATES]->(Fact)-[:SUBJECT]->(Entity)
                                         -[:OBJECT]->(Entity)
     (Entity)-[:SYNONYM {score}]->(Entity)      similar names, e.g. "usa" ~ "united states"
-    (Entity)-[:TUNED {weight}]->(Entity)       a weight you changed on purpose (from a changeset)
+    (Entity|Passage)-[:TUNED {weight}]->(Entity|Passage)   a weight you pinned on purpose (from a changeset); wins over the computed one
 
     (QuestionSet)-[:HAS]->(Question)           evaluation questions, optionally [:ABOUT]->(Source)
     (EvalRun)-[:OF]->(QuestionSet)
