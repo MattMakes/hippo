@@ -57,9 +57,18 @@ def index_source(
     synonymy_threshold: float = 0.8,
     workers: int = 2,
     on_progress: Progress | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict[str, int]:
-    """Index all chunks of one source into the graph. Returns a few counts for the log."""
+    """
+    Index all chunks of one source into the graph. Returns a few counts for the log.
+    `should_stop()` is checked between stages and before every passage; when it says so we raise openie.Stopped.
+    """
     progress = on_progress or (lambda stage, done, total: None)
+
+    def checkpoint(stage: str) -> None:
+        if should_stop and should_stop():
+            raise openie.Stopped(f"stopped before '{stage}'")
+
     chunks = [c for c in chunks if c.text.strip()]
     if not chunks:
         return {"passages": 0, "entities": 0, "facts": 0, "synonyms": 0}
@@ -68,6 +77,7 @@ def index_source(
     progress("embedding passages", 0, len(chunks))
     ids = [passage_id(source_id, c) for c in chunks]
     embeddings = ollama.embed([c.text for c in chunks], kind="document")
+    check_embedding_compatibility(store, ollama.embed_model, int(embeddings.shape[1]))
     store.add_passages(
         [
             {
@@ -85,16 +95,19 @@ def index_source(
 
     # 2. OpenIE.
     progress("extracting facts", 0, len(chunks))
+    checkpoint("extracting facts")
     extractions = openie.extract_many(
         ollama,
         list(zip(ids, [c.text for c in chunks], strict=True)),
         workers=workers,
         on_progress=lambda done, total: progress("extracting facts", done, total),
+        should_stop=should_stop,
     )
     for ex in extractions:
         store.save_extraction(ex.passage_id, ex.entities, ex.triples, ex.error)
 
     # 3. Entities and facts.
+    checkpoint("saving entities and facts")
     progress("saving entities and facts", 0, 1)
     names: dict[str, str] = {}  # entity id -> name
     triples: dict[str, tuple[str, str, str]] = {}  # fact id -> triple
@@ -156,6 +169,28 @@ def index_source(
         "facts": len(new_fact_ids),
         "synonyms": len(synonyms),
     }
+
+
+class EmbeddingMismatch(ValueError):
+    """The graph was built with a different embedding model; its vectors cannot be compared with new ones."""
+
+
+def check_embedding_compatibility(store, embed_model: str, dim: int) -> None:
+    """
+    Vectors from two different embedding models live in different spaces, so mixing them
+    would make similarity scores meaningless. If the graph already holds passages made with
+    another model (or another vector size), refuse with a message that says what to do.
+    """
+    if store.stats().get("passages", 0) == 0:
+        return
+    built_with = store.get_meta("embed_model")
+    built_dim = store.get_meta("embedding_dim")
+    if (built_with and built_with != embed_model) or (built_dim and int(built_dim) != dim):
+        raise EmbeddingMismatch(
+            f"the memory was built with embedding model {built_with!r} ({built_dim} numbers per vector) but this "
+            f"server uses {embed_model!r} ({dim}). Use 'Re-index everything' on the Settings page, or set "
+            f"HIPPO_EMBED_MODEL back to {built_with!r}."
+        )
 
 
 def find_synonyms(

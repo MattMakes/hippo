@@ -188,6 +188,18 @@ def delete_source(ctx: AppContext, source_id: str) -> None:
     shutil.rmtree(source_dir(ctx, source_id), ignore_errors=True)
 
 
+def reindex_all(ctx: AppContext) -> int:
+    """
+    Forget every source's passages and index them all again, one background job per source.
+    This is the way back after changing HIPPO_EMBED_MODEL: old and new vectors must never mix.
+    """
+    started = 0
+    for source in ctx.store.list_sources():
+        if reindex(ctx, source["id"]):
+            started += 1
+    return started
+
+
 def reindex(ctx: AppContext, source_id: str) -> bool:
     """Drop this source's passages and index its saved files again. False if a job is already running."""
     if ctx.jobs.is_running(f"index:{source_id}") or ctx.store.get_source(source_id) is None:

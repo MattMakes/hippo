@@ -123,6 +123,10 @@ class GraphIndex:
         entity_rows = store.load_entities()
         passage_rows = sorted(store.load_passages(), key=lambda r: (r["source_id"], r["ordinal"] or 0))
         fact_rows = store.load_facts()
+        # A row without a usable vector cannot take part in similarity search; drop it here so the
+        # embedding matrices stay aligned with the row lists (a misaligned matrix would rank the wrong passage).
+        passage_rows = _rows_with_good_vectors(passage_rows, "passage")
+        fact_rows = _rows_with_good_vectors(fact_rows, "fact")
 
         node_ids = [r["id"] for r in entity_rows] + [r["id"] for r in passage_rows]
         node_kind = [ENTITY] * len(entity_rows) + [PASSAGE] * len(passage_rows)
@@ -131,7 +135,10 @@ class GraphIndex:
         boost = np.ones(len(node_ids))
         passage_count = np.zeros(len(node_ids))
         for i, row in enumerate(entity_rows):
-            boost[i] = float(row.get("boost") or 1.0)
+            stored_boost = row.get("boost")
+            boost[i] = (
+                1.0 if stored_boost is None else float(stored_boost)
+            )  # 0 is a real value: "mute this entity"
             passage_count[i] = float(row.get("passage_count") or 0)
 
         passages = [
@@ -303,8 +310,26 @@ def build_igraph(num_nodes: int, edges: dict[tuple[int, int], Edge]) -> ig.Graph
     return graph
 
 
-def _matrix(vectors: list[list[float] | None]) -> np.ndarray:
-    rows = [v for v in vectors if v is not None]
-    if not rows:
+def _rows_with_good_vectors(rows: list[dict], kind: str) -> list[dict]:
+    """Keep rows whose embedding is a list of the majority length; log the ones that are not."""
+    lengths = [len(r["embedding"]) for r in rows if isinstance(r.get("embedding"), list) and r["embedding"]]
+    if not lengths:
+        return [r for r in rows if isinstance(r.get("embedding"), list) and r["embedding"]]
+    expected = max(set(lengths), key=lengths.count)
+    good = [r for r in rows if isinstance(r.get("embedding"), list) and len(r["embedding"]) == expected]
+    if len(good) != len(rows):
+        log.warning(
+            "Ignoring %d %s row(s) whose embedding is missing or not %d numbers long (built with a different "
+            "embedding model?). Re-index those sources.",
+            len(rows) - len(good),
+            kind,
+            expected,
+        )
+    return good
+
+
+def _matrix(vectors: list[list[float]]) -> np.ndarray:
+    """A float32 matrix from equal-length vectors (see _rows_with_good_vectors), or an empty (0, 0) one."""
+    if not vectors:
         return np.zeros((0, 0), dtype=np.float32)
-    return np.asarray(rows, dtype=np.float32)
+    return np.asarray(vectors, dtype=np.float32)

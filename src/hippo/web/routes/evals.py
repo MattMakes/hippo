@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ...evals import question_maker, runner
+from ...store.base import validate_settings
 from ..render import ctx_of, render
 
 router = APIRouter()
@@ -283,9 +284,9 @@ def start_run(request: Request, set_id: str, body: RunBody | None = None):
     ctx = ctx_of(request)
     body = body or RunBody()
     try:
-        run_id = runner.start_run(ctx, set_id, body.name, body.settings)
+        run_id = runner.start_run(ctx, set_id, body.name, validate_settings(body.settings or {}))
     except ValueError as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise HTTPException(404 if "unknown question set" in str(exc) else 400, str(exc)) from exc
     return {"run_id": run_id}
 
 

@@ -12,12 +12,13 @@ from typing import Any
 from .context import AppContext
 from .hipporag.answerer import Answer, answer_question
 from .hipporag.retriever import Retriever, Trace
+from .store.base import validate_settings
 
 
 def search(ctx: AppContext, question: str, settings: dict[str, Any] | None = None) -> Trace:
     """Rank passages for a question using the current graph and settings."""
     merged = ctx.store.get_settings()
-    merged.update(settings or {})
+    merged.update(validate_settings(settings or {}))  # raises ValueError on junk, before any model call
     return Retriever(ctx.graph(), ctx.ollama).retrieve(question, merged)
 
 

@@ -22,6 +22,50 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "qa_top_k": 5,  # how many passages the LLM reads when answering
 }
 
+# Type and allowed range of every setting: (type, lowest, highest). None means "no bound".
+SETTING_RULES: dict[str, tuple[type, float | None, float | None]] = {
+    "linking_top_k": (int, 0, 100),
+    "passage_node_weight": (float, 0.0, 10.0),
+    "damping": (float, 0.0, 1.0),
+    "node_specificity": (bool, None, None),
+    "synonymy_threshold": (float, 0.0, 1.0),
+    "retrieval_top_k": (int, 1, 5000),
+    "qa_top_k": (int, 1, 50),
+}
+
+
+def validate_settings(changes: dict[str, Any]) -> dict[str, Any]:
+    """
+    Check and coerce a dict of settings. Unknown keys, wrong types and out-of-range
+    values raise ValueError with a message a person can act on. Every entry point
+    (API, form, MCP, simulations) goes through this, so a typo can never poison the
+    stored settings and break every later search.
+    """
+    unknown = set(changes) - set(SETTING_RULES)
+    if unknown:
+        raise ValueError(f"unknown settings: {sorted(unknown)}")
+    clean: dict[str, Any] = {}
+    for key, value in changes.items():
+        kind, low, high = SETTING_RULES[key]
+        if kind is bool:
+            if isinstance(value, str):
+                value = value.strip().lower() in ("1", "true", "yes", "on")
+            clean[key] = bool(value)
+            continue
+        if isinstance(value, bool):
+            raise ValueError(f"{key} must be a number, not true/false")
+        try:
+            number = kind(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be a {kind.__name__}, got {value!r}") from exc
+        if kind is int and float(value) != number:
+            raise ValueError(f"{key} must be a whole number, got {value!r}")
+        if (low is not None and number < low) or (high is not None and number > high):
+            raise ValueError(f"{key} must be between {low} and {high}, got {value!r}")
+        clean[key] = number
+    return clean
+
+
 CONSTRAINTS = [
     "CREATE CONSTRAINT source_id IF NOT EXISTS FOR (n:Source) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT passage_id IF NOT EXISTS FOR (n:Passage) REQUIRE n.id IS UNIQUE",
@@ -62,6 +106,7 @@ class Neo4jBase:
     def __init__(self, uri: str, user: str, password: str, database: str = "neo4j"):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
         self.database = database
+        self._bootstrapped = False  # schema created and interrupted jobs cleaned, once per process
 
     def close(self) -> None:
         self.driver.close()
@@ -78,12 +123,28 @@ class Neo4jBase:
         return rows[0] if rows else None
 
     def ping(self) -> bool:
+        """
+        Is Neo4j reachable? The first time it is, the schema is created and jobs interrupted
+        by the last shutdown are marked failed. That makes startup order irrelevant: Neo4j may
+        come up minutes after the app and everything still gets set up on the first page load.
+        """
         try:
             self.driver.verify_connectivity()
-            return True
         except Exception as exc:  # noqa: BLE001 - any driver error means "not reachable"
             log.warning("Neo4j not reachable: %s", exc)
             return False
+        if not self._bootstrapped:
+            try:
+                self.on_first_connection()
+                self._bootstrapped = True
+            except Exception as exc:  # noqa: BLE001 - try again on the next ping
+                log.warning("Neo4j is up but bootstrapping failed, will retry: %s", exc)
+                return False
+        return True
+
+    def on_first_connection(self) -> None:
+        """What to do once Neo4j is reachable. Store extends this (see store/__init__.py)."""
+        self.ensure_schema()
 
     # ------------------------------------------------------------- schema
 
@@ -104,9 +165,14 @@ class Neo4jBase:
         return {key: stored.get(key, default) for key, default in DEFAULT_SETTINGS.items()}
 
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
-        allowed = {k: v for k, v in changes.items() if k in DEFAULT_SETTINGS}
-        if allowed:
-            self.run("MATCH (s:Settings {id: 'global'}) SET s += $changes", changes=allowed)
+        """Change some settings. Raises ValueError for unknown keys, wrong types or out-of-range values."""
+        clean = validate_settings(changes)
+        if clean:
+            self.run(
+                "MERGE (s:Settings {id: 'global'}) ON CREATE SET s += $defaults, s.graph_version = 0 SET s += $changes",
+                defaults=DEFAULT_SETTINGS,
+                changes=clean,
+            )
         return self.get_settings()
 
     def get_meta(self, key: str) -> Any:
@@ -115,7 +181,12 @@ class Neo4jBase:
         return row["value"] if row else None
 
     def set_meta(self, key: str, value: Any) -> None:
-        self.run("MATCH (s:Settings {id: 'global'}) SET s[$key] = $value", key=key, value=value)
+        self.run(
+            "MERGE (s:Settings {id: 'global'}) ON CREATE SET s += $defaults, s.graph_version = 0 SET s[$key] = $value",
+            defaults=DEFAULT_SETTINGS,
+            key=key,
+            value=value,
+        )
 
     # ------------------------------------------------- graph version counter
     # The in-memory graph is rebuilt whenever this number changes.
@@ -125,8 +196,15 @@ class Neo4jBase:
         return int(row["v"]) if row else 0
 
     def bump_graph_version(self) -> int:
+        # MERGE rather than MATCH so the counter can never be silently missing (e.g. the app
+        # started before Neo4j did): a missing Settings node is created on the spot.
         row = self.run_one(
-            "MATCH (s:Settings {id: 'global'}) SET s.graph_version = coalesce(s.graph_version, 0) + 1 RETURN s.graph_version AS v"
+            """
+            MERGE (s:Settings {id: 'global'}) ON CREATE SET s += $defaults, s.graph_version = 0
+            SET s.graph_version = coalesce(s.graph_version, 0) + 1
+            RETURN s.graph_version AS v
+            """,
+            defaults=DEFAULT_SETTINGS,
         )
         return int(row["v"]) if row else 0
 

@@ -43,6 +43,7 @@ log = logging.getLogger(__name__)
 
 TRACE_CANDIDATES = 20  # how many top facts we record in the trace (only linking_top_k go to the filter)
 TRACE_TOP_NODES = 40  # how many top PPR nodes we record
+TRACE_SEED_PASSAGES = 10  # how many of the strongest embedding-similarity passages we record as seed passages
 
 # A fact filter takes (question, candidate triples) and returns (kept triples in order, raw model text).
 FactFilter = Callable[[str, list[list[str]]], tuple[list[list[str]], str]]
@@ -186,6 +187,8 @@ class Retriever:
         passage_node_weight = float(settings.get("passage_node_weight", 0.05))
         node_specificity = bool(settings.get("node_specificity", True))
         retrieval_top_k = int(settings.get("retrieval_top_k", 200))
+        if not 0.0 <= damping <= 1.0:
+            raise ValueError(f"damping must be between 0 and 1, got {damping}")
 
         # 1. Embed the question once; score every fact and every passage against it.
         t = time.time()
@@ -316,7 +319,7 @@ class Retriever:
         # Passages seed PPR too, lightly, by their own similarity to the question.
         passage_weights = np.zeros(n)
         passage_weights[index.passage_vertices] = dpr_scores * passage_node_weight
-        for pos in dpr_order[:10]:
+        for pos in dpr_order[:TRACE_SEED_PASSAGES]:
             p = index.passages[int(pos)]
             trace.seed_passages.append(
                 SeedPassage(
@@ -347,7 +350,7 @@ class Retriever:
         passage_ppr = ppr_scores[index.passage_vertices]
         ppr_order = np.argsort(-passage_ppr, kind="stable")
         trace.passages = self._ranked(passage_ppr, dpr_scores, ppr_order, dpr_rank_of, retrieval_top_k)
-        seed_vertices = top_set | {int(v) for v in index.passage_vertices[dpr_order[:10]]}
+        seed_vertices = top_set | {int(v) for v in index.passage_vertices[dpr_order[:TRACE_SEED_PASSAGES]]}
         for v in np.argsort(-ppr_scores, kind="stable")[:TRACE_TOP_NODES]:
             v = int(v)
             trace.top_nodes.append(

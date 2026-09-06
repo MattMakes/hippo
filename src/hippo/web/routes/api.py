@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 from ... import ask as ask_service
 from ...ollama import OllamaError
 from ...status import system_status
-from ...store.base import DEFAULT_SETTINGS
 from ..render import ctx_of
 
 router = APIRouter(prefix="/api")
@@ -41,10 +40,10 @@ def get_settings(request: Request):
 
 @router.put("/settings")
 def put_settings(request: Request, changes: dict[str, Any]):
-    unknown = set(changes) - set(DEFAULT_SETTINGS)
-    if unknown:
-        raise HTTPException(400, f"unknown settings: {sorted(unknown)}")
-    return ctx_of(request).store.update_settings(changes)
+    try:
+        return ctx_of(request).store.update_settings(changes)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/models/pull")
@@ -64,6 +63,8 @@ def ask(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     try:
         trace, answer = ask_service.ask(ctx, body.question.strip(), body.settings)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
     return {
@@ -79,6 +80,8 @@ def search(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     try:
         trace = ask_service.search(ctx, body.question.strip(), body.settings)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
     return {"trace": trace.to_dict()}

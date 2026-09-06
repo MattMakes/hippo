@@ -21,8 +21,10 @@ from ..context import AppContext
 from ..hipporag.answerer import Answer
 from ..hipporag.graph_index import EdgeEdit
 from ..hipporag.retriever import FactFilter, Retriever, Trace, trace_from_dict
+from ..store.base import validate_settings
+from .explain import TOP_PASSAGES
 
-DIFF_TOP = 10  # how many passages of each trace the diff looks at
+DIFF_TOP = TOP_PASSAGES  # the diff covers the same passages the Analyze page explains
 
 
 @dataclass
@@ -41,7 +43,7 @@ class Overrides:
     def from_dict(cls, d: dict[str, Any] | None) -> Overrides:
         d = d or {}
         return cls(
-            settings=dict(d.get("settings") or {}),
+            settings=validate_settings(dict(d.get("settings") or {})),
             force_include=[str(x) for x in d.get("force_include") or []],
             force_exclude=[str(x) for x in d.get("force_exclude") or []],
             node_boosts={str(k): float(v) for k, v in (d.get("node_boosts") or {}).items()},

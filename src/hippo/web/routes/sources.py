@@ -165,6 +165,12 @@ def add_sample(request: Request):
     return {"source_id": pipeline.add_sample(ctx_of(request))}
 
 
+@api.post("/reindex-all")
+def reindex_all(request: Request):
+    """Re-index every source with the current embedding model (the fix for a changed HIPPO_EMBED_MODEL)."""
+    return {"started": pipeline.reindex_all(ctx_of(request))}
+
+
 @api.get("/{source_id}")
 def get_source(request: Request, source_id: str):
     source = ctx_of(request).store.get_source(source_id)

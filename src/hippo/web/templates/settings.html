@@ -3,6 +3,7 @@
 {% block content %}
 <div class="page-head"><h1>Settings</h1></div>
 {% if saved %}<div class="callout ok">Saved. New searches use these settings right away.</div>{% endif %}
+{% if error %}<div class="callout bad">Not saved: {{ error }}</div>{% endif %}
 
 <div class="grid two">
   <section class="card">
@@ -45,7 +46,11 @@
     </dl>
     {% endif %}
     {% if status.embed_model_mismatch %}
-    <div class="callout warn">The graph was built with <code>{{ status.embed_model_built }}</code> but this server uses <code>{{ config.embed_model }}</code>. Vectors from two models cannot be compared: re-index your sources or switch the embed model back.</div>
+    <div class="callout warn">
+      The graph was built with <code>{{ status.embed_model_built }}</code> but this server uses <code>{{ config.embed_model }}</code>.
+      Vectors from two models cannot be compared, so new sources are refused until this is resolved: switch <code>HIPPO_EMBED_MODEL</code> back, or
+      <button class="btn small" data-post="/api/sources/reindex-all" data-message="Re-indexing every source with {{ config.embed_model }}" data-then="/" data-refresh="800">Re-index everything with {{ config.embed_model }}</button>
+    </div>
     {% endif %}
   </section>
 </div>

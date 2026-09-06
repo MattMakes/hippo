@@ -19,6 +19,9 @@ log = logging.getLogger(__name__)
 class Jobs:
     def __init__(self) -> None:
         self._running: dict[str, threading.Thread] = {}
+        self._cancelled: dict[
+            str, threading.Event
+        ] = {}  # a job checks its flag between steps and stops early
         self._lock = threading.Lock()
 
     def start(self, key: str, work: Callable[[], None]) -> bool:
@@ -35,11 +38,34 @@ class Jobs:
                 finally:
                     with self._lock:
                         self._running.pop(key, None)
+                        self._cancelled.pop(key, None)
 
             thread = threading.Thread(target=runner, name=f"job-{key}", daemon=True)
             self._running[key] = thread
+            self._cancelled[key] = threading.Event()
             thread.start()
             return True
+
+    def cancel(self, key: str) -> bool:
+        """Ask a running job to stop at its next checkpoint. Returns False if no such job is running."""
+        with self._lock:
+            event = self._cancelled.get(key)
+            if event is None or not self.is_running(key):
+                return False
+            event.set()
+            return True
+
+    def is_cancelled(self, key: str) -> bool:
+        event = self._cancelled.get(key)
+        return event is not None and event.is_set()
+
+    def wait(self, key: str, timeout: float | None = None) -> bool:
+        """Block until the job has finished (or the timeout passes). Returns True if it is no longer running."""
+        thread = self._running.get(key)
+        if thread is None:
+            return True
+        thread.join(timeout)
+        return not thread.is_alive()
 
     def is_running(self, key: str) -> bool:
         thread = self._running.get(key)

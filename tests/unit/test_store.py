@@ -64,13 +64,15 @@ def test_settings_start_at_the_defaults(store) -> None:
     assert store.get_settings() == DEFAULT_SETTINGS
 
 
-def test_update_settings_changes_known_keys_and_ignores_unknown_ones(store) -> None:
-    after = store.update_settings({"damping": 0.7, "linking_top_k": 3, "bogus": 1})
+def test_update_settings_changes_known_keys_and_rejects_unknown_ones(store) -> None:
+    after = store.update_settings({"damping": 0.7, "linking_top_k": 3})
     assert after["damping"] == 0.7
     assert after["linking_top_k"] == 3
-    assert "bogus" not in after
     assert set(after) == set(DEFAULT_SETTINGS)
     assert store.get_settings() == after
+    with pytest.raises(ValueError):
+        store.update_settings({"damping": 0.9, "bogus": 1})
+    assert store.get_settings()["damping"] == 0.7  # nothing from a rejected request is applied
 
 
 def test_meta_is_none_until_set(store) -> None:

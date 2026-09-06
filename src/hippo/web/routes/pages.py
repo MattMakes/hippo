@@ -14,7 +14,7 @@ from fastapi.responses import RedirectResponse
 from ... import ask as ask_service
 from ...ollama import OllamaError
 from ...status import system_status
-from ...store.base import DEFAULT_SETTINGS
+from ...store.base import DEFAULT_SETTINGS, validate_settings
 from ..render import ctx_of, render
 
 router = APIRouter()
@@ -87,17 +87,32 @@ def settings_page(request: Request, saved: int = 0):
 async def settings_submit(request: Request):
     ctx = ctx_of(request)
     form = await request.form()
-    changes = parse_settings_form(dict(form))
-    ctx.store.update_settings(changes)
+    try:
+        ctx.store.update_settings(parse_settings_form(dict(form)))
+    except ValueError as exc:
+        return render(
+            request,
+            "settings.html",
+            nav="settings",
+            settings=ctx.store.get_settings(),
+            help=SETTING_HELP,
+            saved=False,
+            error=str(exc),
+            status=system_status(ctx, fresh=True),
+            status_code=400,
+        )
     return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 def parse_settings_form(form: dict) -> dict:
-    """Turn form strings into the right types; ignore anything that is not a known setting."""
+    """
+    Turn form strings into the right types (checkboxes are absent when unticked); ignore anything
+    that is not a known setting. Ranges are checked by validate_settings in the store.
+    """
     changes: dict = {}
     for key, default in DEFAULT_SETTINGS.items():
         if isinstance(default, bool):
             changes[key] = key in form and str(form[key]).lower() in ("on", "true", "1", "yes")
         elif key in form and str(form[key]).strip() != "":
-            changes[key] = int(form[key]) if isinstance(default, int) else float(form[key])
+            changes[key] = validate_settings({key: form[key]})[key]
     return changes

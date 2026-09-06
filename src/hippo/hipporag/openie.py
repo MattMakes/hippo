@@ -67,16 +67,30 @@ def extract(ollama: Ollama, passage_id: str, text: str) -> Extraction:
     return result
 
 
+class Stopped(RuntimeError):
+    """Raised when the caller asked us to stop (the job was cancelled or the app is shutting down)."""
+
+
 def extract_many(
     ollama: Ollama,
     passages: list[tuple[str, str]],
     workers: int = 2,
     on_progress: Callable[[int, int], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> list[Extraction]:
-    """Extract from many (passage_id, text) pairs with a few parallel workers. Results keep the input order."""
+    """
+    Extract from many (passage_id, text) pairs with a few parallel workers. Results keep the input order.
+    `should_stop()` is checked before each passage; when it returns True, `Stopped` is raised.
+    """
     results: dict[str, Extraction] = {}
+
+    def extract_unless_stopped(pid: str, text: str) -> Extraction:
+        if should_stop and should_stop():
+            raise Stopped(f"stopped before passage {pid}")
+        return extract(ollama, pid, text)
+
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(extract, ollama, pid, text): pid for pid, text in passages}
+        futures = {pool.submit(extract_unless_stopped, pid, text): pid for pid, text in passages}
         for done, future in enumerate(as_completed(futures), start=1):
             extraction = future.result()
             results[extraction.passage_id] = extraction

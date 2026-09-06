@@ -27,14 +27,25 @@ The graph looks like this (open http://localhost:7474 to browse it):
     (Settings {id: 'global'})                  retrieval knobs + the graph version counter
 """
 
+import logging
+
 from .base import Neo4jBase
 from .changesets import ChangesetQueries
 from .evals import EvalQueries
 from .memory import MemoryQueries
 
+log = logging.getLogger(__name__)
+
 
 class Store(MemoryQueries, EvalQueries, ChangesetQueries, Neo4jBase):
     """All of hippo's Neo4j queries behind one object."""
+
+    def on_first_connection(self) -> None:
+        """Runs once, the first time Neo4j answers: create the schema, then tidy up after any crash."""
+        self.ensure_schema()
+        interrupted = self.mark_interrupted_jobs()
+        if interrupted:
+            log.warning("%d job(s) were interrupted by the last shutdown and are marked failed", interrupted)
 
 
 __all__ = ["Store"]

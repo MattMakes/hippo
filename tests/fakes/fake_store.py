@@ -12,7 +12,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from hippo.store.base import DEFAULT_SETTINGS, new_id, now_iso
+from hippo.store.base import DEFAULT_SETTINGS, new_id, now_iso, validate_settings
+
+
+def _boost(entity: dict[str, Any]) -> float:
+    """Same as Neo4j's coalesce(e.boost, 1.0): unset means 1.0, but a stored 0 stays 0."""
+    return 1.0 if entity.get("boost") is None else float(entity["boost"])
 
 
 class FakeStore:
@@ -39,6 +44,11 @@ class FakeStore:
         pass
 
     def ping(self) -> bool:
+        # Same as the real store: the first successful ping bootstraps (schema + interrupted jobs).
+        if not getattr(self, "_bootstrapped", False):
+            self._bootstrapped = True
+            self.ensure_schema()
+            self.mark_interrupted_jobs()
         return True
 
     def ensure_schema(self) -> None:
@@ -48,7 +58,7 @@ class FakeStore:
         return {k: self.settings.get(k, d) for k, d in DEFAULT_SETTINGS.items()}
 
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
-        self.settings.update({k: v for k, v in changes.items() if k in DEFAULT_SETTINGS})
+        self.settings.update(validate_settings(changes))
         return self.get_settings()
 
     def get_meta(self, key: str) -> Any:
@@ -234,7 +244,7 @@ class FakeStore:
             {
                 "id": i,
                 "name": self.entities[i]["name"],
-                "boost": self.entities[i].get("boost") or 1.0,
+                "boost": _boost(self.entities[i]),
                 "passage_count": self._passage_count(i),
             }
             for i in ids
@@ -313,7 +323,7 @@ class FakeStore:
             {
                 "id": e["id"],
                 "name": e["name"],
-                "boost": e.get("boost") or 1.0,
+                "boost": _boost(e),
                 "passage_count": self._passage_count(e["id"]),
             }
             for e in self.entities.values()

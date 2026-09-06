@@ -25,6 +25,7 @@ from ..hipporag.graph_index import PASSAGE, GraphIndex
 from ..hipporag.retriever import RankedPassage, SeedEntity, Trace
 
 MAX_PATH_HOPS = 3  # longer paths are not a useful explanation; we say "no short path" instead
+TOP_PASSAGES = 10  # how many ranked passages the Analyze page explains, shows text for, and diffs
 
 
 @dataclass
@@ -52,7 +53,7 @@ class Explanation:
 
 
 def explain(
-    index: GraphIndex, trace: Trace, *, top_passages: int = 10, graph: ig.Graph | None = None
+    index: GraphIndex, trace: Trace, *, top_passages: int = TOP_PASSAGES, graph: ig.Graph | None = None
 ) -> Explanation:
     """
     Explain the top passages of `trace` using `index`.

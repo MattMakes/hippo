@@ -98,10 +98,14 @@ def _render_analysis(request: Request, trace: Trace, *, result, answer, history,
     index = ctx.graph()
     explanation = explain(index, trace)
     gold_ids = set((result or {}).get("gold_passage_ids") or [])
+    # Text for exactly the passages the explanation covers, so the two can never disagree.
+    previews = {ranked.passage_id: ranked.preview for ranked in trace.passages}
     passage_text = {}
-    for ranked in trace.passages[:10]:
-        passage = index.passage_by_id(ranked.passage_id)
-        passage_text[ranked.passage_id] = passage.text if passage else ranked.preview
+    for explained in explanation.passages:
+        passage = index.passage_by_id(explained.passage_id)
+        passage_text[explained.passage_id] = (
+            passage.text if passage else previews.get(explained.passage_id, "")
+        )
     return render(
         request,
         "analyze.html",
