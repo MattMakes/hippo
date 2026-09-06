@@ -128,7 +128,7 @@ def test_reindex_everything_endpoint_reindexes_each_source(ctx):
     pipeline.add_sample(ctx)
     pipeline.add_text(ctx, "note", "Zed Corp is located in Austin.")
     ctx.jobs.wait_all()
-    with TestClient(create_app(ctx)) as client:
+    with TestClient(create_app(ctx)) as client:  # the app closes the store on shutdown, so assert inside
         assert client.post("/api/sources/reindex-all").json()["started"] == 2
         ctx.jobs.wait_all()
-    assert all(s["status"] == "ready" for s in ctx.store.list_sources())
+        assert all(s["status"] == "ready" for s in ctx.store.list_sources())
