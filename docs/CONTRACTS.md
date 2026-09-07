@@ -41,6 +41,7 @@ src/hippo/store/                  Store (Neo4j) and LadybugStore (embedded Ladyb
                                   its sources), delete_role (refused while in use), count_users, list_users, get_user, get_user_by_username,
                                   get_user_by_token, create_user, update_user, rotate_token, delete_user, check_password, set_source_access
 src/hippo/remote.py               RemoteHippo: the CLI's client for a running server (the embedded file is single-process).
+justfile                          `just ladybug` / `just neo4j` (docker), `just dev` / `just dev-neo4j` (local), `just test*`; each says its backend.
 src/hippo/hipporag/text.py        clean_phrase, entity_id, fact_id, fact_text, make_id, min_max_normalize, is_meaningful_phrase
 src/hippo/hipporag/openie.py      extract(ollama, passage_id, text) -> Extraction; extract_many(...)
 src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text); index_source(store, ollama, source_id, chunks, *, synonymy_threshold, workers, on_progress, should_stop)

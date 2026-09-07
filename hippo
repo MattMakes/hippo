@@ -43,14 +43,15 @@ host_has_ollama() {
   command -v curl >/dev/null 2>&1 && curl -s --max-time 2 "$OLLAMA_HOST_URL/api/tags" >/dev/null 2>&1
 }
 
-# The HIPPO_STORE line of .env: "neo4j" to run a Neo4j container, anything else (or nothing)
-# means the embedded LadybugDB file, which needs no extra service.
+# Which store the app uses: HIPPO_STORE in the environment wins (`just neo4j` sets it), then the
+# HIPPO_STORE line of .env. "neo4j" runs a Neo4j container; anything else (or nothing) means the
+# embedded LadybugDB file, which needs no extra service. docker compose reads the variable the same way.
 store_backend() {
-  local value=""
-  if [ -f .env ]; then
-    value="$(sed -n 's/^HIPPO_STORE=//p' .env | tail -n 1 | tr '[:upper:]' '[:lower:]')"
+  local value="${HIPPO_STORE:-}"
+  if [ -z "$value" ] && [ -f .env ]; then
+    value="$(sed -n 's/^HIPPO_STORE=//p' .env | tail -n 1)"
   fi
-  printf '%s\n' "${value:-ladybug}"
+  printf '%s\n' "${value:-ladybug}" | tr '[:upper:]' '[:lower:]'
 }
 
 uses_neo4j() {
@@ -152,10 +153,13 @@ cmd_up() {
   fi
   mkdir -p data
   if uses_neo4j; then
-    say "HIPPO_STORE=neo4j in .env: starting a Neo4j container for the graph."
+    say "Graph store: Neo4j (HIPPO_STORE=neo4j). Starting a Neo4j container for the graph."
     ensure_neo4j_password
+    export HIPPO_STORE=neo4j   # so compose gives the app the same answer, whatever .env says
     export USE_NEO4J_PROFILE=1
   else
+    say "Graph store: embedded LadybugDB file at $DB_FILE (HIPPO_STORE=ladybug). No database container."
+    export HIPPO_STORE=ladybug
     export USE_NEO4J_PROFILE=0
   fi
 
