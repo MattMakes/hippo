@@ -27,7 +27,7 @@ def system_status(ctx: AppContext, fresh: bool = False) -> dict[str, Any]:
 
 
 def _compute(ctx: AppContext) -> dict[str, Any]:
-    neo4j_ok = ctx.store.ping()
+    store_ok = ctx.store.ping()
     ollama_ok = ctx.ollama.is_up()
     installed: list[str] = []
     if ollama_ok:
@@ -36,11 +36,13 @@ def _compute(ctx: AppContext) -> dict[str, Any]:
         except OllamaError:
             ollama_ok = False
     models = {name: _installed(name, installed) for name in ctx.ollama.required_models()}
-    stats = ctx.store.stats() if neo4j_ok else {}
-    embed_model_built = ctx.store.get_meta("embed_model") if neo4j_ok else None
+    stats = ctx.store.stats() if store_ok else {}
+    embed_model_built = ctx.store.get_meta("embed_model") if store_ok else None
     return {
-        "neo4j": neo4j_ok,
-        "neo4j_uri": ctx.config.neo4j_uri,
+        "store": store_ok,
+        "store_backend": ctx.config.store_backend,  # "ladybug" (embedded file) or "neo4j"
+        "store_location": ctx.config.store_location,  # the .lbug path, or the bolt URI
+        "neo4j": store_ok,  # older name for "store", kept for anything that reads /api/status
         "ollama": ollama_ok,
         "ollama_url": ctx.config.ollama_url,
         "models": models,
@@ -51,7 +53,7 @@ def _compute(ctx: AppContext) -> dict[str, Any]:
         "stats": stats,
         "embed_model_built": embed_model_built,
         "embed_model_mismatch": bool(embed_model_built and embed_model_built != ctx.ollama.embed_model),
-        "ready": neo4j_ok and ollama_ok and all(models.values()),
+        "ready": store_ok and ollama_ok and all(models.values()),
     }
 
 

@@ -143,7 +143,10 @@ def test_entity_search_and_neighborhood(client):
 
 def test_status_partial_renders_pills(client):
     text = client.get("/partials/status").text
-    assert "Neo4j" in text and "Ollama" in text
+    assert (
+        "Graph" in text and "Ollama" in text
+    )  # "Graph" is the embedded store; it reads "Neo4j" with that backend
+    assert "Neo4j" not in text
 
 
 def test_startup_marks_jobs_interrupted_by_a_restart_as_failed(ctx):
@@ -208,9 +211,18 @@ def test_local_host_headers_are_accepted_on_pages_and_mcp(client):
 
 
 def test_allowed_hosts_can_be_extended_or_switched_off(ctx, tmp_path):
+    class SharedStore:
+        """The two apps below share one store; shutting the first app down must not close it for the second."""
+
+        def __getattr__(self, name):
+            return getattr(ctx.store, name)
+
+        def close(self) -> None:
+            pass
+
     def app_for(hosts: tuple[str, ...]):
         config = Config(data_dir=tmp_path / "data", allowed_hosts=hosts)
-        return create_app(AppContext(config=config, store=ctx.store, ollama=ctx.ollama))
+        return create_app(AppContext(config=config, store=SharedStore(), ollama=ctx.ollama))
 
     with TestClient(app_for(("localhost", "mybox")), base_url="http://mybox:8000") as client:
         assert client.get("/").status_code == 200

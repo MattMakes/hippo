@@ -8,15 +8,19 @@ know about X?" and the client calls hippo.
 Two ways to connect:
 
 * **HTTP (recommended).** The web app serves MCP at `http://localhost:8000/mcp`
-  (streamable HTTP, stateless). Nothing to install: `./hippo up` is enough.
-* **stdio.** The client starts `hippo mcp` itself. This needs hippo installed
-  on your machine (`pip install -e .`) and the Neo4j / Ollama ports reachable,
-  which they are when the containers are running: compose publishes 7687 and
-  11434 on `127.0.0.1`, so they can be reached from this machine only. The
-  Neo4j password is the `NEO4J_PASSWORD` line of `.env` (written by `./hippo up`).
+  (streamable HTTP, stateless). Nothing to install: `hippo serve` (or
+  `./hippo up`) is enough.
+* **stdio.** The client starts `hippo mcp` itself, with hippo installed on
+  your machine (`pip install -e .`) and Ollama reachable. Mind the database:
+  the embedded LadybugDB file can be open in one process at a time, so `hippo
+  mcp` only works while `hippo serve` is *not* running on the same file (it
+  fails with a clear "already open in another hippo process" message
+  otherwise). If you keep the server running, use the HTTP form. With
+  `HIPPO_STORE=neo4j` there is no such limit; compose publishes 7687 on
+  `127.0.0.1`, and the password is the `NEO4J_PASSWORD` line of `.env`.
 
-Both ways only work from the machine that runs the containers; port 8000 is
-also bound to `127.0.0.1`.
+Both ways only work from the machine that runs hippo; port 8000 is bound to
+`127.0.0.1`.
 
 ## Who is calling
 
@@ -62,9 +66,7 @@ The stdio form, with hippo installed on your machine:
       "command": "hippo",
       "args": ["mcp"],
       "env": {
-        "NEO4J_URI": "bolt://localhost:7687",
-        "NEO4J_USER": "neo4j",
-        "NEO4J_PASSWORD": "<the NEO4J_PASSWORD from your .env>",
+        "HIPPO_DATA_DIR": "/Users/you/hippo/data",
         "OLLAMA_URL": "http://localhost:11434",
         "HIPPO_TOKEN": "<your token from /account, once users exist>"
       }
@@ -75,6 +77,9 @@ The stdio form, with hippo installed on your machine:
 
 If `hippo` is not on the PATH Claude Desktop uses, put the full path to the
 executable in `command` (for example `/Users/you/hippo/.venv/bin/hippo`).
+`HIPPO_DATA_DIR` must point at the folder that holds your `hippo.lbug` (or set
+`HIPPO_DB_PATH` to the file itself); with Neo4j, pass `HIPPO_STORE=neo4j` and
+the `NEO4J_*` variables instead.
 
 To use the HTTP endpoint instead, add it as a custom connector in Claude
 Desktop's settings (Settings, Connectors, Add custom connector) with the URL
@@ -117,8 +122,11 @@ environment variables (see `.env.example`), so any client that can spawn a
 command works:
 
 ```bash
-NEO4J_URI=bolt://localhost:7687 NEO4J_PASSWORD="$(sed -n 's/^NEO4J_PASSWORD=//p' .env)" OLLAMA_URL=http://localhost:11434 hippo mcp
+HIPPO_DATA_DIR=./data OLLAMA_URL=http://localhost:11434 hippo mcp
 ```
+
+Remember that this opens the database file itself, so stop `hippo serve` first
+(or use the HTTP endpoint of the running server instead).
 
 Nothing may be printed to stdout in this mode (it is the protocol channel);
 hippo sends its logs to stderr.

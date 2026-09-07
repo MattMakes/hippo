@@ -6,21 +6,27 @@ the facts in that text, and later you ask it questions in plain English. It
 answers from what it remembers and shows you *why*: which facts it matched,
 which parts of the graph lit up, and which passages it read. It is a portable
 implementation of [HippoRAG](https://github.com/OSU-NLP-Group/HippoRAG)
-(HippoRAG 2) that runs entirely in Docker: Neo4j for the graph, Ollama for
-the models, and a small web UI on top. It also speaks MCP, so Claude Code,
-Claude Desktop or Cursor can use it as a tool.
+(HippoRAG 2) that runs on one machine: an embedded graph database
+([LadybugDB](https://ladybugdb.com), one file under `data/`), Ollama for the
+models, and a small web UI on top. It also speaks MCP, so Claude Code, Claude
+Desktop or Cursor can use it as a tool.
 
 ## Run it
 
-You need Docker (Desktop is fine). If you already run
-[Ollama](https://ollama.com) on your machine, hippo will use it; if not, it
-starts one in a container.
+You need Python 3.11+ and [Ollama](https://ollama.com) running on your
+machine. There is no database to install: the graph lives in
+`data/hippo.lbug`.
 
 ```bash
 git clone https://github.com/MattMakes/hippo.git
 cd hippo
-./hippo up
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+hippo serve
 ```
+
+Prefer containers? `./hippo up` does the same with Docker (and starts an
+Ollama container if your machine has none); see "Run in Docker" below.
 
 Then:
 
@@ -31,20 +37,56 @@ Then:
    about 6 GB); the header shows the progress.
 3. Go to **Ask** and type: *Who designed the Orion arm?*
 
+The CLI works alongside the server: `hippo sources`, `hippo ask "Where is
+Boulder?"`, `hippo index notes.md`, `hippo settings`, `hippo users`, `hippo
+user add ...`. The database file belongs to one process at a time, so while
+`hippo serve` is running these commands talk to it over its JSON API instead
+of opening the file themselves. Once users exist that server wants to know
+who you are: put your token (Account page) in `HIPPO_TOKEN`, in `.env` or
+your shell.
+Your whole memory is that one file: copy it to back it up (with hippo
+stopped, so the write-ahead log `hippo.lbug.wal` has been folded in), delete
+it to start over. The empty `hippo.lbug.lock` next to it is how a second hippo
+notices the file is in use.
+
+Everything listens on this machine only: `hippo serve` binds port 8000 (the
+UI, API and MCP) to `127.0.0.1`. hippo has no login and Ollama has no
+password, so if you want to open the UI from another computer, put a proxy
+that asks for a password in front of it, then set `HIPPO_HOST=0.0.0.0` (or
+`HIPPO_BIND` under compose) and `HIPPO_ALLOWED_HOSTS` in `.env`.
+
+### Run in Docker
+
+You need Docker (Desktop is fine). If you already run Ollama on your machine,
+hippo will use it; if not, it starts one in a container.
+
+```bash
+./hippo up
+```
+
 Other launcher commands: `./hippo down`, `./hippo logs`, `./hippo pull-models`,
 `./hippo test`, `./hippo ps`. Anything else is passed to the CLI inside the
-container, e.g. `./hippo sources` or `./hippo ask "Where is Boulder?"`.
+container, e.g. `./hippo sources` or `./hippo ask "Where is Boulder?"`. The
+graph file is in `./data` on your machine, bind-mounted into the container.
 
-The Neo4j browser is at http://localhost:7474 (user `neo4j`; the password is
-the `NEO4J_PASSWORD` line of `.env`, which `./hippo up` fills in with a random
-value on the first run and prints) if you want to look at the graph directly.
+### Neo4j instead of the embedded file
 
-Everything listens on this machine only: compose binds ports 8000 (the UI,
-API and MCP), 7474/7687 (Neo4j) and 11434 (Ollama) to `127.0.0.1`. hippo is
-open until you create the first user (see [Users and roles](#users-and-roles))
-and Ollama has no password, so if you want to open the UI from another
-computer, create users first, put a proxy that speaks HTTPS in front of it,
-then set `HIPPO_BIND=0.0.0.0` and `HIPPO_ALLOWED_HOSTS` in `.env`.
+If you would rather keep the graph in a Neo4j server (to browse it in the
+Neo4j Browser, or share it), set `HIPPO_STORE=neo4j` in `.env`. Without
+Docker, `pip install -e ".[neo4j]"` and point `NEO4J_URI` / `NEO4J_USER` /
+`NEO4J_PASSWORD` at a Neo4j 5. With Docker, `./hippo up` starts a Neo4j
+container for you, writes a random `NEO4J_PASSWORD` into `.env` on the first
+run and prints it; the browser is then at http://localhost:7474. Both
+backends store exactly the same graph and pass the same tests, but a memory
+built in one is not moved to the other automatically.
+
+Everything listens on this machine only: port 8000 (the UI, API and MCP) and,
+under compose, 11434 (Ollama) and 7474/7687 (Neo4j, if used) are bound to
+`127.0.0.1`. hippo is open until you create the first user (see
+[Users and roles](#users-and-roles)) and Ollama has no password, so if you
+want to open the UI from another computer, create users first, put a proxy
+that speaks HTTPS in front of it, then set `HIPPO_HOST=0.0.0.0` (or
+`HIPPO_BIND` under compose) and `HIPPO_ALLOWED_HOSTS` in `.env`.
 
 ## A tour
 
@@ -61,7 +103,7 @@ then set `HIPPO_BIND=0.0.0.0` and `HIPPO_ALLOWED_HOSTS` in `.env`.
 | Run | `/evals/runs/{id}` | One run: summary cards and a per-question table (answer, verdict, metrics, latency). Every row links to its analysis. |
 | Analyze | `/analyze/{result_id}`, or the "Analyze this question" link on any answer | The deep dive: candidate facts, the filter's reply, seeds, a picture of the graph, ranked passages with a one-sentence "why", and a panel to tweak settings and re-run the search without touching anything. |
 | Changesets | `/changesets` | Edits you saved from the analyze page (setting changes, entity boosts, edge weights, synonyms). Apply or delete them. |
-| Settings | `/settings` | Ollama and Neo4j status, model downloads, the retrieval knobs with one-line explanations. |
+| Settings | `/settings` | Ollama and graph store status, model downloads, the retrieval knobs with one-line explanations. |
 
 There is also a JSON API under `/api` (docs at `/api/docs`) and a CLI:
 `hippo serve | mcp | pull-models | index <path-or-git-url> | ask "<question>" | sources | settings | users | user add|token|role|remove`.
@@ -129,7 +171,7 @@ flowchart TD
     subgraph Indexing
         A[Text] -->|split| B[Passages]
         B -->|LLM reads each passage| C[Entities + facts]
-        C -->|stored in Neo4j| D[(Graph: Passage - Entity - Fact, plus synonym links)]
+        C -->|stored in the graph database| D[(Graph: Passage - Entity - Fact, plus synonym links)]
     end
     subgraph Asking
         Q[Question] -->|embed, compare with every fact| F[Top 5 candidate facts]
@@ -146,7 +188,7 @@ Step by step:
 1. **Index.** Text is cut into passages of about 1500 characters. For each
    passage the LLM lists the named entities, then writes facts as
    `[subject, predicate, object]` triples. Passages, entities and facts become
-   nodes in Neo4j; a passage is linked to the entities it mentions, and two
+   nodes in the graph; a passage is linked to the entities it mentions, and two
    entities are linked when a fact joins them. Entity names that mean the same
    thing (by embedding similarity) get a synonym link, e.g. `usa` ~ `united states`.
 2. **Question to facts.** Your question is embedded and compared with every
@@ -208,15 +250,17 @@ reads a `.env` file automatically). Defaults live in `src/hippo/config.py`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `NEO4J_URI` | `bolt://localhost:7687` | Where the graph lives (`bolt://neo4j:7687` inside compose). |
-| `NEO4J_USER` | `neo4j` | Neo4j user. |
-| `NEO4J_PASSWORD` | `hippo-password` | Neo4j password. `./hippo up` writes a random one to `.env` on the first run; Neo4j keeps the password it was created with. |
+| `HIPPO_STORE` | `ladybug` | Where the graph lives: `ladybug` is an embedded LadybugDB file, `neo4j` a Neo4j server. |
+| `HIPPO_DB_PATH` | *(empty)* | The LadybugDB file; empty means `<HIPPO_DATA_DIR>/hippo.lbug`. |
+| `NEO4J_URI` | `bolt://localhost:7687` | (`HIPPO_STORE=neo4j`) Where Neo4j is (`bolt://neo4j:7687` inside compose). |
+| `NEO4J_USER` | `neo4j` | (`HIPPO_STORE=neo4j`) Neo4j user. |
+| `NEO4J_PASSWORD` | `hippo-password` | (`HIPPO_STORE=neo4j`) Neo4j password. `./hippo up` writes a random one to `.env` on the first run; Neo4j keeps the password it was created with. |
 | `OLLAMA_URL` | `http://localhost:11434` | Where the models run. `./hippo up` sets this for you. |
 | `HIPPO_LLM_MODEL` | `qwen3:8b` | The chat model: extracts facts, filters facts, answers, judges. |
 | `HIPPO_EMBED_MODEL` | `nomic-embed-text` | The embedding model. Changing it means re-indexing everything. |
 | `HIPPO_NUM_CTX` | `8192` | Context window asked of Ollama (qwen3's default 4k is too small). |
 | `HIPPO_LLM_TIMEOUT` | `600` | Seconds to wait for one LLM reply. |
-| `HIPPO_DATA_DIR` | `./data` | Uploaded files and cloned repos (`/app/data` in the container). |
+| `HIPPO_DATA_DIR` | `./data` | The graph file, uploaded files and cloned repos (`/app/data` in the container). |
 | `HIPPO_MAX_UPLOAD_BYTES` | `50000000` | Biggest upload or pasted text (50 MB); bigger ones are refused. |
 | `HIPPO_MAX_TEXT_CHARS` | `20000000` | Most text one source may turn into (20 M characters, about 13,000 passages); past that the source fails as "too large". Zips are also limited to 5,000 readable files and 50 MB unpacked. |
 | `HIPPO_OPENIE_WORKERS` | `2` | Parallel LLM calls while extracting facts. |
@@ -230,25 +274,7 @@ reads a `.env` file automatically). Defaults live in `src/hippo/config.py`.
 
 Retrieval knobs (`linking_top_k`, `passage_node_weight`, `damping`,
 `node_specificity`, `synonymy_threshold`, `retrieval_top_k`, `qa_top_k`) are
-stored in Neo4j and changed on the Settings page, not through the environment.
-
-## Run without Docker
-
-You need Python 3.11+, a Neo4j 5 you can reach, and Ollama.
-
-```bash
-# 1. Neo4j: Neo4j Desktop, or just the database container (pick your own password):
-docker run -d -p 127.0.0.1:7474:7474 -p 127.0.0.1:7687:7687 -e NEO4J_AUTH=neo4j/hippo-password neo4j:5.26-community
-# 2. Ollama: https://ollama.com, then make sure it is running.
-# 3. hippo:
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-hippo pull-models        # downloads qwen3:8b and nomic-embed-text
-hippo serve              # http://localhost:8000
-```
-
-Set `NEO4J_URI` / `OLLAMA_URL` if they are not on localhost, and `NEO4J_PASSWORD`
-to whatever you gave Neo4j.
+stored in the graph and changed on the Settings page, not through the environment.
 
 ## Development & tests
 
@@ -259,16 +285,19 @@ ruff check . && ruff format --check .
 pytest tests/unit -q
 ```
 
-The unit tests need neither Neo4j nor Ollama: `tests/conftest.py` provides an
-in-memory `FakeStore` with the same methods as the real store and a rule-based
-`FakeOllama` that understands the "X <relation> Y." sentences of the sample
-corpus. The whole pipeline (index, search, answer, judge) runs in-process.
+The unit tests need no servers: by default the `store` fixture opens a real
+embedded LadybugDB in a temporary file for every test, and `tests/conftest.py`
+provides a rule-based `FakeOllama` that understands the "X <relation> Y."
+sentences of the sample corpus. The whole pipeline (index, search, answer,
+judge) runs in-process.
 
-If `NEO4J_URI` is set, the `store` fixture uses that real database instead
-(and empties it before every test, so never point it at a memory you care
-about). CI does exactly this: `.github/workflows/ci.yml` runs `ruff`, the
-unit tests on Python 3.11 and 3.12 with the fakes, and the same tests once
-more against a `neo4j:5.26-community` service container.
+`HIPPO_TEST_STORE` picks the store the same tests run against: `ladybug` (the
+default), `fake` (the in-memory `FakeStore`, the quickest) or `neo4j` (a real
+Neo4j at `NEO4J_URI`, which is emptied before every test, so never point it
+at a memory you care about). CI runs all three: `.github/workflows/ci.yml`
+runs `ruff`, the unit tests on Python 3.11 and 3.12 with the LadybugDB and
+fake stores, and the same tests once more against a `neo4j:5.26-community`
+service container.
 
 ## Where the code lives
 
@@ -279,7 +308,8 @@ src/hippo/
   prompts.py        every prompt, with the JSON schema it expects back
   context.py        AppContext: config + store + ollama + jobs + the in-memory graph
   ask.py            search(ctx, q) -> Trace ; ask(ctx, q) -> (Trace, Answer)
-  store/            all Cypher: sources, passages, entities, facts, evals, changesets
+  store/            all Cypher: sources, passages, entities, facts, evals, changesets (LadybugDB and Neo4j)
+  remote.py         the CLI's client for a running server (the database file is single-process)
   hipporag/         the algorithm: openie -> indexer -> graph_index (PPR) -> retriever -> answerer
   ingest/           readers (txt, md, pdf, docx, epub, html, code), chunker, git repos, the indexing job
   evals/            metrics, the LLM judge, question generation, the run runner
@@ -289,7 +319,7 @@ src/hippo/
   cli.py            the `hippo` command
 tests/
   fakes/            FakeStore, FakeOllama
-  unit/             fast tests on the fakes (also run against real Neo4j in CI)
+  unit/             fast tests, on an embedded LadybugDB file by default (the fake and real Neo4j in CI too)
 docs/CONTRACTS.md   the function signatures each package exposes
 ```
 

@@ -13,7 +13,7 @@ Style rules for every file:
   choice comes from there.
 * `ruff check` and `ruff format` clean (see pyproject.toml).
 * Every package has tests under `tests/unit/` (fast, use the fakes) and, where
-  it touches the store, the same tests run against real Neo4j in CI via the
+  it touches the store, the same tests run on LadybugDB, the fake and real Neo4j in CI via the
   `store` fixture (see tests/conftest.py).
 
 ## Already written (do not redesign; extend if you must)
@@ -34,11 +34,13 @@ src/hippo/access.py               Access(rank, user_id, unrestricted) + ACCESS_W
 src/hippo/jobs.py                 Jobs.start(key, fn) -> bool; is_running(key); running_keys(); cancel(key); is_cancelled(key); wait(key, timeout); wait_all()
 src/hippo/ask.py                  search(ctx, question, settings=None, access=None) -> Trace; ask(ctx, q, settings=None, access=None) -> (Trace, Answer);
                                   answer_from_trace(ctx, trace, access=None)      # access=None means unrestricted (CLI, open mode, tests)
-src/hippo/store/                  Store (Neo4j). Read store/__init__.py for the graph shape; read each file for the methods.
+src/hippo/store/                  Store (Neo4j) and LadybugStore (embedded LadybugDB file), same methods; open_store(config) picks one.
+                                  Read store/__init__.py for the graph shape; read each file for the methods.
                                   Reads that return sources/passages/entities/facts take `access: Access | None` (memory.py); users.py holds
                                   roles/users: ensure_roles, list_roles, get_role, create_role, update_role (a rank change rewrites min_rank on
                                   its sources), delete_role (refused while in use), count_users, list_users, get_user, get_user_by_username,
                                   get_user_by_token, create_user, update_user, rotate_token, delete_user, check_password, set_source_access
+src/hippo/remote.py               RemoteHippo: the CLI's client for a running server (the embedded file is single-process).
 src/hippo/hipporag/text.py        clean_phrase, entity_id, fact_id, fact_text, make_id, min_max_normalize, is_meaningful_phrase
 src/hippo/hipporag/openie.py      extract(ollama, passage_id, text) -> Extraction; extract_many(...)
 src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text); index_source(store, ollama, source_id, chunks, *, synonymy_threshold, workers, on_progress, should_stop)
@@ -192,7 +194,7 @@ auth.py        AuthGate (ASGI middleware): resolves the Principal (bearer token,
 app.py         create_app(ctx: AppContext | None = None) -> FastAPI   # ctx default: AppContext.from_env(); on startup: store.ensure_schema(),
                kick off "pull-models" job if Ollama is up and models are missing (Ollama.missing_models / ensure_model), mount /static,
                include routers, mount MCP at /mcp (hippo.mcp_server.mount); a 403 on a page renders templates/forbidden.html
-Every page extends templates/base.html (Neo4j/Ollama status + model pull progress in the header, who is signed in, sign out;
+Every page extends templates/base.html (store/Ollama status + model pull progress in the header, who is signed in, sign out;
 nav items for Evals/Changesets/Users appear only for roles that may use them). Routes are
 grouped by feature, one file each, and every file has a `router` (HTML pages and the HTMX form posts / partials
 they use) and, where it has JSON endpoints, an `api` router. app.py includes them in this order:
@@ -278,7 +280,7 @@ routes/analyze.py  the deep dive and changesets (explanations and simulations ru
     GET/POST /api/changesets           list; save {name, ops, from_result_id?, note?} -> {changeset_id}
     POST   /api/changesets/{id}/apply ; DELETE /api/changesets/{id}
 routes/api.py      (router prefix /api) everything about the whole memory rather than one feature
-    GET  /api/status                   {neo4j, ollama, models, jobs, stats}
+    GET  /api/status                   {store, store_backend, store_location, neo4j (alias of store), ollama, models, jobs, stats}
     GET/PUT /api/settings              the retrieval settings
     POST /api/models/pull              start the model download job
     POST /api/ask {question} -> {answer, thought, trace}

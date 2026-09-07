@@ -107,15 +107,15 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
    happens to contain the same paragraph. Titles ("Doc › Heading (part 2)") are
    stored on the passage and shown in the QA prompt as `Title: ...`, where the
    reference writes `Wikipedia Title: <whole passage>`.
-4. **Synonyms via numpy over Neo4j-stored vectors.** The reference runs `retrieve_knn`
+4. **Synonyms via numpy over store-held vectors.** The reference runs `retrieve_knn`
    (k = 2047) over its parquet embedding store. hippo loads every entity vector out
-   of Neo4j, multiplies the new entities' vectors against all of them, and keeps the
+   of the store, multiplies the new entities' vectors against all of them, and keeps the
    top 100 above the threshold. Same neighbours, no separate vector store; fine for
    tens of thousands of entities, and the place to optimise first if a graph gets
    much larger.
-5. **Neo4j instead of pickled igraph + parquet.** The reference keeps the graph in a
+5. **A graph database instead of pickled igraph + parquet.** The reference keeps the graph in a
    pickled igraph and embeddings in parquet files under `save_dir`. hippo keeps
-   everything in Neo4j (see `store/__init__.py` for the shape) and rebuilds the
+   everything in a graph database (LadybugDB by default, or Neo4j; see `store/__init__.py` for the shape) and rebuilds the
    in-memory igraph plus the numpy embedding matrices (`GraphIndex.load`) whenever a
    `graph_version` counter changes. Edge weights are recomputed at load time with the
    same `max(fact count, 1.0 if mention, synonym score)` rule. Two things the

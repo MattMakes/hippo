@@ -36,8 +36,13 @@
   </section>
 
   <section class="card">
-    <h2>Neo4j <span class="pill {{ 'ok' if status.neo4j else 'bad' }}"><span class="dot"></span>{{ 'up' if status.neo4j else 'not reachable' }}</span></h2>
-    <p class="muted">{{ status.neo4j_uri }} · <a href="http://localhost:7474" target="_blank" rel="noopener">open Neo4j Browser</a> to explore the graph by hand</p>
+    {% if status.store_backend == 'neo4j' %}
+    <h2>Neo4j <span class="pill {{ 'ok' if status.store else 'bad' }}"><span class="dot"></span>{{ 'up' if status.store else 'not reachable' }}</span></h2>
+    <p class="muted">{{ status.store_location }} · <a href="http://localhost:7474" target="_blank" rel="noopener">open Neo4j Browser</a> to explore the graph by hand</p>
+    {% else %}
+    <h2>Graph <span class="pill {{ 'ok' if status.store else 'bad' }}"><span class="dot"></span>{{ 'open' if status.store else 'not open' }}</span></h2>
+    <p class="muted">LadybugDB file <code>{{ status.store_location }}</code>, embedded in this process: nothing else to run. To back it up, stop hippo (which folds the write-ahead log into the file) and copy the file.</p>
+    {% endif %}
     {% if status.stats %}
     <dl class="stats">
       {% for key in ['sources', 'passages', 'entities', 'facts', 'synonym_edges', 'mention_edges'] %}

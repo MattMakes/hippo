@@ -3,7 +3,7 @@
 
 The Analyze page lets you change settings, force facts in or out, boost
 entities and edit edge weights, then press "Simulate". Nothing is written
-to Neo4j; we run the retriever again in memory with the overrides and diff
+to the store; we run the retriever again in memory with the overrides and diff
 the two traces.
 
 To keep simulations cheap and repeatable, the LLM fact filter is *replayed*

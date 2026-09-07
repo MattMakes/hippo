@@ -152,6 +152,71 @@ def test_pull_models_when_everything_is_installed(cli_ctx: AppContext, capsys):
     assert "All models are installed" in capsys.readouterr().out
 
 
+# ------------------------------------------- when `hippo serve` has the database
+
+
+@pytest.fixture
+def cli_behind_server(ctx: AppContext, sample_text: str, monkeypatch: pytest.MonkeyPatch):
+    """
+    The embedded database is open in another process (the web server): AppContext.from_env() raises
+    StoreLockedError, and the CLI must fall back to that server's JSON API. The "server" here is the real
+    app on the test fixtures, reached through Starlette's TestClient (an httpx.Client).
+    """
+    from starlette.testclient import TestClient
+
+    from hippo.remote import RemoteHippo
+    from hippo.store import StoreLockedError
+    from hippo.web.app import create_app
+
+    index_sample(ctx, sample_text)
+
+    def locked(cls, ollama=None):
+        raise StoreLockedError("data/hippo.lbug is already open in another hippo process")
+
+    monkeypatch.setattr(AppContext, "from_env", classmethod(locked))
+    with TestClient(create_app(ctx), base_url="http://localhost") as http:
+        remote = RemoteHippo("http://localhost", client=http)
+        monkeypatch.setattr(RemoteHippo, "for_config", classmethod(lambda cls, config: remote))
+        yield ctx
+
+
+def test_ask_uses_the_running_server_when_the_database_is_locked(cli_behind_server, capsys):
+    assert cli.main(["ask", "Where is Acme Robotics headquartered?"]) == 0
+    captured = capsys.readouterr()
+    assert "Boulder" in captured.out and "Top passages:" in captured.out
+    assert "asking the server at http://localhost" in captured.err
+
+
+def test_sources_and_settings_use_the_running_server(cli_behind_server, capsys):
+    assert cli.main(["sources"]) == 0
+    assert "Acme guide" in capsys.readouterr().out
+    assert cli.main(["settings"]) == 0
+    out = capsys.readouterr().out
+    assert "server       = http://localhost" in out and "damping = " in out
+
+
+def test_index_uploads_to_the_running_server(cli_behind_server: AppContext, tmp_path: Path, capsys):
+    note = tmp_path / "zed.md"
+    note.write_text("Zed Labs is located in Lisbon. Zed Labs builds drones.\n")
+    assert cli.main(["index", str(note)]) == 0
+    assert "status: ready" in capsys.readouterr().out
+    names = [s["name"] for s in cli_behind_server.store.list_sources()]
+    assert "zed.md" in names
+
+
+def test_locked_database_and_no_server_is_a_clear_error(monkeypatch: pytest.MonkeyPatch, capsys):
+    from hippo.remote import RemoteHippo
+    from hippo.store import StoreLockedError
+
+    def locked(cls, ollama=None):
+        raise StoreLockedError("data/hippo.lbug is already open in another hippo process")
+
+    monkeypatch.setattr(AppContext, "from_env", classmethod(locked))
+    monkeypatch.setattr(RemoteHippo, "is_up", lambda self: False)
+    assert cli.main(["sources"]) == 2
+    assert "already open in another hippo process" in capsys.readouterr().err
+
+
 def test_user_commands_manage_the_ladder(cli_ctx: AppContext, capsys):
     assert cli.main(["users"]) == 0
     out = capsys.readouterr().out
@@ -176,3 +241,43 @@ def test_user_commands_manage_the_ladder(cli_ctx: AppContext, capsys):
     assert cli.main(["user", "remove", "bob"]) == 0
     assert cli_ctx.store.get_user_by_username("bob") is None
     assert cli.main(["user", "token", "nobody"]) == 2
+
+
+def test_user_commands_go_through_the_running_server(
+    cli_behind_server: AppContext, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    """While `hippo serve` holds the database file, the user commands use its /api/users, token and all."""
+    from hippo.remote import RemoteHippo
+
+    assert cli.main(["users"]) == 0
+    assert "No users yet" in capsys.readouterr().out
+    # The first user closes open mode; the server hands its token back once, and the CLI prints it.
+    assert cli.main(["user", "add", "ann", "--password", "secret1"]) == 0
+    out = capsys.readouterr().out
+    assert "Created ann as Arch admin" in out and "no longer open" in out
+    token = next(line.strip() for line in out.splitlines() if line.strip().startswith("hippo_"))
+    # The server signed the creating client in with a cookie (so a browser is not locked out); a real CLI
+    # run is a fresh process with no cookie jar, so drop it here to behave like one.
+    remote = RemoteHippo.for_config(cli_behind_server.config)  # the fixture's one shared client
+    remote._client.cookies.clear()
+    # Now every call needs a token. Without one the error says where to get it...
+    assert cli.main(["sources"]) == 2
+    assert "set HIPPO_TOKEN" in capsys.readouterr().err
+    # ...and with HIPPO_TOKEN the remote client sends it as a bearer token.
+    monkeypatch.setenv("HIPPO_TOKEN", token)
+    remote._client.headers["Authorization"] = f"Bearer {token}"
+    assert cli.main(["sources"]) == 0
+    assert "Acme guide" in capsys.readouterr().out
+    assert cli.main(["user", "add", "bob", "--password", "secret1", "--role", "individual"]) == 0
+    capsys.readouterr()
+    assert cli.main(["users"]) == 0
+    assert "bob" in capsys.readouterr().out
+    assert cli.main(["user", "token", "bob"]) == 2  # the server never repeats a token
+    assert "--new" in capsys.readouterr().err
+    assert cli.main(["user", "token", "bob", "--new"]) == 0
+    new_token = capsys.readouterr().out.strip()
+    assert cli_behind_server.store.get_user_by_token(new_token)["username"] == "bob"
+    assert cli.main(["user", "role", "bob", "local-admin"]) == 0
+    assert "Local admin" in capsys.readouterr().out
+    assert cli.main(["user", "remove", "bob"]) == 0
+    assert cli_behind_server.store.get_user_by_username("bob") is None
