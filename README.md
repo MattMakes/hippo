@@ -1,4 +1,4 @@
-# Hypno-HippoRAG Implementation
+# A Hip Hypno-HippoRAG Implementation
 
 ![AHipHypnoHippo](./docs/assets/AHipHypnoHippo.jpeg)
 
