@@ -26,7 +26,10 @@ hippo serve
 ```
 
 Prefer containers? `./hippo up` does the same with Docker (and starts an
-Ollama container if your machine has none); see "Run in Docker" below.
+Ollama container if your machine has none); see "Run in Docker" below. If you
+have [just](https://just.systems), `just` lists one recipe per way of running
+hippo: `just ladybug` and `just neo4j` in Docker, `just dev` and `just
+dev-neo4j` without it (see [Choosing a backend](#choosing-a-backend)).
 
 Then:
 
@@ -61,24 +64,47 @@ You need Docker (Desktop is fine). If you already run Ollama on your machine,
 hippo will use it; if not, it starts one in a container.
 
 ```bash
-./hippo up
+./hippo up          # or: just ladybug
 ```
 
-Other launcher commands: `./hippo down`, `./hippo logs`, `./hippo pull-models`,
+The launcher prints which graph store it is starting. Other launcher
+commands: `./hippo down`, `./hippo logs`, `./hippo pull-models`,
 `./hippo test`, `./hippo ps`. Anything else is passed to the CLI inside the
 container, e.g. `./hippo sources` or `./hippo ask "Where is Boulder?"`. The
 graph file is in `./data` on your machine, bind-mounted into the container.
 
-### Neo4j instead of the embedded file
+### Choosing a backend
 
-If you would rather keep the graph in a Neo4j server (to browse it in the
-Neo4j Browser, or share it), set `HIPPO_STORE=neo4j` in `.env`. Without
-Docker, `pip install -e ".[neo4j]"` and point `NEO4J_URI` / `NEO4J_USER` /
-`NEO4J_PASSWORD` at a Neo4j 5. With Docker, `./hippo up` starts a Neo4j
-container for you, writes a random `NEO4J_PASSWORD` into `.env` on the first
-run and prints it; the browser is then at http://localhost:7474. Both
-backends store exactly the same graph and pass the same tests, but a memory
-built in one is not moved to the other automatically.
+hippo can keep its graph in one of two places. Both hold exactly the same
+graph, every store method behaves the same, and the same test suite passes
+on both (and on the in-memory fake), so nothing above the store knows or
+cares which one is in use. The choice is operational.
+
+| | LadybugDB (default, `HIPPO_STORE=ladybug`) | Neo4j (`HIPPO_STORE=neo4j`) |
+| --- | --- | --- |
+| What it is | An embedded database in one file, `data/hippo.lbug`, opened inside the hippo process | A separate server, in Docker or installed yourself |
+| Install | Nothing extra; `pip install -e .` brings the driver | `pip install -e ".[neo4j]"` plus a Neo4j 5, or the Docker profile |
+| Start | `hippo serve`, `just dev`, `./hippo up`, `just ladybug` | `just neo4j` (Docker), or `just neo4j-db` then `just dev-neo4j` |
+| Processes | One at a time may hold the file. While `hippo serve` runs, the CLI talks to it over the API; `hippo mcp` over stdio only works with the server stopped | Any number. `hippo serve`, `hippo mcp` and the CLI can all run at once |
+| Looking at the graph by hand | The Graph page (3D, searchable, filterable) | The Graph page, plus the Neo4j Browser at http://localhost:7474 with ad hoc Cypher |
+| Uniqueness of usernames and tokens | Checked by the store in Python (the database enforces only primary keys) | Database constraints |
+| Entity name search | Scans entity names; fine into the tens of thousands of entities | A text index |
+| On disk | `hippo.lbug`, plus `hippo.lbug.wal` while running (folded in on a clean stop) and an empty `hippo.lbug.lock` | The `neo4j_data` Docker volume, or your server's data directory |
+| Back up | Stop hippo, copy `hippo.lbug` | Neo4j's own tools, or copy the volume |
+| Memory | Tens of megabytes, in-process | A JVM; compose gives it 1.5 GB |
+| Version pin | `real_ladybug` is pinned to 0.15.x: the store works around two quirks of that binding, described at the top of `src/hippo/store/ladybug.py`; check them before moving on | Any Neo4j 5 driver |
+
+Two things are the same on both sides and worth knowing: a memory built in
+one backend is not moved to the other (switching `HIPPO_STORE` starts you
+with an empty graph in the new store), and the graph shape is identical
+except that LadybugDB has no `HAS_ROLE` edge; users point at their role by id,
+and nothing outside the store package reads that edge.
+
+To use Neo4j, set `HIPPO_STORE=neo4j` in `.env` (or run `just neo4j`, which
+sets it for that start). Without Docker, point `NEO4J_URI` / `NEO4J_USER` /
+`NEO4J_PASSWORD` at your server. With Docker, the launcher starts a Neo4j
+container, writes a random `NEO4J_PASSWORD` into `.env` on the first run and
+prints it.
 
 Everything listens on this machine only: port 8000 (the UI, API and MCP) and,
 under compose, 11434 (Ollama) and 7474/7687 (Neo4j, if used) are bound to
@@ -279,10 +305,10 @@ stored in the graph and changed on the Settings page, not through the environmen
 ## Development & tests
 
 ```bash
-uv venv .venv && source .venv/bin/activate     # or: python -m venv .venv
+uv venv .venv && source .venv/bin/activate     # or: python -m venv .venv, or: just venv
 pip install -e ".[dev]"
-ruff check . && ruff format --check .
-pytest tests/unit -q
+ruff check . && ruff format --check .          # just lint
+pytest tests/unit -q                           # just test (LadybugDB), just test-fake, just test-neo4j, just test-all
 ```
 
 The unit tests need no servers: by default the `store` fixture opens a real

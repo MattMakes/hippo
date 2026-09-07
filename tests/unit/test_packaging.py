@@ -325,3 +325,34 @@ def test_contracts_route_map_lists_every_route_of_the_app(ctx):
     assert len(paths) > 40
     missing = [path for path in paths if normalised(path) not in contracts]
     assert not missing, f"routes missing from docs/CONTRACTS.md: {missing}"
+
+
+def test_launcher_up_takes_the_backend_from_the_environment_over_env_file(launcher_dir: Path):
+    """`just neo4j` / `just ladybug` set HIPPO_STORE in the environment; that must beat the .env line."""
+    (launcher_dir / ".env").write_text("HIPPO_STORE=ladybug\n")
+    result = run_up(launcher_dir, HIPPO_STORE="neo4j")
+    assert result.returncode == 0, result.stderr
+    assert "--profile neo4j" in (launcher_dir / "docker.log").read_text()
+    assert "Graph store: Neo4j" in result.stdout
+    (launcher_dir / "docker.log").unlink()
+    (launcher_dir / ".env").write_text("HIPPO_STORE=neo4j\nNEO4J_PASSWORD=x\n")
+    result = run_up(launcher_dir, HIPPO_STORE="ladybug")
+    assert result.returncode == 0, result.stderr
+    assert "--profile neo4j" not in (launcher_dir / "docker.log").read_text()
+    assert "Graph store: embedded LadybugDB" in result.stdout
+
+
+# ---------------------------------------------------------------- justfile
+
+JUSTFILE = ROOT / "justfile"
+
+
+def test_justfile_names_a_recipe_per_backend():
+    """Whoever types `just` must see how to start each backend, in docker and without it."""
+    text = JUSTFILE.read_text()
+    for recipe in ("ladybug", "neo4j", "dev", "dev-neo4j", "test", "test-neo4j", "down"):
+        assert re.search(rf"^{re.escape(recipe)}(\s|:)", text, re.MULTILINE), f"missing recipe {recipe}"
+    assert "HIPPO_STORE=ladybug ./hippo up" in text and "HIPPO_STORE=neo4j ./hippo up" in text
+    if shutil.which("just"):
+        result = subprocess.run(["just", "--list"], capture_output=True, text=True, cwd=ROOT)
+        assert result.returncode == 0, result.stderr
