@@ -21,6 +21,10 @@ identifies its caller with the HIPPO_TOKEN environment variable.
 Every command builds its `AppContext` from environment variables (see
 config.py and .env.example), exactly like the web app does, so the CLI and the
 UI always see the same memory.
+
+The embedded database file can be open in one process at a time. When `hippo
+serve` has it, `index`, `ask`, `sources` and `settings` talk to that server over
+its JSON API instead (remote.py), so they work either way.
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ from typing import Any
 
 from .config import load_config
 from .context import AppContext
+from .remote import RemoteError, RemoteHippo
+from .store import StoreLockedError
 
 WAIT_SECONDS = 3600.0  # a big repo on a slow CPU model really can take an hour
 
@@ -91,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     # stdio MCP owns stdout, so all logging goes to stderr for every command (simplest rule).
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per Ollama/API call is noise here
     handlers = {
         "serve": cmd_serve,
         "mcp": cmd_mcp,
@@ -102,7 +109,13 @@ def main(argv: list[str] | None = None) -> int:
         "users": cmd_users,
         "user": cmd_user,
     }
-    return handlers[args.command](args)
+    try:
+        return handlers[args.command](args)
+    except (StoreLockedError, RemoteError) as exc:
+        # The embedded database belongs to one process at a time; usually `hippo serve` has it, and then
+        # the command went to the server instead, which may have refused (no token, no permission).
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 # ------------------------------------------------------------- commands
@@ -146,7 +159,9 @@ def cmd_pull_models(args: argparse.Namespace) -> int:
 def cmd_index(args: argparse.Namespace) -> int:
     from .ingest import pipeline, repos
 
-    ctx = AppContext.from_env()
+    ctx, remote = _context_or_running_server()
+    if remote is not None:
+        return _index_remotely(remote, args)
     target: str = args.target
     if repos.is_git_url(target):
         source_id = pipeline.add_repo(ctx, target)
@@ -172,22 +187,34 @@ def cmd_index(args: argparse.Namespace) -> int:
 def cmd_ask(args: argparse.Namespace) -> int:
     from .ask import ask
 
-    ctx = AppContext.from_env()
-    trace, answer = ask(ctx, args.question)
-    print(answer.answer)
-    if answer.thought:
-        print(f"\nThought: {answer.thought}")
+    ctx, remote = _context_or_running_server()
+    if remote is not None:
+        reply = remote.ask(args.question)
+        if reply.get("error"):
+            print(f"error: {reply['error']}", file=sys.stderr)
+            return 1
+        answer, thought, trace = reply["answer"], reply.get("thought"), reply["trace"]
+        passages = trace.get("passages", [])
+        fallback = trace.get("used_dpr_fallback"), trace.get("fallback_reason")
+    else:
+        trace_obj, answer_obj = ask(ctx, args.question)
+        answer, thought = answer_obj.answer, answer_obj.thought
+        passages = [vars(p) for p in trace_obj.passages]
+        fallback = trace_obj.used_dpr_fallback, trace_obj.fallback_reason
+    print(answer)
+    if thought:
+        print(f"\nThought: {thought}")
     print("\nTop passages:")
-    for p in trace.passages[:5]:
-        print(f"  {p.rank:>2}. {p.score:.4f}  {p.title}  [{p.source_name}]")
-    if trace.used_dpr_fallback:
-        print(f"\n(no facts matched, fell back to embedding search: {trace.fallback_reason})")
+    for p in passages[:5]:
+        print(f"  {p['rank']:>2}. {p['score']:.4f}  {p['title']}  [{p['source_name']}]")
+    if fallback[0]:
+        print(f"\n(no facts matched, fell back to embedding search: {fallback[1]})")
     return 0
 
 
 def cmd_sources(args: argparse.Namespace) -> int:
-    ctx = AppContext.from_env()
-    rows = ctx.store.list_sources()
+    ctx, remote = _context_or_running_server()
+    rows = remote.sources() if remote is not None else ctx.store.list_sources()
     if not rows:
         print("The memory is empty. Try: hippo index <file>")
         return 0
@@ -211,24 +238,77 @@ def cmd_sources(args: argparse.Namespace) -> int:
 
 
 def cmd_settings(args: argparse.Namespace) -> int:
-    ctx = AppContext.from_env()
-    config = ctx.config
+    ctx, remote = _context_or_running_server()
+    config = load_config()
     print("Where things are:")
-    print(f"  neo4j_uri    = {config.neo4j_uri}")
+    print(f"  store        = {config.store_backend} ({config.store_location})")
+    if remote is not None:
+        print(f"  server       = {remote.base_url} (running; the settings below come from it)")
     print(f"  ollama_url   = {config.ollama_url}")
     print(f"  llm_model    = {config.llm_model}")
     print(f"  embed_model  = {config.embed_model}")
     print(f"  data_dir     = {config.data_dir}")
     print("\nRetrieval settings (change them on the Settings page):")
-    for key, value in sorted(ctx.store.get_settings().items()):
+    settings = remote.settings() if remote is not None else ctx.store.get_settings()
+    for key, value in sorted(settings.items()):
         print(f"  {key} = {value}")
     return 0
 
 
+# ------------------------------------------------- the running server, if any
+
+
+def _context_or_running_server() -> tuple[AppContext | None, RemoteHippo | None]:
+    """
+    An AppContext when this process can open the store, else a client for the server that has it.
+    Exactly one of the two is returned; StoreLockedError propagates if the file is locked and no
+    server answers (some other hippo process has it).
+    """
+    try:
+        return AppContext.from_env(), None
+    except StoreLockedError:
+        remote = RemoteHippo.for_config(load_config())
+        if not remote.is_up():
+            raise
+        print(
+            f"(the database is open in hippo serve; asking the server at {remote.base_url})", file=sys.stderr
+        )
+        return None, remote
+
+
+def _index_remotely(remote: RemoteHippo, args: argparse.Namespace) -> int:
+    from .ingest import repos
+
+    target: str = args.target
+    if repos.is_git_url(target):
+        source_id = remote.add_repo(target)
+    else:
+        path = Path(target)
+        if not path.exists():
+            print(f"{target} does not exist and is not a git URL", file=sys.stderr)
+            return 1
+        source_id = remote.add_upload(*_upload_for_path(path))
+    if args.name:
+        print(
+            "(--name is ignored when indexing through the server; rename it on the Library page)",
+            file=sys.stderr,
+        )
+    print(f"Indexing {target} as source {source_id} ...")
+    source = remote.wait_for_source(source_id, WAIT_SECONDS)
+    print(f"status: {source.get('status')} ({source.get('stage')}), passages: {source.get('passages', 0)}")
+    if source.get("error"):
+        print(f"error: {source['error']}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_users(args: argparse.Namespace) -> int:
-    ctx = AppContext.from_env()
-    ctx.store.ping()  # seeds the roles on a fresh database
-    roles = ctx.store.list_roles()
+    ctx, remote = _context_or_running_server()
+    if remote is not None:
+        roles, users = remote.roles(), remote.users()
+    else:
+        ctx.store.ping()  # seeds the roles on a fresh database
+        roles, users = ctx.store.list_roles(), ctx.store.list_users()
     print("Roles, top of the ladder first (a tier sees itself and every tier below):")
     print_table(
         ["id", "name", "rank", "users", "sources", "may"],
@@ -237,7 +317,6 @@ def cmd_users(args: argparse.Namespace) -> int:
             for r in roles
         ],
     )
-    users = ctx.store.list_users()
     if not users:
         print(
             "\nNo users yet: hippo is open (everyone acts as the top role). Create one: hippo user add <name>"
@@ -261,22 +340,31 @@ def cmd_users(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_user(args: argparse.Namespace) -> int:
+def _ask_password(args: argparse.Namespace) -> str | None:
     from getpass import getpass
 
+    if args.password is not None:
+        return args.password
+    password = getpass("Password: ")
+    if password != getpass("Again: "):
+        print("The two passwords differ.", file=sys.stderr)
+        return None
+    return password
+
+
+def cmd_user(args: argparse.Namespace) -> int:
     from .access import top_role
 
-    ctx = AppContext.from_env()
+    ctx, remote = _context_or_running_server()
+    if remote is not None:
+        return _user_remotely(remote, args)
     ctx.store.ping()
     store = ctx.store
     if args.user_command == "add":
         role_id = args.role or top_role(store.list_roles())["id"]
-        password = args.password
+        password = _ask_password(args)
         if password is None:
-            password = getpass("Password: ")
-            if password != getpass("Again: "):
-                print("The two passwords differ.", file=sys.stderr)
-                return 2
+            return 2
         try:
             user_id = store.create_user(args.username, password, role_id, args.name)
         except ValueError as exc:
@@ -305,6 +393,46 @@ def cmd_user(args: argparse.Namespace) -> int:
         return 0
     if args.user_command == "remove":
         store.delete_user(user["id"])
+        print(f"Removed {user['username']}. Their sources stay, without an owner.")
+        return 0
+    return 2
+
+
+def _user_remotely(remote: RemoteHippo, args: argparse.Namespace) -> int:
+    """The same four sub-commands through the server's /api/users (which checks who may manage whom)."""
+    if args.user_command == "add":
+        password = _ask_password(args)
+        if password is None:
+            return 2
+        reply = remote.create_user(args.username, password, args.role or "", args.name)
+        user = reply.get("user") or {}
+        print(
+            f"Created {user.get('username')} as {user.get('role_name')}. Their token (for MCP and the API):"
+        )
+        print(f"  {reply.get('token')}")
+        if reply.get("signed_in"):
+            print("That was the first user: hippo is no longer open. Sign in at /login.")
+        return 0
+    user = remote.user_by_username(args.username)
+    if user is None:
+        print(f"error: no user '{args.username}'", file=sys.stderr)
+        return 2
+    if args.user_command == "token":
+        if not args.new:
+            print(
+                "The server never hands out an existing token; read it on that user's Account page, "
+                "or issue a new one with --new.",
+                file=sys.stderr,
+            )
+            return 2
+        print(remote.rotate_token(user["id"]))
+        return 0
+    if args.user_command == "role":
+        updated = remote.set_user_role(user["id"], args.role_id)
+        print(f"{updated['username']} is now {updated['role_name']} (rank {updated['rank']}).")
+        return 0
+    if args.user_command == "remove":
+        remote.delete_user(user["id"])
         print(f"Removed {user['username']}. Their sources stay, without an owner.")
         return 0
     return 2

@@ -4,7 +4,7 @@ Settings for hippo, read from environment variables.
 Every knob the app needs lives here, in one place, with a plain-English
 description. Values come from the environment (docker-compose sets them),
 and every one has a sensible default so `hippo` also runs straight from a
-laptop with a local Neo4j and Ollama.
+laptop with nothing but Ollama installed.
 """
 
 from __future__ import annotations
@@ -36,7 +36,10 @@ def parse_allowed_hosts(text: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class Config:
-    # Where the graph lives.
+    # Where the graph lives. "ladybug" (the default) is an embedded LadybugDB file under data_dir:
+    # nothing to install or run. "neo4j" talks to a Neo4j server at neo4j_uri instead.
+    store_backend: str = "ladybug"
+    db_path: Path | None = None  # the .lbug file; None means <data_dir>/hippo.lbug
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "hippo-password"
@@ -71,10 +74,33 @@ class Config:
     # HIPPO_ALLOWED_HOSTS adds names or IPs (comma-separated); "*" turns the check off.
     allowed_hosts: tuple[str, ...] = DEFAULT_ALLOWED_HOSTS
 
+    @property
+    def database_path(self) -> Path:
+        """Where the embedded database file is (only meaningful when store_backend is "ladybug")."""
+        return self.db_path if self.db_path is not None else self.data_dir / "hippo.lbug"
+
+    @property
+    def store_location(self) -> str:
+        """A one-line description of where the graph lives, for the Settings page and the CLI."""
+        return self.neo4j_uri if self.store_backend == "neo4j" else str(self.database_path)
+
+
+STORE_BACKENDS = ("ladybug", "neo4j")
+
+
+def parse_store_backend(text: str) -> str:
+    value = text.strip().lower()
+    if value not in STORE_BACKENDS:
+        raise ValueError(f"HIPPO_STORE must be one of {', '.join(STORE_BACKENDS)}, not {text!r}")
+    return value
+
 
 def load_config() -> Config:
     """Build a Config from environment variables (falling back to the defaults above)."""
+    db_path = _env("HIPPO_DB_PATH", "")
     return Config(
+        store_backend=parse_store_backend(_env("HIPPO_STORE", Config.store_backend)),
+        db_path=Path(db_path) if db_path else None,
         neo4j_uri=_env("NEO4J_URI", Config.neo4j_uri),
         neo4j_user=_env("NEO4J_USER", Config.neo4j_user),
         neo4j_password=_env("NEO4J_PASSWORD", Config.neo4j_password),

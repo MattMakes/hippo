@@ -394,3 +394,39 @@ def test_jobs_left_running_by_a_restart_are_marked_failed(store):
     assert store.get_question_set(set_id)["status"] == "failed"
     assert store.get_run(run_id)["status"] == "failed" and store.get_run(run_id)["finished_at"]
     assert store.mark_interrupted_jobs() == 0
+
+
+def test_text_that_looks_like_json_or_a_list_is_stored_verbatim(store) -> None:
+    """Code and JSON files are indexed too: text starting with { or [ must come back byte for byte."""
+    source_id = store.create_source("file", "{not a struct}.json", meta={"path": "[weird]/{name}"})
+    passage_text = '{"a": [1, 2, {"b": null}]}\n[1, 2, 3]'
+    add_passage(store, source_id, "pj", title="[section]", text=passage_text)
+    add_entity(store, "ej", name="{config}")
+    store.add_facts(
+        [
+            {
+                "id": "fj",
+                "subject": "{config}",
+                "predicate": "[contains]",
+                "object": "{config}",
+                "subject_id": "ej",
+                "object_id": "ej",
+                "embedding": VEC,
+            }
+        ]
+    )
+    store.save_extraction("pj", ["{config}"], [["{config}", "[contains]", "{config}"]], error="[boom]")
+    store.set_meta("note", "{x}")
+
+    source = store.get_source(source_id)
+    assert source["name"] == "{not a struct}.json" and source["meta"] == {"path": "[weird]/{name}"}
+    passage = store.get_passages(["pj"])[0]
+    assert passage["text"] == passage_text and passage["title"] == "[section]"
+    assert passage["entities"] == ["{config}"] and passage["extraction_error"] == "[boom]"
+    assert store.get_entities(["ej"])[0]["name"] == "{config}"
+    fact = store.get_facts(["fj"])[0]
+    assert (fact["subject"], fact["predicate"]) == ("{config}", "[contains]")
+    assert store.search_entities("{conf")[0]["id"] == "ej"
+    assert store.get_meta("note") == "{x}"
+    store.update_source(source_id, error="{}")
+    assert store.get_source(source_id)["error"] == "{}"

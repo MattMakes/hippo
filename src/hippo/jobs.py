@@ -3,7 +3,7 @@ A very small background-job runner.
 
 Indexing a source or running an evaluation can take minutes with a local
 model, so they run in a thread while the web page keeps polling for progress.
-Progress itself is written to Neo4j by the job (on the Source or EvalRun
+Progress itself is written to the store by the job (on the Source or EvalRun
 node), so this class only has to remember what is currently running.
 """
 

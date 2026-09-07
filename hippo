@@ -2,8 +2,8 @@
 # The hippo launcher: a thin wrapper around `docker compose` so you never have
 # to remember flags.
 #
-#   ./hippo up [--build]   start everything (detects an Ollama on this machine)
-#   ./hippo down           stop everything (data is kept in the docker volumes)
+#   ./hippo up [--build]   start hippo (detects an Ollama on this machine; adds Neo4j if .env asks)
+#   ./hippo down           stop everything (data is kept in ./data and the docker volumes)
 #   ./hippo logs           follow the app's logs
 #   ./hippo pull-models    download the LLM and embedding model into Ollama
 #   ./hippo test           run the unit tests inside the app container
@@ -18,6 +18,7 @@ cd "$(dirname "$0")"
 
 OLLAMA_HOST_URL="http://localhost:11434"
 DEFAULT_NEO4J_PASSWORD="hippo-password"   # what docker-compose.yml falls back to when .env has none
+DB_FILE="./data/hippo.lbug"               # where the embedded graph lives (HIPPO_STORE=ladybug, the default)
 
 # ------------------------------------------------------------ helpers
 
@@ -40,6 +41,20 @@ need_docker() {
 host_has_ollama() {
   # curl exits non-zero when nothing answers; that is the "no Ollama here" case.
   command -v curl >/dev/null 2>&1 && curl -s --max-time 2 "$OLLAMA_HOST_URL/api/tags" >/dev/null 2>&1
+}
+
+# The HIPPO_STORE line of .env: "neo4j" to run a Neo4j container, anything else (or nothing)
+# means the embedded LadybugDB file, which needs no extra service.
+store_backend() {
+  local value=""
+  if [ -f .env ]; then
+    value="$(sed -n 's/^HIPPO_STORE=//p' .env | tail -n 1 | tr '[:upper:]' '[:lower:]')"
+  fi
+  printf '%s\n' "${value:-ladybug}"
+}
+
+uses_neo4j() {
+  [ "$(store_backend)" = "neo4j" ]
 }
 
 # The NEO4J_PASSWORD line of .env, or the compose default when there is none.
@@ -95,28 +110,36 @@ ensure_neo4j_password() {
 }
 
 print_urls() {
-  local password
-  password="$(neo4j_password)"
   say ""
   say "hippo is up (ports are open to this machine only):"
   say "  UI             http://localhost:8000"
-  say "  Neo4j browser  http://localhost:7474   (user: neo4j / password: $password, from .env)"
   say "  MCP            http://localhost:8000/mcp"
-  if [ "$password" = "$DEFAULT_NEO4J_PASSWORD" ]; then
-    say "  warning: Neo4j is using the default password; set NEO4J_PASSWORD in .env for a fresh database."
+  if uses_neo4j; then
+    local password
+    password="$(neo4j_password)"
+    say "  Neo4j browser  http://localhost:7474   (user: neo4j / password: $password, from .env)"
+    if [ "$password" = "$DEFAULT_NEO4J_PASSWORD" ]; then
+      say "  warning: Neo4j is using the default password; set NEO4J_PASSWORD in .env for a fresh database."
+    fi
+  else
+    say "  Graph          $DB_FILE   (an embedded LadybugDB file; copy it to back up your memory)"
   fi
   say ""
   say "First time? Open the UI, click 'Load the sample', then ask: Who designed the Orion arm?"
   say "Models are downloaded on first start; watch the header of the UI, or run: ./hippo pull-models"
 }
 
-# `docker compose` with the ollama profile switched on when we are using the container.
+# `docker compose` with the ollama and/or neo4j profiles switched on when those containers are wanted.
 compose() {
+  local profiles=()
   if [ "${USE_OLLAMA_PROFILE:-0}" = "1" ]; then
-    docker compose --profile ollama "$@"
-  else
-    docker compose "$@"
+    profiles+=(--profile ollama)
   fi
+  if [ "${USE_NEO4J_PROFILE:-0}" = "1" ]; then
+    profiles+=(--profile neo4j)
+  fi
+  # The ${arr[@]+...} form keeps `set -u` happy on bash 3.2 (macOS) when no profile is wanted.
+  docker compose ${profiles[@]+"${profiles[@]}"} "$@"
 }
 
 # ----------------------------------------------------------- commands
@@ -128,7 +151,13 @@ cmd_up() {
     build_flag="--build"
   fi
   mkdir -p data
-  ensure_neo4j_password
+  if uses_neo4j; then
+    say "HIPPO_STORE=neo4j in .env: starting a Neo4j container for the graph."
+    ensure_neo4j_password
+    export USE_NEO4J_PROFILE=1
+  else
+    export USE_NEO4J_PROFILE=0
+  fi
 
   if host_has_ollama; then
     say "Found Ollama on this machine at $OLLAMA_HOST_URL; the app will use it."
@@ -147,9 +176,9 @@ cmd_up() {
 
 cmd_down() {
   need_docker
-  # Include the profile so the ollama container is stopped too, if it was started.
-  docker compose --profile ollama down
-  say "Stopped. Your data is still in the docker volumes; './hippo up' brings it back."
+  # Include the profiles so the ollama and neo4j containers are stopped too, if they were started.
+  docker compose --profile ollama --profile neo4j down
+  say "Stopped. Your data is still in ./data (and the docker volumes); './hippo up' brings it back."
 }
 
 cmd_logs() {
@@ -165,20 +194,37 @@ cmd_pull_models() {
 cmd_test() {
   need_docker
   # The image holds only the app (no tests, no pytest), so mount this folder into a throwaway
-  # container. NEO4J_URI is blanked on purpose: the tests then use the in-memory fakes instead
-  # of wiping your real memory (the store fixture empties whatever database it is pointed at).
-  docker compose run --rm --no-deps -e NEO4J_URI= -v "$PWD:/src" app \
+  # container. The tests use throwaway database files (HIPPO_TEST_STORE=ladybug) and never touch
+  # your real memory; NEO4J_URI is blanked so the store fixture cannot point at a real Neo4j either.
+  docker compose run --rm --no-deps -e NEO4J_URI= -e HIPPO_TEST_STORE=ladybug -v "$PWD:/src" app \
     sh -c 'pip install -q pytest && cd /src && python -m pytest tests/unit -q -p no:cacheprovider'
 }
 
 cmd_ps() {
   need_docker
-  docker compose --profile ollama ps
+  docker compose --profile ollama --profile neo4j ps
 }
 
+# The HIPPO_TOKEN line of .env (or the variable in your shell): the CLI needs it once users exist.
+hippo_token() {
+  if [ -n "${HIPPO_TOKEN:-}" ]; then
+    printf '%s\n' "$HIPPO_TOKEN"
+  elif [ -f .env ]; then
+    sed -n 's/^HIPPO_TOKEN=//p' .env | tail -n 1
+  fi
+}
+
+# The CLI runs inside the app container. The server there holds the embedded database, so the
+# commands talk to it over the API (see src/hippo/remote.py); once users exist that needs your token.
 cmd_cli() {
   need_docker
-  docker compose exec app hippo "$@"
+  local token
+  token="$(hippo_token)"
+  if [ -n "$token" ]; then
+    docker compose exec -e "HIPPO_TOKEN=$token" app hippo "$@"
+  else
+    docker compose exec app hippo "$@"
+  fi
 }
 
 usage() {

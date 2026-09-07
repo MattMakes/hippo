@@ -1,7 +1,7 @@
 [project]
 name = "hippo"
 version = "1.0.0"
-description = "A portable HippoRAG memory: Neo4j + Ollama + a friendly UI, all in Docker."
+description = "A portable HippoRAG memory: an embedded graph database + Ollama + a friendly UI."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -11,7 +11,9 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
     "httpx>=0.27",
-    "neo4j>=5.20",
+    # LadybugDB, the embedded graph database (one file under data/). Pinned to 0.15.x: store/ladybug.py
+    # works around two quirks of this binding version (see its docstring); check them before moving on.
+    "real_ladybug>=0.15.3,<0.16",
     "igraph>=0.11",
     "numpy>=1.26",
     "pypdf>=4.0",
@@ -20,10 +22,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# HIPPO_STORE=neo4j: keep the graph in a Neo4j server instead of the embedded file.
+neo4j = ["neo4j>=5.20"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
     "pyyaml>=6",
+    "neo4j>=5.20",  # so the test suite can also run against a real Neo4j (CI does)
 ]
 
 [project.scripts]

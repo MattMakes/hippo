@@ -1,6 +1,6 @@
 """
 The one object every part of the app shares: config, the store, Ollama, jobs,
-and the in-memory graph (rebuilt when Neo4j's graph version changes).
+and the in-memory graph (rebuilt when the store's graph version changes).
 
 Web routes, the MCP server and the CLI all get an `AppContext` and call the
 same functions, so behaviour is identical no matter where a request comes from.
@@ -23,7 +23,7 @@ from .hipporag.graph_index import GraphIndex
 from .jobs import Jobs
 from .model_manager import ModelManager
 from .ollama import Ollama
-from .store import Store
+from .store import AnyStore, open_store
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class AppContext:
     config: Config
-    store: Store
+    store: AnyStore
     ollama: Ollama
     jobs: Jobs = field(default_factory=Jobs)
     models: ModelManager | None = None  # created on first use (needs ollama + jobs)
@@ -45,7 +45,7 @@ class AppContext:
     @classmethod
     def from_env(cls, ollama: Ollama | None = None) -> AppContext:
         config = load_config()
-        store = Store(config.neo4j_uri, config.neo4j_user, config.neo4j_password)
+        store = open_store(config)
         ollama = ollama or Ollama(
             config.ollama_url,
             config.llm_model,
@@ -61,7 +61,7 @@ class AppContext:
 
     def graph(self) -> GraphIndex:
         """
-        The current in-memory graph. Reloads from Neo4j if the graph version moved on.
+        The current in-memory graph. Reloads from the store if the graph version moved on.
 
         Loading a big graph takes a while, so it happens outside `_graph_lock`: other callers keep
         using the previous graph until the new one is swapped in. Only one thread loads at a time

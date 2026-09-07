@@ -1,18 +1,21 @@
 """
-The store: everything hippo remembers lives in Neo4j, and every Cypher query
-lives in this package.
+The store: everything hippo remembers lives in a graph database, and every
+Cypher query lives in this package. There are two interchangeable backends:
 
-    base.py        connecting, running queries, constraints, settings, stats
-    memory.py      sources, passages, entities, facts and the links between them
-    evals.py       question sets, evaluation runs and their results
-    changesets.py  saved graph edits and how they are applied
-    users.py       roles, users and which role may see each source
+    ladybug.py     LadybugDB, an embedded database in one file under data/ (the default:
+                   nothing to install or run)
+    base.py        Neo4j: connecting, running queries, constraints, settings, stats
+    memory.py        sources, passages, entities, facts and the links between them
+    evals.py         question sets, evaluation runs and their results
+    changesets.py    saved graph edits and how they are applied
+    users.py         roles, users and which role may see each source
 
-`Store` simply combines those four groups of queries into one object, so the
-rest of the app writes `store.add_passages(...)` or `store.create_run(...)`
-without caring which file the query is in.
+`Store` combines the five Neo4j groups into one object; `LadybugStore` has the
+very same methods. `open_store(config)` picks one from HIPPO_STORE, so the rest
+of the app writes `store.add_passages(...)` or `store.create_run(...)` without
+caring which database, or which file, the query is in.
 
-The graph looks like this (open http://localhost:7474 to browse it):
+The graph looks like this (with Neo4j, open http://localhost:7474 to browse it):
 
     (Source)<-[:FROM]-(Passage)-[:MENTIONS]->(Entity)
                         |
@@ -30,13 +33,20 @@ The graph looks like this (open http://localhost:7474 to browse it):
     (Settings {id: 'global'})                  retrieval knobs + the graph version counter
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from .base import Neo4jBase
 from .changesets import ChangesetQueries
 from .evals import EvalQueries
+from .ladybug import LadybugStore, StoreLockedError
 from .memory import MemoryQueries
 from .users import UserQueries
+
+if TYPE_CHECKING:
+    from ..config import Config
 
 log = logging.getLogger(__name__)
 
@@ -53,4 +63,15 @@ class Store(MemoryQueries, EvalQueries, ChangesetQueries, UserQueries, Neo4jBase
             log.warning("%d job(s) were interrupted by the last shutdown and are marked failed", interrupted)
 
 
-__all__ = ["Store"]
+AnyStore = Store | LadybugStore
+"""What the rest of the app is handed: either backend (or, in tests, the in-memory fake)."""
+
+
+def open_store(config: Config) -> AnyStore:
+    """The store HIPPO_STORE asks for. Neo4j is connected lazily; LadybugDB opens (and locks) its file now."""
+    if config.store_backend == "neo4j":
+        return Store(config.neo4j_uri, config.neo4j_user, config.neo4j_password)
+    return LadybugStore(config.database_path)
+
+
+__all__ = ["AnyStore", "LadybugStore", "Store", "StoreLockedError", "open_store"]

@@ -1,6 +1,7 @@
-# CI for hippo: lint, the unit tests on the in-memory fakes, and the same
-# unit tests again against a real Neo4j (the `store` fixture switches when
-# NEO4J_URI is set). Ollama is always faked: CI has no GPU and no time to pull models.
+# CI for hippo: lint, the unit tests on the embedded LadybugDB store (the default),
+# the same tests on the in-memory fake, and once more against a real Neo4j (the
+# `store` fixture switches on HIPPO_TEST_STORE / NEO4J_URI). Ollama is always
+# faked: CI has no GPU and no time to pull models.
 
 name: ci
 
@@ -22,11 +23,14 @@ jobs:
       - run: ruff format --check .
 
   unit:
-    name: unit tests (fakes) py${{ matrix.python }}
+    name: unit tests (${{ matrix.store }} store) py${{ matrix.python }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python: ["3.11", "3.12"]
+        store: ["ladybug", "fake"]
+    env:
+      HIPPO_TEST_STORE: ${{ matrix.store }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,6 +57,7 @@ jobs:
           --health-timeout 5s
           --health-retries 30
     env:
+      HIPPO_TEST_STORE: neo4j
       NEO4J_URI: bolt://localhost:7687
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: hippo-password

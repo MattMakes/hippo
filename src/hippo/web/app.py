@@ -4,8 +4,8 @@ The FastAPI application.
 `create_app()` builds the app: it wires the shared AppContext, guards every
 request against other websites (security.py) and against strangers once users
 exist (auth.py), serves the static files, includes the page and API routers,
-mounts the MCP server at /mcp, and on startup makes sure Neo4j has its schema
-and Ollama has its models (pulling them in the background if not).
+mounts the MCP server at /mcp, and on startup makes sure the store has its
+schema and Ollama has its models (pulling them in the background if not).
 
 Run it with `hippo serve` or `uvicorn hippo.web.app:create_app --factory`.
 """
@@ -78,10 +78,13 @@ async def forbidden_page(request: Request, exc: HTTPException):
 
 def startup(ctx: AppContext) -> None:
     """Prepare the database schema and kick off model downloads. Never raises: the UI shows what is missing."""
-    # ping() creates the schema and tidies interrupted jobs the first time Neo4j answers,
-    # so if it is not up yet nothing is lost: the first page load after it comes up does it.
+    # ping() creates the schema and tidies interrupted jobs the first time the store answers,
+    # so if Neo4j is not up yet nothing is lost: the first page load after it comes up does it.
     if not ctx.store.ping():
-        log.warning("Neo4j at %s is not reachable yet; the Settings page will say so", ctx.config.neo4j_uri)
+        log.warning(
+            "the graph store at %s is not reachable yet; the Settings page will say so",
+            ctx.config.store_location,
+        )
     if ctx.ollama.is_up():
         missing = ctx.models.missing() if ctx.models else []
         if missing:

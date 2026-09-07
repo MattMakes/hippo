@@ -1,8 +1,9 @@
 """
 Shared pytest fixtures.
 
-* `store`  - a real Neo4j when NEO4J_URI is set (CI does this), otherwise the in-memory FakeStore.
-             Either way it starts empty for every test.
+* `store`  - chosen by HIPPO_TEST_STORE: `ladybug` (the default: a real embedded LadybugDB in a
+             temporary file), `fake` (the in-memory FakeStore) or `neo4j` (a real Neo4j at NEO4J_URI,
+             which CI does). Either way it starts empty for every test.
 * `ollama` - the rule-based FakeOllama behind the real `Ollama` client class.
 * `ctx`    - an AppContext wired to the two above, with a temporary data directory.
 """
@@ -28,13 +29,18 @@ from tests.fakes.fake_store import FakeStore  # noqa: E402
 SAMPLE_PATH = ROOT / "samples" / "acme_robotics.md"
 
 
-def using_real_neo4j() -> bool:
-    return bool(os.environ.get("NEO4J_URI"))
+def store_backend() -> str:
+    """Which store the `store` fixture builds. NEO4J_URI alone also means neo4j, as it did before."""
+    chosen = os.environ.get("HIPPO_TEST_STORE", "").strip().lower()
+    if chosen:
+        return chosen
+    return "neo4j" if os.environ.get("NEO4J_URI") else "ladybug"
 
 
 @pytest.fixture
-def store():
-    if using_real_neo4j():
+def store(tmp_path):
+    backend = store_backend()
+    if backend == "neo4j":
         from hippo.store import Store
 
         real = Store(
@@ -46,8 +52,16 @@ def store():
         real.ensure_schema()
         yield real
         real.close()
-    else:
+    elif backend == "ladybug":
+        from hippo.store.ladybug import LadybugStore
+
+        embedded = LadybugStore(tmp_path / "hippo.lbug")
+        yield embedded
+        embedded.close()
+    elif backend == "fake":
         yield FakeStore()
+    else:
+        raise ValueError(f"HIPPO_TEST_STORE must be ladybug, fake or neo4j, not {backend!r}")
 
 
 @pytest.fixture

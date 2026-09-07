@@ -1,14 +1,14 @@
 """
 Step 3 of HippoRAG: the graph, loaded into memory so search is fast.
 
-Neo4j is where the graph *lives*; this file is where it *runs*. Loading pulls
-every entity, passage, fact and link out of Neo4j once and builds:
+The store is where the graph *lives*; this file is where it *runs*. Loading pulls
+every entity, passage, fact and link out of the store once and builds:
 
 * an `igraph` graph whose vertices are entities first, then passages
 * numpy matrices of fact and passage embeddings (for similarity to a question)
 * little lookup tables (id -> vertex index, entity -> how many passages mention it)
 
-The graph is rebuilt whenever Neo4j's `graph_version` counter changes (after
+The graph is rebuilt whenever the store's `graph_version` counter changes (after
 indexing or applying a changeset). Building it is the only slow part; a
 search afterwards takes milliseconds.
 

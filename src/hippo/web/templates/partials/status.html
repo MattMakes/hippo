@@ -1,5 +1,5 @@
-<a class="pill {{ 'ok' if status.neo4j else 'bad' }}" href="/settings" title="Neo4j at {{ status.neo4j_uri }}">
-  <span class="dot"></span> Neo4j
+<a class="pill {{ 'ok' if status.store else 'bad' }}" href="/settings" title="{{ 'Neo4j at' if status.store_backend == 'neo4j' else 'LadybugDB file' }} {{ status.store_location }}">
+  <span class="dot"></span> {{ 'Neo4j' if status.store_backend == 'neo4j' else 'Graph' }}
 </a>
 <a class="pill {{ 'ok' if status.ollama and status.models_ready else ('warn' if status.ollama else 'bad') }}" href="/settings"
    title="Ollama at {{ status.ollama_url }}{% if not status.models_ready %} · models missing{% endif %}">

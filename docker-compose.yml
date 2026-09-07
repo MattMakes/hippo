@@ -1,20 +1,55 @@
-# hippo: three containers. `./hippo up` starts them for you (and decides whether
-# the "ollama" service is needed); `docker compose up -d` works too.
+# hippo in docker. `./hippo up` starts what is needed (and decides whether the
+# "ollama" and "neo4j" services are wanted); `docker compose up -d` works too and
+# starts just the app, which keeps its graph in an embedded database file under ./data.
 #
 # Every published port is bound to 127.0.0.1: only programs on this machine can
-# reach Neo4j, Ollama and the hippo UI. hippo is open until the first user is created, and Ollama has no
-# password, so a port open to the network would hand your memory to anyone on
-# it. To reach the UI from another computer set HIPPO_BIND=0.0.0.0 in .env
+# reach the hippo UI, Ollama and (if used) Neo4j. hippo is open until the first
+# user is created, and Ollama has no password, so a port open to the network would
+# hand your memory to anyone on it. To reach the UI from another computer set HIPPO_BIND=0.0.0.0 in .env
 # (and HIPPO_ALLOWED_HOSTS), and put an authenticating proxy in front of it.
 #
-# The Neo4j password comes from NEO4J_PASSWORD in .env; `./hippo up` writes a
-# random one there on the first run. Neo4j only reads it on its very first
-# start, so keep .env next to the neo4j_data volume.
+# Neo4j is optional (HIPPO_STORE=neo4j in .env, or `--profile neo4j`). Its password
+# comes from NEO4J_PASSWORD in .env; `./hippo up` writes a random one there on the
+# first run. Neo4j only reads it on its very first start, so keep .env next to the
+# neo4j_data volume.
 
 services:
-  # neo4j: the graph database where everything hippo remembers is stored.
+  # app: the hippo web UI, API, MCP endpoint and CLI (built from this folder).
+  # By default the graph lives in ./data/hippo.lbug, an embedded LadybugDB file.
+  app:
+    build: .
+    environment:
+      HIPPO_STORE: ${HIPPO_STORE:-ladybug}   # "ladybug" (embedded file) or "neo4j" (the service below)
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-hippo-password}
+      # ./hippo up sets OLLAMA_URL to the host's Ollama when it finds one; otherwise the ollama container.
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      HIPPO_LLM_MODEL: ${HIPPO_LLM_MODEL:-qwen3:8b}
+      HIPPO_EMBED_MODEL: ${HIPPO_EMBED_MODEL:-nomic-embed-text}
+      HIPPO_DATA_DIR: /app/data
+      HIPPO_HOST: 0.0.0.0   # inside the container; the host-side binding below decides who can reach it
+    ports:
+      - "${HIPPO_BIND:-127.0.0.1}:8000:8000"   # the UI, the JSON API and /mcp
+    volumes:
+      - ./data:/app/data   # the graph file, uploads and cloned repos survive container rebuilds
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets the container reach an Ollama running on your machine
+
+  # ollama: a local model server, only started with `--profile ollama` (when your machine has no Ollama).
+  ollama:
+    image: ollama/ollama
+    profiles: ["ollama"]
+    ports:
+      - "127.0.0.1:11434:11434"   # for `hippo mcp` on this machine; Ollama has no password
+    volumes:
+      - ollama_data:/root/.ollama   # downloaded models (several GB) are kept between restarts
+
+  # neo4j: an optional graph server instead of the embedded file, started with `--profile neo4j`
+  # (which ./hippo up adds when .env says HIPPO_STORE=neo4j). The app copes with it coming up late.
   neo4j:
     image: neo4j:5.26-community
+    profiles: ["neo4j"]
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-hippo-password}
       NEO4J_server_memory_heap_max__size: 1G
@@ -32,38 +67,6 @@ services:
       retries: 30
       start_period: 20s
 
-  # app: the hippo web UI, API, MCP endpoint and CLI (built from this folder).
-  app:
-    build: .
-    environment:
-      NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-hippo-password}
-      # ./hippo up sets OLLAMA_URL to the host's Ollama when it finds one; otherwise the ollama container.
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
-      HIPPO_LLM_MODEL: ${HIPPO_LLM_MODEL:-qwen3:8b}
-      HIPPO_EMBED_MODEL: ${HIPPO_EMBED_MODEL:-nomic-embed-text}
-      HIPPO_DATA_DIR: /app/data
-      HIPPO_HOST: 0.0.0.0   # inside the container; the host-side binding below decides who can reach it
-    ports:
-      - "${HIPPO_BIND:-127.0.0.1}:8000:8000"   # the UI, the JSON API and /mcp
-    volumes:
-      - ./data:/app/data   # uploads and cloned repos survive container rebuilds
-    depends_on:
-      neo4j:
-        condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # lets the container reach an Ollama running on your machine
-
-  # ollama: a local model server, only started with `--profile ollama` (when your machine has no Ollama).
-  ollama:
-    image: ollama/ollama
-    profiles: ["ollama"]
-    ports:
-      - "127.0.0.1:11434:11434"   # for `hippo mcp` on this machine; Ollama has no password
-    volumes:
-      - ollama_data:/root/.ollama   # downloaded models (several GB) are kept between restarts
-
 volumes:
-  neo4j_data:
   ollama_data:
+  neo4j_data:

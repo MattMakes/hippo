@@ -7,8 +7,6 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from neo4j import GraphDatabase
-
 log = logging.getLogger(__name__)
 
 # The retrieval knobs, with the reference implementation's defaults (BaseConfig in HippoRAG 2).
@@ -109,6 +107,12 @@ def now_iso() -> str:
 
 class Neo4jBase:
     def __init__(self, uri: str, user: str, password: str, database: str = "neo4j"):
+        try:
+            from neo4j import GraphDatabase  # optional dependency: `pip install 'hippo[neo4j]'`
+        except ImportError as exc:  # pragma: no cover - depends on what is installed
+            raise RuntimeError(
+                "HIPPO_STORE=neo4j needs the neo4j driver: pip install 'hippo[neo4j]' (or pip install neo4j)"
+            ) from exc
         # Short timeouts: when Neo4j is unreachable a page should say so in seconds, not hang for a minute.
         # Notifications off: on a fresh database Neo4j warns that e.g. `owner_id` "does not exist" for
         # every query that mentions a property no node has yet, which would flood the log on each poll.
