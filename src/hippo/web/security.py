@@ -1,9 +1,9 @@
 """
 Two checks that keep other websites out of hippo.
 
-hippo has no login: whoever can reach the port can read and change the memory.
-That is fine on your own machine, but a web page you happen to visit runs in
-the same browser and could try to talk to http://localhost:8000 too. Two tricks
+Until users exist hippo has no login, and even with users a browser sends its
+session cookie along: a web page you happen to visit runs in the same browser
+and could try to talk to http://localhost:8000 too. Two tricks
 make that possible, and one small middleware blocks both:
 
 1. **Cross-site requests (CSRF).** attacker.example can make your browser POST

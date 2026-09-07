@@ -2,7 +2,7 @@
 # the "ollama" service is needed); `docker compose up -d` works too.
 #
 # Every published port is bound to 127.0.0.1: only programs on this machine can
-# reach Neo4j, Ollama and the hippo UI. hippo has no login and Ollama has no
+# reach Neo4j, Ollama and the hippo UI. hippo is open until the first user is created, and Ollama has no
 # password, so a port open to the network would hand your memory to anyone on
 # it. To reach the UI from another computer set HIPPO_BIND=0.0.0.0 in .env
 # (and HIPPO_ALLOWED_HOSTS), and put an authenticating proxy in front of it.

@@ -63,6 +63,7 @@ def test_a_real_mcp_client_can_list_and_call_the_tools(server_url):
                     "hippo_ask",
                     "hippo_remember",
                     "hippo_sources",
+                    "hippo_whoami",
                 ]
 
                 sources = tool_payload(await session.call_tool("hippo_sources", {}))

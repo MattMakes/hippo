@@ -65,5 +65,7 @@ def ctx_of(request: Request) -> AppContext:
 
 def render(request: Request, template: str, nav: str = "", status_code: int = 200, **context: Any):
     ctx = ctx_of(request)
+    # `me` is who is signed in (hippo/access.py); the header shows it and templates gate buttons on it.
+    context.setdefault("me", getattr(request.state, "principal", None))
     context.update(nav=nav, status=system_status(ctx), config=ctx.config)
     return templates.TemplateResponse(request, template, context, status_code=status_code)

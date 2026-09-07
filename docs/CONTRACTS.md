@@ -22,15 +22,29 @@ Style rules for every file:
 src/hippo/config.py               Config + load_config()
 src/hippo/ollama.py               Ollama(client): chat_json/chat_text/embed/embed_one/ensure_model/missing_models/pull/is_up
 src/hippo/prompts.py              every prompt + JSON schema (*_messages(...) builders)
-src/hippo/context.py              AppContext(config, store, ollama, jobs); ctx.graph() -> GraphIndex; ctx.invalidate_graph()
+src/hippo/context.py              AppContext(config, store, ollama, jobs); ctx.graph() -> GraphIndex; ctx.graph_for(access) -> the caller's slice
+                                  (cached by (graph version, visible source ids)); ctx.invalidate_graph(); ctx.invalidate_scoped()
+src/hippo/access.py               Access(rank, user_id, unrestricted) + ACCESS_WHERE (the Cypher predicate on a Source `s`) + access_params;
+                                  Principal(user, role, access): .can(cap), .may_manage_source(row), .may_assign_role(role), .as_role(role);
+                                  CAPABILITIES, DEFAULT_ROLES (arch-admin 40 > regional-admin 30 > local-admin 20 > local-assistant 10 > individual 0);
+                                  hash_password/verify_password (scrypt), new_token, top_role, roles_at_or_below
+                                  Rule: a source is visible when its min_rank <= the caller's rank, or they own it; passages follow their
+                                  source; an entity/fact is visible when a visible passage mentions/states it. Enforced twice: in every
+                                  store read (ACCESS_WHERE) and in memory (GraphIndex.scoped) so PPR never crosses a hidden node.
 src/hippo/jobs.py                 Jobs.start(key, fn) -> bool; is_running(key); running_keys(); cancel(key); is_cancelled(key); wait(key, timeout); wait_all()
-src/hippo/ask.py                  search(ctx, question, settings=None) -> Trace; ask(ctx, q) -> (Trace, Answer); answer_from_trace(ctx, trace)
+src/hippo/ask.py                  search(ctx, question, settings=None, access=None) -> Trace; ask(ctx, q, settings=None, access=None) -> (Trace, Answer);
+                                  answer_from_trace(ctx, trace, access=None)      # access=None means unrestricted (CLI, open mode, tests)
 src/hippo/store/                  Store (Neo4j). Read store/__init__.py for the graph shape; read each file for the methods.
+                                  Reads that return sources/passages/entities/facts take `access: Access | None` (memory.py); users.py holds
+                                  roles/users: ensure_roles, list_roles, get_role, create_role, update_role (a rank change rewrites min_rank on
+                                  its sources), delete_role (refused while in use), count_users, list_users, get_user, get_user_by_username,
+                                  get_user_by_token, create_user, update_user, rotate_token, delete_user, check_password, set_source_access
 src/hippo/hipporag/text.py        clean_phrase, entity_id, fact_id, fact_text, make_id, min_max_normalize, is_meaningful_phrase
 src/hippo/hipporag/openie.py      extract(ollama, passage_id, text) -> Extraction; extract_many(...)
 src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text); index_source(store, ollama, source_id, chunks, *, synonymy_threshold, workers, on_progress, should_stop)
                                   GRAPH_WRITE_LOCK: held while entities/facts are written and linked, and by anything that ends in remove_orphans
-src/hippo/hipporag/graph_index.py GraphIndex.load(store); .ppr(); .neighbors(); .edge_between(); .graph_with_edits(); Passage; Fact; Edge; EdgeEdit
+src/hippo/hipporag/graph_index.py GraphIndex.load(store); .scoped(visible_source_ids) -> induced subgraph (recomputed fact counts and passage
+                                  counts); .ppr(); .neighbors(); .edge_between(); .graph_with_edits(); Passage; Fact; Edge; EdgeEdit
 src/hippo/hipporag/retriever.py   Retriever(index, ollama).retrieve(question, settings, *, fact_filter, force_include, force_exclude, node_boosts, graph) -> Trace
 src/hippo/hipporag/answerer.py    answer_question(ollama, question, [(id,title,text)]) -> Answer(answer, thought, raw, passage_ids)
 tests/fakes/fake_store.py         FakeStore: in-memory Store with identical methods/row shapes
@@ -47,7 +61,11 @@ Key data shapes (see the dataclasses in retriever.py): `Trace` has
 
 Source rows (`store.get_source`/`list_sources`): id, kind ('text'|'file'|'archive'|'repo'|'sample'), name, status
 ('queued'|'reading'|'indexing'|'ready'|'failed'), stage (free text), progress_done, progress_total, error, meta (dict),
-created_at, updated_at, passages (count), fact_links (count).
+created_at, updated_at, passages (count), fact_links (count), owner_id, owner_name, access_role_id (None = everyone),
+access_role_name ('Everyone' when open), min_rank (the role's rank, copied).
+Role rows: id, name, rank, description, capabilities (list), builtin, users (count), sources (count).
+User rows: id, username, display_name, role_id, role_name, rank, disabled, created_at, sources (count), token, password_hash
+(the web layer strips the last two with auth.public_user before anything leaves the server).
 
 ## To write
 
@@ -72,11 +90,12 @@ chunker.py   chunk_document(doc: Document, size_chars: int, overlap_chars: int) 
 repos.py     is_git_url(url) -> bool  (https://, http://, git@, ssh:// forms only)
              clone_repo(url, dest: Path, timeout=300) -> Path   # git clone --depth 1 --single-branch; raise RepoError with a friendly message
              walk_repo(root: Path, budget=None) -> list[Document]   # uses readers; skips IGNORED_DIRS, hidden dirs, files > MAX_FILE_BYTES, binaries
-pipeline.py  add_text(ctx, name, text) -> source_id                 # kind 'text', saves text under data_dir/sources/<id>/
-             add_upload(ctx, filename, data: bytes) -> source_id    # kind 'file' or 'archive' (.zip); saves the file under data_dir/sources/<id>/
+pipeline.py  add_text(ctx, name, text, *, owner_id=None, access_role_id=None) -> source_id   # kind 'text', saves text under data_dir/sources/<id>/
+             add_upload(ctx, filename, data: bytes, *, owner_id=None, access_role_id=None) -> source_id    # kind 'file' or 'archive' (.zip)
              both raise ValueError past max_upload_bytes(ctx) (HIPPO_MAX_UPLOAD_BYTES, 50 MB); the same check serves forms, JSON and MCP
-             add_repo(ctx, url) -> source_id                        # kind 'repo'
-             add_sample(ctx) -> source_id                           # kind 'sample': samples/acme_robotics.md
+             add_repo(ctx, url, *, owner_id=None, access_role_id=None) -> source_id                        # kind 'repo'
+             add_sample(ctx, *, owner_id=None, access_role_id=None) -> source_id                           # kind 'sample': samples/acme_robotics.md
+             every add_* records who added the source and the lowest role that may see it (None = everyone; see hippo/access.py)
              start_indexing(ctx, source_id) -> bool                 # background job "index:<source_id>": read -> chunk -> index_source
                                                                     # status flow: reading -> indexing -> ready | failed (error text kept)
                                                                     # stage/progress_done/progress_total updated through on_progress
@@ -105,7 +124,8 @@ metrics.py         normalize_answer(text) -> str (lowercase, strip punctuation/a
                    gold_rank(gold_ids, ranked_ids) -> int | None   # best rank of any gold passage, 1-based
 judge.py           Verdict(verdict: 'correct'|'partially_correct'|'incorrect', score: 1.0|0.5|0.0, reason: str)
                    judge(ollama, question, expected, actual) -> Verdict   # prompts.judge_messages; on OllamaError -> incorrect with reason
-question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_single=10, max_multihop=5, name=None, set_id=None) -> set_id
+question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_single=10, max_multihop=5, name=None, set_id=None, access=None) -> set_id
+                   - access: the caller's slice; passages and entity pairs come from ctx.graph_for(access)
                    - creates the QuestionSet first (origin 'generated', status 'generating'), fills it, sets status 'ready'
                      (update_question_set for stage/progress; on failure status 'failed' + error)
                    - single-hop: pick up to max_single passages spread evenly across the source; prompts.question_gen_messages
@@ -114,8 +134,9 @@ question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_sing
                      skip empty questions; kind 'multihop'; gold_passage_ids = both passages
                    - each question row: {text, expected_answer, gold_passage_ids, kind, notes}
                    start_generation_job(ctx, source_id, **kw) -> set_id   # creates the set, then Jobs key "generate:<set_id>"
-runner.py          start_run(ctx, set_id, name=None, settings=None) -> run_id   # Jobs key "run:<run_id>"
-                   run_question(ctx, question_row, settings) -> dict          # search -> answer_from_trace -> judge -> metrics; returns the
+runner.py          start_run(ctx, set_id, name=None, settings=None, access=None) -> run_id   # Jobs key "run:<run_id>"; the run searches and
+                                                                             # answers on the starter's slice of the memory (hippo/access.py)
+                   run_question(ctx, question_row, settings, access=None) -> dict   # search -> answer_from_trace -> judge -> metrics; returns the
                                                                              # dict that store.add_result wants (answer, thought, verdict,
                                                                              # judge_score, judge_reason, exact_match, f1, recall, gold_rank, used_dpr_fallback,
                                                                              # latency_ms, trace(dict), error)
@@ -132,6 +153,7 @@ explain.py     explain(index: GraphIndex, trace: Trace, *, top_passages=10, grap
                Explanation.passages: for each of the top passages: passage_id, title, rank, score, dpr_rank,
                    linked_seeds: [{entity_id, name, seed_weight, edge_weight}]  (seed entities this passage MENTIONS),
                    path: [names] shortest path from the strongest seed to this passage when not directly linked (cutoff 3, by igraph),
+                   path_ids: the same path as node ids (what the Graph page highlights),
                    why: one plain sentence ("Directly mentions seed 'boulder' (weight 0.50) and 'acme robotics'." / "Reached in 2 hops via ...")
                Explanation.subgraph: {"nodes": [{id, label, kind, score, is_seed, seed_weight, rank}], "edges": [{source, target, weight, kinds}]}
                    nodes = seed entities + top_nodes + top passages; edges = every graph edge among those nodes (index.edge_between)
@@ -140,7 +162,8 @@ simulate.py    Overrides(settings: dict = {}, force_include: list[str] = [], for
                          edge_edits: list[dict(a, b, weight)] = [], rerun_filter: bool = False, reanswer: bool = False)
                Overrides.from_dict(d); Overrides.to_ops() -> list[op dicts]  (settings -> set_setting; node_boosts -> set_node_boost;
                          edge_edits -> set_edge_weight)   # force_include/exclude are per-question and never become graph ops
-               simulate(ctx, question, overrides, baseline: Trace | None) -> Simulation(trace, answer: Answer | None, diff, baseline)
+               simulate(ctx, question, overrides, baseline: Trace | None, access=None) -> Simulation(trace, answer: Answer | None, diff, baseline)
+                   - runs on ctx.graph_for(access): a simulation never leaves the caller's slice of the graph
                    - settings = baseline.settings (or store settings) merged with overrides.settings
                    - fact filter: replay baseline.filter["kept_triples"] unless rerun_filter (then the LLM runs again)
                    - graph = index.graph_with_edits([EdgeEdit(...)]) when edge_edits
@@ -159,26 +182,57 @@ changesets.py  save(ctx, name, ops, from_result_id=None, note="") -> changeset_i
 
 ```
 security.py    HostAndOriginGuard: refuses foreign Host headers and cross-site writes (CSRF); adhoc.py: the small cache of ad-hoc analyses
+               (each entry remembers its owner; recall_adhoc(key, owner) answers only them)
+auth.py        AuthGate (ASGI middleware): resolves the Principal (bearer token, then the signed `hippo_session` cookie) and puts it on
+               request.state.principal; open mode (no users) = everyone acts as the top role. Strangers get 401 on /api and /mcp,
+               303 -> /login on pages, 401 + HX-Redirect on htmx requests. principal_of(request); require(request, cap) -> 403;
+               require_capability(cap) (a router dependency); principal_from_bearer(ctx, token) (used by the MCP server);
+               sign_session/read_session (HMAC, secret kept as Settings meta "session_secret"); public_user(row) strips secrets.
+    GET/POST /login, POST /logout, GET /account, POST /account/password, POST /account/token, GET /api/me
 app.py         create_app(ctx: AppContext | None = None) -> FastAPI   # ctx default: AppContext.from_env(); on startup: store.ensure_schema(),
                kick off "pull-models" job if Ollama is up and models are missing (Ollama.missing_models / ensure_model), mount /static,
-               include routers, mount MCP at /mcp (hippo.mcp_server.mount)
-Every page extends templates/base.html (Neo4j/Ollama status + model pull progress in the header). Routes are
+               include routers, mount MCP at /mcp (hippo.mcp_server.mount); a 403 on a page renders templates/forbidden.html
+Every page extends templates/base.html (Neo4j/Ollama status + model pull progress in the header, who is signed in, sign out;
+nav items for Evals/Changesets/Users appear only for roles that may use them). Routes are
 grouped by feature, one file each, and every file has a `router` (HTML pages and the HTMX form posts / partials
 they use) and, where it has JSON endpoints, an `api` router. app.py includes them in this order:
-pages.router, sources.router, sources.api, evals.router, evals.api, analyze.router, analyze.api, api.router.
+auth.router, users.router, users.api, graph.router, graph.api, pages.router, sources.router, sources.api, evals.router, evals.api,
+analyze.router, analyze.api, api.router. render() passes the principal to every template as `me`.
 The /api prefix is built per file: api.py's router has prefix="/api", sources.py's api has prefix="/api/sources",
 and evals.py / analyze.py spell "/api/..." in every path; that is why the same prefix shows up in four modules.
 
+routes/users.py   Users & roles (the access ladder)
+    GET  /users                        needs manage_users or manage_roles. The ladder (every role top first: rank, users, sources at
+                                       that tier, what it sees cumulatively, "see the graph as this tier"), the users table (change
+                                       role / disable / reset password / new token / remove, only for users ranked below the caller,
+                                       or peers when the caller is at the very top), and the roles editor (name, rank, description,
+                                       capability checkboxes, add, delete when unused). Open mode shows a callout and the
+                                       "create the first user" form (forced to the top role; that browser is signed in as them).
+    POST /users, POST /users/{id}, POST /roles, POST /roles/{id}      the page's forms (action=save|delete|token)
+    api: GET/POST /api/users, PATCH/DELETE /api/users/{id}, POST /api/users/{id}/token, GET/POST /api/roles, PATCH/DELETE /api/roles/{id}
+routes/graph.py   the Graph page (3D, vendor/3d-force-graph.min.js, static/graph.js)
+    GET  /graph?as_role=&q=&source=    the whole visible graph in 3D; "View as" a role (manage_users/manage_roles, tiers at or below yours)
+    GET  /api/graph/full               nodes [{id,label,kind,degree,tier,tier_rank,source_id?,passage_count?}] + edges [{source,target,weight,kinds}]
+                                       after filters q (name substring + one hop of context), source, kind, min_weight; capped by degree
+                                       (limit, default 2500); plus totals, tiers and the viewer
+    POST /api/graph/light-up {question, settings?, as_role?, top_passages?}   runs ask.search on the viewer's slice and returns seeds,
+                                       kept_facts, top_nodes (PPR scores), ranked passages with "why", paths (seed -> passage node ids)
+                                       and the lit subgraph, so the page can animate the spread
+    GET  /api/graph/node/{id}          side-panel details: passage text/source/facts, or entity facts/passages/boost; neighbours
 routes/pages.py   the pages that fit nowhere else
     GET  /partials/status              header partial: Neo4j/Ollama/model-pull status, polled by every page
-    GET  /ask, POST /ask               Ask: a question box; the POST runs the search + answer and renders the same page with the
-                                       answer, thought, top passages with scores, kept facts, seeds; link "Analyze this question"
+    GET  /ask, POST /ask               Ask: a question box; the POST runs the search + answer (on the caller's slice) and renders the
+                                       same page with the answer, thought, top passages with scores, kept facts, seeds; link "Analyze
+                                       this question"; the page says "searching N of M sources visible to you as <role>"
     GET  /settings, POST /settings     Ollama status (url, models installed vs required, pull progress, "Pull now"), Neo4j status +
                                        stats, retrieval settings form (the DEFAULT_SETTINGS keys with one-line explanations),
-                                       embed model warning; the POST saves the settings and renders the same page
-routes/sources.py  the Library
-    GET  /                             sources table (name, kind, status+stage+progress, passages, facts, created); upload forms
-                                       (file, zip, paste text, git URL, "Load the sample"); delete buttons
+                                       embed model warning; the POST (edit_graph) saves the settings and renders the same page
+routes/sources.py  the Library (everything scoped to the caller; adding needs add_sources; delete/reindex/reclassify need
+                   ownership or manage_sources; a source may only be restricted to a tier at or below the caller's own)
+    GET  /                             sources table (name, kind, status+stage+progress, passages, facts, "visible to" with an inline
+                                       tier picker for sources the caller may manage, owner, created); upload forms (file, zip, paste
+                                       text, git URL, "Load the sample"), each with a "Visible to" picker defaulting to the caller's tier
+    POST /sources/{id}/access          the tier pickers post here (visibility=<role id>|everyone, back=<path>)
     GET  /partials/sources             the sources table, polled while something is indexing (HTMX)
     GET  /sources/{id}                 Source detail: meta, progress, passages (paged) with the entities/triples the LLM extracted,
                                        "Make sample questions" button (-> generation job), question sets about this source, "Reindex", "Delete"
@@ -189,10 +243,11 @@ routes/sources.py  the Library
     POST   /api/sources/text {name, text} | /api/sources/upload (multipart file) | /api/sources/repo {url} | /api/sources/sample
                                        -> {source_id}; 400 with {error} when refused (unsupported type, empty, too big)
     POST   /api/sources/reindex-all    -> {started: n}
-    GET    /api/sources/{id}           status/progress JSON for polling
+    GET    /api/sources/{id}           status/progress JSON for polling (404 when hidden from the caller)
+    PUT    /api/sources/{id}/access {role_id|null|"everyone"}   change who may see it -> the source row
     DELETE /api/sources/{id}           -> {deleted}; 409 with {error} while another source is being indexed (pipeline.Busy)
     POST   /api/sources/{id}/reindex   -> {started: bool}; 409 as above
-routes/evals.py    question sets and runs
+routes/evals.py    question sets and runs (every route needs run_evals)
     GET  /evals                        Question sets (with counts, origin, status) + create set form (name, paste "question | answer"
                                        lines, or JSON) + run history table (all runs: name, set, date, status/progress, accuracy, EM, F1,
                                        recall@5, gold in top5)
@@ -211,7 +266,8 @@ routes/evals.py    question sets and runs
     POST   /api/evals/sets/{id}/run {name, settings?} -> {run_id}
     GET    /api/evals/runs             every run (history)
     GET/DELETE /api/evals/runs/{id}    one run with its summary and progress; delete it
-routes/analyze.py  the deep dive and changesets
+routes/analyze.py  the deep dive and changesets (explanations and simulations run on the caller's slice; stored results need
+                   run_evals; changesets need edit_graph)
     GET  /analyze?question=&key=       Analyze an ad-hoc question: `key` names an analysis cached by the Ask page / POST /analyze
                                        (the last ADHOC_LIMIT, until restart); an expired key shows a 404 page with "analyze it again"
     POST /analyze                      run search + answer for a question typed now, cache it, redirect to GET /analyze?key=
@@ -245,25 +301,32 @@ The Analyze page shows, top to bottom:
        /api/simulate) renders the diff table (before rank -> after rank with arrows), new seeds, new answer; "Save as changeset" button
        (name + note) -> POST /api/changesets with Overrides.to_ops(); note under it: fact in/out toggles are per-question and not saved.
 templates/     base.html, library.html, source.html, ask.html, evals.html, eval_set.html, eval_run.html, analyze.html, changesets.html,
-               settings.html, partials/ (source_row.html, run_row.html, ...)
+               settings.html, login.html, account.html, users.html, graph.html, forbidden.html, partials/ (source_row.html, run_row.html, ...)
 static/        app.css (one clean stylesheet, system fonts, light theme, responsive; no framework), app.js (small helpers: fetch JSON,
-               toasts), analyze.js (simulate panel + cytoscape), vendor/ (htmx.min.js, cytoscape.min.js already there)
+               toasts), analyze.js (simulate panel + cytoscape), graph.js (the 3D graph: filters, light-up animation, side panel),
+               vendor/ (htmx.min.js, cytoscape.min.js, 3d-force-graph.min.js with their LICENSE files)
 ```
 
 ### `src/hippo/mcp_server.py` and `src/hippo/cli.py`
 
 ```
 mcp_server.py  build_server(ctx) -> MCPServer (mcp>=2: from mcp.server.mcpserver import MCPServer)
-               tools: hippo_search(question, top_k=5) -> passages [{title, source, text, score, rank}] + kept facts
+               caller(ctx, mcp_ctx) -> Principal: from `Authorization: Bearer` (HTTP, via Context.headers) or HIPPO_TOKEN (stdio);
+                      ToolError "sign in required" when users exist and no valid token came; open mode = everything
+               tools (each takes an injected `mcp_ctx: Context`, hidden from the schema):
+                      hippo_search(question, top_k=5) -> passages [{title, source, text, score, rank}] + kept facts (caller's slice)
                       hippo_ask(question) -> {answer, thought, sources:[...]}
-                      hippo_remember(name, text) -> {source_id} (adds a text source and indexes it)
-                      hippo_sources() -> list of sources with status
+                      hippo_remember(name, text, visibility=None) -> {source_id, visible_to} (needs add_sources; owner = caller;
+                          visibility = a role id at or below the caller's tier, or "everyone"; default the caller's own tier)
+                      hippo_sources() -> the sources the caller may see, with visible_to and owner
+                      hippo_whoami() -> {open_mode, user, role, can, sources_visible, sources_total, ladder, visibility_you_may_use}
                mount(app: FastAPI, ctx)   # streamable HTTP at /mcp, stateless_http=True; DNS-rebinding protection on, hosts from config.allowed_hosts (HIPPO_ALLOWED_HOSTS)
                                           # (it runs inside docker; users connect at http://localhost:8000/mcp); wire session_manager.run()
                                           # into the FastAPI lifespan
                run_stdio(ctx)             # for `hippo mcp`
 cli.py         main(argv=None): subcommands  serve (uvicorn), mcp (stdio), pull-models, index <path-or-git-url> [--name], ask "<question>",
-               sources, settings. Uses AppContext.from_env().
+               sources, settings, users, user add|token|role|remove. Uses AppContext.from_env(); talks to Neo4j directly, so it is not
+               gated (it is how the first admin is created from `docker exec`).
 ```
 
 ### Docker, CI, docs

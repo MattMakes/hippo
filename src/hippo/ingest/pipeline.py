@@ -71,20 +71,45 @@ class Busy(ValueError):
 # ------------------------------------------------------------- adding
 
 
-def add_text(ctx: AppContext, name: str, text: str) -> str:
+# Every add_* takes `owner_id` and `access_role_id` (see hippo/access.py): who added the source and the
+# lowest role that may see it. Both default to None (no owner, visible to everyone), which is what
+# the CLI and open mode want; the web routes and MCP pass the caller's.
+
+
+def add_text(
+    ctx: AppContext,
+    name: str,
+    text: str,
+    *,
+    owner_id: str | None = None,
+    access_role_id: str | None = None,
+) -> str:
     """Remember a pasted text. The name is what the library shows."""
     name = name.strip() or "Untitled text"
     if not text.strip():
         raise ValueError("the text is empty")
     data = text.encode("utf-8")
     _check_upload_size(ctx, name, len(data))
-    source_id = ctx.store.create_source("text", name, {"file": TEXT_FILE, "chars": len(text)})
+    source_id = ctx.store.create_source(
+        "text",
+        name,
+        {"file": TEXT_FILE, "chars": len(text)},
+        owner_id=owner_id,
+        access_role_id=access_role_id,
+    )
     _write_bytes(source_dir(ctx, source_id) / TEXT_FILE, data)
     start_indexing(ctx, source_id)
     return source_id
 
 
-def add_upload(ctx: AppContext, filename: str, data: bytes) -> str:
+def add_upload(
+    ctx: AppContext,
+    filename: str,
+    data: bytes,
+    *,
+    owner_id: str | None = None,
+    access_role_id: str | None = None,
+) -> str:
     """Remember an uploaded file. A .zip becomes an 'archive' source; anything else a 'file'."""
     safe_name = _safe_filename(filename)
     if not data:
@@ -97,13 +122,21 @@ def add_upload(ctx: AppContext, filename: str, data: bytes) -> str:
                 f"{safe_name} is not a supported file type (text, code, pdf, docx, epub, html, zip)"
             )
     kind = "archive" if is_zip else "file"
-    source_id = ctx.store.create_source(kind, safe_name, {"file": safe_name, "bytes": len(data)})
+    source_id = ctx.store.create_source(
+        kind,
+        safe_name,
+        {"file": safe_name, "bytes": len(data)},
+        owner_id=owner_id,
+        access_role_id=access_role_id,
+    )
     _write_bytes(source_dir(ctx, source_id) / safe_name, data)
     start_indexing(ctx, source_id)
     return source_id
 
 
-def add_repo(ctx: AppContext, url: str) -> str:
+def add_repo(
+    ctx: AppContext, url: str, *, owner_id: str | None = None, access_role_id: str | None = None
+) -> str:
     """Remember a public git repository. Cloning happens inside the background job."""
     url = url.strip()
     if not repos.is_git_url(url):
@@ -111,16 +144,20 @@ def add_repo(ctx: AppContext, url: str) -> str:
             f"'{url}' does not look like a git URL. Use https://host/owner/repo, "
             "ssh://git@host/owner/repo or git@host:owner/repo."
         )
-    source_id = ctx.store.create_source("repo", repos.repo_name(url), {"url": url})
+    source_id = ctx.store.create_source(
+        "repo", repos.repo_name(url), {"url": url}, owner_id=owner_id, access_role_id=access_role_id
+    )
     source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
     start_indexing(ctx, source_id)
     return source_id
 
 
-def add_sample(ctx: AppContext) -> str:
+def add_sample(ctx: AppContext, *, owner_id: str | None = None, access_role_id: str | None = None) -> str:
     """Load samples/acme_robotics.md, the tiny corpus used by the docs and tests."""
     sample = find_sample_path()
-    source_id = ctx.store.create_source("sample", SAMPLE_NAME, {"file": SAMPLE_FILE})
+    source_id = ctx.store.create_source(
+        "sample", SAMPLE_NAME, {"file": SAMPLE_FILE}, owner_id=owner_id, access_role_id=access_role_id
+    )
     _write_bytes(source_dir(ctx, source_id) / SAMPLE_FILE, sample.read_bytes())
     start_indexing(ctx, source_id)
     return source_id

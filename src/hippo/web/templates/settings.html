@@ -58,6 +58,7 @@
 <section class="card">
   <h2>Retrieval settings</h2>
   <p class="muted">These are HippoRAG's knobs. The defaults are the paper's. Change one, then use the Analyze page to see what it did.</p>
+  {% if not can_edit %}<div class="callout">These knobs change everyone's answers, so only roles with <code>edit_graph</code> may save them. Yours ({{ me.role_name if me else '' }}) can read them.</div>{% endif %}
   <form method="post" action="/settings" class="settings-form">
     {% for key, value in settings.items() %}
     <div class="field">
@@ -72,7 +73,7 @@
       <span class="help muted">{{ help[key] }}</span>
     </div>
     {% endfor %}
-    <button class="btn primary" type="submit">Save settings</button>
+    <button class="btn primary" type="submit" {% if not can_edit %}disabled{% endif %}>Save settings</button>
   </form>
 </section>
 {% endblock %}

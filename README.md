@@ -40,10 +40,11 @@ the `NEO4J_PASSWORD` line of `.env`, which `./hippo up` fills in with a random
 value on the first run and prints) if you want to look at the graph directly.
 
 Everything listens on this machine only: compose binds ports 8000 (the UI,
-API and MCP), 7474/7687 (Neo4j) and 11434 (Ollama) to `127.0.0.1`. hippo has
-no login and Ollama has no password, so if you want to open the UI from
-another computer, put a proxy that asks for a password in front of it, then
-set `HIPPO_BIND=0.0.0.0` and `HIPPO_ALLOWED_HOSTS` in `.env`.
+API and MCP), 7474/7687 (Neo4j) and 11434 (Ollama) to `127.0.0.1`. hippo is
+open until you create the first user (see [Users and roles](#users-and-roles))
+and Ollama has no password, so if you want to open the UI from another
+computer, create users first, put a proxy that speaks HTTPS in front of it,
+then set `HIPPO_BIND=0.0.0.0` and `HIPPO_ALLOWED_HOSTS` in `.env`.
 
 ## A tour
 
@@ -52,6 +53,9 @@ set `HIPPO_BIND=0.0.0.0` and `HIPPO_ALLOWED_HOSTS` in `.env`.
 | Library | `/` | Everything hippo remembers. Add a file, a zip, pasted text or a git URL; watch indexing progress; delete sources. |
 | Source | `/sources/{id}` | One source: its passages and the entities and facts the model pulled out of each. "Make sample questions" writes an evaluation set about it. |
 | Ask | `/ask` | Type a question, get the answer, the model's reasoning, the top passages, the facts it kept and the seed entities. "Analyze this question" goes deeper. |
+| Graph | `/graph` | The whole memory you can see as a 3D picture. Search names, filter by source or kind, then type a question and watch activation spread from the seed entities along the graph to the passages it picks. Admins can view it as any tier below them. |
+| Users | `/users` | The access ladder: roles top to bottom with what each tier sees, the users, and the role editor. See [Users and roles](#users-and-roles). |
+| Account | `/account` | Who you are, what your role may do, your API/MCP token, change password. |
 | Evals | `/evals` | Question sets (yours or generated) and the history of every run: accuracy, exact match, F1, recall. |
 | Set | `/evals/sets/{id}` | The questions of one set (add, delete), run it, see past runs. |
 | Run | `/evals/runs/{id}` | One run: summary cards and a per-question table (answer, verdict, metrics, latency). Every row links to its analysis. |
@@ -60,7 +64,50 @@ set `HIPPO_BIND=0.0.0.0` and `HIPPO_ALLOWED_HOSTS` in `.env`.
 | Settings | `/settings` | Ollama and Neo4j status, model downloads, the retrieval knobs with one-line explanations. |
 
 There is also a JSON API under `/api` (docs at `/api/docs`) and a CLI:
-`hippo serve | mcp | pull-models | index <path-or-git-url> | ask "<question>" | sources | settings`.
+`hippo serve | mcp | pull-models | index <path-or-git-url> | ask "<question>" | sources | settings | users | user add|token|role|remove`.
+
+## Users and roles
+
+hippo starts **open**: until the first user exists, anyone who reaches the
+port sees everything, exactly as before. Create a user (Users page, or
+`./hippo user add alice`) and the door closes: every page, `/api` call and MCP
+call then needs a sign-in (username and password in the browser, or
+`Authorization: Bearer <token>` for scripts and MCP clients; each user's
+token is on their Account page). The first user is always the top role, and
+the browser that created it is signed in as them.
+
+Access is a **ladder** of roles ordered by rank. The five seeded roles:
+
+| Role | Rank | Sees | May |
+| --- | --- | --- | --- |
+| Arch admin | 40 | everything | everything, including roles and other admins |
+| Regional admin | 30 | its tier and below | manage users below it, add and manage sources, tune the graph (settings, changesets), run evals |
+| Local admin | 20 | its tier and below | manage users below it, add and manage sources, run evals |
+| Local assistant | 10 | its tier and below | add sources |
+| Individual | 0 | what is open to everyone, plus their own | add sources |
+
+Roles are editable on the Users page: rename them, move them up or down the
+ladder, change what they may do, add new tiers between existing ones (ranks
+are spaced by ten for that), delete unused ones.
+
+**What "sees" means.** Every source names the lowest role that may see it
+("Local admin and above", or "Everyone"). A user sees a source when their
+rank is at least the source's, or when they added it. Passages follow their
+source; an entity or fact is visible when at least one visible passage
+mentions or states it. That rule is applied in two places, and both must
+agree:
+
+* in Cypher, on every store read that returns sources, passages, entities or
+  facts (a hidden node can never come back from the database), and
+* in memory, on the graph the search runs on: before a question is asked, the
+  graph is cut down to the caller's visible nodes, so Personalized PageRank
+  cannot spread activation *through* a hidden passage, let alone rank it.
+
+When you add a source you pick who may see it (your own tier by default; you
+cannot restrict a source to a tier above your own). Sources from before there
+were users are open to everyone until you change them in the Library. The
+Users page shows, for every tier, how many sources and passages it can see,
+and the Graph page can be viewed "as" any tier below yours to check.
 
 ## How it works, in plain words
 
@@ -140,12 +187,16 @@ Every step is recorded in a trace, which is what the Analyze page shows.
 
 ## Use it from Claude / Cursor (MCP)
 
-hippo serves MCP at `http://localhost:8000/mcp` with four tools:
-`hippo_search`, `hippo_ask`, `hippo_remember`, `hippo_sources`.
+hippo serves MCP at `http://localhost:8000/mcp` with five tools:
+`hippo_search`, `hippo_ask`, `hippo_remember`, `hippo_sources`, `hippo_whoami`.
 
 ```bash
 claude mcp add --transport http hippo http://localhost:8000/mcp
 ```
+
+Once users exist, add your token: `claude mcp add --transport http hippo
+http://localhost:8000/mcp --header "Authorization: Bearer <token>"`. Every
+tool then works on the part of the memory you may see.
 
 Claude Desktop and Cursor setups, the stdio alternative (`hippo mcp`) and
 example calls are in [docs/MCP.md](docs/MCP.md).
@@ -171,10 +222,11 @@ reads a `.env` file automatically). Defaults live in `src/hippo/config.py`.
 | `HIPPO_OPENIE_WORKERS` | `2` | Parallel LLM calls while extracting facts. |
 | `HIPPO_CHUNK_SIZE` | `1500` | Passage size in characters. |
 | `HIPPO_CHUNK_OVERLAP` | `150` | Overlap between neighbouring passages. |
-| `HIPPO_HOST` | `127.0.0.1` | Address `hippo serve` listens on (this machine only; hippo has no login). docker-compose sets `0.0.0.0` inside the container and publishes the port on `HIPPO_BIND`. |
+| `HIPPO_HOST` | `127.0.0.1` | Address `hippo serve` listens on (this machine only; hippo is open until users exist). docker-compose sets `0.0.0.0` inside the container and publishes the port on `HIPPO_BIND`. |
 | `HIPPO_PORT` | `8000` | Web server port. |
 | `HIPPO_BIND` | `127.0.0.1` | (compose only) The address port 8000 is published on. `0.0.0.0` opens it to the network; do that only behind an authenticating proxy. |
-| `HIPPO_ALLOWED_HOSTS` | *(empty)* | Extra host names or IPs the UI and `/mcp` answer to, comma-separated (`localhost`, `127.0.0.1` and `[::1]` always work). hippo has no login, so other names are refused to stop websites you visit from reaching your memory; add your LAN name or IP here if you open hippo from another machine, or `*` to switch the check off. |
+| `HIPPO_ALLOWED_HOSTS` | *(empty)* | Extra host names or IPs the UI and `/mcp` answer to, comma-separated (`localhost`, `127.0.0.1` and `[::1]` always work). Other names are refused to stop websites you visit from reaching your memory; add your LAN name or IP here if you open hippo from another machine, or `*` to switch the check off. |
+| `HIPPO_TOKEN` | *(empty)* | (`hippo mcp` only) The user token the stdio MCP server acts as, once users exist. |
 
 Retrieval knobs (`linking_top_k`, `passage_node_weight`, `damping`,
 `node_specificity`, `synonymy_threshold`, `retrieval_top_k`, `qa_top_k`) are

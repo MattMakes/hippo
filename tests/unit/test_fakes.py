@@ -245,6 +245,8 @@ def test_fake_store_starts_empty() -> None:
         "question_sets": 0,
         "eval_runs": 0,
         "changesets": 0,
+        "users": 0,
+        "roles": 0,
     }
     assert store.graph_version() == 0
     assert store.ping()

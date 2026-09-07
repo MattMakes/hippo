@@ -48,6 +48,15 @@ def index_sample(ctx: AppContext, sample_text: str) -> str:
         (["ask", "Who designed the Orion arm?"], "ask", {"question": "Who designed the Orion arm?"}),
         (["sources"], "sources", {}),
         (["settings"], "settings", {}),
+        (["users"], "users", {}),
+        (
+            ["user", "add", "ann", "--role", "individual", "--password", "pw"],
+            "user",
+            {"user_command": "add", "username": "ann", "role": "individual"},
+        ),
+        (["user", "token", "ann", "--new"], "user", {"user_command": "token", "new": True}),
+        (["user", "role", "ann", "local-admin"], "user", {"user_command": "role", "role_id": "local-admin"}),
+        (["user", "remove", "ann"], "user", {"user_command": "remove"}),
     ],
 )
 def test_parses_every_subcommand(argv, command, extra):
@@ -141,3 +150,29 @@ def test_pull_models_reports_progress(cli_ctx: AppContext, fake_ollama, capsys):
 def test_pull_models_when_everything_is_installed(cli_ctx: AppContext, capsys):
     assert cli.main(["pull-models"]) == 0
     assert "All models are installed" in capsys.readouterr().out
+
+
+def test_user_commands_manage_the_ladder(cli_ctx: AppContext, capsys):
+    assert cli.main(["users"]) == 0
+    out = capsys.readouterr().out
+    assert "arch-admin" in out and "No users yet" in out
+    assert cli.main(["user", "add", "Ann", "--password", "secret1", "--name", "Ann Lee"]) == 0
+    out = capsys.readouterr().out
+    assert "Created ann as Arch admin" in out and "hippo_" in out and "no longer open" in out
+    assert cli.main(["user", "add", "bob", "--password", "secret1", "--role", "individual"]) == 0
+    capsys.readouterr()
+    assert cli.main(["user", "add", "bob", "--password", "secret1"]) == 2, "duplicate username"
+    assert cli.main(["users"]) == 0
+    out = capsys.readouterr().out
+    assert "ann" in out and "bob" in out and "Individual" in out
+    assert cli.main(["user", "token", "bob"]) == 0
+    token = capsys.readouterr().out.strip()
+    assert cli_ctx.store.get_user_by_token(token)["username"] == "bob"
+    assert cli.main(["user", "token", "bob", "--new"]) == 0
+    assert capsys.readouterr().out.strip() != token
+    assert cli.main(["user", "role", "bob", "local-admin"]) == 0
+    assert "Local admin" in capsys.readouterr().out
+    assert cli.main(["user", "role", "bob", "ceo"]) == 2
+    assert cli.main(["user", "remove", "bob"]) == 0
+    assert cli_ctx.store.get_user_by_username("bob") is None
+    assert cli.main(["user", "token", "nobody"]) == 2

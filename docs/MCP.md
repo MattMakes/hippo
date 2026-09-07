@@ -16,7 +16,21 @@ Two ways to connect:
   Neo4j password is the `NEO4J_PASSWORD` line of `.env` (written by `./hippo up`).
 
 Both ways only work from the machine that runs the containers; port 8000 is
-also bound to `127.0.0.1`, and hippo has no login of its own.
+also bound to `127.0.0.1`.
+
+## Who is calling
+
+Until the first user is created hippo is open and every tool sees the whole
+memory. Once users exist (Users page, or `./hippo user add`), every MCP call
+must identify its user, and each tool then works on the part of the memory
+that user may see (see "Users and roles" in the README):
+
+* **HTTP:** send `Authorization: Bearer <token>`. Your token is on your
+  Account page (`/account`).
+* **stdio (`hippo mcp`):** set the `HIPPO_TOKEN` environment variable.
+
+Without a valid token the HTTP endpoint answers 401 and the tools return the
+error "sign in required". `hippo_whoami` tells you who hippo thinks you are.
 
 hippo only answers requests whose `Host` header is `localhost`, `127.0.0.1` or `[::1]`.
 To reach `/mcp` by another name or IP (a LAN address, a Tailscale name), add it to
@@ -27,6 +41,8 @@ no login, so do that only on a network you trust.
 
 ```bash
 claude mcp add --transport http hippo http://localhost:8000/mcp
+# once users exist:
+claude mcp add --transport http hippo http://localhost:8000/mcp --header "Authorization: Bearer <your token>"
 ```
 
 Check with `claude mcp list`. Then, in a session: *use hippo to remember that
@@ -49,7 +65,8 @@ The stdio form, with hippo installed on your machine:
         "NEO4J_URI": "bolt://localhost:7687",
         "NEO4J_USER": "neo4j",
         "NEO4J_PASSWORD": "<the NEO4J_PASSWORD from your .env>",
-        "OLLAMA_URL": "http://localhost:11434"
+        "OLLAMA_URL": "http://localhost:11434",
+        "HIPPO_TOKEN": "<your token from /account, once users exist>"
       }
     }
   }
@@ -84,13 +101,14 @@ Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for all proje
 {
   "mcpServers": {
     "hippo": {
-      "url": "http://localhost:8000/mcp"
+      "url": "http://localhost:8000/mcp",
+      "headers": {"Authorization": "Bearer <your token, once users exist>"}
     }
   }
 }
 ```
 
-Cursor lists the four tools under Settings, MCP.
+Cursor lists the five tools under Settings, MCP.
 
 ## stdio alternative: `hippo mcp`
 
@@ -105,7 +123,7 @@ NEO4J_URI=bolt://localhost:7687 NEO4J_PASSWORD="$(sed -n 's/^NEO4J_PASSWORD=//p'
 Nothing may be printed to stdout in this mode (it is the protocol channel);
 hippo sends its logs to stderr.
 
-## The four tools
+## The five tools
 
 ### `hippo_search(question, top_k=5)`
 
@@ -177,3 +195,25 @@ List what is in the memory and whether it is indexed yet.
 
 Empty questions and empty texts come back as tool errors with a plain
 message; the client shows it verbatim.
+
+### `hippo_whoami()`
+
+Who hippo thinks you are: your user and role, your rank on the ladder, what
+your role may do, how many of the sources you can see, and the role ids you
+may pass as `visibility` to `hippo_remember`.
+
+```json
+{
+  "open_mode": false,
+  "user": {"id": "3f2a...", "username": "ivy", "display_name": ""},
+  "role": {"id": "individual", "name": "Individual", "rank": 0},
+  "can": ["add_sources"],
+  "sources_visible": 3, "sources_total": 9,
+  "ladder": [{"id": "arch-admin", "name": "Arch admin", "rank": 40}, "..."],
+  "visibility_you_may_use": ["everyone", "individual"]
+}
+```
+
+`hippo_remember(name, text, visibility=None)` records you as the owner and,
+by default, makes the text visible to your own tier and above; pass
+`"everyone"` or a role id at or below yours to choose otherwise.

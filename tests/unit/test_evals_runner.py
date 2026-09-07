@@ -118,10 +118,10 @@ def test_one_broken_question_does_not_kill_the_run(ctx, set_id, monkeypatch):
     questions = ctx.store.list_questions(set_id)
     poison = questions[0]["text"]
 
-    def flaky_search(ctx_, text, settings):
+    def flaky_search(ctx_, text, settings, access=None):
         if text == poison:
             raise RuntimeError("boom")
-        return real_search(ctx_, text, settings)
+        return real_search(ctx_, text, settings, access)
 
     monkeypatch.setattr(runner, "search", flaky_search)
     run_id = start_run(ctx, set_id)

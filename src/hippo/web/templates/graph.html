@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Graph{% endblock %}
+{% block head %}<script src="/static/vendor/3d-force-graph.min.js" defer></script><script src="/static/graph.js" defer></script>{% endblock %}
+{% block content %}
+<div class="page-head row spread">
+  <div>
+    <h1>The graph{% if preview_role %} <span class="muted">as {{ preview_role.name }}</span>{% endif %}</h1>
+    <p class="muted">Every entity and passage {% if preview_role %}a <b>{{ preview_role.name }}</b>{% else %}you{% endif %} can see, in 3D. Search names, filter by source, then type a question to watch the search spread from its seed entities to the passages it picks. Drag to orbit, scroll to zoom, click a node for details.</p>
+  </div>
+  {% if previewable %}
+  <form method="get" action="/graph" class="row" title="See the graph as another tier would (only tiers at or below yours)">
+    <label class="small muted">View as</label>
+    <select name="as_role" onchange="this.form.submit()" style="max-width:220px">
+      <option value="">{{ 'myself (' ~ me.role_name ~ ')' if me and not me.is_open else 'everything (open mode)' }}</option>
+      {% for r in previewable %}<option value="{{ r.id }}" {{ 'selected' if preview_role and r.id == preview_role.id }}>{{ r.name }} (rank {{ r.rank }})</option>{% endfor %}
+    </select>
+    {% if initial_query %}<input type="hidden" name="q" value="{{ initial_query }}">{% endif %}
+  </form>
+  {% endif %}
+</div>
+
+<section class="card graph-toolbar">
+  <div class="row">
+    <input id="g-question" type="text" placeholder="Ask the graph a question, e.g. Who designed the Orion arm?" style="flex: 1; min-width: 280px">
+    <button class="btn primary" id="g-light" type="button">Light up</button>
+    <button class="btn" id="g-replay" type="button" disabled title="Play the spread again">Replay</button>
+    <button class="btn" id="g-clear" type="button" disabled>Clear</button>
+    <details class="knobs-inline">
+      <summary class="small">search knobs</summary>
+      <div class="row small">
+        <label>damping <input id="g-damping" type="number" min="0.05" max="0.95" step="0.05" value="0.5" style="width: 80px"></label>
+        <label>linking_top_k <input id="g-topk" type="number" min="0" max="50" step="1" value="5" style="width: 70px"></label>
+        <label>passage_node_weight <input id="g-pnw" type="number" min="0" max="5" step="0.01" value="0.05" style="width: 80px"></label>
+        <label>passages shown <input id="g-top-passages" type="number" min="1" max="50" step="1" value="10" style="width: 70px"></label>
+      </div>
+    </details>
+  </div>
+  <div class="row" style="margin-top: .5rem">
+    <input id="g-search" type="text" placeholder="filter by name (entities and passage titles)" value="{{ initial_query }}" style="max-width: 280px">
+    <select id="g-source" style="max-width: 240px">
+      <option value="">every source</option>
+      {% for s in sources %}<option value="{{ s.id }}" {{ 'selected' if request.query_params.get('source') == s.id }}>{{ s.name | short(40) }} ({{ s.passages }})</option>{% endfor %}
+    </select>
+    <select id="g-kind" style="max-width: 150px"><option value="">entities + passages</option><option value="entity">entities only</option><option value="passage">passages only</option></select>
+    <label class="small">min edge weight <input id="g-minw" type="number" min="0" step="0.1" value="0" style="width: 70px"></label>
+    <label class="small">max nodes <input id="g-limit" type="number" min="50" max="8000" step="50" value="{{ default_limit }}" style="width: 90px"></label>
+    <button class="btn" id="g-reload" type="button">Apply</button>
+    <label class="small">colour by
+      <select id="g-color" style="max-width: 130px"><option value="tier">tier</option><option value="kind">kind</option><option value="source">source</option></select>
+    </label>
+    <label class="small"><input id="g-dim" type="checkbox" checked> dim what did not light up</label>
+  </div>
+</section>
+
+<div class="graph3d-wrap">
+  <div class="graph3d-stage">
+    <div id="graph3d" class="graph3d"></div>
+    <div id="g-legend" class="graph3d-legend"></div>
+    <div id="g-status" class="graph3d-status muted small">loading…</div>
+  </div>
+  <aside id="g-side" class="graph3d-side">
+    <div class="muted small">Click a node to see what it is, or ask a question above to see which paths light up.</div>
+  </aside>
+</div>
+
+<script id="graph-data" type="application/json">{{ {
+  "asRole": preview_role.id if preview_role else "",
+  "initialQuery": initial_query
+} | tojson }}</script>
+{% endblock %}

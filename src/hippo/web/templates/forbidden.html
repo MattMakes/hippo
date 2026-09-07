@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Not allowed{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Not allowed</h1></div>
+<div class="callout warn">{{ message }}</div>
+<p class="muted">You are signed in as <b>{{ me.name if me else 'nobody' }}</b>{% if me %} with the role <b>{{ me.role_name }}</b>{% endif %}. The <a href="/account">Account page</a> lists what your role may do.</p>
+<a class="btn" href="/">Back to the Library</a>
+{% endblock %}

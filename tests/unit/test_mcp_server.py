@@ -14,7 +14,7 @@ from hippo import mcp_server
 from hippo.context import AppContext
 from hippo.hipporag.indexer import Chunk, index_source
 
-TOOL_NAMES = {"hippo_search", "hippo_ask", "hippo_remember", "hippo_sources"}
+TOOL_NAMES = {"hippo_search", "hippo_ask", "hippo_remember", "hippo_sources", "hippo_whoami"}
 MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
 

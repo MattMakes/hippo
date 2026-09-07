@@ -4,6 +4,9 @@ Evals: question sets, runs, and the history of results.
 Pages render the tables; forms post here and redirect; the /api/evals/*
 endpoints return JSON. The work itself (generating questions, running a set)
 lives in hippo.evals and runs in background jobs.
+
+Every route here needs the `run_evals` capability (hippo/access.py): runs read
+and answer from the whole memory, so this section is for roles trusted with it.
 """
 
 from __future__ import annotations
@@ -11,15 +14,16 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ...evals import question_maker, runner
 from ...store.base import validate_settings
+from ..auth import principal_of, require_capability
 from ..render import STOP_POLLING, ctx_of, render
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_capability("run_evals"))])
 
 SUMMARY_CARDS = [
     ("accuracy", "Accuracy", "mean judge score: correct 1, partial ½, incorrect 0"),
@@ -158,7 +162,7 @@ def run_form(request: Request, set_id: str, name: str = Form("")):
     ctx = ctx_of(request)
     if not ctx.store.list_questions(set_id):
         return RedirectResponse(f"/evals/sets/{set_id}?error=This+set+has+no+questions+yet", status_code=303)
-    run_id = runner.start_run(ctx, set_id, name.strip() or None)
+    run_id = runner.start_run(ctx, set_id, name.strip() or None, access=principal_of(request).access)
     return RedirectResponse(f"/evals/runs/{run_id}", status_code=303)
 
 
@@ -197,7 +201,7 @@ def parse_question_lines(text: str) -> list[dict[str, Any]]:
 
 # ------------------------------------------------------------------ JSON
 
-api = APIRouter(prefix="/api")
+api = APIRouter(prefix="/api", dependencies=[Depends(require_capability("run_evals"))])
 
 
 class QuestionIn(BaseModel):
@@ -273,14 +277,20 @@ def delete_question(request: Request, question_id: str):
 @api.post("/sources/{source_id}/generate-questions")
 def generate_questions(request: Request, source_id: str, body: GenerateBody | None = None):
     ctx = ctx_of(request)
-    source = ctx.store.get_source(source_id)
+    principal = principal_of(request)
+    source = ctx.store.get_source(source_id, principal.access)  # a hidden source looks like a missing one
     if source is None:
         raise HTTPException(404, "no such source")
     if source["status"] != "ready":
         return JSONResponse({"error": "wait until this source has finished indexing"}, status_code=409)
     body = body or GenerateBody()
     set_id = question_maker.start_generation_job(
-        ctx, source_id, max_single=body.max_single, max_multihop=body.max_multihop, name=body.name
+        ctx,
+        source_id,
+        max_single=body.max_single,
+        max_multihop=body.max_multihop,
+        name=body.name,
+        access=principal.access,
     )
     return {"set_id": set_id}
 
@@ -290,7 +300,13 @@ def start_run(request: Request, set_id: str, body: RunBody | None = None):
     ctx = ctx_of(request)
     body = body or RunBody()
     try:
-        run_id = runner.start_run(ctx, set_id, body.name, validate_settings(body.settings or {}))
+        run_id = runner.start_run(
+            ctx,
+            set_id,
+            body.name,
+            validate_settings(body.settings or {}),
+            access=principal_of(request).access,
+        )
     except ValueError as exc:
         raise HTTPException(404 if "unknown question set" in str(exc) else 400, str(exc)) from exc
     return {"run_id": run_id}

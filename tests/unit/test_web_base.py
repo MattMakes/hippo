@@ -57,7 +57,7 @@ def test_asking_keeps_the_trace_so_analyze_does_not_ask_the_model_again(client, 
 
 
 def test_unexpected_error_while_asking_is_shown_not_swallowed(client, monkeypatch):
-    def broken(ctx, question):
+    def broken(ctx, question, **kwargs):
         raise RuntimeError("Neo4j went away")
 
     monkeypatch.setattr(pages.ask_service, "ask", broken)

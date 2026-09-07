@@ -8,6 +8,10 @@ stores the trace under a random key and the link carries that key.
 
 Only the last ADHOC_LIMIT traces are kept, in memory, so a key can expire
 (or vanish on restart); the Analyze page then offers to run it again.
+
+Each entry remembers who asked (`owner`, a user id or None in open mode) and
+`recall_adhoc` only answers that same person: a key is a random string, but
+one user must not be able to open another user's analysis by pasting it.
 """
 
 from __future__ import annotations
@@ -25,16 +29,20 @@ _ADHOC: OrderedDict[str, dict[str, Any]] = OrderedDict()  # trace_key -> {"trace
 _ADHOC_LOCK = threading.Lock()
 
 
-def remember_adhoc(trace: Trace, answer: dict[str, Any] | None) -> str:
-    """Keep a trace (and the answer given) and return the key to fetch it with."""
+def remember_adhoc(trace: Trace, answer: dict[str, Any] | None, owner: str | None = None) -> str:
+    """Keep a trace (and the answer given) for `owner` and return the key to fetch it with."""
     key = new_id()
     with _ADHOC_LOCK:
-        _ADHOC[key] = {"trace": trace.to_dict(), "answer": answer}
+        _ADHOC[key] = {"trace": trace.to_dict(), "answer": answer, "owner": owner}
         while len(_ADHOC) > ADHOC_LIMIT:
             _ADHOC.popitem(last=False)
     return key
 
 
-def recall_adhoc(key: str) -> dict[str, Any] | None:
+def recall_adhoc(key: str, owner: str | None = None) -> dict[str, Any] | None:
+    """The entry under `key`, if it belongs to `owner` (None matches only open-mode entries)."""
     with _ADHOC_LOCK:
-        return _ADHOC.get(key)
+        entry = _ADHOC.get(key)
+    if entry is None or entry.get("owner") != owner:
+        return None
+    return entry

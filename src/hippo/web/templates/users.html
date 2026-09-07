@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Users & roles{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Users &amp; roles</h1>
+  <p class="muted">Access is a ladder. Every source names the lowest role that may see it; a user sees every source at or below their role's rank, plus their own. Search, the graph and MCP only ever touch what the caller can see.</p>
+</div>
+{% if saved %}<div class="callout ok">{{ saved }}</div>{% endif %}
+{% if error %}<div class="callout bad">{{ error }}</div>{% endif %}
+{% if open_mode %}
+<div class="callout warn">
+  <b>hippo is open.</b> No users exist yet, so anyone who reaches this port acts as the top role and sees everything, as before.
+  Creating the first user closes the door: they become <b>{{ ladder[0].name }}</b> and this browser is signed in as them.
+  {% if total_sources %}The {{ total_sources }} existing source{{ 's' if total_sources != 1 }} stay{{ '' if total_sources != 1 else 's' }} visible to everyone until you change them in the Library.{% endif %}
+</div>
+{% elif open_sources %}
+<div class="callout"><b>{{ open_sources }} of {{ total_sources }} sources</b> are open to everyone. Change a source's tier in the Library, or on its own page.</div>
+{% endif %}
+
+<section class="card">
+  <div class="card-head"><h2>The ladder</h2><span class="muted small">top first · a tier sees itself and everything below</span></div>
+  <div class="ladder">
+    {% for r in ladder %}
+    <div class="rung {{ 'mine' if r.is_mine }}" style="--depth: {{ loop.index0 }}; --steps: {{ ladder | length }}">
+      <div class="rung-head">
+        <span class="tier-dot" style="--lvl: {{ loop.index0 }}; --steps: {{ ladder | length }}"></span>
+        <b>{{ r.name }}</b>
+        <span class="badge">rank {{ r.rank }}</span>
+        {% if r.is_mine %}<span class="pill info">you</span>{% endif %}
+        {% if r.builtin %}<span class="muted small">built in</span>{% endif %}
+      </div>
+      <p class="muted small">{{ r.description }}</p>
+      <div class="rung-stats">
+        <span><b>{{ r.users }}</b> user{{ 's' if r.users != 1 }}</span>
+        <span><b>{{ r.sources }}</b> source{{ 's' if r.sources != 1 }} at this tier</span>
+        <span>sees <b>{{ r.sees_sources }}</b> of {{ total_sources }} sources · <b>{{ r.sees_passages }}</b> passages</span>
+        <a class="small" href="/graph?as_role={{ r.id }}">see the graph as this tier →</a>
+      </div>
+      <p class="small"><span class="muted">may:</span> {% for cap in r.capabilities %}<span class="badge">{{ cap | replace('_', ' ') }}</span> {% else %}<span class="muted">only ask questions</span>{% endfor %}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{% if can_users or open_mode %}
+<section class="card">
+  <div class="card-head"><h2>Users</h2><span class="muted small">{{ users | length }} total</span></div>
+  {% if users %}
+  <div class="scroll-x"><table class="table compact">
+    <thead><tr><th>User</th><th>Role</th><th class="num">Own sources</th><th>Status</th><th>Change</th></tr></thead>
+    <tbody>
+    {% for u in users %}
+    <tr class="{{ 'muted' if u.disabled }}">
+      <td><b>{{ u.username }}</b>{% if u.display_name %} <span class="muted">· {{ u.display_name }}</span>{% endif %}{% if u.is_me %} <span class="pill info">you</span>{% endif %}
+        {% if u.token %}<div class="token-box small"><code>{{ u.token }}</code> <span class="muted">their new token; shown once</span></div>{% endif %}</td>
+      <td>{{ u.role_name }} <span class="muted small">({{ u.rank }})</span></td>
+      <td class="num">{{ u.sources }}</td>
+      <td>{% if u.disabled %}<span class="pill bad">disabled</span>{% else %}<span class="pill ok">active</span>{% endif %}</td>
+      <td>
+        {% if u.manageable %}
+        <form method="post" action="/users/{{ u.id }}" class="row compact-form">
+          <select name="role_id" title="Role">{% for r in assignable %}<option value="{{ r.id }}" {{ 'selected' if r.id == u.role_id }}>{{ r.name }}</option>{% endfor %}</select>
+          <input type="password" name="password" placeholder="new password" autocomplete="new-password" style="max-width:150px">
+          <label class="small"><input type="checkbox" name="disabled" {{ 'checked' if u.disabled }}> disabled</label>
+          <button class="btn small" name="action" value="save">Save</button>
+          <button class="btn small" name="action" value="token" title="Issue a new API/MCP token">New token</button>
+          <button class="btn small danger" name="action" value="delete" onclick="return confirm('Remove {{ u.username }}? Their sources stay, without an owner.')">Remove</button>
+        </form>
+        {% elif u.is_me %}<a class="small" href="/account">your account</a>
+        {% else %}<span class="muted small">not below your rank</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="empty">No users yet.</div>
+  {% endif %}
+
+  <h3 style="margin-top:1rem">{{ 'Create the first user (closes open mode)' if open_mode else 'Add a user' }}</h3>
+  <form method="post" action="/users" class="row compact-form">
+    <input type="text" name="username" placeholder="username" autocomplete="off" required style="max-width:180px">
+    <input type="text" name="display_name" placeholder="name (optional)" style="max-width:180px">
+    <input type="password" name="password" placeholder="password" autocomplete="new-password" minlength="4" required style="max-width:180px">
+    {% if open_mode %}
+    <span class="badge">{{ ladder[0].name }}</span><input type="hidden" name="role_id" value="{{ ladder[0].id }}">
+    {% else %}
+    <select name="role_id" required>{% for r in assignable %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}</select>
+    {% endif %}
+    <button class="btn primary" type="submit">{{ 'Create and sign me in' if open_mode else 'Add user' }}</button>
+  </form>
+  <p class="muted small">Each new user gets a token for scripts and MCP; it is shown here once and on their Account page.</p>
+</section>
+{% endif %}
+
+{% if can_roles %}
+<section class="card">
+  <div class="card-head"><h2>Roles</h2><span class="muted small">rank decides sight; the checkboxes decide what a role may do</span></div>
+  <div class="scroll-x"><table class="table compact roles-table">
+    <thead><tr><th>Role</th><th>Rank</th><th>Description</th>{% for cap in capabilities %}<th class="cap" title="{{ capabilities[cap] }}">{{ cap | replace('_', ' ') }}</th>{% endfor %}<th></th></tr></thead>
+    <tbody>
+    {% for r in ladder %}
+    <tr>
+      {% if r.editable %}
+      <form method="post" action="/roles/{{ r.id }}" id="role-{{ r.id }}"></form>
+      <td><input form="role-{{ r.id }}" type="text" name="name" value="{{ r.name }}" required style="min-width:140px"></td>
+      <td><input form="role-{{ r.id }}" type="number" name="rank" value="{{ r.rank }}" min="0" max="1000" style="width:80px"></td>
+      <td><input form="role-{{ r.id }}" type="text" name="description" value="{{ r.description }}" style="min-width:220px"></td>
+      {% for cap in capabilities %}<td class="cap"><input form="role-{{ r.id }}" type="checkbox" name="cap_{{ cap }}" {{ 'checked' if cap in r.capabilities }}></td>{% endfor %}
+      <td class="row">
+        <button form="role-{{ r.id }}" class="btn small" name="action" value="save">Save</button>
+        <button form="role-{{ r.id }}" class="btn small danger" name="action" value="delete" {% if r.users or r.sources or r.is_mine %}disabled title="{{ 'your own role' if r.is_mine else 'in use: move its users and sources first' }}"{% endif %} onclick="return confirm('Delete the role {{ r.name }}?')">Delete</button>
+      </td>
+      {% else %}
+      <td><b>{{ r.name }}</b></td><td>{{ r.rank }}</td><td class="muted">{{ r.description }}</td>
+      {% for cap in capabilities %}<td class="cap">{{ '✓' if cap in r.capabilities else '' }}</td>{% endfor %}
+      <td class="muted small">above your rank</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted small">Moving a role's rank moves every source at that tier with it. Ranks are spaced by ten so a new tier fits between two.</p>
+
+  <h3 style="margin-top:1rem">Add a role</h3>
+  <form method="post" action="/roles" class="row compact-form">
+    <input type="text" name="name" placeholder="name" required style="max-width:180px">
+    <input type="number" name="rank" placeholder="rank" min="0" max="1000" value="15" style="width:90px">
+    <input type="text" name="description" placeholder="what this tier is for" style="max-width:260px">
+    {% for cap in capabilities %}<label class="small" title="{{ capabilities[cap] }}"><input type="checkbox" name="cap_{{ cap }}"> {{ cap | replace('_', ' ') }}</label>{% endfor %}
+    <button class="btn primary" type="submit">Add role</button>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

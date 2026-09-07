@@ -39,6 +39,7 @@ class PassageExplanation:
     linked_seeds: list[dict[str, Any]] = field(default_factory=list)
     # names along the path, seed first, passage last (empty when directly linked)
     path: list[str] = field(default_factory=list)
+    path_ids: list[str] = field(default_factory=list)  # the same path as node ids (for highlighting)
     why: str = ""
 
 
@@ -117,7 +118,8 @@ def _explain_passage(
     if out.linked_seeds:
         out.why = _why_direct(out.linked_seeds)
     else:
-        out.path = _path_from_strongest_seed(index, graph, seeds, seed_vertex, vertex)
+        out.path_ids = _path_from_strongest_seed(index, graph, seeds, seed_vertex, vertex)
+        out.path = [index.name_of(index.idx_of[node_id]) for node_id in out.path_ids]
         out.why = _why_path(out.path, ranked)
     if gone:
         out.why += _why_gone(gone)
@@ -157,14 +159,14 @@ def _path_from_strongest_seed(
     vertex: int,
 ) -> list[str]:
     """
-    Names along the shortest path (by hop count, which is what people understand) from the
+    Node ids along the shortest path (by hop count, which is what people understand) from the
     strongest seed that reaches this passage within MAX_PATH_HOPS. Empty if none does.
     """
     for seed in seeds:  # already sorted strongest first; every one of them exists in `graph`
         paths = graph.get_shortest_paths(seed_vertex[seed.entity_id], to=vertex, weights=None, output="vpath")
         path = paths[0] if paths else []
         if path and len(path) - 1 <= MAX_PATH_HOPS:
-            return [index.name_of(v) for v in path]
+            return [index.node_ids[v] for v in path]
     return []
 
 

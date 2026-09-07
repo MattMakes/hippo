@@ -63,7 +63,7 @@ class Config:
     )
 
     # Web server.
-    host: str = "127.0.0.1"  # this machine only; hippo has no login. docker-compose sets 0.0.0.0 inside the container.
+    host: str = "127.0.0.1"  # this machine only; hippo is open until users exist. docker-compose sets 0.0.0.0 inside the container.
     port: int = 8000
     # Host names the web app answers to. Browsers send the address they used in the
     # Host header; anything else is refused so a page on attacker.example cannot point its

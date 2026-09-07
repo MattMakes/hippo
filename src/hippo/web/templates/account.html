@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Account{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Account</h1>
+  <p class="muted">Who you are to hippo, what your role may see and do, and the token your tools use.</p>
+</div>
+{% if saved == 'password' %}<div class="callout ok">Password changed.</div>{% endif %}
+{% if saved == 'token' %}<div class="callout ok">A new token was issued. Update any client that used the old one.</div>{% endif %}
+{% if error %}<div class="callout bad">{{ error }}</div>{% endif %}
+
+<div class="grid two">
+  <section class="card">
+    <h2>You</h2>
+    {% if user %}
+    <dl class="defs">
+      <div><dt>Username</dt><dd><code>{{ user.username }}</code></dd></div>
+      <div><dt>Name</dt><dd>{{ user.display_name or '–' }}</dd></div>
+      <div><dt>Role</dt><dd><b>{{ role.name }}</b> <span class="muted">· rank {{ role.rank }}</span></dd></div>
+      <div><dt>Sources</dt><dd>{{ user.sources }} of your own</dd></div>
+    </dl>
+    {% else %}
+    <p class="muted">hippo is in <b>open mode</b>: no users exist, so you act as <b>{{ role.name }}</b> and see everything. <a href="/users">Create the first user</a> to change that.</p>
+    {% endif %}
+    <h3>What this role may do</h3>
+    <ul class="caps">
+      {% for cap, what in capabilities.items() %}
+      <li class="{{ 'yes' if cap in role.capabilities else 'no' }}"><b>{{ cap | replace('_', ' ') }}</b> <span class="muted small">{{ what }}</span></li>
+      {% endfor %}
+    </ul>
+    <p class="muted small">Sight is decided by rank, not by these: you see every source whose tier is at or below <b>{{ role.name }}</b>, plus your own.</p>
+  </section>
+
+  <section class="card">
+    <h2>Your token</h2>
+    {% if token %}
+    <p class="muted small">Scripts and MCP clients (Claude Code, Claude Desktop, Cursor) identify themselves with this instead of a password. Anyone holding it acts as you, so keep it out of shared files.</p>
+    <div class="token-box"><code id="token">{{ token }}</code><button class="btn small" type="button" data-copy="#token">Copy</button></div>
+    <details>
+      <summary>How to use it</summary>
+      <p class="small">HTTP (Claude Code, Cursor, curl): add the header <code>Authorization: Bearer {{ token }}</code> to <code>{{ mcp_url }}</code> or any <code>/api</code> call.</p>
+      <p class="small">Stdio (<code>hippo mcp</code>): set the environment variable <code>HIPPO_TOKEN={{ token }}</code> for the process.</p>
+      <p class="small">See docs/MCP.md for client config snippets.</p>
+    </details>
+    <form method="post" action="/account/token" onsubmit="return confirm('Issue a new token? Every client using the old one stops working.')">
+      <button class="btn" type="submit">Issue a new token</button>
+    </form>
+    {% else %}
+    <p class="muted">Tokens belong to users; in open mode nothing needs one.</p>
+    {% endif %}
+
+    {% if user %}
+    <h2 style="margin-top:1rem">Change password</h2>
+    <form method="post" action="/account/password" class="stack">
+      <label>Current password<input type="password" name="current" autocomplete="current-password" required></label>
+      <label>New password<input type="password" name="new" autocomplete="new-password" minlength="4" required></label>
+      <label>New password again<input type="password" name="again" autocomplete="new-password" minlength="4" required></label>
+      <button class="btn primary" type="submit">Change password</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

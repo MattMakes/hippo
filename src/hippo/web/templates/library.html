@@ -7,12 +7,24 @@
 </div>
 {% if error %}<div class="callout bad">{{ error }}</div>{% endif %}
 
+{% macro visibility_picker(name='visibility') %}
+<label class="row small visibility-pick">
+  <span class="muted">Visible to</span>
+  <select name="{{ name }}" style="max-width:220px">
+    {% for r in visibility_choices %}<option value="{{ r.id }}" {{ 'selected' if r.id == default_visibility }}>{{ r.name }} and above</option>{% endfor %}
+    <option value="everyone" {{ 'selected' if not default_visibility }}>Everyone</option>
+  </select>
+</label>
+{% endmacro %}
+
+{% if can_add %}
 <div class="grid two">
   <section class="card">
     <h2>Add files</h2>
     <form method="post" action="/sources/upload" enctype="multipart/form-data" class="stack">
       <input type="file" name="files" multiple required>
       <p class="muted small">Text, Markdown, PDF, Word, EPUB, HTML, source code, or a .zip of any of those (a zipped repo works).</p>
+      {{ visibility_picker() }}
       <button class="btn primary" type="submit">Upload</button>
     </form>
   </section>
@@ -22,6 +34,7 @@
     <form method="post" action="/sources/repo" class="stack">
       <input type="url" name="url" placeholder="https://github.com/owner/repo" required>
       <p class="muted small">Cloned once (shallow). Text and code files are indexed; build folders and binaries are skipped.</p>
+      {{ visibility_picker() }}
       <button class="btn primary" type="submit">Clone & index</button>
     </form>
   </section>
@@ -31,6 +44,7 @@
     <form method="post" action="/sources/text" class="stack">
       <input type="text" name="name" placeholder="A name for this text">
       <textarea name="text" rows="4" placeholder="Paste notes, an article, meeting minutes…" required></textarea>
+      {{ visibility_picker() }}
       <button class="btn primary" type="submit">Remember this</button>
     </form>
   </section>
@@ -38,15 +52,19 @@
   <section class="card">
     <h2>Try the sample</h2>
     <p class="muted">A one-page field guide about a small robotics company, written so that its facts link across sections. Good for a first multi-hop question.</p>
-    <form method="post" action="/sources/sample"><button class="btn" type="submit">Load the sample</button></form>
+    <form method="post" action="/sources/sample" class="stack">{{ visibility_picker() }}<button class="btn" type="submit">Load the sample</button></form>
   </section>
 </div>
+{% else %}
+<div class="callout">Your role (<b>{{ principal.role_name }}</b>) can ask questions but not add sources. Ask an admin if you need to.</div>
+{% endif %}
 
 <section class="card">
   <div class="card-head">
     <h2>Sources</h2>
-    <span class="muted">{{ sources | length }} total</span>
+    <span class="muted">{{ sources | length }}{% if total_sources is not none and total_sources != sources | length %} of {{ total_sources }}{% endif %} visible to you as <b>{{ principal.role_name }}</b></span>
   </div>
+  <p class="muted small">"Visible to" is the lowest tier that can see a source; every tier above it can too. Owners always see their own. Only what you can see takes part in your searches.</p>
   <div class="scroll-x" id="sources" hx-get="/partials/sources" hx-trigger="every 3s" hx-swap="innerHTML">
     {% include "partials/source_rows.html" %}
   </div>

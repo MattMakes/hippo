@@ -8,6 +8,15 @@ The `hippo` command line.
     hippo ask "<question>"      ask the memory a question
     hippo sources               list what is in the memory
     hippo settings              show the retrieval settings and where things are
+    hippo users                 list users and roles (the access ladder)
+    hippo user add <name>       create a user (prompts for a password; --role picks the tier)
+    hippo user token <name>     print a user's API/MCP token (or --new to issue another)
+    hippo user role <name> <r>  move a user to another role
+    hippo user remove <name>    delete a user
+
+The CLI talks to Neo4j directly, so it is not gated by users: it is how you
+create the first admin from `docker exec` (see hippo/access.py). `hippo mcp`
+identifies its caller with the HIPPO_TOKEN environment variable.
 
 Every command builds its `AppContext` from environment variables (see
 config.py and .env.example), exactly like the web app does, so the CLI and the
@@ -42,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--host",
         default=None,
-        help="bind address (default: HIPPO_HOST or 127.0.0.1; hippo has no login, so open it up only behind a proxy)",
+        help="bind address (default: HIPPO_HOST or 127.0.0.1; open it up only with users created and a proxy in front)",
     )
     serve.add_argument("--port", type=int, default=None, help="port (default: HIPPO_PORT or 8000)")
 
@@ -58,6 +67,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("sources", help="list the sources in the memory")
     sub.add_parser("settings", help="show the retrieval settings")
+    sub.add_parser("users", help="list users and roles")
+
+    user = sub.add_parser("user", help="manage one user: add, token, role, remove")
+    user_sub = user.add_subparsers(dest="user_command", required=True)
+    add = user_sub.add_parser("add", help="create a user")
+    add.add_argument("username")
+    add.add_argument("--role", default=None, help="role id (default: the top role; see `hippo users`)")
+    add.add_argument("--password", default=None, help="password (prompted for when omitted)")
+    add.add_argument("--name", default="", help="display name")
+    token = user_sub.add_parser("token", help="print a user's token")
+    token.add_argument("username")
+    token.add_argument("--new", action="store_true", help="issue a new token (the old one stops working)")
+    role = user_sub.add_parser("role", help="move a user to another role")
+    role.add_argument("username")
+    role.add_argument("role_id")
+    remove = user_sub.add_parser("remove", help="delete a user (their sources stay, without an owner)")
+    remove.add_argument("username")
     return parser
 
 
@@ -73,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
         "ask": cmd_ask,
         "sources": cmd_sources,
         "settings": cmd_settings,
+        "users": cmd_users,
+        "user": cmd_user,
     }
     return handlers[args.command](args)
 
@@ -195,6 +223,91 @@ def cmd_settings(args: argparse.Namespace) -> int:
     for key, value in sorted(ctx.store.get_settings().items()):
         print(f"  {key} = {value}")
     return 0
+
+
+def cmd_users(args: argparse.Namespace) -> int:
+    ctx = AppContext.from_env()
+    ctx.store.ping()  # seeds the roles on a fresh database
+    roles = ctx.store.list_roles()
+    print("Roles, top of the ladder first (a tier sees itself and every tier below):")
+    print_table(
+        ["id", "name", "rank", "users", "sources", "may"],
+        [
+            [r["id"], r["name"], r["rank"], r["users"], r["sources"], ", ".join(r["capabilities"])]
+            for r in roles
+        ],
+    )
+    users = ctx.store.list_users()
+    if not users:
+        print(
+            "\nNo users yet: hippo is open (everyone acts as the top role). Create one: hippo user add <name>"
+        )
+        return 0
+    print()
+    print_table(
+        ["username", "name", "role", "rank", "sources", "status"],
+        [
+            [
+                u["username"],
+                u.get("display_name", ""),
+                u["role_name"],
+                u["rank"],
+                u["sources"],
+                "disabled" if u.get("disabled") else "active",
+            ]
+            for u in users
+        ],
+    )
+    return 0
+
+
+def cmd_user(args: argparse.Namespace) -> int:
+    from getpass import getpass
+
+    from .access import top_role
+
+    ctx = AppContext.from_env()
+    ctx.store.ping()
+    store = ctx.store
+    if args.user_command == "add":
+        role_id = args.role or top_role(store.list_roles())["id"]
+        password = args.password
+        if password is None:
+            password = getpass("Password: ")
+            if password != getpass("Again: "):
+                print("The two passwords differ.", file=sys.stderr)
+                return 2
+        try:
+            user_id = store.create_user(args.username, password, role_id, args.name)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        user = store.get_user(user_id) or {}
+        print(f"Created {user['username']} as {user['role_name']}. Their token (for MCP and the API):")
+        print(f"  {user['token']}")
+        if store.count_users() == 1:
+            print("That was the first user: hippo is no longer open. Sign in at /login.")
+        return 0
+    user = store.get_user_by_username(args.username)
+    if user is None:
+        print(f"error: no user '{args.username}'", file=sys.stderr)
+        return 2
+    if args.user_command == "token":
+        print(store.rotate_token(user["id"]) if args.new else user["token"])
+        return 0
+    if args.user_command == "role":
+        try:
+            updated = store.update_user(user["id"], role_id=args.role_id)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"{updated['username']} is now {updated['role_name']} (rank {updated['rank']}).")
+        return 0
+    if args.user_command == "remove":
+        store.delete_user(user["id"])
+        print(f"Removed {user['username']}. Their sources stay, without an owner.")
+        return 0
+    return 2
 
 
 # -------------------------------------------------------------- helpers

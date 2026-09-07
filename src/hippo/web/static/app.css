@@ -168,3 +168,54 @@ tr.muted td { color: var(--muted); }
 .down { color: var(--bad); font-weight: 600; }
 .ops { margin: 0; padding-left: 1.2rem; }
 @media (max-width: 860px) { .graph-wrap { grid-template-columns: 1fr; } .knob { grid-template-columns: 1fr; } }
+
+/* ----- who is signed in (header) */
+.who { display: flex; align-items: center; gap: .5rem; white-space: nowrap; }
+.who-name { color: var(--ink); }
+.who-name:hover { text-decoration: none; color: var(--accent); }
+form.inline { display: inline; margin: 0; }
+
+/* ----- sign in */
+.login-wrap { display: flex; justify-content: center; padding-top: 2rem; }
+.login-card { width: 100%; max-width: 420px; }
+.login-card label { display: block; font-size: .9rem; color: var(--muted); }
+.login-card input { margin-top: .2rem; }
+
+/* ----- account & users */
+.caps { list-style: none; padding: 0; margin: 0 0 .5rem; }
+.caps li { padding: .25rem 0; border-bottom: 1px solid var(--line); }
+.caps li.no b { color: var(--muted); text-decoration: line-through; }
+.caps li.yes b::before { content: "✓ "; color: var(--ok); }
+.token-box { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .5rem 0; }
+.token-box code { word-break: break-all; }
+.compact-form select, .compact-form input[type=text], .compact-form input[type=password], .compact-form input[type=number] { width: auto; padding: .3rem .5rem; }
+.compact-form label { display: inline-flex; gap: .3rem; align-items: center; }
+.ladder { display: flex; flex-direction: column; gap: .5rem; }
+.rung { border: 1px solid var(--line); border-radius: var(--radius); padding: .6rem .9rem; margin-left: calc(var(--depth) * 1.25rem); background: var(--surface); }
+.rung.mine { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.rung-head { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.rung-stats { display: flex; gap: 1rem; flex-wrap: wrap; font-size: .85rem; color: var(--muted); margin: .25rem 0; }
+.tier-dot { width: .9rem; height: .9rem; border-radius: 50%; display: inline-block; background: hsl(245 55% calc(30% + var(--lvl) * (55% / max(1, var(--steps) - 1)))); }
+.roles-table th.cap, .roles-table td.cap { text-align: center; font-size: .75rem; }
+.roles-table input[type=text], .roles-table input[type=number] { padding: .25rem .4rem; }
+.visibility-pick select { width: auto; padding: .3rem .5rem; }
+.access-card { border-left: 3px solid var(--accent); }
+.scope-note { margin-top: .25rem; }
+
+/* ----- graph page */
+.graph-toolbar label { display: inline-flex; gap: .3rem; align-items: center; }
+.graph-toolbar input[type=number], .graph-toolbar select { width: auto; padding: .3rem .5rem; }
+.knobs-inline summary { cursor: pointer; color: var(--accent); }
+.graph3d-wrap { display: grid; grid-template-columns: 1fr 340px; gap: 1rem; }
+.graph3d-stage { position: relative; min-width: 0; }
+.graph3d canvas { display: block; }
+.graph3d { height: 70vh; min-height: 480px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: #fcfbf8; }
+.graph3d-legend { position: absolute; left: .6rem; bottom: .6rem; display: flex; flex-wrap: wrap; gap: .4rem .8rem; font-size: .75rem; background: rgba(255,255,255,.85); padding: .35rem .6rem; border-radius: 8px; max-width: 80%; }
+.graph3d-legend i { display: inline-block; width: .7rem; height: .7rem; border-radius: 50%; margin-right: .3rem; vertical-align: -1px; }
+.graph3d-status { position: absolute; left: .6rem; top: .6rem; background: rgba(255,255,255,.85); padding: .25rem .6rem; border-radius: 8px; }
+.graph3d-side { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: .9rem 1rem; max-height: 70vh; overflow: auto; font-size: .92rem; }
+.graph3d-side h4 { margin: 0 0 .4rem; }
+.graph3d-side .g-list { padding-left: 1.1rem; margin: .2rem 0; }
+.graph3d-side .g-list li { margin: .15rem 0; }
+.g-tip { background: rgba(30, 36, 48, .92); color: #fff; padding: .35rem .6rem; border-radius: 6px; font-size: .8rem; line-height: 1.35; }
+@media (max-width: 960px) { .graph3d-wrap { grid-template-columns: 1fr; } .graph3d-side { max-height: none; } }

@@ -4,6 +4,7 @@
 <div class="page-head">
   <h1>Ask your memory</h1>
   <p class="muted">A question goes in; the graph finds the passages; the model reads them and answers. Every answer links to an analysis of how it was found.</p>
+  {% if scope %}<p class="small scope-note">{% if scope.open %}Searching everything: <b>{{ scope.visible }}</b> source{{ 's' if scope.visible != 1 }} (open mode).{% else %}Searching <b>{{ scope.visible }}</b> of {{ scope.total }} sources ({{ scope.passages }} passages) visible to you as <b>{{ scope.role }}</b>. <a href="/graph">See them in the graph</a>.{% endif %}</p>{% endif %}
 </div>
 
 {# "load" fires once htmx has processed the form (after the deferred bundle ran), so /ask?q=... asks straight away. #}

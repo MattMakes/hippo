@@ -12,7 +12,17 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from hippo.access import (
+    DEFAULT_ROLES,
+    EVERYONE_RANK,
+    EVERYTHING,
+    Access,
+    hash_password,
+    new_token,
+    verify_password,
+)
 from hippo.store.base import DEFAULT_SETTINGS, new_id, now_iso, validate_settings
+from hippo.store.users import clean_capabilities, clean_rank, clean_username, slug
 
 
 def _boost(entity: dict[str, Any]) -> float:
@@ -38,6 +48,8 @@ class FakeStore:
         self.runs: dict[str, dict[str, Any]] = {}
         self.results: dict[str, dict[str, Any]] = {}
         self.changesets: dict[str, dict[str, Any]] = {}
+        self.roles: dict[str, dict[str, Any]] = {}
+        self.users: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------------- base
     def close(self) -> None:
@@ -48,6 +60,7 @@ class FakeStore:
         if not getattr(self, "_bootstrapped", False):
             self._bootstrapped = True
             self.ensure_schema()
+            self.ensure_roles()
             self.mark_interrupted_jobs()
         return True
 
@@ -85,11 +98,22 @@ class FakeStore:
             "question_sets": len(self.question_sets),
             "eval_runs": len(self.runs),
             "changesets": len(self.changesets),
+            "users": len(self.users),
+            "roles": len(self.roles),
         }
 
     # ---------------------------------------------------------- sources
-    def create_source(self, kind: str, name: str, meta: dict[str, Any] | None = None) -> str:
+    def create_source(
+        self,
+        kind: str,
+        name: str,
+        meta: dict[str, Any] | None = None,
+        *,
+        owner_id: str | None = None,
+        access_role_id: str | None = None,
+    ) -> str:
         sid = new_id()
+        role = self.roles.get(access_role_id or "")
         self.sources[sid] = {
             "id": sid,
             "kind": kind,
@@ -102,8 +126,14 @@ class FakeStore:
             "meta_json": json.dumps(meta or {}),
             "created_at": now_iso(),
             "updated_at": now_iso(),
+            "owner_id": owner_id,
+            "access_role_id": role["id"] if role else None,
+            "min_rank": int(role["rank"]) if role else EVERYONE_RANK,
         }
         return sid
+
+    def _visible(self, source: dict[str, Any], access: Access | None) -> bool:
+        return (access or EVERYTHING).can_see_source(source)
 
     def update_source(self, source_id: str, **fields: Any) -> None:
         allowed = {"status", "stage", "progress_done", "progress_total", "error", "name", "meta_json"}
@@ -119,16 +149,26 @@ class FakeStore:
         pids = [pid for pid, p in self.passages.items() if p["source_id"] == source["id"]]
         row["passages"] = len(pids)
         row["fact_links"] = sum(1 for pid, _ in self.statements if pid in pids)
+        row.setdefault("owner_id", None)
+        row.setdefault("access_role_id", None)
+        row["min_rank"] = int(row.get("min_rank") or 0)
+        role = self.roles.get(row["access_role_id"] or "")
+        row["access_role_name"] = (
+            role["name"] if role else ("Everyone" if not row["access_role_id"] else row["access_role_id"])
+        )
+        owner = self.users.get(row["owner_id"] or "")
+        row["owner_name"] = owner["username"] if owner else ""
         return row
 
-    def get_source(self, source_id: str) -> dict[str, Any] | None:
+    def get_source(self, source_id: str, access: Access | None = None) -> dict[str, Any] | None:
         s = self.sources.get(source_id)
-        return self._source_row(s) if s else None
+        return self._source_row(s) if s and self._visible(s, access) else None
 
-    def list_sources(self) -> list[dict[str, Any]]:
+    def list_sources(self, access: Access | None = None) -> list[dict[str, Any]]:
         return [
             self._source_row(s)
             for s in sorted(self.sources.values(), key=lambda s: s["created_at"], reverse=True)
+            if self._visible(s, access)
         ]
 
     def delete_source(self, source_id: str) -> None:
@@ -216,12 +256,27 @@ class FakeStore:
             "extraction_error": p.get("extraction_error"),
         }
 
-    def get_passages(self, ids: list[str]) -> list[dict[str, Any]]:
-        return [self._passage_row(self.passages[i]) for i in ids if i in self.passages]
+    def _passage_visible(self, p: dict[str, Any], access: Access | None) -> bool:
+        source = self.sources.get(p["source_id"])
+        return source is not None and self._visible(source, access)
 
-    def passages_for_source(self, source_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def get_passages(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        return [
+            self._passage_row(self.passages[i])
+            for i in ids
+            if i in self.passages and self._passage_visible(self.passages[i], access)
+        ]
+
+    def passages_for_source(
+        self, source_id: str, limit: int = 50, offset: int = 0, access: Access | None = None
+    ) -> list[dict[str, Any]]:
         rows = sorted(
-            (p for p in self.passages.values() if p["source_id"] == source_id), key=lambda p: p["ordinal"]
+            (
+                p
+                for p in self.passages.values()
+                if p["source_id"] == source_id and self._passage_visible(p, access)
+            ),
+            key=lambda p: p["ordinal"],
         )
         return [self._passage_row(p) for p in rows[offset : offset + limit]]
 
@@ -237,30 +292,46 @@ class FakeStore:
 
     def add_entities(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
-            e = self.entities.setdefault(row["id"], {"id": row["id"], "name": row["name"], "boost": None})
+            e = self.entities.setdefault(
+                row["id"], {"id": row["id"], "name": row["name"], "boost": None, "created_at": now_iso()}
+            )
             e["embedding"] = list(row["embedding"])
 
-    def _passage_count(self, eid: str) -> int:
-        return sum(1 for _, e in self.mentions if e == eid)
+    def _passage_count(self, eid: str, access: Access | None = None) -> int:
+        return sum(
+            1
+            for pid, e in self.mentions
+            if e == eid and pid in self.passages and self._passage_visible(self.passages[pid], access)
+        )
 
-    def get_entities(self, ids: list[str]) -> list[dict[str, Any]]:
-        return [
-            {
-                "id": i,
-                "name": self.entities[i]["name"],
-                "boost": _boost(self.entities[i]),
-                "passage_count": self._passage_count(i),
-            }
-            for i in ids
-            if i in self.entities
-        ]
+    def get_entities(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        rows = []
+        for i in ids:
+            if i not in self.entities:
+                continue
+            count = self._passage_count(i, access)
+            if count == 0 and not (access or EVERYTHING).unrestricted:
+                continue  # Neo4j: WHERE $acc_all OR passage_count > 0 (hidden unless a visible passage mentions it)
+            rows.append(
+                {
+                    "id": i,
+                    "name": self.entities[i]["name"],
+                    "boost": _boost(self.entities[i]),
+                    "passage_count": count,
+                }
+            )
+        return rows
 
-    def search_entities(self, text: str, limit: int = 20) -> list[dict[str, Any]]:
+    def search_entities(
+        self, text: str, limit: int = 20, access: Access | None = None
+    ) -> list[dict[str, Any]]:
         rows = [
-            {"id": e["id"], "name": e["name"], "passage_count": self._passage_count(e["id"])}
+            {"id": e["id"], "name": e["name"], "passage_count": self._passage_count(e["id"], access)}
             for e in self.entities.values()
             if text.lower() in e["name"]
         ]
+        if not (access or EVERYTHING).unrestricted:
+            rows = [r for r in rows if r["passage_count"] > 0]
         rows.sort(key=lambda r: (-r["passage_count"], r["name"]))
         return rows[:limit]
 
@@ -296,8 +367,20 @@ class FakeStore:
             row["embedding"] = f["embedding"]
         return row
 
-    def get_facts(self, ids: list[str]) -> list[dict[str, Any]]:
-        return [self._fact_row(self.facts[i], False) for i in ids if i in self.facts]
+    def get_facts(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        rows = []
+        for i in ids:
+            if i not in self.facts:
+                continue
+            row = self._fact_row(self.facts[i], False)
+            row["passage_ids"] = [
+                pid
+                for pid in row["passage_ids"]
+                if pid in self.passages and self._passage_visible(self.passages[pid], access)
+            ]
+            if row["passage_ids"] or (access or EVERYTHING).unrestricted:
+                rows.append(row)
+        return rows
 
     # ------------------------------------------------------------ links
     def link_passage_facts(self, pairs: list[tuple[str, str]]) -> None:
@@ -320,6 +403,193 @@ class FakeStore:
                 current["score"] = float(score)
             current["manual"] = current["manual"] or manual
 
+    # ---------------------------------------------------------- roles
+    def ensure_roles(self) -> None:
+        for role in DEFAULT_ROLES:
+            self.roles.setdefault(
+                role["id"], {**role, "capabilities": list(role["capabilities"]), "builtin": True}
+            )
+
+    def _role_row(self, role: dict[str, Any]) -> dict[str, Any]:
+        row = dict(role)
+        row["rank"] = int(row.get("rank") or 0)
+        row["capabilities"] = sorted(row.get("capabilities") or [])
+        row["users"] = sum(1 for u in self.users.values() if u.get("role_id") == role["id"])
+        row["sources"] = sum(1 for s in self.sources.values() if s.get("access_role_id") == role["id"])
+        return row
+
+    def list_roles(self) -> list[dict[str, Any]]:
+        return [
+            self._role_row(r) for r in sorted(self.roles.values(), key=lambda r: (-int(r["rank"]), r["name"]))
+        ]
+
+    def get_role(self, role_id: str | None) -> dict[str, Any] | None:
+        r = self.roles.get(role_id or "")
+        return self._role_row(r) if r else None
+
+    def create_role(
+        self, name: str, rank: int, description: str = "", capabilities: list[str] | None = None
+    ) -> str:
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("the role needs a name")
+        role_id = slug(name)
+        if role_id in self.roles:
+            role_id = f"{role_id}-{new_id()[:4]}"
+        self.roles[role_id] = {
+            "id": role_id,
+            "name": name,
+            "rank": clean_rank(rank),
+            "description": (description or "").strip(),
+            "capabilities": clean_capabilities(capabilities),
+            "builtin": False,
+        }
+        return role_id
+
+    def update_role(self, role_id: str, **fields: Any) -> dict[str, Any]:
+        allowed = {"name", "rank", "description", "capabilities"}
+        bad = set(fields) - allowed
+        if bad:
+            raise ValueError(f"unknown role fields: {sorted(bad)}")
+        role = self.roles.get(role_id)
+        if role is None:
+            raise ValueError("no such role")
+        if "name" in fields:
+            role["name"] = str(fields["name"]).strip()
+            if not role["name"]:
+                raise ValueError("the role needs a name")
+        if "rank" in fields:
+            role["rank"] = clean_rank(fields["rank"])
+            for s in self.sources.values():
+                if s.get("access_role_id") == role_id:
+                    s["min_rank"] = role["rank"]
+        if "description" in fields:
+            role["description"] = str(fields["description"] or "").strip()
+        if "capabilities" in fields:
+            role["capabilities"] = clean_capabilities(fields["capabilities"])
+        return self._role_row(role)
+
+    def delete_role(self, role_id: str) -> None:
+        role = self.get_role(role_id)
+        if role is None:
+            raise ValueError("no such role")
+        if role["users"] or role["sources"]:
+            raise ValueError(
+                f"'{role['name']}' is still used by {role['users']} user(s) and {role['sources']} source(s); "
+                "move them to another role first"
+            )
+        if len(self.roles) <= 1:
+            raise ValueError("cannot delete the last role")
+        del self.roles[role_id]
+
+    # ---------------------------------------------------------- users
+    def _user_row(self, user: dict[str, Any]) -> dict[str, Any]:
+        row = dict(user)
+        role = self.roles.get(user.get("role_id") or "")
+        row["role_name"] = role["name"] if role else (user.get("role_id") or "")
+        row["rank"] = int(role["rank"]) if role else 0
+        row["sources"] = sum(1 for s in self.sources.values() if s.get("owner_id") == user["id"])
+        return row
+
+    def count_users(self) -> int:
+        return len(self.users)
+
+    def list_users(self) -> list[dict[str, Any]]:
+        rows = [self._user_row(u) for u in self.users.values()]
+        rows.sort(key=lambda r: (-r["rank"], r["username"]))
+        return rows
+
+    def get_user(self, user_id: str | None) -> dict[str, Any] | None:
+        u = self.users.get(user_id or "")
+        return self._user_row(u) if u else None
+
+    def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        name = (username or "").strip().lower()
+        for u in self.users.values():
+            if u["username"] == name:
+                return self._user_row(u)
+        return None
+
+    def get_user_by_token(self, token: str) -> dict[str, Any] | None:
+        if not token:
+            return None
+        for u in self.users.values():
+            if u["token"] == token:
+                return self._user_row(u)
+        return None
+
+    def create_user(self, username: str, password: str, role_id: str, display_name: str = "") -> str:
+        username = clean_username(username)
+        if self.get_user_by_username(username) is not None:
+            raise ValueError(f"the username '{username}' is taken")
+        if role_id not in self.roles:
+            raise ValueError("no such role")
+        user_id = new_id()
+        self.users[user_id] = {
+            "id": user_id,
+            "username": username,
+            "display_name": (display_name or "").strip(),
+            "password_hash": hash_password(password),
+            "token": new_token(),
+            "role_id": role_id,
+            "disabled": False,
+            "created_at": now_iso(),
+        }
+        return user_id
+
+    def update_user(self, user_id: str, **fields: Any) -> dict[str, Any]:
+        allowed = {"display_name", "role_id", "disabled", "password"}
+        bad = set(fields) - allowed
+        if bad:
+            raise ValueError(f"unknown user fields: {sorted(bad)}")
+        user = self.users.get(user_id)
+        if user is None:
+            raise ValueError("no such user")
+        if "display_name" in fields:
+            user["display_name"] = str(fields["display_name"] or "").strip()
+        if "disabled" in fields:
+            user["disabled"] = bool(fields["disabled"])
+        if "password" in fields:
+            user["password_hash"] = hash_password(str(fields["password"]))
+        if "role_id" in fields:
+            if fields["role_id"] not in self.roles:
+                raise ValueError("no such role")
+            user["role_id"] = fields["role_id"]
+        return self._user_row(user)
+
+    def rotate_token(self, user_id: str) -> str:
+        token = new_token()
+        if user_id in self.users:
+            self.users[user_id]["token"] = token
+        return token
+
+    def delete_user(self, user_id: str) -> None:
+        for s in self.sources.values():
+            if s.get("owner_id") == user_id:
+                s["owner_id"] = None
+        self.users.pop(user_id, None)
+
+    def check_password(self, username: str, password: str) -> dict[str, Any] | None:
+        user = self.get_user_by_username(username)
+        if user is None or user.get("disabled"):
+            return None
+        return user if verify_password(password, user.get("password_hash")) else None
+
+    def set_source_access(self, source_id: str, role_id: str | None, owner_id: str | None = ...) -> None:
+        if role_id:
+            role = self.roles.get(role_id)
+            if role is None:
+                raise ValueError("no such role")
+            min_rank = int(role["rank"])
+        else:
+            min_rank = EVERYONE_RANK
+        source = self.sources.get(source_id)
+        if source is None:
+            return
+        source.update(access_role_id=role_id, min_rank=min_rank, updated_at=now_iso())
+        if owner_id is not ...:
+            source["owner_id"] = owner_id
+
     # ------------------------------------------------------- graph loads
     def load_entities(self) -> list[dict[str, Any]]:
         return [
@@ -328,6 +598,7 @@ class FakeStore:
                 "name": e["name"],
                 "boost": _boost(e),
                 "passage_count": self._passage_count(e["id"]),
+                "created_at": e.get("created_at", ""),
             }
             for e in self.entities.values()
         ]

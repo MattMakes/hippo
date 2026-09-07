@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hippo: the ladybugdb branch, explained</title>
+<style>
+  :root {
+    --ink: #1f2430; --muted: #5b6270; --bg: #fbfaf7; --card: #ffffff; --line: #e3dfd6;
+    --accent: #b5411f; --accent2: #2f6f8f; --ok: #2e7d4f; --warn: #b26a00; --bad: #b3261e;
+    --code: #f3f1ec;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 17px/1.6 Georgia, "Iowan Old Style", "Palatino Linotype", serif; color: var(--ink); background: var(--bg); }
+  header { background: var(--ink); color: #f6f3ec; padding: 2.2rem 1.2rem; }
+  header h1 { margin: 0 0 .3rem; font-size: 1.9rem; font-weight: 600; }
+  header p { margin: 0; color: #cfc8b8; }
+  main { max-width: 860px; margin: 0 auto; padding: 1.2rem; }
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.4rem; margin: 1.4rem 0 2rem; }
+  nav.toc ol { margin: .4rem 0 0; padding-left: 1.2rem; }
+  nav.toc li { margin: .2rem 0; }
+  h2 { font-size: 1.55rem; margin: 3rem 0 1rem; padding-top: .6rem; border-top: 3px solid var(--accent); }
+  h3 { font-size: 1.2rem; margin: 2rem 0 .6rem; color: var(--accent2); }
+  h4 { margin: 1.4rem 0 .4rem; }
+  p { margin: .8rem 0; }
+  a { color: var(--accent2); }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: .9rem 1rem; overflow-x: auto; white-space: pre; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  code { font: 0.92em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code); padding: .05em .3em; border-radius: 4px; }
+  pre code { background: none; padding: 0; }
+  .callout { border-left: 5px solid var(--accent2); background: #eef4f7; padding: .8rem 1rem; margin: 1.2rem 0; border-radius: 0 8px 8px 0; }
+  .callout.warn { border-color: var(--warn); background: #fbf3e6; }
+  .callout.def { border-color: var(--ok); background: #eaf5ee; }
+  .callout strong:first-child { display: block; margin-bottom: .2rem; }
+  .skip { font-size: .95rem; color: var(--muted); font-style: italic; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .95rem; }
+  th, td { border: 1px solid var(--line); padding: .45rem .6rem; text-align: left; vertical-align: top; }
+  th { background: #f1ede4; }
+  /* diagrams */
+  .diagram { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; margin: 1.3rem 0; }
+  .diagram .caption { font-size: .9rem; color: var(--muted); margin-top: .6rem; text-align: center; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: center; gap: .5rem; }
+  .box { border: 2px solid var(--accent2); border-radius: 8px; padding: .5rem .8rem; background: #fff; min-width: 120px; text-align: center; font-size: .92rem; }
+  .box.store { border-color: var(--accent); }
+  .box.dim { border-style: dashed; color: var(--muted); }
+  .box.file { border-color: var(--ok); }
+  .box small { display: block; color: var(--muted); font-size: .8rem; margin-top: .2rem; }
+  .arrow { align-self: center; font-size: 1.4rem; color: var(--muted); padding: 0 .2rem; }
+  .stack { display: flex; flex-direction: column; gap: .4rem; }
+  .graph { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .6rem; }
+  .node { border-radius: 999px; padding: .35rem .7rem; text-align: center; font-size: .88rem; border: 2px solid; }
+  .node.source { border-color: #7a5c99; background: #f2ecf8; }
+  .node.passage { border-color: var(--accent2); background: #e9f1f6; }
+  .node.entity { border-color: var(--ok); background: #e8f4ec; }
+  .node.fact { border-color: var(--warn); background: #fbf1e2; }
+  .node.hidden { opacity: .35; text-decoration: line-through; }
+  .ui { border: 1px solid var(--line); border-radius: 8px; background: #fff; font-family: ui-sans-serif, system-ui, sans-serif; font-size: .9rem; }
+  .ui .bar { background: #ede9df; padding: .4rem .7rem; border-bottom: 1px solid var(--line); display: flex; gap: .6rem; align-items: center; }
+  .ui .pill { border-radius: 999px; padding: .1rem .6rem; font-size: .8rem; border: 1px solid var(--line); }
+  .ui .pill.ok { background: #e2f3e8; border-color: var(--ok); }
+  .ui .body { padding: .7rem; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 640px) { .row2 { grid-template-columns: 1fr; } body { font-size: 16px; } }
+  /* quiz */
+  .quiz { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.2rem; margin: 1.4rem 0; }
+  .quiz .q { font-weight: 600; }
+  .quiz button { display: block; width: 100%; text-align: left; margin: .4rem 0; padding: .55rem .8rem; border: 1px solid var(--line); background: #fff; border-radius: 8px; font: inherit; cursor: pointer; }
+  .quiz button:hover { border-color: var(--accent2); }
+  .quiz button.right { border-color: var(--ok); background: #eaf5ee; }
+  .quiz button.wrong { border-color: var(--bad); background: #fbeae9; }
+  .quiz .fb { margin-top: .6rem; font-size: .95rem; display: none; }
+  footer { color: var(--muted); font-size: .9rem; margin: 3rem 0 1rem; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>hippo without a database server: the <code>ladybugdb</code> branch</h1>
+  <p>An explanation of the change from <code>main</code> (<code>00b657b</code>) to <code>ladybugdb</code> (<code>1568d0b</code>): 72 files, about 7,400 lines added.</p>
+</header>
+<main>
+
+<nav class="toc">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#background">Background</a>
+      <ol>
+        <li><a href="#bg-deep">For beginners: what hippo is and why it has a graph database</a></li>
+        <li><a href="#bg-narrow">Directly relevant: the store layer, and the work that arrived alongside</a></li>
+      </ol>
+    </li>
+    <li><a href="#intuition">Intuition</a></li>
+    <li><a href="#code">Code walkthrough</a></li>
+    <li><a href="#quiz">Quiz</a></li>
+  </ol>
+</nav>
+
+<!-- ======================================================================= -->
+<h2 id="background">1. Background</h2>
+
+<h3 id="bg-deep">1.1 For beginners: what hippo is and why it has a graph database</h3>
+<p class="skip">Skip to <a href="#bg-narrow">1.2</a> if you already know hippo.</p>
+
+<p>hippo is a personal memory. You feed it text: notes, documents, an entire git repository. It reads that text with a local language model, pulls out the <em>things</em> mentioned and the <em>facts</em> connecting them, and stores those as a small knowledge graph. Later you ask a question in plain English, and hippo answers from what it remembers, showing you which facts it matched and which passages it read. It is a portable implementation of <a href="https://github.com/OSU-NLP-Group/HippoRAG">HippoRAG 2</a>, and it also speaks MCP so tools like Claude Code can use it.</p>
+
+<p>The graph is the heart of it. Suppose you index one sentence from the sample corpus:</p>
+
+<pre>The Orion arm was designed by Marcus Lee at Acme Robotics in Boulder.</pre>
+
+<p>hippo stores a <strong>Passage</strong> node holding that text, <strong>Entity</strong> nodes for <em>orion arm</em>, <em>marcus lee</em>, <em>acme robotics</em>, <em>boulder</em>, and <strong>Fact</strong> nodes for triples such as <code>["Orion arm", "was designed by", "Marcus Lee"]</code>. Edges tie them together, and every passage points at the <strong>Source</strong> it came from:</p>
+
+<div class="diagram">
+  <div class="graph">
+    <div class="node source">Source: acme_robotics.md</div>
+    <div class="node passage">Passage: "The Orion arm was designed by…"</div>
+    <div class="node fact">Fact: orion arm —designed by→ marcus lee</div>
+    <div class="node entity">Entity: orion arm</div>
+    <div class="node entity">Entity: marcus lee</div>
+    <div class="node entity">Entity: boulder</div>
+  </div>
+  <div class="caption">Edges (not drawn): Passage —FROM→ Source; Passage —MENTIONS→ Entity; Passage —STATES→ Fact; Fact —SUBJECT/OBJECT→ Entity. Synonyms link entities whose names mean the same thing.</div>
+</div>
+
+<p>Answering a question is a walk over this graph. The question <em>Who designed the Orion arm?</em> is embedded and compared with every fact; the best-matching facts are kept, their entities become <em>seeds</em>, and <strong>Personalized PageRank</strong> spreads activation from those seeds along the edges. Passages that light up most are handed to the language model, which writes the answer.</p>
+
+<div class="callout def">
+  <strong>Two homes for the graph</strong>
+  The graph <em>lives</em> in a database (durable, queried with Cypher) and <em>runs</em> in memory: hippo loads every node and edge into an <code>igraph</code> structure plus numpy matrices whenever a <code>graph_version</code> counter changes. The database is therefore mostly a persistence layer with a query language, not the thing that does PageRank.
+</div>
+
+<p>Until this branch, that database was <strong>Neo4j</strong>: a separate Java server, run in Docker, with a password, a browser UI on port 7474 and a bolt port on 7687. It works well, but it is heavy for a "memory you run on your own machine". Starting hippo meant starting Neo4j, and running the CLI meant reaching a server.</p>
+
+<h3 id="bg-narrow">1.2 Directly relevant: the store layer, and the work that arrived alongside</h3>
+
+<p>Everything hippo persists goes through one object, the <strong>store</strong>. Before this change it was <code>hippo.store.Store</code>, a class assembled from four groups of Cypher queries: <code>memory.py</code> (sources, passages, entities, facts and their links), <code>evals.py</code> (question sets and evaluation runs), <code>changesets.py</code> (saved graph edits) and <code>base.py</code> (connecting, settings, the version counter). Web routes, the MCP server and the CLI all receive an <code>AppContext</code> that holds the store, and they only ever call methods like <code>store.add_passages(rows)</code> or <code>store.get_facts(ids)</code>. None of them write Cypher.</p>
+
+<p>That discipline had already produced a second implementation: <code>tests/fakes/fake_store.py</code>, an in-memory dictionary-backed <code>FakeStore</code> with the same methods and row shapes. The unit tests ran against the fake locally and against a real Neo4j in CI, and a comment in the fake says: <em>If you add a query to the real store, add it here too.</em> This branch adds a third implementation and leans on exactly that contract.</p>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="stack">
+      <div class="box">Web UI &amp; /api</div>
+      <div class="box">MCP server</div>
+      <div class="box">CLI</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box">AppContext<small>config · store · ollama · jobs · in-memory graph</small></div>
+    <div class="arrow">→</div>
+    <div class="stack">
+      <div class="box store">Store<small>Neo4j, Cypher over bolt</small></div>
+      <div class="box store">LadybugStore<small>new: embedded file</small></div>
+      <div class="box store dim">FakeStore<small>tests only</small></div>
+    </div>
+  </div>
+  <div class="caption">The app only knows the store's method names. Any object with those methods will do, which is what makes a second backend feasible.</div>
+</div>
+
+<p>One more piece of context matters. While this branch was being built, another session was adding <strong>role-based access control</strong> and a <strong>3D graph view</strong> to hippo's main checkout: roles on a rank ladder, users with passwords and tokens, per-source visibility, sign-in for the UI, API and MCP. That work touched the store contract in three ways. It added <code>Role</code> and <code>User</code> nodes with a new query module <code>store/users.py</code>; it gave every read of sources, passages, entities and facts an <code>access</code> argument that filters what the caller may see; and it made <code>load_entities</code> return <code>created_at</code>. The <code>ladybugdb</code> branch contains a snapshot of that work too, so that the new store could be proven against the full contract rather than the old one.</p>
+
+<!-- ======================================================================= -->
+<h2 id="intuition">2. Intuition</h2>
+
+<p>The core idea is small: <strong>swap the database server for a database file, behind the interface that already existed.</strong> Everything else in the branch is the consequence of taking that idea seriously.</p>
+
+<h3>2.1 A file instead of a server</h3>
+
+<p><a href="https://ladybugdb.com">LadybugDB</a> is the community continuation of Kùzu, an <em>embedded</em> property-graph database: it runs inside your Python process, speaks Cypher, and keeps everything in a single file. Think of it as "SQLite, but for graphs". Opening the store is now:</p>
+
+<pre>store = LadybugStore("data/hippo.lbug")   # creates the file and its tables if missing</pre>
+
+<p>Compare the two ways of running hippo:</p>
+
+<div class="diagram">
+  <div class="row2">
+    <div>
+      <div class="ui">
+        <div class="bar"><span class="pill">before</span> <strong>./hippo up</strong></div>
+        <div class="body">
+          <div class="flow">
+            <div class="box">app container</div>
+            <div class="arrow">↔</div>
+            <div class="box store">neo4j container<small>1 GB heap · password · ports 7474/7687</small></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="ui">
+        <div class="bar"><span class="pill ok">after</span> <strong>pip install -e . &amp;&amp; hippo serve</strong></div>
+        <div class="body">
+          <div class="flow">
+            <div class="box">hippo process</div>
+            <div class="arrow">↔</div>
+            <div class="box file">data/hippo.lbug<small>one file, opened in-process</small></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="caption">Ollama, the model server, is still needed in both cases. The database server is not.</div>
+</div>
+
+<p>Neo4j does not go away. It becomes an option: <code>HIPPO_STORE=neo4j</code> (with <code>pip install 'hippo[neo4j]'</code>, or a Docker profile) uses the untouched Neo4j code. A single function decides:</p>
+
+<pre>def open_store(config):
+    if config.store_backend == "neo4j":
+        return Store(config.neo4j_uri, config.neo4j_user, config.neo4j_password)
+    return LadybugStore(config.database_path)</pre>
+
+<h3>2.2 Same graph, stricter dialect</h3>
+
+<p>The graph shape is identical in both backends, but LadybugDB is a different kind of database. Neo4j is schemaless: you can <code>SET s.min_rank = 40</code> on a node that never had that property. LadybugDB wants every table and column declared first, with a type:</p>
+
+<pre>CREATE NODE TABLE Entity(id STRING PRIMARY KEY, name STRING, boost DOUBLE,
+                         embedding FLOAT[], created_at STRING)
+CREATE REL TABLE MENTIONS(FROM Passage TO Entity)</pre>
+
+<p>That strictness has a pleasant side effect. In Neo4j a null property simply does not exist on the node, so a source created with <code>error: null</code> comes back with no <code>error</code> key at all, and every row-shaping function has to fill defaults in. LadybugDB returns the column with <code>None</code>. The new store strips those <code>None</code>s before handing rows to the same shaping functions, so callers see identical dictionaries from either backend.</p>
+
+<p>The dialect is also smaller. Three Neo4j idioms used throughout the old queries have no LadybugDB equivalent, and each has a plain substitute:</p>
+
+<table>
+  <tr><th>Neo4j idiom</th><th>What it did</th><th>LadybugDB substitute</th></tr>
+  <tr><td><code>count { (e)&lt;-[:MENTIONS]-() }</code></td><td>count a pattern inline</td><td><code>OPTIONAL MATCH</code> the pattern, then <code>count(p)</code> in an aggregation</td></tr>
+  <tr><td><code>SET s += $fields</code></td><td>set many properties from a map</td><td>build the <code>SET a = $a, b = $b</code> list in Python from the already-validated keys</td></tr>
+  <tr><td><code>[(p)-[:STATES]-&gt;(f) | p.id]</code></td><td>pattern comprehension into a list</td><td><code>OPTIONAL MATCH</code> plus <code>collect(p.id)</code></td></tr>
+</table>
+
+<p>Settings and free-form metadata, which Neo4j kept as arbitrary properties on one <code>Settings</code> node, become two JSON text columns on a single row, because a declared schema cannot grow a column per key.</p>
+
+<h3>2.3 The two surprises in the binding</h3>
+
+<p>Two behaviours of the Python binding (<code>real_ladybug</code> 0.15.3) shaped the code more than the dialect did. Both were found by probing, and both are documented at the top of <code>store/ladybug.py</code> so that the next person does not rediscover them the hard way.</p>
+
+<div class="callout warn">
+  <strong>Surprise 1: strings that look like JSON are parsed.</strong>
+  Pass the parameter <code>'{"a": 1}'</code> and the query receives a struct, not a string. Pass <code>'[1, 2]'</code> and it receives a list. Inside a list-of-rows parameter, such a string becomes the empty string. hippo indexes code and JSON files, stores LLM output, and keeps several <code>*_json</code> columns, so this would silently corrupt data.
+</div>
+
+<p>The workaround is to send every piece of free text as <em>bytes</em>, which the binding leaves alone, and to turn it back into a string inside the query with LadybugDB's <code>decode()</code>:</p>
+
+<pre>self.run("MATCH (p:Passage {id: $id}) SET p.text = decode($text)",
+         id=passage_id, text=text(passage_text))      # text() -> bytes or None</pre>
+
+<p>Ids, timestamps and fixed status words like <code>'ready'</code> are safe and travel as plain strings. A test named <code>test_text_that_looks_like_json_or_a_list_is_stored_verbatim</code> now runs against all three stores to keep this honest.</p>
+
+<div class="callout warn">
+  <strong>Surprise 2: MERGE of a relationship fails under UNWIND.</strong>
+  <code>UNWIND $rows AS row MATCH (a), (b) MERGE (a)-[:MENTIONS]-&gt;(b)</code> raises an internal error. Doing one <code>MERGE</code> statement per pair works but costs about 10 ms each, and a large source creates tens of thousands of mention links.
+</div>
+
+<p>The substitute is "create the edge unless it exists", which LadybugDB handles in one batched statement:</p>
+
+<pre>UNWIND $rows AS row
+MATCH (a:Passage {id: row.a}), (b:Entity {id: row.b})
+WHERE NOT EXISTS { MATCH (a)-[:MENTIONS]->(b) }
+CREATE (a)-[:MENTIONS]->(b)</pre>
+
+<p>Measured: 2,000 links in 0.03 s this way, versus 18 s one at a time. Node writes and edge writes are therefore always two statements per batch.</p>
+
+<h3>2.4 One process at a time, and what that means for the CLI</h3>
+
+<p>A server can be shared; a file cannot. LadybugDB allows exactly one process to have the file open. That is fine for <code>hippo serve</code>, but the CLI commands (<code>hippo ask</code>, <code>hippo sources</code>, <code>hippo index</code>, and the new <code>hippo users</code>) each start a fresh process and used to open their own store. While the server runs, they would fail.</p>
+
+<p>The branch handles this in two layers:</p>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="box"><strong>hippo ask "…"</strong><small>new process</small></div>
+    <div class="arrow">→</div>
+    <div class="box file">try to open hippo.lbug<small>advisory lock on hippo.lbug.lock</small></div>
+    <div class="arrow">✗ locked →</div>
+    <div class="box">RemoteHippo<small>POST /api/ask with Authorization: Bearer $HIPPO_TOKEN</small></div>
+    <div class="arrow">→</div>
+    <div class="box"><strong>hippo serve</strong><small>owns the file</small></div>
+  </div>
+  <div class="caption">If the file is free, the CLI opens it directly. If it is held and a server answers, the CLI asks the server. If it is held and nothing answers, the error names the problem.</div>
+</div>
+
+<p>The advisory lock exists for a subtle reason. A second process that opened a busy database did not get LadybugDB's own "locked" error; it read the write-ahead log mid-write and reported <em>Corrupted wal file</em>. The files were unharmed (it only reads), but the message would send someone hunting for corruption that is not there. Taking hippo's own <code>flock</code> on a sidecar <code>.lock</code> file <em>before</em> touching the database means a second hippo never gets that far.</p>
+
+<h3>2.5 Access control on the file store</h3>
+
+<p>The access-control work defines visibility per <strong>source</strong>. Every source records the lowest role that may see it as an integer <code>min_rank</code>, plus an optional <code>owner_id</code>. A caller's <code>Access</code> is their rank and user id. The Cypher predicate is one comparison, bound to a source <code>s</code>:</p>
+
+<pre>($acc_all OR s.owner_id = $acc_uid OR coalesce(s.min_rank, 0) &lt;= $acc_rank)</pre>
+
+<p>Passages follow their source. Entities and facts are shared between sources, so they are visible when <em>at least one visible passage</em> mentions or states them, and their passage counts only count visible passages. Here is the sample corpus after an admin restricts it to rank 40, seen by an Individual (rank 0) who also added a note of their own:</p>
+
+<div class="diagram">
+  <div class="graph">
+    <div class="node source hidden">Source: acme_robotics.md (min_rank 40)</div>
+    <div class="node source">Source: my-notes.md (owner: me)</div>
+    <div class="node passage hidden">Passage: "The Orion arm was…"</div>
+    <div class="node passage">Passage: "Zed Labs is in Lisbon…"</div>
+    <div class="node entity hidden">Entity: orion arm (0 visible mentions)</div>
+    <div class="node entity">Entity: zed labs (1 visible mention)</div>
+    <div class="node fact hidden">Fact: orion arm —designed by→ marcus lee</div>
+    <div class="node fact">Fact: zed labs —located in→ lisbon</div>
+  </div>
+  <div class="caption">Struck-through nodes are filtered out of every store read for this caller, and cut out of the in-memory graph before PageRank runs, so activation cannot flow through them.</div>
+</div>
+
+<p>The LadybugDB store applies the very same predicate; only the surrounding query shape differs (an <code>OPTIONAL MATCH … WHERE</code> followed by an aggregation instead of a <code>count {}</code> subquery). A live run confirmed the behaviour end to end: the Individual asking <em>Who designed the Orion arm?</em> got "I have nothing in memory to answer that yet" with zero passages ranked, while the Arch admin got "Marcus Lee" with eight.</p>
+
+<div class="callout">
+  <strong>Why the contract mattered</strong>
+  The access-control work was written for Neo4j by someone who did not know LadybugDB existed. Because it followed the rule "new store methods go into the store package, the fake, and the shared tests", giving LadybugDB parity was a contained job: read the new methods, write their LadybugDB equivalents, and run the same tests until they passed on all three backends.
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="code">3. Code walkthrough</h2>
+
+<p>The branch is four commits. Reading them in order tells the story: first the new store and the plumbing to select it, then a packaging fix, then the access-control snapshot with LadybugDB parity, then a re-sync with later edits. The walkthrough below is grouped by concern rather than by commit.</p>
+
+<h3>3.1 The new store: <code>src/hippo/store/ladybug.py</code> (about 1,400 lines)</h3>
+
+<p>One class, <code>LadybugStore</code>, with every method of the Neo4j <code>Store</code>. It reuses the Neo4j store's row-shaping helpers (<code>_source_row</code>, <code>_passage_row</code>, <code>_result_row</code> and so on) so that a row from either backend is built by the same function. The file opens with two schema tables:</p>
+
+<pre>NODE_TABLES = {
+    "Source": """id STRING PRIMARY KEY, kind STRING, name STRING, status STRING, ...
+                 owner_id STRING, access_role_id STRING, min_rank INT64""",
+    "Passage": "... embedding FLOAT[], entities_json STRING, ...",
+    "Role":    "id STRING PRIMARY KEY, name STRING, rank INT64, ... capabilities STRING[], builtin BOOLEAN",
+    "User":    "id STRING PRIMARY KEY, username STRING, ... token STRING, role_id STRING, disabled BOOLEAN, ...",
+    ...
+}
+REL_TABLES = [("FROM", "FROM Passage TO Source", ""), ("MENTIONS", "FROM Passage TO Entity", ""),
+              ("TUNED", "FROM Entity TO Entity, FROM Entity TO Passage, FROM Passage TO Entity, FROM Passage TO Passage",
+                        ", weight DOUBLE, updated_at STRING"), ...]</pre>
+
+<p>Points worth noticing as you read it:</p>
+<ul>
+  <li><strong>Opening.</strong> <code>__init__</code> takes the advisory lock, opens the database, creates a connection, and runs <code>ensure_schema()</code> (all <code>CREATE … IF NOT EXISTS</code>). A lock failure raises <code>StoreLockedError</code> with advice; a WAL error is re-raised with a hint that an older hippo may hold the file.</li>
+  <li><strong>Running queries.</strong> <code>run()</code> holds one <code>RLock</code> around every statement, because LadybugDB allows one writer at a time within the process. Rows come back as dicts keyed by column alias; whole nodes pass through <code>_node()</code>, which drops internal <code>_ID</code>/<code>_LABEL</code> keys and <code>None</code> values.</li>
+  <li><strong>Text.</strong> The <code>text()</code> helper encodes free text to bytes; every such parameter is wrapped in <code>decode()</code> in the query. The generic <code>_set()</code> helper builds a <code>SET</code> list and applies the same rule to string values automatically.</li>
+  <li><strong>Links.</strong> <code>_link(rel, from_label, to_label, pairs)</code> is the batched create-unless-exists helper; <code>add_passages</code>, <code>add_facts</code>, <code>link_passage_entities</code> and <code>link_passage_facts</code> all go through it. <code>add_synonyms</code> is two statements: update existing edges, then create the missing ones.</li>
+  <li><strong>Order.</strong> Neo4j's <code>UNWIND $ids … MATCH</code> returns rows in the order asked; LadybugDB's <code>WHERE id IN $ids</code> does not. <code>_in_asked_order()</code> restores it for <code>get_passages</code>, <code>get_entities</code> and <code>get_facts</code>.</li>
+  <li><strong>Access.</strong> <code>_SOURCE_QUERY</code>, <code>_VISIBLE_MENTIONS</code> and <code>_fact_rows</code> carry the shared <code>ACCESS_WHERE</code>, and every affected method gained the <code>access</code> parameter with <code>access_params(access)</code> binding the three <code>$acc_*</code> values.</li>
+  <li><strong>Users and roles.</strong> The whole of <code>UserQueries</code> is mirrored: role seeding on first connection, editable roles whose rank change is copied onto their sources, users with scrypt password hashes and bearer tokens, <code>set_source_access</code>. Users reference roles by <code>role_id</code>; there is no <code>HAS_ROLE</code> edge. Username and token uniqueness is checked in Python, since LadybugDB only enforces primary keys.</li>
+</ul>
+
+<h3>3.2 Choosing a backend: <code>config.py</code>, <code>store/__init__.py</code>, <code>context.py</code></h3>
+
+<p><code>Config</code> gains <code>store_backend</code> (from <code>HIPPO_STORE</code>, default <code>ladybug</code>, validated against the two allowed values) and <code>db_path</code> (from <code>HIPPO_DB_PATH</code>, defaulting to <code>&lt;data_dir&gt;/hippo.lbug</code>), plus two properties: <code>database_path</code> and a human-readable <code>store_location</code>. The store package exports <code>open_store(config)</code> and a type alias <code>AnyStore = Store | LadybugStore</code>; <code>AppContext.from_env()</code> calls <code>open_store</code> instead of constructing <code>Store</code> directly. The Neo4j driver import in <code>base.py</code> moved inside <code>Neo4jBase.__init__</code>, so the package loads without the driver installed and gives a clear message if you ask for Neo4j without it.</p>
+
+<h3>3.3 Status and pages: <code>status.py</code>, two templates</h3>
+
+<p>The status dictionary now reports <code>store</code> (up or not), <code>store_backend</code> and <code>store_location</code>; the old <code>neo4j</code> key stays as an alias for anything already reading <code>/api/status</code>. The header pill reads "Graph" with the file path as its tooltip, or "Neo4j" with the bolt URI when that backend is chosen. The Settings page shows either the Neo4j card with its browser link or a card describing the embedded file and how to back it up.</p>
+
+<h3>3.4 The CLI and its remote fallback: <code>cli.py</code>, <code>remote.py</code></h3>
+
+<p><code>RemoteHippo</code> is a thin <code>httpx</code> client for <code>/api</code>: ask, sources, settings, upload and repo indexing with polling, and the users and roles endpoints. It reads <code>HIPPO_TOKEN</code> and sends it as a bearer token; a 401 becomes a <code>RemoteError</code> whose message says to set the token from the Account page. <code>is_up()</code> treats a 401 as "up", since a server that wants a token is still a server.</p>
+
+<p>In <code>cli.py</code>, one helper decides the mode for every data command:</p>
+
+<pre>def _context_or_running_server():
+    try:
+        return AppContext.from_env(), None          # we can open the file ourselves
+    except StoreLockedError:
+        remote = RemoteHippo.for_config(load_config())
+        if not remote.is_up():
+            raise                                    # locked and nobody answers: say so
+        return None, remote                          # the server has it: ask the server</pre>
+
+<p><code>ask</code>, <code>sources</code>, <code>settings</code>, <code>index</code>, <code>users</code> and <code>user add|token|role|remove</code> each have a local path and a remote path producing the same output. One asymmetry is deliberate: <code>hippo user token alice</code> without <code>--new</code> cannot work remotely, because the server never repeats an existing token; the command says so and points at <code>--new</code>.</p>
+
+<h3>3.5 Tests: <code>conftest.py</code> and the new test files</h3>
+
+<p>The <code>store</code> fixture now chooses by <code>HIPPO_TEST_STORE</code>: <code>ladybug</code> (the default, a real embedded database in a temporary file per test), <code>fake</code>, or <code>neo4j</code> (a real server at <code>NEO4J_URI</code>, emptied before each test). The whole suite, not just the store tests, runs against whichever is chosen. New tests cover JSON-looking text on every backend, persistence across close and reopen, the cross-process lock (a subprocess tries to open the same file), backend selection from the environment, the CLI's server fallback with and without a token, and the remote user commands. CI runs the suite three times.</p>
+
+<h3>3.6 Packaging and docs</h3>
+
+<ul>
+  <li><code>pyproject.toml</code>: <code>real_ladybug&gt;=0.15.3,&lt;0.16</code> is a hard dependency, pinned to the minor version the two workarounds were written against; <code>neo4j</code> moves to an optional extra and into the dev extras.</li>
+  <li><code>docker-compose.yml</code>: only the <code>app</code> service starts by default; <code>ollama</code> and <code>neo4j</code> are profiles. The app no longer <code>depends_on</code> Neo4j (it already coped with Neo4j coming up late). The Docker image installs the <code>neo4j</code> extra so either backend works in a container.</li>
+  <li><code>./hippo</code> launcher: the random-password dance and the Neo4j browser URL only happen when <code>.env</code> says <code>HIPPO_STORE=neo4j</code>; <code>./hippo &lt;cli command&gt;</code> forwards <code>HIPPO_TOKEN</code> into the container.</li>
+  <li>README, <code>.env.example</code>, <code>docs/MCP.md</code>, <code>docs/CONTRACTS.md</code>: the pip-and-Ollama path is the headline, Docker and Neo4j are sections, and the single-process rule is spelled out (stdio MCP only works while the server is not running on the same file).</li>
+</ul>
+
+<h3>3.7 What came along from the other session</h3>
+
+<p>For completeness, the snapshot merged in from the access-control session adds <code>access.py</code> (roles, <code>Access</code>, <code>Principal</code>, password hashing, tokens), <code>store/users.py</code> (the Neo4j queries), <code>web/auth.py</code> (sessions, bearer tokens, the gate), routes and templates for users, account, login, forbidden and the 3D graph (<code>routes/graph.py</code>, <code>static/graph.js</code>, a vendored <code>3d-force-graph</code>), and <code>AppContext.graph_for(access)</code>, which cuts the in-memory graph down to a caller's visible sources and caches the result. Those files are theirs; this branch's contribution is that they run unchanged on LadybugDB.</p>
+
+<div class="callout warn">
+  <strong>Merge note</strong>
+  That snapshot was taken from uncommitted work in main's checkout while the other session was still active. When it commits, merge <code>main</code> into <code>ladybugdb</code> first; identical hunks merge cleanly and only edits made after the re-sync need attention.
+</div>
+
+<!-- ======================================================================= -->
+<h2 id="quiz">4. Quiz</h2>
+<p>Five questions. Each has one correct answer; click to check.</p>
+
+<div class="quiz" data-answer="2">
+  <div class="q">1. A passage whose text begins with <code>[</code> is indexed into the LadybugDB store. Why does the store send that text as bytes and call <code>decode()</code> in the query?</div>
+  <button>Because LadybugDB has no STRING column type for text longer than a page, so long values must be stored as BLOBs.</button>
+  <button>Because the write-ahead log only accepts binary records, and strings would be rejected until the next checkpoint.</button>
+  <button>Because the Python binding parses string parameters that look like JSON into structs or lists, so the text would be mangled.</button>
+  <button>Because the embedding vectors and the text share one FLOAT[] column, and bytes keep them aligned.</button>
+  <div class="fb"></div>
+</div>
+
+<div class="quiz" data-answer="0">
+  <div class="q">2. <code>hippo serve</code> is running on <code>data/hippo.lbug</code>. Someone runs <code>hippo ask "Where is Boulder?"</code> in another terminal. What happens?</div>
+  <button>The CLI fails to take the lock, finds the server answering at the configured host and port, and sends the question to <code>/api/ask</code>.</button>
+  <button>The CLI opens the file read-only, runs PageRank on its own copy of the graph, and answers without contacting the server.</button>
+  <button>The CLI waits until the server checkpoints its write-ahead log, then opens the file for the duration of one query.</button>
+  <button>The CLI asks the server to close the database, opens it, answers, and hands the file back when it exits.</button>
+  <div class="fb"></div>
+</div>
+
+<div class="quiz" data-answer="3">
+  <div class="q">3. Two sources exist: one open to everyone, one restricted to rank 40. Both mention the entity <em>acme robotics</em>. A rank-0 user calls <code>get_entities(["acme-robotics"])</code>. What comes back?</div>
+  <button>Nothing, because an entity mentioned by any restricted passage is hidden from everyone below that rank.</button>
+  <button>The entity with a passage count of 2, since entity rows are not filtered; only passage rows are.</button>
+  <button>The entity with a passage count of 0, because counts are computed before the access filter and then zeroed.</button>
+  <button>The entity with a passage count of 1, since it is visible through the open passage and only visible passages are counted.</button>
+  <div class="fb"></div>
+</div>
+
+<div class="quiz" data-answer="1">
+  <div class="q">4. Why do <code>add_passages</code> and the link methods create relationships with <code>WHERE NOT EXISTS { … } CREATE</code> instead of <code>MERGE</code>?</div>
+  <button>Because MERGE on a relationship in LadybugDB creates duplicate edges whenever the endpoints already exist.</button>
+  <button>Because MERGE of a relationship fails under UNWIND in this binding, and one MERGE statement per pair is far too slow.</button>
+  <button>Because LadybugDB has no MERGE clause at all, only CREATE and DELETE, so existence must be checked by hand.</button>
+  <button>Because relationships in LadybugDB are immutable, so an edge that exists must be deleted and re-created to be kept.</button>
+  <div class="fb"></div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <div class="q">5. Which statement about running the test suite on this branch is correct?</div>
+  <button>The store tests run against LadybugDB, and the rest of the suite always uses the in-memory fake for speed.</button>
+  <button>The suite runs against Neo4j by default, and <code>HIPPO_TEST_STORE=ladybug</code> switches only the store tests over.</button>
+  <button>The whole suite runs against a real embedded LadybugDB file by default, and <code>HIPPO_TEST_STORE</code> can switch it to the fake or to Neo4j.</button>
+  <button>The suite mocks the store entirely; the backends are only exercised by the live smoke test described in the README.</button>
+  <div class="fb"></div>
+</div>
+
+</main>
+<footer>Generated 2026-09-06 for the <code>ladybugdb</code> branch of MattMakes/hippo.</footer>
+
+<script>
+  const feedback = {
+    0: ["Text columns are STRING; there is no size limit that forces BLOBs.", "The WAL is not involved in parameter typing.", "Right. Strings starting with { or [ become structs or lists (and empty strings inside row lists), so all free text travels as bytes and is decoded in Cypher.", "Embeddings live in their own FLOAT[] column; text has nothing to do with them."],
+    1: ["Right. The advisory lock fails, RemoteHippo checks /api/status, and the question goes over HTTP (with HIPPO_TOKEN once users exist).", "LadybugDB does not allow a second process to open the file at all while another holds it.", "There is no waiting: the second process would fail immediately, so the CLI does not try.", "There is no hand-over protocol; the server keeps the file for its whole lifetime."],
+    2: ["Entities are shared; being mentioned by a hidden passage does not hide them from someone who sees another mention.", "Entity reads are filtered: an entity with no visible mention is left out, and counts only include visible passages.", "Counts are computed over the visible passages only, so the value is 1, not 0.", "Right. Visible through the open passage, and the count reflects only what this caller may see."],
+    3: ["MERGE does not create duplicates; it fails outright in this combination.", "Right. It was measured: batched create-unless-exists took 0.03 s for 2,000 links, one MERGE per pair took 18 s.", "MERGE exists and is used for nodes; it is only the relationship-under-UNWIND case that fails.", "Relationships are mutable; add_synonyms updates edge properties in place."],
+    4: ["The entire suite uses whatever the store fixture builds; there is no split by test file.", "The default is ladybug, not Neo4j, and the fixture switches the whole suite.", "Right. The fixture builds a LadybugStore in a temp file per test; HIPPO_TEST_STORE=fake or =neo4j swaps it for every test, and CI runs all three.", "Nothing is mocked; the fake is a full in-memory implementation and the two real backends are exercised too."]
+  };
+  document.querySelectorAll('.quiz').forEach((quiz, qi) => {
+    const answer = Number(quiz.dataset.answer);
+    const buttons = quiz.querySelectorAll('button');
+    const fb = quiz.querySelector('.fb');
+    buttons.forEach((b, i) => b.addEventListener('click', () => {
+      buttons.forEach(x => x.classList.remove('right', 'wrong'));
+      b.classList.add(i === answer ? 'right' : 'wrong');
+      if (i !== answer) buttons[answer].classList.add('right');
+      fb.style.display = 'block';
+      fb.textContent = (i === answer ? 'Correct. ' : 'Not quite. ') + feedback[qi][i];
+    }));
+  });
+</script>
+</body>
+</html>

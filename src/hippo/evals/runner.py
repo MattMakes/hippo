@@ -22,6 +22,7 @@ import time
 from statistics import mean
 from typing import Any
 
+from ..access import Access
 from ..ask import answer_from_trace, search
 from ..context import AppContext
 from ..store.base import now_iso
@@ -39,9 +40,17 @@ GOLD_TOP = 5  # "gold in top 5" is the retrieval number the Evals page shows
 
 
 def start_run(
-    ctx: AppContext, set_id: str, name: str | None = None, settings: dict[str, Any] | None = None
+    ctx: AppContext,
+    set_id: str,
+    name: str | None = None,
+    settings: dict[str, Any] | None = None,
+    access: Access | None = None,
 ) -> str:
-    """Create the run and start answering in the background. Returns the run id straight away."""
+    """
+    Create the run and start answering in the background. Returns the run id straight away.
+    `access` is the runner's (hippo/access.py): every question is searched and answered on their
+    slice of the memory, so a run can never read a passage the person who started it cannot.
+    """
     question_set = ctx.store.get_question_set(set_id)
     if question_set is None:
         raise ValueError(f"unknown question set {set_id}")
@@ -49,16 +58,18 @@ def start_run(
     merged.update(settings or {})
     run_name = name or f"{question_set['name']} @ {now_iso()}"
     run_id = ctx.store.create_run(set_id, run_name, merged)
-    ctx.jobs.start(f"run:{run_id}", lambda: _run_all(ctx, run_id, set_id, merged))
+    ctx.jobs.start(f"run:{run_id}", lambda: _run_all(ctx, run_id, set_id, merged, access))
     return run_id
 
 
-def _run_all(ctx: AppContext, run_id: str, set_id: str, settings: dict[str, Any]) -> None:
+def _run_all(
+    ctx: AppContext, run_id: str, set_id: str, settings: dict[str, Any], access: Access | None = None
+) -> None:
     store = ctx.store
     results: list[Result] = []
     try:
         for done, question in enumerate(store.list_questions(set_id), start=1):
-            result = run_question(ctx, question, settings)
+            result = run_question(ctx, question, settings, access)
             store.add_result(run_id, question["id"], result)
             results.append(result)
             store.update_run(run_id, progress_done=done)
@@ -75,7 +86,9 @@ def _run_all(ctx: AppContext, run_id: str, set_id: str, settings: dict[str, Any]
 # ------------------------------------------------------------- one question
 
 
-def run_question(ctx: AppContext, question_row: dict[str, Any], settings: dict[str, Any]) -> Result:
+def run_question(
+    ctx: AppContext, question_row: dict[str, Any], settings: dict[str, Any], access: Access | None = None
+) -> Result:
     """Search, answer, judge and score one question. Never raises: trouble lands in `error`."""
     text = question_row["text"]
     expected = (question_row.get("expected_answer") or "").strip()
@@ -83,7 +96,7 @@ def run_question(ctx: AppContext, question_row: dict[str, Any], settings: dict[s
     result = _empty_result()
     started = time.time()
     try:
-        trace = search(ctx, text, settings)
+        trace = search(ctx, text, settings, access)
         result["trace"] = trace.to_dict()
         # Stored as its own property too: the run table lists results without their (big) traces.
         result["used_dpr_fallback"] = trace.used_dpr_fallback
@@ -91,7 +104,7 @@ def run_question(ctx: AppContext, question_row: dict[str, Any], settings: dict[s
         result["recall"] = metrics.recall_at_k(gold_ids, ranked_ids)
         result["gold_rank"] = metrics.gold_rank(gold_ids, ranked_ids)
 
-        answer = answer_from_trace(ctx, trace)
+        answer = answer_from_trace(ctx, trace, access)
         # Latency is what a user would wait for: search plus answer, not the grading.
         result["latency_ms"] = round((time.time() - started) * 1000, 1)
         result["answer"] = answer.answer

@@ -13,5 +13,5 @@
   {% endfor %}
 {% endif %}
 {% if status.jobs %}
-  <span class="pill info" title="{{ status.jobs | join(', ') }}">⏳ {{ status.jobs | length }} job{{ 's' if status.jobs | length != 1 }}</span>
+  <span class="pill info" title="{{ status.jobs | join(', ') if (me is none or me.access.unrestricted) else 'running in the background' }}">⏳ {{ status.jobs | length }} job{{ 's' if status.jobs | length != 1 }}</span>
 {% endif %}

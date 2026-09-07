@@ -2,7 +2,7 @@
 <div class="empty">Nothing here yet. Upload something above, or load the sample.</div>
 {% else %}
 <table class="table">
-  <thead><tr><th>Name</th><th>Kind</th><th>Status</th><th class="num">Passages</th><th class="num">Facts</th><th>Added</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Kind</th><th>Status</th><th class="num">Passages</th><th class="num">Facts</th><th>Visible to</th><th>Added</th><th></th></tr></thead>
   <tbody>
   {% for s in sources %}
   <tr>
@@ -11,10 +11,27 @@
     <td>{% include "partials/source_status.html" with context %}</td>
     <td class="num">{{ s.passages }}</td>
     <td class="num">{{ s.fact_links }}</td>
+    <td>
+      {% if s.can_manage and visibility_choices is defined %}
+      <form method="post" action="/sources/{{ s.id }}/access" class="inline row" title="Change who may see this source">
+        <input type="hidden" name="back" value="/">
+        <select name="visibility" class="small" onchange="this.form.submit()" style="max-width:190px">
+          {% for r in visibility_choices %}<option value="{{ r.id }}" {{ 'selected' if r.id == s.access_role_id }}>{{ r.name }} +</option>{% endfor %}
+          {% if s.access_role_id and s.access_role_id not in (visibility_choices | map(attribute='id') | list) %}<option value="{{ s.access_role_id }}" selected>{{ s.access_role_name }} +</option>{% endif %}
+          <option value="everyone" {{ 'selected' if not s.access_role_id }}>Everyone</option>
+        </select>
+      </form>
+      {% else %}
+      <span class="pill {{ 'ok' if not s.access_role_id }}" title="{{ 'Open to every user' if not s.access_role_id else 'This tier and every tier above it' }}">{{ 'Everyone' if not s.access_role_id else s.access_role_name ~ ' +' }}</span>
+      {% endif %}
+      {% if s.owner_name %}<div class="muted small">by {{ s.owner_name }}{% if s.is_mine %} (you){% endif %}</div>{% endif %}
+    </td>
     <td class="muted">{{ s.created_at[:16] | replace('T', ' ') }}</td>
     <td class="row">
       <a class="btn small" href="/ask" title="Ask a question">Ask</a>
+      {% if s.can_manage %}
       <button class="btn small danger" data-delete="/api/sources/{{ s.id }}" data-confirm="Forget '{{ s.name }}' and everything learned from it?" {% if busy_ids is defined and s.id in busy_ids %}disabled title="Wait until indexing has finished"{% endif %}>Delete</button>
+      {% endif %}
     </td>
   </tr>
   {% endfor %}

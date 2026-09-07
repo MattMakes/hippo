@@ -101,6 +101,8 @@ def test_stats_has_every_key_and_counts_what_we_create(store) -> None:
         "question_sets",
         "eval_runs",
         "changesets",
+        "users",
+        "roles",
     }
     assert set(store.stats()) == keys
     source_id = store.create_source("text", "S")

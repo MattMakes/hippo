@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <section class="card login-card">
+    <h1>Sign in</h1>
+    {% if open_mode %}
+    <p class="muted">hippo has no users yet, so there is nothing to sign in to: everyone who can reach this port acts as the top role. <a href="/users">Create the first user</a> to close the door.</p>
+    <a class="btn primary" href="{{ next }}">Continue</a>
+    {% else %}
+    <p class="muted">Your memory is gated by users. Ask an admin for an account if you do not have one.</p>
+    {% if error %}<div class="callout bad">{{ error }}</div>{% endif %}
+    <form method="post" action="/login" class="stack">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label>Username<input type="text" name="username" autocomplete="username" autofocus required></label>
+      <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+    <p class="muted small">Scripts and MCP clients sign in with a token instead: <code>Authorization: Bearer …</code>, found on the Account page.</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

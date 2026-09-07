@@ -3,6 +3,14 @@ Queries for the memory itself: sources, passages, entities, facts and their link
 
 Reading tip: the `load_*` functions at the bottom are what the in-memory
 graph (hipporag/graph_index.py) uses to rebuild itself.
+
+Access: every read that hands back sources, passages, entities or facts takes
+an `access` (hippo/access.py). `None` means "unrestricted" (the indexer, the
+graph loader and the CLI); a web or MCP request passes the caller's Access and
+the ACCESS_WHERE predicate keeps hidden sources, and everything only they
+support, out of the result. Entities and facts are shared between sources, so
+they count as visible when at least one visible passage mentions/states them,
+and their passage counts only count visible passages.
 """
 
 from __future__ import annotations
@@ -10,6 +18,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..access import ACCESS_WHERE, Access, access_params
 from .base import Neo4jBase, new_id, now_iso, with_defaults
 
 BATCH = 200  # rows per write query; keeps transactions small and progress visible
@@ -24,19 +33,35 @@ class MemoryQueries(Neo4jBase):
     # ============================================================== sources
     # A Source is one thing you uploaded: a file, a pasted text, a git repo.
 
-    def create_source(self, kind: str, name: str, meta: dict[str, Any] | None = None) -> str:
+    def create_source(
+        self,
+        kind: str,
+        name: str,
+        meta: dict[str, Any] | None = None,
+        *,
+        owner_id: str | None = None,
+        access_role_id: str | None = None,
+    ) -> str:
+        """
+        A new source. `access_role_id` names the lowest role that may see it (None = everyone);
+        its rank is copied to min_rank so ACCESS_WHERE is one comparison. The owner always sees it.
+        """
         source_id = new_id()
         self.run(
             """
+            OPTIONAL MATCH (r:Role {id: $access_role_id})
             CREATE (s:Source {id: $id, kind: $kind, name: $name, status: 'queued', stage: 'queued',
                               progress_done: 0, progress_total: 0, error: null,
-                              meta_json: $meta_json, created_at: $now, updated_at: $now})
+                              meta_json: $meta_json, created_at: $now, updated_at: $now,
+                              owner_id: $owner_id, access_role_id: r.id, min_rank: coalesce(r.rank, 0)})
             """,
             id=source_id,
             kind=kind,
             name=name,
             meta_json=json.dumps(meta or {}),
             now=now_iso(),
+            owner_id=owner_id,
+            access_role_id=access_role_id,
         )
         return source_id
 
@@ -49,25 +74,33 @@ class MemoryQueries(Neo4jBase):
         fields["updated_at"] = now_iso()
         self.run("MATCH (s:Source {id: $id}) SET s += $fields", id=source_id, fields=fields)
 
-    def get_source(self, source_id: str) -> dict[str, Any] | None:
+    def get_source(self, source_id: str, access: Access | None = None) -> dict[str, Any] | None:
         row = self.run_one(
-            """
-            MATCH (s:Source {id: $id})
-            RETURN s AS s, count { (s)<-[:FROM]-(:Passage) } AS passages,
-                   count { (s)<-[:FROM]-(:Passage)-[:STATES]->(:Fact) } AS fact_links
+            f"""
+            MATCH (s:Source {{id: $id}}) WHERE {ACCESS_WHERE}
+            OPTIONAL MATCH (r:Role {{id: s.access_role_id}})
+            OPTIONAL MATCH (u:User {{id: s.owner_id}})
+            RETURN s AS s, r.name AS access_role_name, u.username AS owner_name,
+                   count {{ (s)<-[:FROM]-(:Passage) }} AS passages,
+                   count {{ (s)<-[:FROM]-(:Passage)-[:STATES]->(:Fact) }} AS fact_links
             """,
             id=source_id,
+            **access_params(access),
         )
         return _source_row(row) if row else None
 
-    def list_sources(self) -> list[dict[str, Any]]:
+    def list_sources(self, access: Access | None = None) -> list[dict[str, Any]]:
         rows = self.run(
-            """
-            MATCH (s:Source)
-            RETURN s AS s, count { (s)<-[:FROM]-(:Passage) } AS passages,
-                   count { (s)<-[:FROM]-(:Passage)-[:STATES]->(:Fact) } AS fact_links
+            f"""
+            MATCH (s:Source) WHERE {ACCESS_WHERE}
+            OPTIONAL MATCH (r:Role {{id: s.access_role_id}})
+            OPTIONAL MATCH (u:User {{id: s.owner_id}})
+            RETURN s AS s, r.name AS access_role_name, u.username AS owner_name,
+                   count {{ (s)<-[:FROM]-(:Passage) }} AS passages,
+                   count {{ (s)<-[:FROM]-(:Passage)-[:STATES]->(:Fact) }} AS fact_links
             ORDER BY s.created_at DESC
-            """
+            """,
+            **access_params(access),
         )
         return [_source_row(r) for r in rows]
 
@@ -176,23 +209,26 @@ class MemoryQueries(Neo4jBase):
             error=error,
         )
 
-    def get_passages(self, ids: list[str]) -> list[dict[str, Any]]:
+    def get_passages(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
         rows = self.run(
-            """
+            f"""
             UNWIND $ids AS id
-            MATCH (p:Passage {id: id})-[:FROM]->(s:Source)
+            MATCH (p:Passage {{id: id}})-[:FROM]->(s:Source) WHERE {ACCESS_WHERE}
             RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal,
                    s.id AS source_id, s.name AS source_name,
                    p.entities_json AS entities_json, p.triples_json AS triples_json, p.extraction_error AS extraction_error
             """,
             ids=ids,
+            **access_params(access),
         )
         return [_passage_row(r) for r in rows]
 
-    def passages_for_source(self, source_id: str, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def passages_for_source(
+        self, source_id: str, limit: int = 50, offset: int = 0, access: Access | None = None
+    ) -> list[dict[str, Any]]:
         rows = self.run(
-            """
-            MATCH (p:Passage)-[:FROM]->(s:Source {id: $id})
+            f"""
+            MATCH (p:Passage)-[:FROM]->(s:Source {{id: $id}}) WHERE {ACCESS_WHERE}
             RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal,
                    s.id AS source_id, s.name AS source_name,
                    p.entities_json AS entities_json, p.triples_json AS triples_json, p.extraction_error AS extraction_error
@@ -201,6 +237,7 @@ class MemoryQueries(Neo4jBase):
             id=source_id,
             limit=limit,
             offset=offset,
+            **access_params(access),
         )
         return [_passage_row(r) for r in rows]
 
@@ -232,27 +269,37 @@ class MemoryQueries(Neo4jBase):
                 now=now_iso(),
             )
 
-    def get_entities(self, ids: list[str]) -> list[dict[str, Any]]:
+    def get_entities(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        # An entity is visible when a visible passage mentions it, and its passage_count counts
+        # visible passages only (a count over hidden passages would leak that they exist). Unrestricted
+        # reads keep entities nothing mentions yet: the indexer looks them up before linking them.
         rows = self.run(
-            """
+            f"""
             UNWIND $ids AS id
-            MATCH (e:Entity {id: id})
-            RETURN e.id AS id, e.name AS name, coalesce(e.boost, 1.0) AS boost,
-                   count { (e)<-[:MENTIONS]-() } AS passage_count
+            MATCH (e:Entity {{id: id}})
+            WITH e, count {{ (e)<-[:MENTIONS]-(:Passage)-[:FROM]->(s:Source) WHERE {ACCESS_WHERE} }} AS passage_count
+            WHERE $acc_all OR passage_count > 0
+            RETURN e.id AS id, e.name AS name, coalesce(e.boost, 1.0) AS boost, passage_count
             """,
             ids=ids,
+            **access_params(access),
         )
         return rows
 
-    def search_entities(self, text: str, limit: int = 20) -> list[dict[str, Any]]:
+    def search_entities(
+        self, text: str, limit: int = 20, access: Access | None = None
+    ) -> list[dict[str, Any]]:
         rows = self.run(
-            """
+            f"""
             MATCH (e:Entity) WHERE e.name CONTAINS $text
-            RETURN e.id AS id, e.name AS name, count { (e)<-[:MENTIONS]-() } AS passage_count
+            WITH e, count {{ (e)<-[:MENTIONS]-(:Passage)-[:FROM]->(s:Source) WHERE {ACCESS_WHERE} }} AS passage_count
+            WHERE $acc_all OR passage_count > 0
+            RETURN e.id AS id, e.name AS name, passage_count
             ORDER BY passage_count DESC, e.name LIMIT $limit
             """,
             text=text.lower(),
             limit=limit,
+            **access_params(access),
         )
         return rows
 
@@ -286,16 +333,20 @@ class MemoryQueries(Neo4jBase):
                 now=now_iso(),
             )
 
-    def get_facts(self, ids: list[str]) -> list[dict[str, Any]]:
+    def get_facts(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        # A fact is visible when a visible passage states it; only those passages are listed.
         rows = self.run(
-            """
+            f"""
             UNWIND $ids AS id
-            MATCH (f:Fact {id: id})-[:SUBJECT]->(a:Entity), (f)-[:OBJECT]->(b:Entity)
+            MATCH (f:Fact {{id: id}})-[:SUBJECT]->(a:Entity), (f)-[:OBJECT]->(b:Entity)
+            WITH f, a, b,
+                 [(p:Passage)-[:STATES]->(f) WHERE EXISTS {{ (p)-[:FROM]->(s:Source) WHERE {ACCESS_WHERE} }} | p.id] AS passage_ids
+            WHERE $acc_all OR size(passage_ids) > 0
             RETURN f.id AS id, f.subject AS subject, f.predicate AS predicate, f.object AS object,
-                   a.id AS subject_id, b.id AS object_id,
-                   [(p:Passage)-[:STATES]->(f) | p.id] AS passage_ids
+                   a.id AS subject_id, b.id AS object_id, passage_ids
             """,
             ids=ids,
+            **access_params(access),
         )
         return rows
 
@@ -352,7 +403,7 @@ class MemoryQueries(Neo4jBase):
             """
             MATCH (e:Entity)
             RETURN e.id AS id, e.name AS name, coalesce(e.boost, 1.0) AS boost,
-                   count { (e)<-[:MENTIONS]-() } AS passage_count
+                   count { (e)<-[:MENTIONS]-() } AS passage_count, e.created_at AS created_at
             """
         )
 
@@ -411,6 +462,9 @@ SOURCE_DEFAULTS: dict[str, Any] = {
     "meta_json": "{}",
     "created_at": "",
     "updated_at": "",
+    "owner_id": None,
+    "access_role_id": None,
+    "min_rank": 0,
 }
 
 
@@ -419,6 +473,11 @@ def _source_row(row: dict[str, Any]) -> dict[str, Any]:
     source["meta"] = json.loads(source.pop("meta_json", None) or "{}")
     source["passages"] = int(row.get("passages", 0))
     source["fact_links"] = int(row.get("fact_links", 0))
+    source["min_rank"] = int(source.get("min_rank") or 0)
+    source["access_role_name"] = row.get("access_role_name") or (
+        "Everyone" if not source.get("access_role_id") else source["access_role_id"]
+    )
+    source["owner_name"] = row.get("owner_name") or ""
     return source
 
 

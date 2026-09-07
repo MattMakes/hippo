@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..access import Access
 from ..ask import answer_from_trace
 from ..context import AppContext
 from ..hipporag.answerer import Answer
@@ -84,10 +85,17 @@ class Simulation:
 
 
 def simulate(
-    ctx: AppContext, question: str, overrides: Overrides, baseline: Trace | None = None
+    ctx: AppContext,
+    question: str,
+    overrides: Overrides,
+    baseline: Trace | None = None,
+    access: Access | None = None,
 ) -> Simulation:
-    """Run the search again with `overrides` and diff it against `baseline` (or a fresh plain search)."""
-    index = ctx.graph()
+    """
+    Run the search again with `overrides` and diff it against `baseline` (or a fresh plain search).
+    `access` keeps the simulation inside the caller's slice of the graph (hippo/access.py).
+    """
+    index = ctx.graph_for(access)
     retriever = Retriever(index, ctx.ollama)
 
     base_settings = dict(baseline.settings) if baseline is not None else ctx.store.get_settings()
@@ -110,7 +118,7 @@ def simulate(
         node_boosts=dict(overrides.node_boosts) or None,
         graph=graph,
     )
-    answer = answer_from_trace(ctx, trace) if overrides.reanswer else None
+    answer = answer_from_trace(ctx, trace, access) if overrides.reanswer else None
     return Simulation(trace=trace, answer=answer, diff=diff_traces(baseline, trace), baseline=baseline)
 
 

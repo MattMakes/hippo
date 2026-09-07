@@ -77,6 +77,10 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT eval_result_id IF NOT EXISTS FOR (n:EvalResult) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT changeset_id IF NOT EXISTS FOR (n:Changeset) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT settings_id IF NOT EXISTS FOR (n:Settings) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT role_id IF NOT EXISTS FOR (n:Role) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT user_id IF NOT EXISTS FOR (n:User) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT user_username IF NOT EXISTS FOR (n:User) REQUIRE n.username IS UNIQUE",
+    "CREATE CONSTRAINT user_token IF NOT EXISTS FOR (n:User) REQUIRE n.token IS UNIQUE",
     # A TEXT index (not the default RANGE one) is what `CONTAINS` searches can use.
     "CREATE TEXT INDEX entity_name IF NOT EXISTS FOR (n:Entity) ON (n.name)",
 ]
@@ -106,8 +110,14 @@ def now_iso() -> str:
 class Neo4jBase:
     def __init__(self, uri: str, user: str, password: str, database: str = "neo4j"):
         # Short timeouts: when Neo4j is unreachable a page should say so in seconds, not hang for a minute.
+        # Notifications off: on a fresh database Neo4j warns that e.g. `owner_id` "does not exist" for
+        # every query that mentions a property no node has yet, which would flood the log on each poll.
         self.driver = GraphDatabase.driver(
-            uri, auth=(user, password), connection_timeout=5.0, connection_acquisition_timeout=10.0
+            uri,
+            auth=(user, password),
+            connection_timeout=5.0,
+            connection_acquisition_timeout=10.0,
+            notifications_min_severity="OFF",
         )
         self.database = database
         self._bootstrapped = False  # schema created and interrupted jobs cleaned, once per process
@@ -225,7 +235,9 @@ class Neo4jBase:
                    count { ()-[:MENTIONS]->() } AS mention_edges,
                    count { (:QuestionSet) } AS question_sets,
                    count { (:EvalRun) } AS eval_runs,
-                   count { (:Changeset) } AS changesets
+                   count { (:Changeset) } AS changesets,
+                   count { (:User) } AS users,
+                   count { (:Role) } AS roles
             """
         )
         return {k: int(v) for k, v in (row or {}).items()}

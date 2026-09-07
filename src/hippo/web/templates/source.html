@@ -7,12 +7,43 @@
     <h1>{{ source.name }}</h1>
   </div>
   <div class="row">
+    <a class="btn" href="/graph?source={{ source.id }}">Show in graph</a>
+    {% if can_evals %}
     <a class="btn" href="/evals?source={{ source.id }}">Question sets</a>
     <button class="btn" data-post="/api/sources/{{ source.id }}/generate-questions" data-body='{"max_single": 8, "max_multihop": 4}' data-message="Making questions… this takes a minute" data-then="/evals" data-refresh="1500" {% if source.status != 'ready' %}disabled title="Wait until indexing has finished"{% endif %}>Make sample questions</button>
+    {% endif %}
+    {% if source.can_manage %}
     <button class="btn" data-post="/api/sources/{{ source.id }}/reindex" data-message="Re-indexing" data-refresh="800" {% if busy %}disabled{% endif %}>Reindex</button>
     <button class="btn danger" data-delete="/api/sources/{{ source.id }}" data-confirm="Forget '{{ source.name }}' and everything learned from it?" data-then="/" {% if busy %}disabled title="Wait until indexing has finished"{% endif %}>Delete</button>
+    {% endif %}
   </div>
 </div>
+{% if request.query_params.get('error') %}<div class="callout bad">{{ request.query_params.get('error') }}</div>{% endif %}
+
+<section class="card access-card">
+  <div class="row spread">
+    <div>
+      <h3>Who can see this</h3>
+      <p class="muted small">
+        {% if source.access_role_id %}<b>{{ source.access_role_name }}</b> and every tier above it{% else %}<b>Everyone</b> who can sign in{% endif %}{% if source.owner_name %}, and its owner <b>{{ source.owner_name }}</b>{% if source.is_mine %} (you){% endif %}{% endif %}.
+        Its passages, and the entities and facts only they support, are absent from everyone else's searches and graph.
+      </p>
+    </div>
+    {% if source.can_manage %}
+    <form method="post" action="/sources/{{ source.id }}/access" class="row">
+      <input type="hidden" name="back" value="/sources/{{ source.id }}">
+      <select name="visibility" style="max-width:240px">
+        {% for r in visibility_choices %}<option value="{{ r.id }}" {{ 'selected' if r.id == source.access_role_id }}>{{ r.name }} and above</option>{% endfor %}
+        {% if source.access_role_id and source.access_role_id not in (visibility_choices | map(attribute='id') | list) %}<option value="{{ source.access_role_id }}" selected>{{ source.access_role_name }} and above</option>{% endif %}
+        <option value="everyone" {{ 'selected' if not source.access_role_id }}>Everyone</option>
+      </select>
+      <button class="btn" type="submit">Change</button>
+    </form>
+    {% else %}
+    <span class="muted small">Only the owner or a role with <code>manage_sources</code> can change this.</span>
+    {% endif %}
+  </div>
+</section>
 
 <div class="grid three">
   <section class="card">

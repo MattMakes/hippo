@@ -75,6 +75,8 @@ def small_graph(store) -> str:
 
 def test_load_entities_rows(store, small_graph: str) -> None:
     rows = {r["id"]: r for r in store.load_entities()}
+    created_at = rows["a"].pop("created_at")  # set on creation; the graph loader sorts by it
+    assert created_at
     assert rows["a"] == {"id": "a", "name": "alpha", "boost": 1.0, "passage_count": 2}
     assert rows["c"]["passage_count"] == 1
 

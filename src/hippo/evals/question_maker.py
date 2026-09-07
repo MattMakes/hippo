@@ -28,6 +28,7 @@ from itertools import combinations
 from typing import Any
 
 from .. import prompts
+from ..access import Access
 from ..context import AppContext
 from ..hipporag.graph_index import ENTITY, GraphIndex, Passage
 from ..ollama import OllamaError
@@ -62,12 +63,16 @@ def generate_questions(
     max_multihop: int = 5,
     name: str | None = None,
     set_id: str | None = None,
+    access: Access | None = None,
 ) -> str:
-    """Fill a question set about `source_id` (creating it unless `set_id` is given). Returns the set id."""
+    """
+    Fill a question set about `source_id` (creating it unless `set_id` is given). Returns the set id.
+    `access` keeps the passages (and the entity pairs for multi-hop questions) inside the caller's slice.
+    """
     set_id = set_id or _create_set(ctx, source_id, name)
     store = ctx.store
     try:
-        index = ctx.graph()
+        index = ctx.graph_for(access)
         passages = _passages_of(index, source_id)
         if not passages:
             raise ValueError("this source has no indexed passages yet; index it first")

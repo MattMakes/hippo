@@ -4,14 +4,20 @@ and the in-memory graph (rebuilt when Neo4j's graph version changes).
 
 Web routes, the MCP server and the CLI all get an `AppContext` and call the
 same functions, so behaviour is identical no matter where a request comes from.
+
+`graph()` is the whole graph; `graph_for(access)` is the part a user may see
+(hippo/access.py). Scoped graphs are cut from the full one in memory and cached
+by the set of visible sources, so two users who see the same sources share one.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
+from .access import Access
 from .config import Config, load_config
 from .hipporag.graph_index import GraphIndex
 from .jobs import Jobs
@@ -32,6 +38,9 @@ class AppContext:
     _graph: GraphIndex | None = None
     _graph_lock: threading.Lock = field(default_factory=threading.Lock)  # guards `_graph` itself
     _reload_lock: threading.Lock = field(default_factory=threading.Lock)  # only one thread loads at a time
+    # (graph version, visible source ids) -> scoped GraphIndex; small, because cutting one is cheap
+    _scoped: OrderedDict[tuple[int, frozenset[str]], GraphIndex] = field(default_factory=OrderedDict)
+    _scoped_lock: threading.Lock = field(default_factory=threading.Lock)
 
     @classmethod
     def from_env(cls, ollama: Ollama | None = None) -> AppContext:
@@ -92,9 +101,41 @@ class AppContext:
             self._graph = loaded
         return loaded
 
+    SCOPED_CACHE_SIZE = 16
+
+    def graph_for(self, access: Access | None) -> GraphIndex:
+        """
+        The graph as `access` may see it. Unrestricted access (None, open mode, internal work)
+        gets the full graph; anyone else gets an induced subgraph over their visible sources,
+        so a search can neither rank a hidden passage nor spread activation through one.
+        """
+        full = self.graph()
+        if access is None or access.unrestricted:
+            return full
+        # The store applies the access predicate itself, so this is the Cypher-checked list.
+        visible = frozenset(row["id"] for row in self.store.list_sources(access))
+        key = (full.version, visible)
+        with self._scoped_lock:
+            cached = self._scoped.get(key)
+            if cached is not None:
+                self._scoped.move_to_end(key)
+                return cached
+        scoped = full.scoped(visible)
+        with self._scoped_lock:
+            self._scoped[key] = scoped
+            while len(self._scoped) > self.SCOPED_CACHE_SIZE:
+                self._scoped.popitem(last=False)
+        return scoped
+
     def invalidate_graph(self) -> None:
         with self._graph_lock:
             self._graph = None
+        self.invalidate_scoped()
+
+    def invalidate_scoped(self) -> None:
+        """Forget the per-viewer graphs (after a source's visibility changed; the full graph is unchanged)."""
+        with self._scoped_lock:
+            self._scoped.clear()
 
     def close(self) -> None:
         self.store.close()

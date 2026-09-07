@@ -120,7 +120,9 @@ class GraphIndex:
         started = time.time()
         version = store.graph_version() if version is None else version
 
-        entity_rows = store.load_entities()
+        # Neo4j returns nodes in no promised order (deleted node ids get reused), so sort here:
+        # vertex numbers are recorded in traces, and a stable numbering keeps old traces readable.
+        entity_rows = sorted(store.load_entities(), key=lambda r: (r.get("created_at") or "", r["id"]))
         passage_rows = sorted(store.load_passages(), key=lambda r: (r["source_id"], r["ordinal"] or 0))
         fact_rows = store.load_facts()
         # A row without a usable vector cannot take part in similarity search; drop it here so the
@@ -289,6 +291,110 @@ class GraphIndex:
             implementation="prpack",
         )
         return np.asarray(scores, dtype=np.float64)
+
+    # ------------------------------------------------------ access scope
+
+    def scoped(self, visible_sources: frozenset[str] | set[str]) -> GraphIndex:
+        """
+        The part of this graph a user may see: passages of `visible_sources`, the entities those
+        passages mention, the facts they state, and only the edges among them.
+
+        This is what makes access control hold for search: PPR runs on the returned graph, so
+        activation can never pass through a hidden passage, and a hidden passage can never be
+        ranked. Edge weights and passage counts are recomputed from the visible passages alone,
+        so a fact stated only in a hidden passage neither links its entities nor seeds them.
+        """
+        visible = set(visible_sources)
+        keep_passages = [p for p in self.passages if p.source_id in visible]
+        if len(keep_passages) == len(self.passages):
+            return self  # nothing hidden: share the full index (and its cache)
+
+        keep_passage_ids = {p.id for p in keep_passages}
+        old_passage_vertices = {
+            int(self.passage_vertices[i]) for i, p in enumerate(self.passages) if p.id in keep_passage_ids
+        }
+
+        # Entities stay only when a visible passage mentions them (a mention edge to a kept passage).
+        keep_entity_vertices: set[int] = set()
+        mention_count: dict[int, int] = {}
+        for (a, b), e in self.edges.items():
+            if not e.mention:
+                continue
+            # Mention edges join a passage and an entity; entities come first in vertex order.
+            entity_v, passage_v = (a, b) if self.node_kind[a] == ENTITY else (b, a)
+            if passage_v in old_passage_vertices and self.node_kind[entity_v] == ENTITY:
+                keep_entity_vertices.add(entity_v)
+                mention_count[entity_v] = mention_count.get(entity_v, 0) + 1
+
+        entity_vertices = sorted(keep_entity_vertices)
+        entity_ids = [self.node_ids[v] for v in entity_vertices]
+        node_ids = entity_ids + [p.id for p in keep_passages]
+        node_kind = [ENTITY] * len(entity_ids) + [PASSAGE] * len(keep_passages)
+        idx_of = {node_id: i for i, node_id in enumerate(node_ids)}
+        old_to_new = {v: i for i, v in enumerate(entity_vertices)}
+        for i, p in enumerate(keep_passages):
+            old_to_new[self.idx_of[p.id]] = len(entity_ids) + i
+
+        boost = np.ones(len(node_ids))
+        passage_count = np.zeros(len(node_ids))
+        for old_v, new_v in old_to_new.items():
+            if self.node_kind[old_v] == ENTITY:
+                boost[new_v] = self.entity_boost[old_v]
+                passage_count[new_v] = float(mention_count.get(old_v, 0))
+
+        passage_positions = [i for i, p in enumerate(self.passages) if p.id in keep_passage_ids]
+        passage_vertices = np.array([idx_of[p.id] for p in keep_passages], dtype=np.int64)
+        passage_embeddings = (
+            self.passage_embeddings[passage_positions] if len(passage_positions) else _matrix([])
+        )
+
+        # Facts stay when a visible passage states them; their passage lists shrink to the visible ones.
+        facts: list[Fact] = []
+        fact_positions: list[int] = []
+        for i, f in enumerate(self.facts):
+            shown_in = [pid for pid in f.passage_ids if pid in keep_passage_ids]
+            if shown_in and f.subject_id in idx_of and f.object_id in idx_of:
+                facts.append(
+                    Fact(f.id, f.subject, f.predicate, f.object, f.subject_id, f.object_id, shown_in)
+                )
+                fact_positions.append(i)
+        fact_embeddings = self.fact_embeddings[fact_positions] if fact_positions else _matrix([])
+        fact_index_of = {f.id: i for i, f in enumerate(facts)}
+
+        # Edges among kept nodes. Fact counts are recomputed from the visible (passage, fact) pairs;
+        # mention, synonym and tuned values carry over as they are per pair, not per passage.
+        edges: dict[tuple[int, int], Edge] = {}
+        for (a, b), e in self.edges.items():
+            na, nb = old_to_new.get(a), old_to_new.get(b)
+            if na is None or nb is None:
+                continue
+            edges[(min(na, nb), max(na, nb))] = Edge(
+                fact_count=0, mention=e.mention, synonym_score=e.synonym_score, tuned=e.tuned
+            )
+        for f in facts:
+            a, b = idx_of[f.subject_id], idx_of[f.object_id]
+            if a == b:
+                continue
+            e = edges.setdefault((min(a, b), max(a, b)), Edge())
+            e.fact_count += len(f.passage_ids)
+
+        return GraphIndex(
+            version=self.version,
+            node_ids=node_ids,
+            node_kind=node_kind,
+            idx_of=idx_of,
+            entity_names={eid: self.entity_names.get(eid, eid) for eid in entity_ids},
+            entity_boost=boost,
+            entity_passage_count=passage_count,
+            passages=list(keep_passages),
+            passage_vertices=passage_vertices,
+            passage_embeddings=passage_embeddings,
+            facts=facts,
+            fact_embeddings=fact_embeddings,
+            fact_index_of=fact_index_of,
+            graph=build_igraph(len(node_ids), edges),
+            edges=edges,
+        )
 
     # ---------------------------------------------------- what-if edits
 
