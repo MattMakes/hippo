@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import zipfile
 
 import pytest
@@ -10,6 +11,8 @@ import pytest
 from hippo.context import AppContext
 from hippo.ingest import pipeline
 from hippo.ingest.repos import RepoError
+from hippo.store.base import DEFAULT_SETTINGS
+from tests.conftest import CODE_CHECKOUT_SUBJECTS, git_env, make_code_checkout
 
 SETTLE_SECONDS = 60
 
@@ -189,7 +192,7 @@ def test_add_repo_records_clone_failures(ctx: AppContext) -> None:
 def test_add_repo_indexes_a_checkout(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
     """Stand in for `git clone` by writing files into the destination, then check the whole flow."""
 
-    def fake_clone(url: str, dest, timeout: int = 300):
+    def fake_clone(url: str, dest, timeout: int = 300, depth: int = 1):
         (dest / "src").mkdir(parents=True)
         (dest / "src" / "app.py").write_text("def lift():\n    return 12\n")
         (dest / "README.md").write_text("Acme Robotics builds robot arms.")
@@ -344,3 +347,154 @@ def code_sample_paths() -> list[str]:
         for p in CODE_SAMPLE_PATH.rglob("*")
         if p.is_file() and p.name != "expected.json"
     ]
+
+
+# ------------------------------------------------------ repo history (WP2b)
+
+
+def test_a_repo_source_indexes_its_git_history(git_index) -> None:
+    ctx, source_id, _ = git_index
+    code = ctx.store.get_source(source_id)["meta"]["code"]
+
+    assert (code["commits"], code["history_skipped"]) == (3, 0)
+    assert code["modifies"] > 0
+    assert ctx.store.stats()["commits"] == 3
+    # The whole point: a commit is reachable from the symbol it changed, on every backend.
+    commits = {c["id"]: c for c in ctx.store.load_commits()}
+    assert {c["ordinal"] for c in commits.values()} == {0, 1, 2}
+    symbols = {s["id"]: s for s in ctx.store.load_symbols()}
+    touched = {
+        (commits[m["commit_id"]]["ordinal"], symbols[m["symbol_id"]]["qualname"])
+        for m in ctx.store.load_modifies()
+    }
+    assert (1, "OrderService.place") in touched
+    assert (1, "OrderService") not in touched  # innermost only, S2.9
+    assert [(a["a"], a["b"]) for a in ctx.store.load_precedes()] == [
+        (o[0], o[1])
+        for o in zip(
+            [c["id"] for c in sorted(commits.values(), key=lambda c: c["ordinal"])],
+            [c["id"] for c in sorted(commits.values(), key=lambda c: c["ordinal"])][1:],
+            strict=False,
+        )
+    ]
+
+
+def test_a_commit_gets_a_passage_of_its_own(git_index) -> None:
+    ctx, source_id, _ = git_index
+    titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
+    assert "commit " in "".join(titles)
+    subjects = sorted(t.split(": ", 1)[1] for t in titles if t.startswith("commit "))
+    assert subjects == sorted(CODE_CHECKOUT_SUBJECTS)
+    # DEFINED_IN: the commit node is reachable from its passage, like every other code node.
+    passage_ids = {
+        c["id"]: c["passage_ids"] for c in ctx.store.get_commits([c["id"] for c in ctx.store.load_commits()])
+    }
+    assert all(len(ids) == 1 for ids in passage_ids.values())
+
+
+def test_the_history_depth_setting_reaches_git_and_zero_disables_history(ctx, tmp_path, monkeypatch) -> None:
+    from hippo.ingest import pipeline, repos
+
+    checkout = make_code_checkout(tmp_path / "origin")
+    seen: list[int] = []
+
+    def clone_locally(url, dest, timeout=300, depth=1):
+        seen.append(depth)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", str(depth), "--single-branch", "--", url, str(dest)],
+            check=True,
+            env=git_env(),
+        )
+        return dest
+
+    monkeypatch.setattr(repos, "clone_repo", clone_locally)
+    ctx.store.update_settings({"code_history_depth": 0})
+    source_id = ctx.store.create_source("repo", "no history", {"url": f"file://{checkout}"})
+    pipeline.source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
+    pipeline.run_indexing(ctx, source_id)
+
+    code = ctx.store.get_source(source_id)["meta"]["code"]
+    assert (code["commits"], code["modifies"]) == (0, 0)
+    assert ctx.store.stats()["commits"] == 0
+    assert code["symbols"] > 0  # the code graph itself is unaffected
+    assert seen == [1]  # history off still clones, but only the tip
+
+
+def test_history_depth_clones_one_commit_deeper_than_it_reads(git_index) -> None:
+    # A shallow clone's oldest commit reports no parent, so its diff would be taken against the
+    # empty tree and it would look like the commit that added the whole repository. Fetching one
+    # extra commit puts that boundary outside the walk instead.
+    _, _, depths = git_index
+    assert depths == [DEFAULT_SETTINGS["code_history_depth"] + 1]
+
+
+def test_a_repo_source_still_links_its_prose_to_its_code(git_index) -> None:
+    # The README names `OrderService.place` in backticks and "the order service" in words. Both
+    # become REFERS_TO, at the two omegas the table gives -- a repo source is a code source and a
+    # prose source at once, and reading its history must not have cost it the prose half.
+    ctx, source_id, _ = git_index
+    symbols = {s["id"]: s["qualname"] for s in ctx.store.load_symbols()}
+    titles = {p["id"]: p["title"] for p in ctx.store.passages_for_source(source_id)}
+    found = {
+        (titles[r["passage_id"]], symbols[r["node_id"]], r["omega"], r["token"])
+        for r in ctx.store.load_refers_to()
+        if r["node_id"] in symbols and r["passage_id"] in titles
+    }
+    assert ("Code sample", "OrderService.place", 0.85, "OrderService.place") in found
+    assert ("Code sample", "OrderService", 0.6, "order service") in found
+
+
+def test_a_commit_passage_is_scanned_for_the_symbols_its_message_names(git_index) -> None:
+    # `_is_prose` counts a commit passage as prose, so "Add the order service" is scanned exactly
+    # as the README is -- and reaches `OrderService` by the same split-token rule, at 0.60. That
+    # is the whole reason a commit becomes a passage rather than only a node.
+    ctx, source_id, _ = git_index
+    commit_ids = {c["id"] for c in ctx.store.load_commits()}
+    commit_passages = {
+        p["id"]: p["title"]
+        for p in ctx.store.passages_for_source(source_id)
+        if p["title"].startswith("commit ")
+    }
+    assert len(commit_passages) == 3
+    assert commit_ids and all(
+        set(c["passage_ids"]) <= set(commit_passages) for c in ctx.store.get_commits(sorted(commit_ids))
+    )
+
+    symbols = {s["id"]: s["qualname"] for s in ctx.store.load_symbols()}
+    from_commits = {
+        (commit_passages[r["passage_id"]].split(": ", 1)[1], symbols[r["node_id"]], r["omega"], r["token"])
+        for r in ctx.store.load_refers_to()
+        if r["passage_id"] in commit_passages and r["node_id"] in symbols
+    }
+    assert ("Add the order service", "OrderService", 0.6, "order service") in from_commits
+    # And only from the message. The `Touched:` line is hippo's own writing, built from this
+    # source's MODIFIES edges: scanning it back out would invent a REFERS_TO for every pair
+    # MODIFIES already has, at a lower omega than the edge it was derived from.
+    assert not [row for row in from_commits if row[3].startswith("pyapp.")]
+
+
+def test_a_symbol_carries_the_commits_that_touched_it_all_the_way_to_an_answer(git_index) -> None:
+    """The whole chain on a real repository: git -> store -> GraphIndex -> the answer block.
+
+    WP3's three tests use `tests/fakes/code_fixture.write_commit_history`, a store-built stand-in
+    with seven-character shas. That is the cleaner test for the block's grammar, and it stays --
+    but nothing there would notice if a real 40-character sha reached the page whole, or if an
+    ISO date did. This is the test that would.
+    """
+    from hippo import ask
+
+    ctx, source_id, _ = git_index
+    trace = ask.search(ctx, "What does OrderService.place do?")
+    assert trace.used_code_seeds
+    assert trace.history, "a seeded symbol with MODIFIES edges must carry its commits"
+    row = trace.history[0]
+    # The trace keeps the real, whole sha -- it is what a reader would paste into `git show`.
+    assert len(row["sha"]) == 40
+    assert row["date"] == "2024-01-02"  # the day, not the full ISO timestamp
+    assert row["subject"] == "Total, invoice and log in place"
+
+    answer = ask.answer_from_trace(ctx, trace)
+    line = next(ln for ln in answer.context_block.splitlines() if ln.startswith("Commits: "))
+    assert line == f"Commits: {row['sha'][:7]} 2024-01-02 Total, invoice and log in place"
+    assert row["sha"] not in answer.context_block  # shortened for the page, whole in the trace

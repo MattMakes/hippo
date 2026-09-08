@@ -136,6 +136,35 @@ def test_only_one_thread_loads_when_many_ask_at_once(ctx: AppContext, monkeypatc
     assert ctx.graph().version == ctx.store.graph_version()
 
 
+def test_close_cancels_and_waits_for_jobs_before_closing_the_store(ctx: AppContext, monkeypatch) -> None:
+    """
+    A background job (an index, a model pull) may still be running when the app shuts down.
+    Neo4j's own driver warns that closing it while something is still using it "results in
+    unspecified behaviour" -- the intermittent BufferError this pins down. `close()` must
+    cancel every running job and wait for it to actually stop before it touches the store.
+    """
+    order: list[str] = []
+    deadline = time.monotonic() + 2.0  # a safety net: pre-fix, nothing cancels this job
+
+    def slow_job() -> None:
+        while not ctx.jobs.is_cancelled("slow") and time.monotonic() < deadline:
+            time.sleep(0.01)
+        order.append("job")
+
+    real_close = ctx.store.close
+
+    def spy_close() -> None:
+        order.append("store")
+        real_close()
+
+    monkeypatch.setattr(ctx.store, "close", spy_close)
+    assert ctx.jobs.start("slow", slow_job)
+
+    ctx.close()
+
+    assert order == ["job", "store"]
+
+
 def test_with_nothing_cached_every_caller_waits_for_the_one_load(ctx: AppContext, monkeypatch) -> None:
     # After invalidate_graph() there is no previous graph to fall back on, so callers must wait
     # rather than get None - and still only one of them loads.

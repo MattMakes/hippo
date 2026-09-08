@@ -697,9 +697,15 @@ def test_the_select_pass_is_not_called_unless_it_is_switched_on(code_retriever: 
     assert on.select["keep"] and on.select["raw"] == "kept all"
 
 
+def qa_slice(trace: Trace, qa_top_k: int = 5) -> list[str]:
+    """What `ask.answer_from_trace` reads and cites - the slice a `drop` has to be able to move."""
+    return [p.passage_id for p in trace.passages if not p.via_expand][:qa_top_k]
+
+
 def test_a_dropped_passage_is_demoted_and_never_removed(code_retriever: Retriever) -> None:
     base = code_retriever.retrieve(PLACE, settings())
     first = base.passages[0].passage_id
+    assert len(base.passages) > 5, "the qa slice has to have somewhere to promote from"
 
     trace = code_retriever.retrieve(
         PLACE, settings(), select_fn=lambda q, ranked: SelectResult(drop=[first], raw="dropped one")
@@ -710,6 +716,58 @@ def test_a_dropped_passage_is_demoted_and_never_removed(code_retriever: Retrieve
     demoted = next(p for p in trace.passages if p.passage_id == first)
     assert demoted.rank > 1
     assert [p.rank for p in trace.passages] == list(range(1, len(trace.passages) + 1))
+
+
+def test_a_dropped_passage_changes_what_the_model_reads(code_retriever: Retriever) -> None:
+    # AR1 fix 1. The judged window is wider than `qa_top_k`, and a demoted passage falls below
+    # everything the model never saw - so a "drop" replaces a passage in the slice `ask.py`
+    # answers from instead of only reordering it.
+    base = code_retriever.retrieve(PLACE, settings())
+    first = base.passages[0].passage_id
+
+    trace = code_retriever.retrieve(
+        PLACE, settings(), select_fn=lambda q, ranked: SelectResult(drop=[first], raw="dropped one")
+    )
+    assert set(qa_slice(trace)) != set(qa_slice(base))
+    assert first not in qa_slice(trace)
+    assert len(qa_slice(trace)) == len(qa_slice(base)) == 5
+
+
+def test_the_select_window_is_wider_than_the_slice_the_answerer_reads(code_retriever: Retriever) -> None:
+    seen: list[int] = []
+
+    def watcher(question, ranked):
+        seen.append(len(ranked))
+        return keep_all(question, ranked)
+
+    base = code_retriever.retrieve(PLACE, settings())
+    code_retriever.retrieve(PLACE, settings(), select_fn=watcher)
+    assert seen == [min(len(base.passages), 10)]  # max(qa_top_k * 2, qa_top_k + 5) at qa_top_k = 5
+
+    seen.clear()
+    code_retriever.retrieve(PLACE, settings(qa_top_k=1), select_fn=watcher)
+    assert seen == [min(len(base.passages), 6)]  # qa_top_k + 5 wins for a small slice
+
+
+def test_a_trace_stored_before_the_wider_select_window_still_loads() -> None:
+    # The window moved; the *stored* shape did not. A trace written by the narrow-window build
+    # (and every simulation replaying it) has to keep loading unchanged.
+    stored = {
+        "question": "What does place do?",
+        "settings": {"qa_top_k": 5},
+        "graph_version": 3,
+        "used_code_seeds": True,
+        "select": {
+            "keep": ["passage-a"],
+            "drop": ["passage-b"],
+            "expand": [],
+            "raw": "{'keep': ['passage-a']}",
+            "error": "",
+        },
+    }
+    trace = trace_from_dict(json.loads(json.dumps(stored)))
+    assert trace.select == stored["select"]
+    assert trace.used_code_seeds and trace.passages == []
 
 
 def test_unknown_passage_ids_in_the_reply_are_ignored(code_retriever: Retriever) -> None:

@@ -7,6 +7,10 @@ tests run against FakeStore locally and a real Neo4j in CI.
 
 from __future__ import annotations
 
+import random
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -174,6 +178,26 @@ def test_find_synonyms_skips_tiny_phrases_and_itself(store) -> None:
     pairs = find_synonyms(store, ids, vectors, names, threshold=0.0)
     # "us" is too short to be linked; "usa" links to "us" (never to itself).
     assert [(a, b) for a, b, _ in pairs] == [(ids[1], ids[0])]
+
+
+def test_the_top_neighbours_of_a_row_are_the_ones_a_full_sort_would_pick() -> None:
+    """
+    AR1 fix 9. `find_synonyms` sorted the entire key row per new id to take 100 of it; D7 put code
+    ids on both sides, so a 20k-symbol repository sorted 20k rows of 20k. `argpartition` is linear
+    and only the partition is sorted - and it must pick exactly what the full sort picked.
+    """
+    from hippo.hipporag.indexer import SYNONYM_MAX_NEIGHBOURS, _top_neighbours
+
+    rng = np.random.default_rng(7)
+    row = (rng.permutation(SYNONYM_MAX_NEIGHBOURS * 3) / 100).astype(np.float32)  # all distinct
+    assert list(_top_neighbours(row)) == list(np.argsort(-row, kind="stable")[:SYNONYM_MAX_NEIGHBOURS])
+
+    short = np.asarray([0.1, 0.9, 0.5], dtype=np.float32)  # shorter than the cut: keep it all
+    assert list(_top_neighbours(short)) == [1, 2, 0]
+    assert list(_top_neighbours(np.zeros(0, dtype=np.float32))) == []
+    # Two symbols named `place` in two classes embed identically, so ties are real here. They
+    # break by key index, which the old full sort (numpy's unstable quicksort) did not promise.
+    assert list(_top_neighbours(np.asarray([0.5, 0.9, 0.5, 0.9], dtype=np.float32))) == [1, 3, 0, 2]
 
 
 def test_find_synonyms_with_nothing_new_or_nothing_stored(store) -> None:
@@ -590,6 +614,39 @@ def test_symbols_carry_a_community_from_the_module_projection(store, ollama, cod
     assert all(row["community"] is not None for row in store.load_symbols())
 
 
+def test_two_leiden_runs_in_two_threads_do_not_interleave(code_chunks, monkeypatch) -> None:
+    """
+    AR1 fix 3. igraph's RNG is process-global and `_leiden` seeds it, runs and restores it, while
+    `jobs.py` runs each index job in its own thread. Without a lock two jobs interleave as
+    seed(A) -> seed(B) -> run(A) -> restore(A) -> run(B) and job B partitions unseeded: community
+    integers a re-index would not reproduce, on a single-threaded CI gate that stays green.
+    """
+    import igraph as ig
+
+    from hippo.hipporag.indexer import module_communities
+
+    graph, _chunks = code_chunks
+    events: list[str] = []
+    real = ig.set_random_number_generator
+
+    def spy(generator):
+        events.append("seed" if isinstance(generator, random.Random) else "restore")
+        time.sleep(0.01)  # wide enough that an unlocked interleave is a certainty, not a race
+        return real(generator)
+
+    monkeypatch.setattr(ig, "set_random_number_generator", spy)
+
+    results: list[dict[str, int]] = []
+    threads = [threading.Thread(target=lambda: results.append(module_communities(graph))) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert events == ["seed", "restore"] * 4, "seed/run/restore is one atomic triple"
+    assert len(results) == 4 and all(r == results[0] for r in results)
+
+
 def test_stopping_before_the_code_graph_stage_writes_no_code(store, ollama, code_source, code_chunks):
     graph, chunks = code_chunks
     with pytest.raises(openie.Stopped, match="writing code graph"):
@@ -801,3 +858,60 @@ def test_a_prose_entity_indexed_first_still_finds_the_symbol(store, ollama, code
 
     service = symbol_id(code_source, "pyapp/orders.py", "OrderService")
     assert {entity_id("order service"), service} in [{r["a"], r["b"]} for r in store.load_synonyms()]
+
+
+def test_the_indexed_history_matches_the_checked_in_spec(git_index, request) -> None:
+    """
+    The `commits` and `modifies` halves of the same spec, over a real repository.
+
+    Keyed by `(ordinal, subject)` and `(ordinal, path, qualname)` and never by SHA (S2.17): a
+    SHA hashes the author, the committer and their timestamps, and `commit_id` mixes in a
+    `source_id` that differs every run, so a file keyed on either could not match twice.
+    """
+    if request.config.getoption("--update-expected"):
+        pytest.skip(rewrite_expected())
+    ctx, source_id, _ = git_index
+    assert indexed_history(ctx.store, source_id) == checked_in_history()
+
+
+def checked_in_history() -> dict[str, list]:
+    import json
+
+    from tests.conftest import CODE_SAMPLE_PATH
+
+    document = json.loads((CODE_SAMPLE_PATH / "expected.json").read_text())
+    return {
+        "commits": sorted(
+            (c["ordinal"], c["subject"], c["message"], c["author"], c["date"]) for c in document["commits"]
+        ),
+        "modifies": sorted(
+            (m["ordinal"], m["path"], m["qualname"], _json(m["hunk"])) for m in document["modifies"]
+        ),
+    }
+
+
+def indexed_history(store, source_id: str) -> dict[str, list]:
+    commits = {c["id"]: c for c in store.load_commits() if c["source_id"] == source_id}
+    symbols = {s["id"]: s for s in store.load_symbols() if s["source_id"] == source_id}
+    return {
+        "commits": sorted(
+            (
+                c["ordinal"],
+                (c["message"].splitlines() or [""])[0],
+                c["message"],
+                c["author"],
+                c["date"],
+            )
+            for c in commits.values()
+        ),
+        "modifies": sorted(
+            (
+                commits[m["commit_id"]]["ordinal"],
+                symbols[m["symbol_id"]]["path"],
+                symbols[m["symbol_id"]]["qualname"],
+                _json(m["hunk"]),
+            )
+            for m in store.load_modifies()
+            if m["commit_id"] in commits and m["symbol_id"] in symbols
+        ),
+    }

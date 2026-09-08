@@ -30,6 +30,11 @@ from .graph_index import COMMIT, DATA, SYMBOL, CodeNode, DirectedEdge, GraphInde
 
 MAX_HOPS = 6  # shortest_code_path
 PATH_HOPS = 4  # code_paths_for: what goes in the answer block
+PAIRED_SEEDS = 5  # code_paths_for: how many of the seeds are searched against each other
+# One traversal's ceiling. `_bfs` re-sorts `_walkable` at every vertex it visits, so an unbounded
+# walk over a 20k-symbol graph is what `timing["paths"]` would spend a question on; past this many
+# visited vertices the two seeds are treated as unconnected, which is what the caller shows anyway.
+BFS_VISIT_BUDGET = 5000
 BLAST_DEPTH = 2
 BLAST_CAP = 200
 MAX_BLOCK_EDGES = 60  # a hard rail; `code_triples_chars` is the real cut
@@ -94,7 +99,13 @@ def display_of(node: CodeNode | None) -> str:
 
 
 def display_at(index: GraphIndex, vertex: int) -> str:
-    return display_of(index.code_node_at(vertex))
+    """Memoised on the index: `_walkable` sorts on this for two strings per edge at every vertex a
+    walk visits, and `display_of` rebuilds them each time (AR1 fix 6)."""
+    cached = index.display_cache.get(vertex)
+    if cached is None:
+        cached = display_of(index.code_node_at(vertex))
+        index.display_cache[vertex] = cached
+    return cached
 
 
 # -------------------------------------------------------------- resolving
@@ -190,7 +201,7 @@ def _bfs(
 ) -> list[DirectedEdge]:
     queue: deque[tuple[int, list[DirectedEdge]]] = deque([(a, [])])
     seen = {a}
-    while queue:
+    while queue and len(seen) < BFS_VISIT_BUDGET:  # a hard visit budget, not a time budget
         vertex, walked = queue.popleft()
         if len(walked) >= max_hops:
             continue
@@ -224,6 +235,13 @@ def code_paths_for(
 
     Order is deterministic (seed order, then the order the edges were loaded), and repeated edges
     appear once - the same INVOKES can be both a step on a path and a direct edge of its caller.
+
+    Only the first `PAIRED_SEEDS` are searched *against each other*. `vertices` arrives in weight
+    order from `_explain_code`, so those are the strongest seeds; every seed still contributes its
+    own direct edges. Pairing is a double BFS per pair, and two unrelated seeds are the common
+    case, so all of `MAX_CODE_SEEDS` would be 190 pairs and 380 traversals on the query path -
+    for a block `code_triples_chars` cuts long before that many relations reach a reader
+    (AR1 fix 6).
     """
     out: list[DirectedEdge] = []
     seen: set[tuple[int, int, str]] = set()
@@ -235,8 +253,9 @@ def code_paths_for(
             out.append(edge)
 
     ordered = list(dict.fromkeys(vertices))
-    for i, a in enumerate(ordered):
-        for b in ordered[i + 1 :]:
+    paired = ordered[:PAIRED_SEEDS]
+    for i, a in enumerate(paired):
+        for b in paired[i + 1 :]:
             for edge in shortest_code_path(index, a, b, theta=theta, max_hops=max_hops):
                 add(edge)
     for vertex in ordered:

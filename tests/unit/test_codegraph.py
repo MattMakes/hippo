@@ -515,12 +515,21 @@ def test_expected_json_matches_the_extractor(fixture_graph):
     }
 
 
-def test_expected_json_reserves_the_later_sections():
-    """WP2b fills these in; `update_expected.py` must not erase them. WP2i filled the other
-    two -- `definitions` and `refers_to` -- and `test_indexer.py` is what compares against them."""
-    for section in ("commits", "modifies"):
-        assert EXPECTED[section] == []
-    assert EXPECTED["definitions"] and EXPECTED["refers_to"]
+def test_expected_json_has_all_seven_sections_filled_in():
+    """
+    Every section of the spec now has content -- WP2b filled the last two.
+
+    `commits` and `modifies` are keyed by `(ordinal, subject)` and `(ordinal, path, qualname)`
+    and carry no sha of their own (S2.17): a sha hashes the author, the committer and both of
+    their timestamps, so a file keyed on one could not match on another machine. The `hunk` is
+    kept because it is what pins S2.9 -- the ranges are the file as it was at that commit.
+    """
+    for section in ("symbols", "data_objects", "edges", "definitions", "refers_to", "commits", "modifies"):
+        assert EXPECTED[section], f"{section} is empty"
+    assert {c["ordinal"] for c in EXPECTED["commits"]} == {0, 1, 2}
+    assert set(EXPECTED["commits"][0]) == {"ordinal", "subject", "message", "author", "date"}
+    assert set(EXPECTED["modifies"][0]) == {"ordinal", "path", "qualname", "hunk"}
+    assert set(EXPECTED["modifies"][0]["hunk"]) == {"file", "old_range", "new_range", "churn"}
 
 
 def test_expected_json_never_stores_node_ids():
@@ -1060,6 +1069,7 @@ def test_stats_shape(fixture_graph):
     stats = fixture_graph.stats()
     assert set(stats) == {
         "symbols",
+        "languages",  # WP4a: the status page's Code card reads this out of Source.meta["code"]
         "data_objects",
         "edges",
         "edges_by_kind",
@@ -1068,12 +1078,36 @@ def test_stats_shape(fixture_graph):
         "unresolved_calls",
         "unresolved_calls_total",
         "truncated",
+        "commits",
+        "modifies",
+        "history_skipped",
     }
     assert stats["symbols"] == 30
     assert stats["files_parsed"] == 10
     assert stats["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # tools/build.go
     assert stats["unresolved_calls"]["pyapp/orders.py"] == 2  # os.path.join and print
     assert stats["truncated"] is False
+    # An archive has no history to read, so the three history counts are zero rather than absent:
+    # `meta["code"]` has one shape whatever the source kind, and 0 commits is a fact about it.
+    assert (stats["commits"], stats["modifies"], stats["history_skipped"]) == (0, 0, 0)
+    assert json.loads(json.dumps(stats)) == stats
+
+
+def test_history_is_carried_on_the_graph_for_the_indexer_to_write():
+    """
+    `read_history` fills these; `extract_code` never does. They live on `CodeGraph` because the
+    indexer writes one object, and because `stats()` is what tells a user their history was cut
+    short (`history_skipped`) rather than their repository being small.
+    """
+    graph = graph_of({"a.py": "def one():\n    return 1\n"})
+    assert (graph.commits, graph.modifies, graph.precedes, graph.history_skipped) == ([], [], [], 0)
+
+    graph.commits = [{"id": "commit-1", "sha": "abc", "ordinal": 0}]
+    graph.modifies = [{"commit_id": "commit-1", "symbol_id": "symbol-1", "omega": 1.0, "hunk": {}}]
+    graph.precedes = [("commit-1", "commit-2")]
+    graph.history_skipped = 4
+    stats = graph.stats()
+    assert (stats["commits"], stats["modifies"], stats["history_skipped"]) == (1, 1, 4)
     assert json.loads(json.dumps(stats)) == stats
 
 
