@@ -103,7 +103,7 @@ def test_the_analyze_page_shows_the_seed_symbols_and_the_paths(client):
     assert "seed symbols" in page.lower()
     assert "pyapp.orders.OrderService.place" in page
     assert "identifier" in page  # the `how` column
-    assert "Paths" in page
+    assert "<h2>Paths" in page
     assert "-[INVOKES 1.00 same_file]-" in page  # S2.15, rendered by paths.render_triples
 
 
@@ -122,11 +122,22 @@ def test_the_code_knobs_take_their_bounds_from_setting_rules(client):
         assert f'min="{low}"' in field and f'max="{high}"' in field, (key, field)
 
 
-def test_a_prose_question_hides_the_code_sections(client):
+def test_a_prose_question_says_no_lexical_anchor_and_has_no_paths(client):
+    """
+    A prose question still collects *dense* seed symbols once a repository is indexed alongside,
+    so the table is not empty - and hiding it would be the wrong lie on the page whose whole job
+    is explaining what the search did. What must be unambiguous is that nothing lexical fired:
+    the footer says so, and there is no Paths section, because paths are gated on that (Ruling 1a).
+    """
     page = analyze_page(client, PROSE)
-    assert "Seed symbols" not in page
+    assert "A lexical anchor was found: <b>no</b>" in page
+    assert "<h2>Paths" not in page
     # The knobs stay: they are settings, and a prose question may still want the scale at 0.
     assert 'id="ov-code_structural_scale"' in page
+
+
+def test_a_code_question_says_a_lexical_anchor_was_found(client):
+    assert "A lexical anchor was found: <b>yes</b>" in analyze_page(client, PLACE)
 
 
 def test_a_dense_seed_names_the_passage_it_came_from(client, coded):
