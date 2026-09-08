@@ -97,6 +97,12 @@ class History:
     modifies: list[dict] = field(default_factory=list)
     precedes: list[tuple[str, str]] = field(default_factory=list)
     skipped: int = 0
+    # Whether the walk stopped before the end of the first-parent line, for any reason -- a
+    # budget or a cancellation. `skipped` alone cannot say: cancelling is not a budget, so it
+    # counts nothing, and a caller reading `skipped == 0` off a cancelled run would take a
+    # partial history for a complete one. Named like `CodeGraph.truncated`, which exists for
+    # exactly this reason.
+    truncated: bool = False
 
 
 @dataclass
@@ -165,9 +171,11 @@ def read_history(
     kept: list[str] = []
     for position, entry in enumerate(entries):
         if should_stop is not None and should_stop():
-            break  # cancellation, not a budget: nothing to report as skipped
+            history.truncated = True  # cancellation, not a budget: nothing to report as skipped
+            break
         if time.monotonic() - started >= total_s:
             history.skipped += len(entries) - position
+            history.truncated = True
             break
         node_id = commit_id(source_id, entry["sha"])
         try:

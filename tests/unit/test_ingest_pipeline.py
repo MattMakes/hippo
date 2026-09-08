@@ -446,17 +446,32 @@ def test_a_repo_source_still_links_its_prose_to_its_code(git_index) -> None:
 
 
 def test_a_commit_passage_is_scanned_for_the_symbols_its_message_names(git_index) -> None:
-    # `_is_prose` counts a commit passage as prose, so "Total, invoice and log in place" is
-    # scanned like a README is. This is the one thing a commit passage buys over a bare node.
+    # `_is_prose` counts a commit passage as prose, so "Add the order service" is scanned exactly
+    # as the README is -- and reaches `OrderService` by the same split-token rule, at 0.60. That
+    # is the whole reason a commit becomes a passage rather than only a node.
     ctx, source_id, _ = git_index
     commit_ids = {c["id"] for c in ctx.store.load_commits()}
     commit_passages = {
-        p["id"] for p in ctx.store.passages_for_source(source_id) if p["title"].startswith("commit ")
+        p["id"]: p["title"]
+        for p in ctx.store.passages_for_source(source_id)
+        if p["title"].startswith("commit ")
     }
     assert len(commit_passages) == 3
     assert commit_ids and all(
-        set(c["passage_ids"]) <= commit_passages for c in ctx.store.get_commits(sorted(commit_ids))
+        set(c["passage_ids"]) <= set(commit_passages) for c in ctx.store.get_commits(sorted(commit_ids))
     )
+
+    symbols = {s["id"]: s["qualname"] for s in ctx.store.load_symbols()}
+    from_commits = {
+        (commit_passages[r["passage_id"]].split(": ", 1)[1], symbols[r["node_id"]], r["omega"], r["token"])
+        for r in ctx.store.load_refers_to()
+        if r["passage_id"] in commit_passages and r["node_id"] in symbols
+    }
+    assert ("Add the order service", "OrderService", 0.6, "order service") in from_commits
+    # And only from the message. The `Touched:` line is hippo's own writing, built from this
+    # source's MODIFIES edges: scanning it back out would invent a REFERS_TO for every pair
+    # MODIFIES already has, at a lower omega than the edge it was derived from.
+    assert not [row for row in from_commits if row[3].startswith("pyapp.")]
 
 
 def test_a_symbol_carries_the_commits_that_touched_it_all_the_way_to_an_answer(git_index) -> None:

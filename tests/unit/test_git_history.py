@@ -150,6 +150,7 @@ def test_reads_the_three_commits_newest_first(tmp_path: Path) -> None:
     history, _ = history_of(checkout)
 
     assert [c["ordinal"] for c in history.commits] == [0, 1, 2]
+    assert history.truncated is False  # the whole first-parent line, start to finish
     assert [c["message"].strip() for c in history.commits] == list(reversed(CODE_CHECKOUT_SUBJECTS))
     assert [c["date"] for c in history.commits] == list(reversed(CODE_CHECKOUT_DATES))
     assert {c["author"] for c in history.commits} == {"Hippo Fixture"}
@@ -309,6 +310,7 @@ def test_the_whole_pass_budget_stops_the_walk_and_keeps_what_it_read(tmp_path: P
     # says so, rather than quietly reporting a repository with no history.
     assert history.commits == []
     assert history.skipped == 3
+    assert history.truncated is True
 
 
 def test_should_stop_ends_the_walk_without_counting_a_skip(tmp_path: Path) -> None:
@@ -326,6 +328,9 @@ def test_should_stop_ends_the_walk_without_counting_a_skip(tmp_path: Path) -> No
     )  # fmt: skip
     assert [c["ordinal"] for c in history.commits] == [0, 1]
     assert history.skipped == 0
+    # `skipped` is a budget count, and no budget was exceeded -- but the walk *did* stop early,
+    # and a caller that only looked at `skipped` could not tell this from a complete history.
+    assert history.truncated is True
 
 
 def test_a_merge_commit_reports_what_it_brought_in(tmp_path: Path) -> None:

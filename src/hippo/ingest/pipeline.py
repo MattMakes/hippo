@@ -314,6 +314,11 @@ def _clone_depth(ctx: AppContext) -> int:
     than we walk puts that boundary outside the walk, so it is never read at all.
     (`read_history` also refuses to diff a `.git/shallow` commit, which covers a clone this
     function did not make -- a user's own checkout, or a repo cloned before this setting moved.)
+
+    The settings are read here rather than threaded in because `read_source` is reached from
+    several callers and predates this pass; `_read_chunk_index` reads them again a moment later.
+    Two reads of a table that cannot change inside one job, for one fewer parameter on a public
+    function.
     """
     depth = int(ctx.store.get_settings()["code_history_depth"])
     return depth + 1 if depth > 0 else 1

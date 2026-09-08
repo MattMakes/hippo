@@ -278,7 +278,7 @@ def index_source(
         checkpoint("linking mentions")
         progress("linking mentions", 0, 1)
         refers = refers_to_rows(
-            code, [(pid, c.text) for pid, c in zip(ids, chunks, strict=True) if _is_prose(c)]
+            code, [(pid, _scanned(c)) for pid, c in zip(ids, chunks, strict=True) if _is_prose(c)]
         )
         store.add_refers_to(refers)
         progress("linking mentions", 1, 1)
@@ -320,6 +320,19 @@ def _openie_text(chunk: Chunk) -> str | None:
     if chunk.extract_text is None:
         return chunk.text
     return chunk.extract_text if len(chunk.extract_text.strip()) >= MIN_OPENIE_DOC_CHARS else None
+
+
+def _scanned(chunk: Chunk) -> str:
+    """
+    The text the name scanner reads: what a *person* wrote, never what hippo generated.
+
+    For every prose passage that is the passage itself, unchanged. For a commit passage it is
+    the message alone, not the `Touched: …` line the chunker appended: those names were built
+    from this source's own MODIFIES edges, so scanning them back out would manufacture a
+    REFERS_TO for every pair MODIFIES already has -- evidence derived from itself, at a lower
+    omega than the edge it came from.
+    """
+    return chunk.text if chunk.extract_text is None else (chunk.extract_text or chunk.text)
 
 
 def _is_prose(chunk: Chunk) -> bool:
