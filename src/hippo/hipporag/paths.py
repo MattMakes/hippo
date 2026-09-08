@@ -8,9 +8,10 @@ who calls whom, what a change would touch, which commits edited a function, whic
 
 Three rules hold for every tool here.
 
-* **`DEFINED_IN` and `PRECEDES` are never steps in a path.** `DEFINED_IN` joins a symbol to the
-  passage it is written down in - walking it would hop from "code" to "prose" and back, producing
-  paths that read as nonsense. `PRECEDES` chains commits and is only ever a side list (`history`).
+* **Only the relations between two code nodes are steps in a path** (`NOT_A_STEP` below).
+  `DEFINED_IN` and `REFERS_TO` join a symbol to the passage it is written down in or named by -
+  walking either would hop from "code" to "prose" and back, producing paths that read as nonsense.
+  `MODIFIES` and `PRECEDES` belong to history, which is a side list (`history`), not a route.
 * **`code_theta` filters, and it never touches PPR.** An edge below the threshold is invisible here
   and in the answer block; it still carries its weight into the graph search, where the reference's
   own `max()` rule decides what it is worth (D22).
