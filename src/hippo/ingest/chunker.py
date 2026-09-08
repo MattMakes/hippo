@@ -59,13 +59,83 @@ Piece = tuple[str, str, list[str], str | None]
 def chunk_documents(
     docs: list[Document], size_chars: int, overlap_chars: int, code: CodeGraph | None = None
 ) -> list[Chunk]:
-    """Chunk every document, numbering the chunks continuously across the list."""
+    """
+    Chunk every document, numbering the chunks continuously across the list.
+
+    A repository's commits come last and are passages like any other, so they get an embedding,
+    a DEFINED_IN link to their `Commit` node and -- because their `extract_text` is the message,
+    which is prose -- REFERS_TO edges to the symbols the message names.
+    """
     chunks: list[Chunk] = []
     for doc in docs:
         for chunk in chunk_document(doc, size_chars, overlap_chars, code=code):
             chunk.ordinal = len(chunks)
             chunks.append(chunk)
+    for chunk in _chunk_commits(code, size_chars):
+        chunk.ordinal = len(chunks)
+        chunks.append(chunk)
     return chunks
+
+
+def _chunk_commits(code: CodeGraph | None, size_chars: int) -> list[Chunk]:
+    """
+    One passage per commit: the message, then the symbols the commit touched.
+
+    The message is what OpenIE reads (`extract_text`) and the "Touched:" line is deliberately
+    not part of it -- those are identifiers, and OpenIE over prose is what this pass is for.
+    Names are the fully-qualified `display` form, the one the answer block, the path tools and
+    the CLI all use, so a reader sees the same name everywhere.
+    """
+    if code is None or not code.commits:
+        return []
+    size = max(MIN_CHUNK_CHARS, size_chars)
+    display = {s.id: s.display for s in code.symbols}
+    touched: dict[str, list[str]] = {}
+    for row in code.modifies:
+        name = display.get(row["symbol_id"])
+        if name is not None:
+            touched.setdefault(row["commit_id"], []).append(name)
+
+    chunks: list[Chunk] = []
+    for commit in code.commits:
+        message = (commit.get("message") or "").strip()
+        subject = message.splitlines()[0] if message else commit["sha"][:10]
+        names = touched.get(commit["id"], [])
+        chunks.append(
+            Chunk(
+                ordinal=0,  # chunk_documents renumbers across the whole source
+                title=f"commit {commit['sha'][:10]}: {subject}",
+                text=_commit_text(message, names, size),
+                defines=[commit["id"]],
+                extract_text=message,
+            )
+        )
+    return chunks
+
+
+def _commit_text(message: str, names: list[str], size: int) -> str:
+    """
+    `message`, then `Touched: a, b, c` -- cut to fit the passage with a count of what was cut.
+
+    A merge can touch hundreds of symbols, and a passage that long is neither readable nor
+    embeddable. Cutting silently would make the passage quietly wrong about what the commit
+    did, so the number that was dropped is part of the text.
+    """
+    if not names:
+        return message
+    header = f"{message}\n\nTouched: " if message else "Touched: "
+    kept: list[str] = []
+    for position, name in enumerate(names):
+        more = len(names) - position - 1
+        tail = f", … (+{more} more)" if more else ""
+        if len(header) + len(", ".join([*kept, name])) + len(tail) > size:
+            break
+        kept.append(name)
+    if len(kept) == len(names):
+        return header + ", ".join(kept)
+    if not kept:  # not even one name fits: say so rather than claim the commit touched nothing
+        return f"{header}… ({len(names)} symbols)"[:size]
+    return f"{header}{', '.join(kept)}, … (+{len(names) - len(kept)} more)"
 
 
 def chunk_document(

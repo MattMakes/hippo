@@ -394,3 +394,84 @@ def test_chunk_documents_numbers_symbol_passages_continuously(code_graph) -> Non
     chunks = chunk_documents(docs, 1500, 150, code=code_graph)
     assert [c.ordinal for c in chunks] == list(range(len(chunks)))
     assert chunks[-1].title == "notes.md" and chunks[-1].extract_text is None
+
+
+# ------------------------------------------------------- commit passages (WP2b)
+
+
+def commit_graph(code_graph, count: int = 2):
+    """The fixture's graph with a little history bolted on, as `read_history` would leave it."""
+    from dataclasses import replace
+
+    place = next(s for s in code_graph.symbols if s.qualname == "OrderService.place")
+    save = next(s for s in code_graph.symbols if s.qualname == "OrderService.save")
+    graph = replace(
+        code_graph,
+        commits=[
+            {
+                "id": f"commit-{i}",
+                "source_id": FIXTURE_SOURCE,
+                "sha": f"{i}" * 40,
+                "author": "Hippo Fixture",
+                "date": f"2024-01-0{i + 1}T09:00:00+00:00",
+                "message": f"Subject {i}\n\nA body paragraph for commit {i}.",
+                "ordinal": i,
+            }
+            for i in range(count)
+        ],
+        modifies=[
+            {"commit_id": "commit-0", "symbol_id": place.id, "omega": 1.0, "hunk": {}},
+            {"commit_id": "commit-0", "symbol_id": save.id, "omega": 1.0, "hunk": {}},
+        ],
+    )
+    return graph, place, save
+
+
+def test_each_commit_becomes_one_passage(code_graph) -> None:
+    graph, place, save = commit_graph(code_graph)
+    chunks = chunk_documents([fixture_doc(ORDERS)], 1500, 150, code=graph)
+    commits = [c for c in chunks if c.title.startswith("commit ")]
+
+    assert [c.title for c in commits] == [
+        "commit 0000000000: Subject 0",  # sha[:10] and the message's first line
+        "commit 1111111111: Subject 1",
+    ]
+    assert commits[0].defines == ["commit-0"]  # DEFINED_IN, so the commit node has a passage
+    # The whole message, then what it touched -- by fully-qualified display name, the same name
+    # the answer block and the path tools use, in the order MODIFIES came in.
+    assert commits[0].text == (
+        f"Subject 0\n\nA body paragraph for commit 0.\n\nTouched: {place.display}, {save.display}"
+    )
+    assert commits[1].text == "Subject 1\n\nA body paragraph for commit 1."  # touched nothing
+    # OpenIE sees the message only, never the "Touched:" line: those are identifiers, and the
+    # >= 80-char rule then skips a one-line commit message by itself (S2.7).
+    assert commits[0].extract_text == "Subject 0\n\nA body paragraph for commit 0."
+
+
+def test_commit_passages_come_after_the_files_and_keep_the_ordinal_run(code_graph) -> None:
+    graph, _, _ = commit_graph(code_graph)
+    chunks = chunk_documents(
+        [fixture_doc(ORDERS), prose("Boulder is in Colorado.", "n.md")], 1500, 150, code=graph
+    )
+    assert [c.ordinal for c in chunks] == list(range(len(chunks)))
+    assert [c.title.startswith("commit ") for c in chunks][-2:] == [True, True]
+
+
+def test_a_commit_that_touched_a_great_many_symbols_stays_one_readable_passage(code_graph) -> None:
+    graph, _, _ = commit_graph(code_graph)
+    graph.modifies = [
+        {"commit_id": "commit-0", "symbol_id": s.id, "omega": 1.0, "hunk": {}} for s in code_graph.symbols
+    ]
+    (commit,) = [
+        c for c in chunk_documents([], 300, 0, code=graph) if c.title == "commit 0000000000: Subject 0"
+    ]
+    assert len(commit.text) <= 300
+    assert commit.text.rstrip().endswith("more)")  # says how many names were cut, never lies by omission
+
+
+def test_a_graph_with_no_history_adds_no_commit_passages(code_graph) -> None:
+    assert not [
+        c
+        for c in chunk_documents([fixture_doc(ORDERS)], 1500, 150, code=code_graph)
+        if c.title.startswith("commit ")
+    ]

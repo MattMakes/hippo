@@ -801,3 +801,60 @@ def test_a_prose_entity_indexed_first_still_finds_the_symbol(store, ollama, code
 
     service = symbol_id(code_source, "pyapp/orders.py", "OrderService")
     assert {entity_id("order service"), service} in [{r["a"], r["b"]} for r in store.load_synonyms()]
+
+
+def test_the_indexed_history_matches_the_checked_in_spec(git_index, request) -> None:
+    """
+    The `commits` and `modifies` halves of the same spec, over a real repository.
+
+    Keyed by `(ordinal, subject)` and `(ordinal, path, qualname)` and never by SHA (S2.17): a
+    SHA hashes the author, the committer and their timestamps, and `commit_id` mixes in a
+    `source_id` that differs every run, so a file keyed on either could not match twice.
+    """
+    if request.config.getoption("--update-expected"):
+        pytest.skip(rewrite_expected())
+    ctx, source_id, _ = git_index
+    assert indexed_history(ctx.store, source_id) == checked_in_history()
+
+
+def checked_in_history() -> dict[str, list]:
+    import json
+
+    from tests.conftest import CODE_SAMPLE_PATH
+
+    document = json.loads((CODE_SAMPLE_PATH / "expected.json").read_text())
+    return {
+        "commits": sorted(
+            (c["ordinal"], c["subject"], c["message"], c["author"], c["date"]) for c in document["commits"]
+        ),
+        "modifies": sorted(
+            (m["ordinal"], m["path"], m["qualname"], _json(m["hunk"])) for m in document["modifies"]
+        ),
+    }
+
+
+def indexed_history(store, source_id: str) -> dict[str, list]:
+    commits = {c["id"]: c for c in store.load_commits() if c["source_id"] == source_id}
+    symbols = {s["id"]: s for s in store.load_symbols() if s["source_id"] == source_id}
+    return {
+        "commits": sorted(
+            (
+                c["ordinal"],
+                (c["message"].splitlines() or [""])[0],
+                c["message"],
+                c["author"],
+                c["date"],
+            )
+            for c in commits.values()
+        ),
+        "modifies": sorted(
+            (
+                commits[m["commit_id"]]["ordinal"],
+                symbols[m["symbol_id"]]["path"],
+                symbols[m["symbol_id"]]["qualname"],
+                _json(m["hunk"]),
+            )
+            for m in store.load_modifies()
+            if m["commit_id"] in commits and m["symbol_id"] in symbols
+        ),
+    }

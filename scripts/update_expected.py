@@ -12,8 +12,8 @@ Usage, from the repo root:
     .venv/bin/python scripts/update_expected.py           # rewrite the file
     .venv/bin/python scripts/update_expected.py --check   # exit 1 if it would change
 
-The file has seven top-level sections. This script owns the first five and leaves the last
-two exactly as it found them, so WP2b can fill them in without this script erasing the work:
+The file has seven top-level sections, and this script now owns all of them -- the last two
+need a git repository, which it builds in a temporary directory from the same tree:
 
     symbols       [{path, qualname, display, kind, lang, line_start, line_end, header_end,
                     signature, doc, is_test, raises, params, statement_lines}]
@@ -45,22 +45,23 @@ from __future__ import annotations
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from hippo.codegraph import extract_code  # noqa: E402
+from hippo.codegraph import extract_code, read_history  # noqa: E402
 from hippo.config import Config  # noqa: E402
 from hippo.hipporag.indexer import passage_id, refers_to_rows  # noqa: E402
 from hippo.ingest.chunker import chunk_documents  # noqa: E402
-from tests.conftest import CODE_SAMPLE_PATH, code_sample_docs  # noqa: E402
+from tests.conftest import CODE_SAMPLE_PATH, code_sample_docs, make_code_checkout  # noqa: E402
 
 EXPECTED = CODE_SAMPLE_PATH / "expected.json"
 SOURCE_ID = "fixture"
-OWNED = ("symbols", "data_objects", "edges", "definitions", "refers_to")
-LATER = ("commits", "modifies")
+OWNED = ("symbols", "data_objects", "edges", "definitions", "refers_to", "commits", "modifies")
+LATER = ()
 
 
 def build(source_id: str = SOURCE_ID) -> dict:
@@ -127,13 +128,58 @@ def build(source_id: str = SOURCE_ID) -> dict:
         }
         for row in refers_to_rows(graph, prose)
     ]
+    commits, modifies = history(source_id, graph.symbols)
     return {
         "symbols": sorted(symbols, key=lambda s: (s["path"], s["qualname"])),
         "data_objects": sorted(data_objects, key=lambda d: (d["kind"], d["qualname"])),
         "edges": sorted(edges, key=lambda e: (e["kind"], e["a"], e["b"])),
         "definitions": sorted(definitions, key=lambda d: (d["node"], d["passage"])),
         "refers_to": sorted(refers_to, key=lambda r: (r["passage"], r["node"])),
+        "commits": sorted(commits, key=lambda c: (c["ordinal"], c["subject"])),
+        "modifies": sorted(modifies, key=lambda m: (m["ordinal"], m["path"], m["qualname"])),
     }
+
+
+def history(source_id: str, head: list) -> tuple[list[dict], list[dict]]:
+    """
+    The `commits` and `modifies` sections, from a throwaway checkout of the same tree.
+
+    **Nothing here is keyed on a SHA** (S2.17). A SHA hashes the author, the committer and both
+    of their timestamps, and `commit_id` mixes in a `source_id` that is different on every run,
+    so a file keyed on either could never match twice. `(ordinal, subject)` names a commit and
+    `(ordinal, path, qualname)` names a MODIFIES row; the test maps this run's SHAs through the
+    ordinal. `make_code_checkout` pins the identity and the dates too, so the SHAs happen to be
+    stable as well -- but that is belt and braces, not the rule.
+
+    The HEAD symbols are the ones already extracted from the checked-in tree rather than from
+    the checkout: `make_code_checkout` asserts the two are byte-identical, so they are the same
+    symbols with the same ids -- and re-reading the checkout would mean walking into its `.git`.
+    """
+    with tempfile.TemporaryDirectory() as scratch:
+        checkout = make_code_checkout(Path(scratch))
+        read = read_history(checkout, head, source_id, depth=200, timeout_s=30, total_s=300)
+        ordinals = {c["id"]: c["ordinal"] for c in read.commits}
+        symbols = {s.id: s for s in head}
+        commits = [
+            {
+                "ordinal": c["ordinal"],
+                "subject": (c["message"].splitlines() or [""])[0],
+                "message": c["message"],
+                "author": c["author"],
+                "date": c["date"],
+            }
+            for c in read.commits
+        ]
+        modifies = [
+            {
+                "ordinal": ordinals[m["commit_id"]],
+                "path": symbols[m["symbol_id"]].path,
+                "qualname": symbols[m["symbol_id"]].qualname,
+                "hunk": m["hunk"],
+            }
+            for m in read.modifies
+        ]
+        return commits, modifies
 
 
 def render(sections: dict, existing: dict | None = None) -> str:
