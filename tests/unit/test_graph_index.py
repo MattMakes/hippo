@@ -29,6 +29,7 @@ from hippo.hipporag.graph_index import (
     COMMIT,
     DATA,
     ENTITY,
+    MAX_SCALED_GRAPHS,
     PASSAGE,
     SYMBOL,
     Edge,
@@ -578,6 +579,21 @@ def test_graph_for_scale_returns_the_default_graph_and_memoises_the_rest(index: 
     scaled = index.graph_for_scale(0.5)
     assert scaled is not index.graph
     assert index.graph_for_scale(0.5) is scaled  # memoised per scale
+
+
+def test_the_per_scale_memo_is_quantized_and_bounded(index: GraphIndex) -> None:
+    # AR1 fix 2: `code_structural_scale` is a user-supplied float and the settings form steps it
+    # by 0.01, so an unbounded memo keyed by the raw float is one full igraph per slider position.
+    assert index.graph_for_scale(0.5) is index.graph_for_scale(0.501)
+    assert index.graph_for_scale(0.999) is index.graph  # rounds to the default, no rebuild
+
+    for step in range(0, 90):
+        index.graph_for_scale(step / 100)
+    assert len(index._scaled) <= MAX_SCALED_GRAPHS
+
+    kept = index.graph_for_scale(0.89)  # the most recent survives, the oldest was evicted
+    assert index.graph_for_scale(0.89) is kept
+    assert 0.0 not in index._scaled
 
 
 def test_specificity_is_mention_count_for_entities_and_in_degree_plus_one_for_code(

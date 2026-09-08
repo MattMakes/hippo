@@ -54,6 +54,8 @@ COMMIT = "commit"
 
 CODE_KINDS: tuple[str, ...] = (SYMBOL, DATA, COMMIT)
 
+MAX_SCALED_GRAPHS = 3  # how many non-default `code_structural_scale` igraphs an index keeps
+
 
 @dataclass
 class Passage:
@@ -722,11 +724,19 @@ class GraphIndex:
         rebuild, because `Edge.weight` is a property with no access to settings and `build_igraph`
         runs once inside `load()`. The memo lives and dies with the index, which `graph_version`
         already invalidates; a `scoped()` index gets its own.
+
+        The scale is quantized to the settings form's own `step="0.01"` and at most
+        `MAX_SCALED_GRAPHS` are kept, oldest first. `code_structural_scale` is a user-supplied
+        float that nothing rounds, so an unbounded memo keyed by it grows one full igraph per
+        distinct float - hundreds of MB from one deliberate drag of the slider (AR1 fix 2).
         """
+        scale = round(scale, 2)
         if scale == 1.0:
             return self.graph
         cached = self._scaled.get(scale)
         if cached is None:
+            if len(self._scaled) >= MAX_SCALED_GRAPHS:
+                del self._scaled[next(iter(self._scaled))]  # insertion order: the oldest goes
             cached = build_igraph(self.num_nodes, self.edges, scale)
             self._scaled[scale] = cached
         return cached
