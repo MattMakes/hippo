@@ -19,6 +19,12 @@ dependencies = [
     "pypdf>=4.0",
     "python-docx>=1.1",
     "mcp>=2.0",
+    # The code graph: tree-sitter parses Python/TypeScript into symbols and calls,
+    # sqlglot reads the SQL literals we turn into READS/WRITES edges (codegraph/).
+    "tree-sitter>=0.25,<0.27",
+    "tree-sitter-python>=0.23,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+    "sqlglot>=27,<31",
 ]
 
 [project.optional-dependencies]
@@ -44,11 +50,17 @@ packages = ["src/hippo"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# tests/fixtures/ holds checked-in source trees that the code-graph extractor parses. They are
+# fixture data, not our tests: code_sample/tests/test_orders.py must never be collected. This is
+# pytest's default list plus "fixtures" (setting the key replaces the default, it does not extend it).
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "fixtures"]
 
 [tool.ruff]
 line-length = 110
 target-version = "py311"
-extend-exclude = ["docs/plans"]  # planning notes quote code verbatim; not ours to reformat
+# planning notes quote code verbatim, and tests/fixtures/ is a source tree whose exact bytes and
+# line numbers are the spec (one-line suites, undefined names on purpose); neither is ours to reformat.
+extend-exclude = ["docs/plans", "tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
