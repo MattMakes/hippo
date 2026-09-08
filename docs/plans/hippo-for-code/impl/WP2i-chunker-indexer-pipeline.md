@@ -62,7 +62,37 @@ list. The `Tiny` (`test_graph_index.py`) and `small_graph` (`test_store_graph.py
 `make_id`-shaped ids. The parity test in `test_store_code.py` goes red if a store method lands on one
 backend only. Full handoff in the `backend-developer-1` ledger entry (`horch sessions`).
 
-<!-- ORCHESTRATOR FILLS FROM THE WP2 LEDGER SUMMARY -->
+**WP2 (extractors + fixture), merged as 9ba5e39.** `extract_code(docs, source_id, *, should_stop=None)
+-> CodeGraph` in `src/hippo/codegraph/`. Over the fixture: 30 symbols, 12 data objects, 64 edges; over
+`src/hippo` 0.20 s. `Symbol` carries the WP1 store row fields PLUS five the store has no columns for:
+`params`, `module`, `display`, `header_end`, `statement_lines` — **use `Symbol.row()` / `DataObject.row()`,
+not `asdict()`**, to build store rows; you add `embedding`. Passage titles use `Symbol.display`
+(`module.qualname`, e.g. `pyapp.orders.OrderService.place`); PLAN 2.5 pins `src/tool.py :: src.tool.lift
+(lines 1-2)`. `header_end < line_start` means there is NO header passage (`pyapp/store.py` opens with
+`class Base`). `statement_lines` are the body's top-level statement starts — where an oversized passage
+may split. **`.sql` files are in `files_parsed` but yield NO symbols**: `graph.parsed(path)` is True and
+`graph.by_path(path)` is empty, so the chunker branches on `readers.lang_of(path) == "sql"`, not on
+`parsed()`. `DataObject.mentions` is `[(path, line), ...]` for EVERY site naming it (deduped across DDL /
+literal / `__tablename__` / `mongoose.model`) and is the only source for S2.5's DEFINED_IN-from-every-
+passage; a `.sql` file's tables have no owning symbol, so their DEFINED_IN comes from the `.sql` chunk's
+`defines`. `should_stop` returns a PARTIAL graph with `truncated=True` and never raises `openie.Stopped`
+(codegraph cannot import it) — the pipeline decides what a truncated graph means. A zip with a root
+folder resolves (unique-suffix fallback) but module qualnames/display keep the prefix
+(`myrepo-main.pyapp.orders`). `unresolved_calls` counts every call with no edge, builtins included
+(~4000 over `src/hippo` is expected). The three budget constants are UPPER_CASE
+(`CODE_MAX_FILES`, `CODE_MAX_FILE_BYTES`, `CODE_MAX_SYMBOLS_PER_SOURCE`). `data_access.py` sets the
+sqlglot logger to ERROR at import. `tests/conftest.py` already has `CODE_SAMPLE_PATH` and
+`code_sample_docs()`. `expected.json` is keyed by `(path, qualname)` / `(kind, qualname)`, never by node
+id; `scripts/update_expected.py` rewrites only `symbols`/`data_objects`/`edges` (`--check` fails when
+stale) and leaves `definitions`/`refers_to`/`commits`/`modifies` for you — extend it. Two approved
+rulings pinned by tests: `cli.main -> OrderService.place` is INVOKES 0.90 `via_import` (not 2.6's 0.50),
+and `place -> OrderService.log` is INVOKES 1.00 `same_file` with NO `place -> Base.log` edge. Where PLAN
+2.6's prose list and the 2.2b table conflict, the table wins. Pre-existing flake: an intermittent
+`BufferError` in the neo4j driver's `close()` teardown in `test_web_auth.py` — not yours. Full handoff in
+the `opus-1` ledger entry.
+
+**WP3 phase 1 is on `wp/wp3` (not merged yet)** and added `tests/fakes/code_fixture.py`, which writes
+the plan's tree through the store methods; you do not need it, but do not create a file of that name.
 
 ## Scope
 
