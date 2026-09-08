@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 from ... import ask as ask_service
 from ...ollama import OllamaError
 from ...status import system_status
-from ...store.base import DEFAULT_SETTINGS, validate_settings
+from ...store.base import DEFAULT_SETTINGS, SETTING_RULES, validate_settings
 from ..adhoc import remember_adhoc
 from ..auth import principal_of, require
 from ..render import ctx_of, render
@@ -33,17 +33,22 @@ SETTING_HELP = {
     "retrieval_top_k": "How many passages a search returns and keeps in the trace.",
     "qa_top_k": "How many passages the model reads before answering.",
     # The code graph. Without a line here a setting renders a blank hint and nobody notices.
-    "code_seed_weight": "Anchor seed mass; 0 = ignore symbols named in the question.",
-    "code_structural_scale": (
-        "Multiplier on every code-touching weight term; 0 = no code vertex reaches the graph search. "
-        "Capped at 3.0 so a code edge can never outrank three facts."
+    "code_seed_weight": (
+        "How strongly a symbol the question names starts the graph search; 0 ignores names entirely."
     ),
-    "code_theta": "Minimum confidence for the path tools and the answer block (never the graph search).",
-    "code_dense_seeds": "Code passages similar to the question that also seed their symbol.",
-    "code_triples_chars": "Size cap of the Code graph block.",
-    "code_community_boost": "Post-search score bonus for passages in a seed's community.",
-    "code_select": "The extra keep/drop/expand pass by the model, when code seeds fired.",
-    "code_expand_max": "Neighbours fetched per “expand”, confidence 0.75 and above.",
+    "code_structural_scale": (
+        "Multiplier on every weight that exists only because code was indexed; 0 keeps code out of the "
+        "graph search altogether. Capped at 3.0 so a code relation can never outrank three facts."
+    ),
+    "code_theta": "Minimum confidence a relation needs to be shown in a path or the answer block.",
+    "code_dense_seeds": (
+        "How many of the question's closest passages also start the search from the symbols they "
+        "define. Counted over all passages, not just code ones."
+    ),
+    "code_triples_chars": "Size cap on the Code graph block the model reads.",
+    "code_community_boost": "Score bonus for passages in the same subsystem as a symbol the question found.",
+    "code_select": "A second pass where the model keeps, drops or expands passages, when the question named a symbol.",
+    "code_expand_max": "How many neighbours one “expand” may fetch, confidence 0.75 and above.",
     "code_history_depth": "First-parent commits read per repo source; 0 disables history.",
     "code_git_timeout_s": "Per-commit `git show` budget; a timeout skips that commit.",
     "code_history_total_s": "Whole-pass budget for reading history; stops early and keeps what it read.",
@@ -129,6 +134,7 @@ def settings_page(request: Request, saved: int = 0):
         nav="settings",
         settings=ctx.store.get_settings() if ctx.store.ping() else DEFAULT_SETTINGS,
         help=SETTING_HELP,
+        rules=SETTING_RULES,
         saved=bool(saved),
         status=system_status(ctx, fresh=True),
         can_edit=principal_of(request).can("edit_graph"),
@@ -149,6 +155,7 @@ async def settings_submit(request: Request):
             nav="settings",
             settings=ctx.store.get_settings(),
             help=SETTING_HELP,
+            rules=SETTING_RULES,
             saved=False,
             error=str(exc),
             status=system_status(ctx, fresh=True),

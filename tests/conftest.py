@@ -122,16 +122,56 @@ def code_sample_zip() -> bytes:
     return buffer.getvalue()
 
 
-@pytest.fixture
-def code_index(ctx: AppContext):
-    """The fixture tree indexed through the real pipeline with FakeOllama: `(ctx, source_id)`."""
+def index_code_sample(ctx: AppContext) -> str:
+    """Index the fixture tree through the real pipeline (parse, chunk, code graph and all)."""
     from hippo.ingest import pipeline
 
     source_id = pipeline.add_upload(ctx, "code_sample.zip", code_sample_zip())
     ctx.jobs.wait_all(60)
     source = ctx.store.get_source(source_id)
     assert source["status"] == "ready", source["error"]
-    yield ctx, source_id
+    return source_id
+
+
+def sample_chunks(text: str) -> list:
+    """`samples/acme_robotics.md` as one passage per '## ' section."""
+    from hippo.hipporag.indexer import Chunk
+
+    chunks = []
+    for ordinal, section in enumerate(text.split("## ")[1:]):
+        title, _, body = section.partition("\n")
+        chunks.append(Chunk(ordinal, title.strip(), body.strip()))
+    return chunks
+
+
+def index_prose_sample(ctx: AppContext) -> str:
+    """Index `samples/acme_robotics.md`, the prose corpus every fidelity claim is measured against."""
+    from hippo.hipporag.indexer import index_source
+
+    source_id = ctx.store.create_source("sample", "Acme Robotics")
+    index_source(ctx.store, ctx.ollama, source_id, sample_chunks(SAMPLE_PATH.read_text()))
+    ctx.store.update_source(source_id, status="ready")
+    return source_id
+
+
+@pytest.fixture
+def code_index(ctx: AppContext):
+    """The fixture tree indexed through the real pipeline with FakeOllama: `(ctx, source_id)`."""
+    yield ctx, index_code_sample(ctx)
+
+
+@pytest.fixture
+def mixed_index(ctx: AppContext):
+    """
+    Prose *and* code in **one** memory: `(ctx, prose_source_id, code_source_id)`.
+
+    Every other "prose behaves as it does today" assertion in the suite runs on a prose-only
+    corpus, which is exactly why the two fidelity defects V2.5 found were invisible. The prose goes
+    in first, so a test can search before the code arrives and compare.
+    """
+    prose_source_id = index_prose_sample(ctx)
+    code_source_id = index_code_sample(ctx)
+    yield ctx, prose_source_id, code_source_id
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
