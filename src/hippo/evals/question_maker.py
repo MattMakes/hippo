@@ -290,7 +290,7 @@ def code_questions(index: GraphIndex, source_id: str, limit: int = 5) -> list[Qu
                 {
                     "text": f"What does {caller} call?",
                     "expected_answer": f"{caller} calls {callee}.",
-                    "gold_passage_ids": gold + callee_gold,
+                    "gold_passage_ids": _gold(gold, callee_gold),
                     "kind": "code",
                     "notes": (
                         f"INVOKES {callee} ({best.provenance}, omega {best.omega:.2f}); callees: {callees}"
@@ -346,7 +346,7 @@ def commit_questions(index: GraphIndex, source_id: str, limit: int = 5) -> list[
                 {
                     "text": f'What changed in the commit "{subject}"?',
                     "expected_answer": f'The commit "{subject}" changed {names}.',
-                    "gold_passage_ids": commit_gold + symbol_gold,
+                    "gold_passage_ids": _gold(commit_gold, symbol_gold),
                     "kind": "commit",
                     "notes": f"touched: {names}",
                 },
@@ -361,6 +361,17 @@ def commit_questions(index: GraphIndex, source_id: str, limit: int = 5) -> list[
 def _defining_passage_ids(index: GraphIndex, vertex: int) -> list[str]:
     """The passage ids a code node is written down in, in vertex order (so: passage ordinal order)."""
     return [index.node_ids[p] for p in sorted(index.defining_passages(vertex))]
+
+
+def _gold(*groups: list[str]) -> list[str]:
+    """Several nodes' passage ids as one gold list: order kept, each id once. Two symbols sharing a
+    passage would otherwise store it twice and read as two hits to anyone counting the raw list."""
+    out: list[str] = []
+    for group in groups:
+        for passage_id in group:
+            if passage_id not in out:
+                out.append(passage_id)
+    return out
 
 
 def _mentions_by_entity(index: GraphIndex, passages: list[Passage]) -> dict[int, list[Passage]]:
