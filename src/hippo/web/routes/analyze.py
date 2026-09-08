@@ -30,8 +30,10 @@ from ...analysis.changesets import save as save_changeset_ops
 from ...analysis.explain import explain
 from ...analysis.simulate import Overrides
 from ...analysis.simulate import simulate as run_simulation
+from ...hipporag.paths import render_triples
 from ...hipporag.retriever import Trace, trace_from_dict
 from ...ollama import OllamaError
+from ...store.base import SETTING_RULES
 from ..adhoc import ADHOC_LIMIT, recall_adhoc, remember_adhoc
 from ..auth import principal_of, require
 from ..render import ctx_of, render
@@ -127,6 +129,10 @@ def _render_analysis(request: Request, trace: Trace, *, result, answer, history,
         explanation=explanation,
         gold_ids=gold_ids,
         passage_text=passage_text,
+        # The S2.15 grammar is rendered here, by the same function the answer block uses, so the
+        # page and the block can never drift into two spellings of one relation.
+        path_lines=render_triples(trace.paths),
+        rules=SETTING_RULES,
         trace_key=trace_key,
         graph_changed=trace.graph_version != index.version,
         current_settings=ctx.store.get_settings(),

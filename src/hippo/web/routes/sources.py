@@ -20,11 +20,13 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ...access import Principal, roles_at_or_below
+from ...hipporag import paths
 from ...ingest import pipeline
 from ...ingest.pipeline import Busy
 from ...ingest.repos import RepoError
 from ..auth import principal_of, require
 from ..render import STOP_POLLING, ctx_of, render
+from . import graph as graph_routes
 
 router = APIRouter()
 
@@ -137,6 +139,7 @@ def source_page(request: Request, source_id: str, page: int = 1):
         nav="library",
         source=with_manage_flags([source], principal)[0],
         passages=passages,
+        code_details=code_details_for(ctx, principal, passages),
         question_sets=question_sets,
         page=page,
         pages=pages,
@@ -145,6 +148,67 @@ def source_page(request: Request, source_id: str, page: int = 1):
         visibility_choices=visibility_choices(ctx, principal),
         can_evals=principal.can("run_evals"),
     )
+
+
+CODE_COMMITS_SHOWN = 5
+
+
+def code_details_for(ctx, principal: Principal, passages: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Per passage id: the symbols written down in it and their corner of the code graph.
+
+    A prose source has none of this and gets an empty dict, which the template checks. The
+    relations are rendered by `paths.render_triples`, so the page and the block the model reads
+    say the same thing in the same S2.15 grammar rather than in two hand-written formats.
+
+    `is_commit` and `touched` are for the one passage kind that is not code: a commit's own
+    passage, which the template introduces by what it changed rather than by what it "defines".
+    """
+    index = ctx.graph_for(principal.access)
+    if not index.code_nodes:
+        return {}
+    theta = float(ctx.store.get_settings().get("code_theta", 0.0))
+    out: dict[str, Any] = {}
+    for passage in passages:
+        vertex = index.idx_of.get(passage["id"])
+        if vertex is None:  # still indexing, or hidden from this caller
+            continue
+        symbols = sorted(index.symbols_defined_in(vertex), key=lambda v: paths.display_at(index, v))
+        if not symbols:
+            continue
+        edges = [e for v in symbols for e in index.out_edges(v) if e.dst != vertex]
+        commits: list = []
+        for v in symbols:
+            for commit in paths.history(index, v, limit=CODE_COMMITS_SHOWN):
+                if commit.id not in {c.id for c in commits}:
+                    commits.append(commit)
+        # `paths.history` is newest-first per symbol, but a passage can define several symbols and
+        # the loop above concatenates their histories in display-name order. Sort the merged list
+        # before the cut, or the newest commit of the second symbol lands under the oldest of the
+        # first - and, once the cut bites, drops off the page entirely. `ordinal` 0 is newest.
+        commits.sort(key=lambda c: (c.ordinal, c.sha))
+        nodes = [index.code_node_at(v) for v in symbols]
+        out[passage["id"]] = {
+            # A commit is DEFINED_IN its own passage too, so a commit passage arrives here with the
+            # commit as its only "symbol". Saying it *defines* a sha is nonsense; what a reader
+            # wants is what the commit touched, which is exactly its MODIFIES targets.
+            "is_commit": all(n is not None and n.kind == "commit" for n in nodes),
+            "touched": sorted({paths.display_at(index, e.dst) for e in edges if e.kind == "MODIFIES"}),
+            "symbols": [
+                {
+                    "id": index.node_ids[v],
+                    "name": paths.display_at(index, v),
+                    "node": index.code_node_at(v),
+                }
+                for v in symbols
+            ],
+            "relations": paths.render_triples(
+                paths.triple_rows(index, graph_routes.sorted_edges(index, edges))
+            ),
+            "tests": paths.test_rows(index, paths.tests_for(index, symbols, theta=theta)),
+            "commits": paths.history_rows(commits[:CODE_COMMITS_SHOWN]),
+        }
+    return out
 
 
 @router.get("/partials/sources/{source_id}/status")

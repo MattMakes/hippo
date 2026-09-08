@@ -61,9 +61,45 @@
   <section class="card">
     <h3>Details</h3>
     <p class="muted small">Added {{ source.created_at[:16] | replace('T', ' ') }}<br>
-    {% for key, value in source.meta.items() if key not in ('counts', 'documents', 'chunks') %}{{ key }}: {{ value | short(60) }}<br>{% endfor %}</p>
+    {% for key, value in source.meta.items() if key not in ('counts', 'documents', 'chunks', 'code') %}{{ key }}: {{ value | short(60) }}<br>{% endfor %}</p>
   </section>
 </div>
+
+{% set code = source.meta.code %}
+{% if code %}
+<section class="card">
+  <h2>Code graph</h2>
+  <p class="muted">What reading this source as code found. Symbols, tables and commits are nodes of
+  the same graph as the entities; the relations between them are what a path, a blast radius and the
+  Code graph block in an answer are built from.</p>
+  <dl class="stats">
+    <div><dt>symbols</dt><dd>{{ code.symbols or 0 }}</dd></div>
+    <div><dt>data objects</dt><dd>{{ code.data_objects or 0 }}</dd></div>
+    <div><dt>relations</dt><dd>{{ code.edges or 0 }}</dd></div>
+    {# `is defined`, not `is not none`: an archive source has no `commits` key at all, and Jinja's
+       `none` test asks `value is None`, which Undefined is not - so `is not none` was true for
+       every source that has no history and printed an empty stat. #}
+    {% if code.commits is defined %}<div><dt>commits</dt><dd>{{ code.commits }}</dd></div>{% endif %}
+    <div><dt>files parsed</dt><dd>{{ code.files_parsed or 0 }}</dd></div>
+    {# `files_skipped` counts by reason (too_big / unsupported / parse_error), so it is a dict. #}
+    <div><dt>files skipped</dt><dd>{{ (code.files_skipped or {}).values() | sum }}</dd></div>
+    <div><dt>unresolved calls</dt><dd>{{ code.unresolved_calls_total or 0 }}</dd></div>
+  </dl>
+  {% if code.languages %}
+  <p class="muted small">languages: {{ code.languages | join(', ') }}</p>
+  {% endif %}
+  {# Only the reasons that actually skipped something: the dict carries a zero for every reason. #}
+  {% set skipped = (code.files_skipped or {}).items() | selectattr(1) | list %}
+  {% if skipped %}
+  <p class="muted small">skipped: {% for reason, n in skipped | sort %}{{ reason | replace('_', ' ') }} {{ n }}{{ ', ' if not loop.last }}{% endfor %}</p>
+  {% endif %}
+  {% if code.edges_by_kind %}
+  <p class="row wrap small">{% for kind, n in code.edges_by_kind | dictsort %}<span class="badge">{{ kind }} {{ n }}</span>{% endfor %}</p>
+  {% endif %}
+  {% if code.truncated %}<div class="callout warn small">Some files were too large to parse in full; their symbols stop where the budget did.</div>{% endif %}
+  {% if code.history_skipped %}<div class="callout warn small">History stopped early: {{ code.history_skipped }} commit(s) were not read (see <code>code_history_total_s</code>).</div>{% endif %}
+</section>
+{% endif %}
 
 {% if question_sets %}
 <section class="card">
@@ -90,6 +126,30 @@
       <summary>What the model extracted</summary>
       {% if p.entities %}<p class="muted small">Entities: {{ p.entities | join(', ') }}</p>{% endif %}
       <ul class="facts">{% for t in p.triples %}<li class="triple"><b>{{ t[0] }}</b> <i>{{ t[1] }}</i> <b>{{ t[2] }}</b></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    {% set cg = code_details.get(p.id) %}
+    {% if cg %}
+    <details>
+      <summary>In the code graph</summary>
+      {# A commit's own passage defines the commit, not any code: introduce it by what it changed. #}
+      {% if cg.is_commit %}
+      <p class="muted small">Touched
+        {% for name in cg.touched %}<code>{{ name }}</code>{{ ', ' if not loop.last }}{% endfor %}{% if not cg.touched %}nothing that survived resolution{% endif %}.
+      </p>
+      {% else %}
+      <p class="muted small">Defines
+        {% for s in cg.symbols %}<code>{{ s.name }}</code>{% if s.node.code_kind %} <span class="muted">({{ s.node.code_kind }}{% if s.node.line_start %}, lines {{ s.node.line_start }}–{{ s.node.line_end }}{% endif %})</span>{% endif %}{{ ', ' if not loop.last }}{% endfor %}.
+      </p>
+      {# The signature is what tells two same-named overloads apart, so it goes under the name. #}
+      {% for s in cg.symbols if s.node.signature %}
+      <p class="mono small">{{ s.node.signature }}</p>
+      {% endfor %}
+      {% endif %}
+      {# The same S2.15 grammar the answer block uses, rendered by paths.render_triples. #}
+      {% if cg.relations %}<ul class="facts small mono">{% for line in cg.relations %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}
+      {% if cg.tests %}<p class="muted small">Tests: {% for t in cg.tests %}<code>{{ t.name }}</code>{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+      {% if cg.commits %}<p class="muted small">Commits: {% for c in cg.commits %}<code>{{ c.sha[:7] }}</code> {{ c.date }} {{ c.subject | short(50) }}{{ ' · ' if not loop.last }}{% endfor %}</p>{% endif %}
     </details>
     {% endif %}
   </article>

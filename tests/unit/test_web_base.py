@@ -197,8 +197,8 @@ def test_entity_search_and_neighborhood(client):
 
 
 def test_the_graph_endpoints_survive_an_index_that_contains_code(ctx, client):
-    """The Graph page renders per-kind panels in WP4. Until then a symbol may look like an entity,
-    but nothing may 500 - and every count must still be about the kind it names."""
+    """Nothing may 500 over a code-bearing index, and every count must still be about the kind it
+    names. The per-kind panels themselves are `test_web_graph_code.py`."""
     source_id = ctx.store.create_source("repo", "pyapp")
     symbol_id = make_id("symbol-", "place")
     ctx.store.add_passages(
@@ -238,6 +238,7 @@ def test_the_graph_endpoints_survive_an_index_that_contains_code(ctx, client):
     by_id = {n["id"]: n for n in full["nodes"]}
     assert by_id[symbol_id]["kind"] == "symbol"
     assert by_id[symbol_id]["label"] == "pyapp.orders.OrderService.place"
+    assert "passage_count" not in by_id[symbol_id]  # a symbol is not an entity
     # Every passage node still resolves to its own passage, which is what passages-last protects.
     for node in full["nodes"]:
         if node["kind"] == "passage":
