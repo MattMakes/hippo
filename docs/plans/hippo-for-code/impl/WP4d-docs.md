@@ -3,12 +3,19 @@
 Read `impl/00-impl-context.md` first. Worktree `.worktrees/wp4d`, branch `wp/wp4d`. No Neo4j leg: you
 change no code. `just lint` must still pass (it does not lint markdown outside `docs/plans`, but run it).
 
-`code-graph` now contains WP1-WP3, and WP4a/b/c (API+MCP+CLI, web pages, evals) are being built in
-parallel by three other workers. **You edit only `docs/CONTRACTS.md`, `docs/FIDELITY.md`, `docs/MCP.md`,
-`README.md` and the new `docs/design/` directory.** Where a name you must document is owned by a parallel
-worker (endpoint query parameters, MCP response fields, CLI flags, eval metric names), take it from the
-plan; the orchestrator will hand you their ledger summaries when they land so you can correct the few
-that differ, before your branch merges.
+You start EARLY. `code-graph` contains WP1, WP2 and WP2i (store, extractors, indexing); WP3 (retrieval,
+`anchors.py`, `paths.py`, the answer block) and WP2b (git history) are in flight and will merge while you
+work; WP4a/b/c (API+MCP+CLI, web pages, evals) come after them. **You edit only `docs/CONTRACTS.md`,
+`docs/FIDELITY.md`, `docs/MCP.md`, `README.md` and the new `docs/design/` directory.** Order your work by
+what is merged: first everything that documents WP1/WP2/WP2i (the CONTRACTS code-graph block for the
+store, `codegraph/`, `graph_index.py`, `indexer.py`, `chunker.py`; the README "Code" section's indexing
+half and its settings rows; `docs/design/`; Known limitations), then — when the orchestrator tells you
+WP3/WP2b have merged — `git merge code-graph` into `wp/wp4d` (the one time you may merge; docs only, so
+no conflicts expected) and write the retrieval half (FIDELITY adaptation 15 and its three sentence
+edits, the answer block, seeding). Where a name is owned by a not-yet-merged worker (endpoint query
+parameters, MCP response fields, CLI flags, eval metric names), take it from the plan and mark it
+`<!-- verify against WPxx -->`; the orchestrator will send their summaries so you can correct the few
+that differ before your branch merges.
 
 Your spec is PLAN.md **§Docs to update (lines 528-568)** in full — it prescribes the exact format of each
 file — plus the FIDELITY paragraph and the three sentence edits in §Retrieval rule (lines 121-125),
