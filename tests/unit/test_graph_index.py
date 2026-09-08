@@ -669,6 +669,30 @@ def test_name_index_maps_names_qualnames_and_split_tokens(index: GraphIndex, tin
     assert "nothing" not in index.name_index
 
 
+def test_path_index_maps_a_basename_to_the_symbols_defined_in_that_file(
+    index: GraphIndex, tiny: Tiny
+) -> None:
+    # AR1 fix 5: keyed by the *basename*, because a stack frame names an absolute path and the
+    # index holds a repo-relative one - `anchors._same_path` matches either way round on a suffix,
+    # so this is the superset that scan produced and `_same_path` still decides.
+    assert index.path_index["orders.py"] == [tiny.sym_f, tiny.sym_g]
+    assert "pyapp/orders.py" not in index.path_index  # the whole path is not a key
+    assert "nothing.py" not in index.path_index
+    # Data objects and commits have no file of their own, so only symbols are in it.
+    assert all(
+        index.node_kind[index.idx_of[nid]] == SYMBOL for ids in index.path_index.values() for nid in ids
+    )
+
+
+def test_a_scoped_index_shares_the_path_index_and_filters_it_through_idx_of(
+    index: GraphIndex, tiny: Tiny
+) -> None:
+    scoped = index.scoped(frozenset())  # nothing visible at all
+    assert scoped.path_index is index.path_index  # shared, exactly like name_index
+    assert scoped.code_nodes == []
+    assert all(nid not in scoped.idx_of for nid in scoped.path_index["orders.py"])
+
+
 def test_graph_with_edits_copies_the_code_fields(index: GraphIndex, tiny: Tiny) -> None:
     # It rebuilds every Edge with `Edge(**vars(v))`, so this is free - but only while omega and
     # code_kinds are real fields; the test is what pins that.

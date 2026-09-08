@@ -36,7 +36,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .graph_index import DATA, SYMBOL, CodeNode, GraphIndex
+from .graph_index import DATA, SYMBOL, CodeNode, GraphIndex, path_key
 from .paths import display_of
 
 MAX_ANCHORS = 20  # how many seeds one question may contribute at all
@@ -415,16 +415,30 @@ def _same_path(a: str, b: str) -> bool:
     return bool(a) and bool(b) and (a == b or a.endswith("/" + b) or b.endswith("/" + a))
 
 
+def _symbols_in_file(index: GraphIndex, path: str) -> list[CodeNode]:
+    """
+    The visible symbols of one file, in vertex order.
+
+    Through `path_index` rather than a scan of `code_nodes`: a 40-frame traceback or a 30-hunk
+    patch against a 20k-symbol index was ~10^6 `_same_path` calls with two string allocations
+    each, per question, on the retrieval path (AR1 fix 5). `_same_path` still decides - it matches
+    a suffix either way round, so the index is keyed by the basename and is a superset. Hits go
+    through `_visible`, so a scoped index cannot reach a hidden symbol named in the shared index.
+    """
+    out: list[CodeNode] = []
+    for node_id in index.path_index.get(path_key(path), ()):
+        node = _visible(index, node_id)
+        if node is not None and node.kind == SYMBOL and _same_path(node.path, path):
+            out.append(node)
+    return out
+
+
 def _frame_anchors(text: str, index: GraphIndex) -> list[Anchor]:
     out: list[Anchor] = []
     for depth, (path, line, name) in enumerate(_frames(text)):
         weight = FRAME_DECAY**depth
         token = f"{path}:{line}"
-        in_file = [
-            node
-            for node in index.code_nodes
-            if node.kind == SYMBOL and _visible(index, node.id) is not None and _same_path(node.path, path)
-        ]
+        in_file = _symbols_in_file(index, path)
         containing = [n for n in in_file if n.line_start <= line <= n.line_end]
         if containing:
             # The innermost definition wins: a method, not the class or module that spans it.
@@ -490,12 +504,8 @@ def _diff_anchors(text: str, index: GraphIndex) -> list[Anchor]:
         end = start + max(1, int(hunk.group(2) or 1)) - 1
         touched = [
             node
-            for node in index.code_nodes
-            if node.kind == SYMBOL
-            and node.code_kind != "module"
-            and _same_path(node.path, path)
-            and node.line_start <= end
-            and start <= node.line_end
+            for node in _symbols_in_file(index, path)
+            if node.code_kind != "module" and node.line_start <= end and start <= node.line_end
         ]
         for node in touched:
             if any(_contains(node, other) for other in touched):

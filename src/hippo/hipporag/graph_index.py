@@ -209,6 +209,7 @@ class GraphIndex:
     code_out: dict[int, list[DirectedEdge]] = field(default_factory=dict)
     code_in: dict[int, list[DirectedEdge]] = field(default_factory=dict)
     name_index: dict[str, list[str]] = field(default_factory=dict)  # lowercase name/token -> node ids
+    path_index: dict[str, list[str]] = field(default_factory=dict)  # file basename -> symbol ids
     communities: dict[int, str] = field(default_factory=dict)  # community -> its canonical label
     # One rebuilt igraph per non-default code_structural_scale; see graph_for_scale.
     _scaled: dict[float, ig.Graph] = field(default_factory=dict, repr=False, compare=False)
@@ -411,6 +412,7 @@ class GraphIndex:
             code_out=code_out,
             code_in=code_in,
             name_index=_name_index(code_nodes),
+            path_index=_path_index(code_nodes),
             communities=_community_labels(code_nodes),
         )
 
@@ -691,6 +693,7 @@ class GraphIndex:
             # Shared, not rebuilt: every consumer filters its hits through this index's `idx_of`,
             # so a hidden symbol can be named here and still never be reached.
             name_index=self.name_index,
+            path_index=self.path_index,
             communities=self.communities,
         )
 
@@ -829,6 +832,29 @@ def _name_index(code_nodes: list[CodeNode]) -> dict[str, list[str]]:
         for token in node.name_tokens or split_identifier(node.name):
             add(token, node.id)
     return index
+
+
+def _path_index(code_nodes: list[CodeNode]) -> dict[str, list[str]]:
+    """
+    A file's basename -> the ids of the symbols defined in it, in `code_nodes` order.
+
+    Keyed by the *basename*, not the whole path, because `anchors._same_path` matches either way
+    round on a suffix: a traceback names `/Users/me/proj/pyapp/orders.py` and the index holds
+    `pyapp/orders.py`. Every such match has equal basenames, so this is a superset the caller
+    still filters with `_same_path` - and, like `name_index`, it is shared with `scoped()` and
+    every consumer filters its hits through the scoped `idx_of` (AR1 fix 5).
+    """
+    index: dict[str, list[str]] = {}
+    for node in code_nodes:
+        if node.kind != SYMBOL or not node.path:
+            continue
+        index.setdefault(path_key(node.path), []).append(node.id)
+    return index
+
+
+def path_key(path: str) -> str:
+    """The lowercase basename of a path, in the one normalisation `_same_path` uses."""
+    return path.replace("\\", "/").rsplit("/", 1)[-1].lower()
 
 
 def _community_labels(code_nodes: list[CodeNode]) -> dict[int, str]:
