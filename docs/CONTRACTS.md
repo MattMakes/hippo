@@ -24,6 +24,9 @@ src/hippo/ollama.py               Ollama(client): chat_json/chat_text/embed/embe
 src/hippo/prompts.py              every prompt + JSON schema (*_messages(...) builders)
 src/hippo/context.py              AppContext(config, store, ollama, jobs); ctx.graph() -> GraphIndex; ctx.graph_for(access) -> the caller's slice
                                   (cached by (graph version, visible source ids)); ctx.invalidate_graph(); ctx.invalidate_scoped()
+                                  ctx.close(): cancels every running job and WAITS for it before closing the store, because
+                                  the neo4j driver closing under another thread is unspecified behaviour (an intermittent
+                                  BufferError in practice)
 src/hippo/access.py               Access(rank, user_id, unrestricted) + ACCESS_WHERE (the Cypher predicate on a Source `s`) + access_params;
                                   Principal(user, role, access): .can(cap), .may_manage_source(row), .may_assign_role(role), .as_role(role);
                                   CAPABILITIES, DEFAULT_ROLES (arch-admin 40 > regional-admin 30 > local-admin 20 > local-assistant 10 > individual 0);
