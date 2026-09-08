@@ -109,7 +109,10 @@ def test_question_without_expected_answer_is_not_judged(ctx, set_id):
     assert result["verdict"] == ""
     assert result["judge_score"] is None
     assert result["exact_match"] is None
-    assert result["recall"] == {}
+    # `code_seeded` describes the trace, not the gold set, so it is written even here. What must
+    # stay absent is every gold-derived key: no `recall@k`, no rank, and no place in `summarize`'s
+    # gold means (test_evals_code.py::test_summarize_means_the_new_keys pins that half).
+    assert result["recall"] == {"code_seeded": 0.0}
     assert result["gold_rank"] is None
 
 

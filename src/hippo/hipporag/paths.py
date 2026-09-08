@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from itertools import zip_longest
 from typing import Any
 
 from .graph_index import COMMIT, DATA, SYMBOL, CodeNode, DirectedEdge, GraphIndex
@@ -168,6 +169,11 @@ def _walkable(index: GraphIndex, edges: list[DirectedEdge], theta: float) -> lis
     return sorted(kept, key=lambda e: (e.kind, display_at(index, e.dst), display_at(index, e.src)))
 
 
+def _tier(edge: DirectedEdge) -> float:
+    """An edge's confidence as the block prints it, so two edges of one ω tier group together."""
+    return round(float(edge.omega), 4)
+
+
 def _steps(index: GraphIndex, vertex: int, *, theta: float, undirected: bool) -> list[DirectedEdge]:
     """The edges a walk may take from `vertex`, forwards (and backwards when undirected)."""
     out = _walkable(index, index.out_edges(vertex), theta)
@@ -218,8 +224,29 @@ def _bfs(
 
 
 def direct_edges(index: GraphIndex, vertex: int, *, theta: float) -> list[DirectedEdge]:
-    """Everything one hop from a vertex, both ways, in a fixed order (out first, then in)."""
-    return _steps(index, vertex, theta=theta, undirected=True)
+    """
+    Everything one hop from a vertex, both ways, **strongest first** - ω descending, and at equal
+    ω the incoming edges interleaved with the outgoing ones, incoming first.
+
+    The order used to be "out first, then in", and `code_triples_chars` cuts this list: a symbol
+    with more outgoing calls than the budget fits therefore never showed a single caller, so
+    "where is X called" got a block that could not answer it however confident the calling edge
+    was (QA1 defect 1). Sorting by ω puts the most-confident relation of *either* direction first,
+    and the in-before-out tie-break inside a tier is what keeps a resolved caller (INVOKES 0.90 in)
+    ahead of the callee's own equally-confident calls (INVOKES 0.90 out).
+
+    ω is grouped on `round(ω, 4)` - the value `triple_rows` renders - so a backend's float wobble
+    cannot split one tier and give Neo4j a different interleave from LadybugDB.
+    """
+    incoming = _walkable(index, index.in_edges(vertex), theta)
+    outgoing = _walkable(index, index.out_edges(vertex), theta)
+    ordered: list[DirectedEdge] = []
+    for omega in sorted({_tier(e) for e in (*incoming, *outgoing)}, reverse=True):
+        both = zip_longest(
+            [e for e in incoming if _tier(e) == omega], [e for e in outgoing if _tier(e) == omega]
+        )
+        ordered += [edge for pair in both for edge in pair if edge is not None]
+    return ordered
 
 
 def code_paths_for(
@@ -233,8 +260,18 @@ def code_paths_for(
     """
     The relations worth showing for a set of seeds: what connects them, then what touches each.
 
-    Order is deterministic (seed order, then the order the edges were loaded), and repeated edges
-    appear once - the same INVOKES can be both a step on a path and a direct edge of its caller.
+    The order is what survives `code_triples_chars`, so it is the answer's shape, not a detail:
+
+    1. **The pairwise paths first**, in seed order - they are what connects the seeds to each other,
+       and a route only reads as a route whole.
+    2. **Then every seed's `direct_edges` round-robin**, one edge per seed per turn in seed (weight)
+       order, so a hub seed's 40 relations cannot starve the seed ranked behind it. Within a seed
+       the edges are strongest-first, both directions interleaved (see `direct_edges`).
+
+    A relation appears once, keyed on the two **display names** and the kind - the form the block
+    prints. Node ids embed the source, so a repository indexed twice would otherwise render every
+    edge of the overlap twice and spend the budget saying the same thing (QA1 defect 1). This also
+    collapses the same INVOKES reached both as a step on a path and as a direct edge of its caller.
 
     Only the first `PAIRED_SEEDS` are searched *against each other*. `vertices` arrives in weight
     order from `_explain_code`, so those are the strongest seeds; every seed still contributes its
@@ -244,10 +281,10 @@ def code_paths_for(
     (AR1 fix 6).
     """
     out: list[DirectedEdge] = []
-    seen: set[tuple[int, int, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
 
     def add(edge: DirectedEdge) -> None:
-        key = (edge.src, edge.dst, edge.kind)
+        key = (display_at(index, edge.src), display_at(index, edge.dst), edge.kind)
         if key not in seen:
             seen.add(key)
             out.append(edge)
@@ -258,9 +295,10 @@ def code_paths_for(
         for b in paired[i + 1 :]:
             for edge in shortest_code_path(index, a, b, theta=theta, max_hops=max_hops):
                 add(edge)
-    for vertex in ordered:
-        for edge in direct_edges(index, vertex, theta=theta):
-            add(edge)
+    for turn in zip_longest(*(direct_edges(index, v, theta=theta) for v in ordered)):
+        for edge in turn:
+            if edge is not None:
+                add(edge)
     return out[:cap]
 
 

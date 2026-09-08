@@ -66,13 +66,19 @@ def pull_models(request: Request):
 # --------------------------------------------------------------- ask/search
 
 
+# `ask_service.code_fields` is what the MCP tools spread into their own answers, so the five code
+# keys mean the same thing over HTTP as over MCP and cannot drift apart. `code_graph` is the one
+# thing a caller could not otherwise reconstruct: the trace carries the rows, but the rendered
+# `Title: Code graph` block is built during the answer and used to reach no HTTP client at all
+# (QA1 surprise 3).
+
+
 @router.post("/ask")
 def ask(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
+    access = principal_of(request).access
     try:
-        trace, answer = ask_service.ask(
-            ctx, body.question.strip(), body.settings, access=principal_of(request).access
-        )
+        trace, answer = ask_service.ask(ctx, body.question.strip(), body.settings, access=access)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
@@ -82,21 +88,22 @@ def ask(request: Request, body: QuestionBody):
         "thought": answer.thought,
         "passage_ids": answer.passage_ids,
         "trace": trace.to_dict(),
+        **ask_service.code_fields(trace, answer.context_block),
     }
 
 
 @router.post("/search")
 def search(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
+    access = principal_of(request).access
     try:
-        trace = ask_service.search(
-            ctx, body.question.strip(), body.settings, access=principal_of(request).access
-        )
+        trace = ask_service.search(ctx, body.question.strip(), body.settings, access=access)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
-    return {"trace": trace.to_dict()}
+    block = ask_service.code_block(ctx.graph_for(access), trace)
+    return {"trace": trace.to_dict(), **ask_service.code_fields(trace, block)}
 
 
 # ------------------------------------------------------------- graph lookups

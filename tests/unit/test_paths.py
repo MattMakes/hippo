@@ -34,7 +34,7 @@ from hippo.hipporag.paths import (
     shortest_code_path,
     triple_rows,
 )
-from tests.fakes.code_fixture import write_commit_history
+from tests.fakes.code_fixture import call_hub, write_commit_history
 
 THETA = 0.5
 HEADER = "Relations from the code graph."
@@ -54,6 +54,14 @@ def index_with_history(code_index) -> GraphIndex:
     ctx, source_id = code_index
     write_commit_history(ctx, source_id)
     return ctx.graph()
+
+
+@pytest.fixture
+def index_with_hub(code_index) -> tuple[GraphIndex, dict[str, str]]:
+    """The tree plus QA1 defect 1's shape: a ten-call hub with one caller, and a second seed."""
+    ctx, source_id = code_index
+    names = call_hub(ctx, source_id)
+    return ctx.graph(), names
 
 
 def vertex(index: GraphIndex, name: str) -> int:
@@ -213,6 +221,74 @@ def test_a_walk_gives_up_once_it_has_spent_its_visit_budget(index: GraphIndex, m
     monkeypatch.setattr(paths, "BFS_VISIT_BUDGET", 2)
     assert shortest_code_path(index, main, total, theta=THETA) == []  # two hops: budget spent
     assert len(shortest_code_path(index, main, place, theta=THETA)) == 1  # one hop still lands
+
+
+# ------------------------------------------------------- relevance order (QA1 defect 1)
+# The smoke's shape: a function whose own outgoing calls crowd `code_triples_chars` before its one
+# caller is reached, so "where is X called" got a block that could not answer it.
+
+
+def test_a_seeds_own_edges_come_back_strongest_first_in_before_out(index_with_hub) -> None:
+    """
+    Ten outgoing calls at ω 0.90-1.00 and one caller at 0.90, as `direct_edges` orders them.
+
+    ω descending puts the four calls above 0.90 first; the in-before-out tie-break inside the 0.90
+    tier then puts the caller ahead of the six calls it ties with. Out-then-in made it the eleventh.
+    """
+    graph, names = index_with_hub
+    rendered = lines(graph, direct_edges(graph, vertex(graph, names["hub"]), theta=THETA))
+
+    assert [float(line.split(" ")[2]) for line in rendered] == [1.0, 1.0, 0.95, 0.95] + [0.9] * 7
+    assert rendered[4] == f"{names['caller']} -[INVOKES 0.90 via_import]-> {names['hub']}"
+    assert all(line.startswith(names["hub"]) for line in rendered[:4] + rendered[5:])
+
+
+def test_the_caller_survives_a_budget_that_only_fits_six_lines(index_with_hub) -> None:
+    """The defect as a reader meets it: a block with room for six of the eleven relations."""
+    graph, names = index_with_hub
+    hub = vertex(graph, names["hub"])
+    trace = SimpleNamespace(
+        paths=triple_rows(graph, code_paths_for(graph, [hub], theta=THETA)), tests=[], history=[]
+    )
+    body = render_block(graph, trace, header=HEADER, max_chars=8000).splitlines()[1:]
+    six = sum(len(line) for line in body[:6]) + 5  # exactly six lines' worth of budget
+
+    kept = render_block(graph, trace, header=HEADER, max_chars=six).splitlines()[1:]
+    assert len(kept) == 7 and kept[-1] == "… (+5 more)"  # six relations, then the count
+    assert f"{names['caller']} -[INVOKES 0.90 via_import]-> {names['hub']}" in kept
+    # The budget is genuinely the tight one: the hub's own calls alone would have filled it.
+    assert len([line for line in body if line.startswith(names["hub"])]) == 10
+
+
+def test_the_seeds_take_turns_so_a_hub_cannot_starve_the_next_seed(index_with_hub) -> None:
+    """`code_paths_for` round-robins the seeds' direct edges rather than exhausting each in turn."""
+    graph, names = index_with_hub
+    seeds = [vertex(graph, names["hub"]), vertex(graph, names["other"])]
+    rendered = lines(graph, code_paths_for(graph, seeds, theta=THETA))
+
+    assert rendered[:3] == [
+        f"{names['hub']} -[INVOKES 1.00 same_file]-> pkg.anchors._step0",
+        f"{names['other']} -[INVOKES 0.90 same_file]-> {names['other_helper']}",  # its turn, at once
+        f"{names['hub']} -[INVOKES 1.00 same_file]-> pkg.anchors._step1",
+    ]
+
+
+def test_the_same_relation_from_two_indexed_copies_is_shown_once(index_with_hub, code_index) -> None:
+    """
+    A repository indexed twice gives every symbol a same-named twin, so every edge of the overlap
+    renders identically. The block dedupes on the two display names and the kind, not on the node
+    ids (which carry the source), so the budget is not spent saying one thing twice (QA1 defect 1).
+    """
+    graph, names = index_with_hub
+    ctx, _source_id = code_index
+    call_hub(ctx, ctx.store.create_source("zip", "the same repository again"))
+    twinned = ctx.graph()
+
+    copies = [twinned.idx_of[n.id] for n in twinned.code_nodes if display_of(n) == names["hub"]]
+    assert len(copies) == 2, "two node ids behind one display name"
+    assert lines(twinned, code_paths_for(twinned, copies, theta=THETA)) == lines(
+        graph, code_paths_for(graph, [vertex(graph, names["hub"])], theta=THETA)
+    )
 
 
 def test_display_at_is_memoised_on_the_index(index: GraphIndex) -> None:
