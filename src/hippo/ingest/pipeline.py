@@ -39,6 +39,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from ..codegraph import extract_code
 from ..context import AppContext
 from ..hipporag import openie
 from ..hipporag.indexer import GRAPH_WRITE_LOCK, index_source
@@ -250,12 +251,24 @@ def _read_chunk_index(ctx: AppContext, source: dict[str, Any], *, should_stop) -
     _set_status(ctx, source_id, "reading", "reading files")
     docs = read_source(ctx, source)
     config = ctx.config
-    chunks = chunk_documents(docs, config.chunk_size_chars, config.chunk_overlap_chars)
+
+    # Between reading and chunking: every source is offered to the code extractor, and one that
+    # holds no code we have a grammar for simply comes back with an empty graph.
+    ctx.store.update_source(source_id, stage="parsing code")
+    code = extract_code(docs, source_id, should_stop=should_stop)
+    # A partial graph means either "cancelled" or "over budget", and `extract_code` cannot tell
+    # us which -- it may not import openie. Asking again is what separates the two.
+    if should_stop():
+        raise openie.Stopped("stopped before 'chunking'")
+
+    chunks = chunk_documents(docs, config.chunk_size_chars, config.chunk_overlap_chars, code=code)
     if not chunks:
         raise ValueError("no readable text was found in this source")
     if len(chunks) > MAX_CHUNKS:
         raise TooLarge(
             f"too large: this source makes {len(chunks):,} passages; the limit is {MAX_CHUNKS:,}. "
+            "A parsed repository makes one passage per module, class and function rather than one "
+            "per 1500 characters, so it reaches the limit at a few thousand symbols. "
             "Split it into smaller sources."
         )
 
@@ -265,6 +278,7 @@ def _read_chunk_index(ctx: AppContext, source: dict[str, Any], *, should_stop) -
         ctx.ollama,
         source_id,
         chunks,
+        code=code,
         synonymy_threshold=float(ctx.store.get_settings()["synonymy_threshold"]),
         workers=config.openie_workers,
         on_progress=lambda stage, done, total: ctx.store.update_source(
@@ -273,7 +287,7 @@ def _read_chunk_index(ctx: AppContext, source: dict[str, Any], *, should_stop) -
         should_stop=should_stop,
     )
     meta = dict(source.get("meta") or {})
-    meta.update({"chunks": len(chunks), "documents": len(docs), "counts": counts})
+    meta.update({"chunks": len(chunks), "documents": len(docs), "counts": counts, "code": code.stats()})
     ctx.store.update_source(
         source_id,
         status="ready",

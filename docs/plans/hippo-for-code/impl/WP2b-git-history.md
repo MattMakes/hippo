@@ -4,11 +4,23 @@ Read `impl/00-impl-context.md` first. Worktree `.worktrees/wp2b`, branch `wp/wp2
 Neo4j test container: name `hippo-neo4j-wp2b`, port **17694**.
 
 `code-graph` now contains WP1 (store: `add_commits`, `add_modifies`, `add_precedes`, `load_*`, the three
-history settings in `DEFAULT_SETTINGS`/`SETTING_RULES`), WP2 (`codegraph/` extractors, fixture tree) and
-WP2i (chunker/indexer/pipeline integration, `code_index` fixture, golden `expected.json` test).
-Another worker is building WP3 (retrieval) in parallel; you share `store/base.py` only if you must
-(the settings already exist — you should not need to touch it) and you do not touch `retriever.py`,
-`anchors.py`, `paths.py`, `ask.py`, `answerer.py`, `prompts.py`.
+history settings in `DEFAULT_SETTINGS`/`SETTING_RULES`) and WP2 (`codegraph/` extractors, the fixture
+tree). WP2i (chunker/indexer/pipeline integration, the `code_index` fixture, the golden test) and WP3
+(retrieval) are being built in parallel and will merge while you work. You do not touch `retriever.py`,
+`anchors.py`, `paths.py`, `ask.py`, `answerer.py`, `prompts.py`, `store/base.py` (the settings exist).
+
+## Two phases — read this first
+
+**Phase 1 (now):** the backend-free half — `codegraph/git_history.py`, `test_git_history.py`,
+`make_code_checkout` in `tests/conftest.py`, `repos.clone_repo(..., depth=1)` and its test. All of it
+runs against a real git repo in `tmp_path` and needs no store, no pipeline. Commit green on all three
+stores (nothing you touch should change any store test), write the ledger note, then
+`horch tell orchestrator "[<role>] PHASE 1 DONE: wp/wp2b ..."` and **keep your pane open**.
+
+**Phase 2 (when the orchestrator tells you WP2i has merged):** `git merge code-graph` into `wp/wp2b`
+(the one time you may merge; resolve `tests/conftest.py` if both sides added to it), then the pipeline
+and indexer integration, the `git_index` fixture, the `expected.json` `commits`/`modifies` sections and
+the pipeline history tests on all three stores. Then the normal DONE.
 
 Your spec is PLAN.md **WP2b (lines 354-366)**, S2.9 (MODIFIES intersects hunks with symbol ranges AT THAT
 COMMIT), S2.11 (budgets: `code_history_depth`, `code_git_timeout_s`, `code_history_total_s`), the
@@ -22,7 +34,25 @@ format), `research/R2-ingest-evals-tests.md` R2-7 (`clone_repo` hardcodes `--dep
 
 ## What the previous workers built (read their code, not just this summary)
 
-<!-- ORCHESTRATOR FILLS FROM THE WP1 / WP2 / WP2i LEDGER SUMMARIES -->
+**WP1 (store), merged as 240d348.** `src/hippo/store/code.py` has the row shapers `commit_write_row`
+and `modifies_write_rows`; every store has `add_commits(rows)` (`{id, source_id, sha, author, date,
+message, ordinal}` + `embedding` when the passage path supplies one — check), `add_modifies(rows)`
+(`{commit_id, symbol_id, omega, hunk}`, `hunk` JSON text), `add_precedes(pairs)`, `get_commits`,
+`load_commits`/`load_modifies`/`load_precedes`; `delete_code_nodes_for_source` sweeps commits with the
+source. `GraphIndex` loads commits as vertices (order entities → symbols → data → commits → passages),
+MODIFIES/PRECEDES as `DirectedEdge`s, PRECEDES excluded from igraph. Ids: `commit_id(source_id, sha)`
+in `codegraph/model.py`. Full handoff in the `backend-developer-1` ledger entry.
+
+**WP2 (extractors), merged as 9ba5e39.** `codegraph/python.py` / `typescript.py` expose the walkers
+(`walk(...) -> FileFacts`) and `codegraph/treesitter.py` the parser factory — reuse them to parse a
+file's content at a commit; `Symbol` has `path`, `qualname`, `display`, `line_start`, `line_end`;
+`readers.lang_of(name)` says which language a path is. The three budget constants are UPPER_CASE.
+`tests/conftest.py` already has `CODE_SAMPLE_PATH` and `code_sample_docs()`. The fixture tree is
+`tests/fixtures/code_sample/` (11 files, exact line numbers per PLAN 420-469); `expected.json` there
+has empty `commits`/`modifies` lists for you to fill through `scripts/update_expected.py` (extend it;
+`--check` must pass). Full handoff in the `opus-1` ledger entry.
+
+<!-- ORCHESTRATOR FILLS FROM THE WP2i LEDGER SUMMARY AT PHASE 2 -->
 
 ## Scope
 

@@ -135,7 +135,7 @@ def test_add_upload_zip_archive(ctx: AppContext) -> None:
     assert source["status"] == "ready", source["error"]
     assert source["meta"]["documents"] == 2
     titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
-    assert titles == ["docs/places.md", "src/tool.py (lines 1-2)"]
+    assert titles == ["docs/places.md", "src/tool.py :: src.tool.lift (lines 1-2)"]
 
 
 def test_add_upload_strips_directories_from_the_file_name(ctx: AppContext) -> None:
@@ -202,7 +202,7 @@ def test_add_repo_indexes_a_checkout(ctx: AppContext, monkeypatch: pytest.Monkey
     assert source["status"] == "ready", source["error"]
     assert source["meta"]["documents"] == 2
     titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
-    assert titles == ["README.md", "src/app.py (lines 1-2)"]
+    assert titles == ["README.md", "src/app.py :: src.app.lift (lines 1-2)"]
 
 
 # ------------------------------------------------------ delete, reindex
@@ -282,3 +282,65 @@ def test_reindex_all_clears_every_source_then_indexes_each_again(ctx: AppContext
     assert {s["status"] for s in ctx.store.list_sources()} == {"ready"}
     assert ctx.store.get_source(sample)["passages"] == 8
     assert ctx.store.get_source(note)["passages"] == 1
+
+
+# ------------------------------------------------------- a source with code
+
+
+def test_a_code_archive_is_parsed_chunked_by_symbol_and_recorded_in_meta(code_index) -> None:
+    ctx, source_id = code_index
+    source = ctx.store.get_source(source_id)
+    code = source["meta"]["code"]
+
+    assert (code["symbols"], code["data_objects"], code["edges"]) == (30, 12, 64)
+    assert code["edges_by_kind"] == {
+        "CATCHES": 1,
+        "CONTAINS": 26,
+        "IMPORTS": 9,
+        "INHERITS": 2,
+        "INVOKES": 13,
+        "OVERRIDES": 1,
+        "RAISES": 1,
+        "READS": 6,
+        "TESTED_BY": 3,
+        "WRITES": 2,
+    }
+    assert code["files_parsed"] == 10  # six Python files, three TypeScript, one .sql
+    assert code["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # build.go
+    assert code["truncated"] is False
+    # Calls that resolve to nothing in the repo -- builtins included -- are counted per file, so
+    # phase 2 has a baseline to work from (D15). Only parsed files can have any.
+    assert set(code["unresolved_calls"]) <= set(code_sample_paths())
+    assert code["unresolved_calls_total"] == sum(code["unresolved_calls"].values())
+    assert source["meta"]["counts"]["symbols"] == 30
+
+
+def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
+    ctx, source_id = code_index
+    titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
+    assert "pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)" in titles
+    assert "schema/orders.sql (lines 1-2)" in titles  # no symbols to cut by; windows as before
+    assert "tools/build.go (lines 1-3)" in titles  # no grammar; windows as before
+    assert not any(t == "pyapp/orders.py (lines 1-40)" for t in titles)
+
+
+def test_deleting_a_code_source_removes_its_symbols_and_data_objects(code_index) -> None:
+    ctx, source_id = code_index
+    assert len(ctx.store.load_symbols()) == 30
+
+    pipeline.delete_source(ctx, source_id)
+
+    assert ctx.store.load_symbols() == []
+    assert ctx.store.load_data_objects() == []
+    assert ctx.store.load_code_edges() == []
+
+
+def code_sample_paths() -> list[str]:
+    """Every file of the fixture tree, as the archive titles it."""
+    from tests.conftest import CODE_SAMPLE_PATH
+
+    return [
+        p.relative_to(CODE_SAMPLE_PATH).as_posix()
+        for p in CODE_SAMPLE_PATH.rglob("*")
+        if p.is_file() and p.name != "expected.json"
+    ]
