@@ -17,7 +17,41 @@ strings; `origin` is QuestionSet-level, `kind` per question), R2-14 (`recall[...
 
 ## What the previous workers built (read their code, not just this)
 
-<!-- ORCHESTRATOR FILLS FROM THE WP2b / WP3 LEDGER SUMMARIES: Trace fields, MODIFIES access via GraphIndex -->
+**WP1 (store + GraphIndex), 240d348.** 22 store methods on all three backends (writers `add_symbols`,
+`add_data_objects`, `add_commits`, `add_code_edges`, `link_definitions`, `add_modifies`, `add_precedes`,
+`add_refers_to`, `set_symbol_communities`; readers `get_symbols`/`get_data_objects`/`get_commits`
+(access-scoped, `source_name` + `passage_ids`); nine `load_*` loaders; `delete_code_nodes_for_source`);
+`stats()` has `symbols`, `data_objects`, `code_edges`, `commits`. `GraphIndex`: `NodeKind` five-valued
+(`entity`, `passage`, `symbol`, `data`, `commit`), vertex order entities → symbols → data → commits →
+passages LAST, `first_passage_vertex`, `CodeNode`, `DirectedEdge(src, dst, kind, omega, provenance,
+extra)`, `code_out`/`code_in`, `name_index`, `Edge.omega`/`code_kinds`/`weight_at(scale)`,
+`specificity` (denominator; `entity_passage_count` alias), `graph_for_scale(scale)`, `scoped()` per-kind
+visibility, `community_of`/`community_name`, `code_node_by_id`, `out_edges`/`in_edges`,
+`defining_passages`, `symbols_defined_in`. All eleven `code_*` settings in `DEFAULT_SETTINGS`/
+`SETTING_RULES`/`SETTING_HELP`; `analysis/simulate.py` has `SIMULATABLE_SETTINGS` + `INGEST_SETTINGS`
+which a test asserts partition `SETTING_RULES`. **`code_out`/`code_in` are in load order and Neo4j
+promises none** — anything that renders or walks them must sort (WP3 sorts by (kind, target name,
+source name)); never pin an order-dependent string without sorting.
+
+**WP2 (extractors), 9ba5e39.** `src/hippo/codegraph/` (`model`, `treesitter`, `python`, `typescript`,
+`resolve`, `data_access`, `extract`); `extract_code(docs, source_id, *, should_stop=None) -> CodeGraph`;
+`Symbol.display` is the fully-qualified display name (`pyapp.orders.OrderService.place`); ids via
+`symbol_id`/`data_id`/`commit_id` in `codegraph/model.py`; `readers.lang_of(name)`. Fixture:
+`tests/fixtures/code_sample/` (30 symbols, 12 data objects, 64 edges; `expected.json` is the spec;
+`scripts/update_expected.py --check`). Two pinned rulings: `cli.main -> OrderService.place` INVOKES 0.90
+`via_import`; `place -> OrderService.log` INVOKES 1.00 `same_file`, no `place -> Base.log` edge.
+
+**WP2i (indexing), 143480d.** Passage titles `path :: module.qualname (lines a-b)` (`(part N)` when
+split); `Chunk.defines`/`extract_text`; `index_source(..., code=)` stages `"writing code graph"`,
+`"linking mentions"` (REFERS_TO 0.85/0.60), `"communities"` (seeded Leiden, relabelled); nine-key
+counts; `meta["code"]` = `symbols`, `data_objects`, `edges`, `edges_by_kind`, `files_parsed`,
+`files_skipped`, `unresolved_calls`, `unresolved_calls_total`, `truncated` (+ WP2b's commit keys and
+`history_skipped`). `tests/conftest.py`: `code_index` fixture yields `(ctx, source_id)` (kind
+`"archive"`, store-generated id), `code_sample_zip()`, `CODE_SAMPLE_PATH`, `--update-expected`. A symbol
+whose name splits into < 2 tokens carries NO embedding by design (`enters_synonym_search`); DataObject
+exempt. Full handoffs: `horch sessions` entries `backend-developer-1`, `opus-1`, `backend-developer-2`.
+
+<!-- ORCHESTRATOR FILLS FROM THE WP2b / WP3 LEDGER SUMMARIES -->
 
 ## Scope
 
