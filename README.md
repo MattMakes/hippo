@@ -80,7 +80,8 @@ Everything listens on this machine only: port 8000 (the UI, API and MCP) and, un
 | Settings | `/settings` | Ollama and graph store status, model downloads, the retrieval knobs with one-line explanations. |
 
 There is also a JSON API under `/api` (docs at `/api/docs`) and a CLI:
-`hippo serve | mcp | pull-models | index <path-or-git-url> | ask "<question>" | sources | settings | users | user add|token|role|remove`.
+`hippo serve | mcp | pull-models | index <path-or-git-url> | ask "<question>" | sources | settings | users | user add|token|role|remove`,
+plus four commands over an indexed repository: `hippo path A B`, `hippo blast SYMBOL`, `hippo raises SYMBOL EXCEPTION`, `hippo history SYMBOL`.
 
 ## Users and roles
 
@@ -174,7 +175,7 @@ Plus the edges that tie the code graph to the prose one: `DEFINED_IN` (a symbol 
 
 **A call it cannot justify produces no edge.** Not a guess with a low score — nothing. A call into the standard library, a third-party package, or a name the resolver cannot bind is left out, and only *counted*, per file, so you can see how big the gap is (`meta["code"]["unresolved_calls"]` on the source, and `unresolved_calls_total` beside it).
 
-**What you see.** The Source page's `code` meta records what the parser found: `symbols`, `data_objects`, `edges` and `edges_by_kind`, `files_parsed`, `files_skipped` (by reason: too big, unsupported, parse error), `unresolved_calls` and `unresolved_calls_total`, and `truncated`. `GET /api/status` counts `symbols`, `data_objects`, `code_edges` and `commits` across the whole memory, beside the entity and fact counts it always reported.
+**What you see.** The Source page's `code` meta records what the parser found: `symbols`, `languages` (which of the three it actually parsed), `data_objects`, `edges` and `edges_by_kind`, `files_parsed`, `files_skipped` (by reason: too big, unsupported, parse error), `unresolved_calls` and `unresolved_calls_total`, and `truncated`. `GET /api/status` has a `code` card summing the same things across the whole memory — `symbols`, `data_objects`, `code_edges`, `commits`, `languages`, `unresolved_calls`, `history_skipped` — beside the entity and fact counts it always reported. Every value is zero or empty until you index a repository.
 
 **Safety rails.** Extraction stops at 5,000 files or 50,000 symbols per source (`truncated` then says so), and a file over 512 KiB keeps its line windows rather than being parsed. These are constants, not knobs — the same class as the 20,000-passage ceiling. The knobs are on the Settings page and in [the table below](#settings-you-can-change-on-the-settings-page): eleven of them, all named `code_*`, and **none of them is an environment variable**.
 
@@ -210,8 +211,40 @@ It is cut at `code_triples_chars` on a line boundary. It is not a real passage: 
 
 Every one of these is off on a memory with no code in it, and can be switched off on one that has: see [the settings table](#settings-you-can-change-on-the-settings-page). `docs/FIDELITY.md` adaptation 15 states the guarantee precisely and says which test checks it.
 
-<!-- WP2b/WP4a: git history and `code_history_depth`; the four path tools over MCP and the CLI
-     (`hippo path` / `blast` / `raises` / `history`). Written once those merge. -->
+### Asking the graph directly
+
+Some questions do not want an answer written for them — they want a fact a call graph knows exactly. Four tools walk the graph and never call the model, so they are fast and give the same answer every time. Each is a CLI command, an MCP tool and a JSON endpoint:
+
+| Question | CLI | MCP tool |
+| --- | --- | --- |
+| How does this end up calling that? | `hippo path A B` | `hippo_explain_path` |
+| What could a change here break? | `hippo blast SYMBOL [--depth N]` | `hippo_blast_radius` |
+| Where can this error come from? | `hippo raises SYMBOL EXCEPTION` | `hippo_exception_path` |
+| Which commits touched this? | `hippo history SYMBOL [--limit N]` | `hippo_history` |
+
+```console
+$ hippo path OrderService.place billing.total
+How pyapp.orders.OrderService.place reaches pyapp.billing.total:
+pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total
+```
+
+The `0.90` is how sure the resolver is and `via_import` is the rule that earned it — here, `place` calls `total` through a name it imported.
+
+Name a symbol however you like — fully qualified (`pyapp.orders.OrderService.place`), module-relative (`OrderService.place`) or bare (`place`) — as long as it picks out one. If it does not, nothing is guessed: you get the candidates and an exit code of 2.
+
+```console
+$ hippo blast log
+error: 'log' could mean any of: pyapp.orders.OrderService.log, pyapp.store.Base.log, tsapp.models.base.Base.log
+  pyapp.orders.OrderService.log
+  pyapp.store.Base.log
+  tsapp.models.base.Base.log
+```
+
+Over HTTP the same four live under `/api/code` (plus `/api/code/symbols?q=` to search names), where an unknown name is a 404, an ambiguous one a 409 carrying `candidates`, and a blank argument a 400. Every answer also carries `lines`: the same thing already rendered for a person to read. `docs/MCP.md` has a request and response for each.
+
+**And the answer itself says more now.** `hippo_search` and `hippo_ask` gained `seed_symbols`, `paths`, `tests`, `history` and `code_graph` — always present, empty on a prose question, so a client never has to ask whether the memory holds code.
+
+<!-- WP2b: git history and `code_history_depth`. Written once that merges. -->
 
 ### Known limitations
 
@@ -233,8 +266,10 @@ Every one of these is off on a memory with no code in it, and can be switched of
 
 ## Use it from Claude / Cursor (MCP)
 
-hippo serves MCP at `http://localhost:8000/mcp` with five tools:
-`hippo_search`, `hippo_ask`, `hippo_remember`, `hippo_sources`, `hippo_whoami`.
+hippo serves MCP at `http://localhost:8000/mcp` with nine tools. Five are about the memory as a whole —
+`hippo_search`, `hippo_ask`, `hippo_remember`, `hippo_sources`, `hippo_whoami` — and four answer
+structural questions about indexed source code: `hippo_explain_path`, `hippo_blast_radius`,
+`hippo_exception_path`, `hippo_history`.
 
 ```bash
 claude mcp add --transport http hippo http://localhost:8000/mcp
@@ -337,7 +372,8 @@ src/hippo/
   evals/            metrics, the LLM judge, question generation, the run runner
   analysis/         explain a result, simulate changes, save/apply changesets
   web/              FastAPI app, routes, Jinja templates, static files
-  mcp_server.py     the four MCP tools (HTTP at /mcp and stdio)
+    routes/code.py  the /api/code endpoints: symbol search, call path, blast radius, exception path, history
+  mcp_server.py     the nine MCP tools (HTTP at /mcp and stdio)
   cli.py            the `hippo` command
 tests/
   fakes/            FakeStore, FakeOllama

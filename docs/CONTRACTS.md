@@ -533,6 +533,17 @@ mcp_server.py  build_server(ctx) -> MCPServer (mcp>=2: from mcp.server.mcpserver
                           visibility = a role id at or below the caller's tier, or "everyone"; default the caller's own tier)
                       hippo_sources() -> the sources the caller may see, with visible_to and owner
                       hippo_whoami() -> {open_mode, user, role, can, sources_visible, sources_total, ladder, visibility_you_may_use}
+                      the four code tools, each a module-level *_tool(ctx, ..., principal=None) with a one-line
+                          @server.tool closure, and each sharing routes/code.py's payload builder so the two never drift:
+                      hippo_explain_path(a, b) ; hippo_blast_radius(symbol, depth=2) ;
+                      hippo_exception_path(symbol, exception) ; hippo_history(symbol, limit=3)
+                          AmbiguousSymbol / UnknownSymbol / ValueError -> ToolError with the message verbatim, the
+                          candidates inline: ToolError is the one error a client is shown, so anything a caller could
+                          act on has to be inside it
+               hippo_search and hippo_ask gained seed_symbols, paths, tests, history, code_graph (_code_fields).
+                      ALWAYS PRESENT, empty unless a lexical anchor fired, so a client never branches on whether the
+                      memory holds code. Trap: seed_symbols[].name is the MODULE-RELATIVE qualname (index.name_of),
+                      while paths[].a_name and the code_graph block use the fully-qualified display name.
                mount(app: FastAPI, ctx)   # streamable HTTP at /mcp, stateless_http=True; DNS-rebinding protection on, hosts from config.allowed_hosts (HIPPO_ALLOWED_HOSTS)
                                           # (it runs inside docker; users connect at http://localhost:8000/mcp); wire session_manager.run()
                                           # into the FastAPI lifespan
@@ -540,6 +551,18 @@ mcp_server.py  build_server(ctx) -> MCPServer (mcp>=2: from mcp.server.mcpserver
 cli.py         main(argv=None): subcommands  serve (uvicorn), mcp (stdio), pull-models, index <path-or-git-url> [--name], ask "<question>",
                sources, settings, users, user add|token|role|remove. Uses AppContext.from_env(); talks to Neo4j directly, so it is not
                gated (it is how the first admin is created from `docker exec`).
+               over an indexed repository: path A B, blast SYMBOL [--depth N], raises SYMBOL EXCEPTION,
+               history SYMBOL [--limit N]. Each runs through _context_or_running_server(), so it works against the
+               local file or a running server, and _code_locally / _code_remotely normalise both error paths into
+               CodeNameError -> "error: <message>" plus one indented candidate per line on stderr, exit 2.
+               A "not found" answer (no path, nothing depends on it, no commits) is exit 0 with a sentence, not an error.
+src/hippo/remote.py    RemoteHippo gained code_path, code_blast_radius, code_exception_path, code_history;
+               a 409 from the server becomes RemoteAmbiguous, which already carries the candidates.
+src/hippo/status.py    the "code" card: {symbols, data_objects, code_edges, commits, languages, unresolved_calls,
+               history_skipped}. The four counts come from store.stats(); languages / unresolved_calls /
+               history_skipped are summed from each source's meta["code"], because a count cannot carry them.
+               Deliberately NOT from ctx.graph(): system_status runs on every page render and must not pay for
+               a full GraphIndex.load.
 ```
 
 ### Docker, CI, docs
