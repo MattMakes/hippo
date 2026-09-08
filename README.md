@@ -151,7 +151,7 @@ Give hippo a git repository or a zip of one and it does something different from
 
 **One passage per symbol.** Instead of 1500-character windows that cut a function in half, each module header, class header, function and method becomes its own passage, titled `path :: module.qualname (lines a-b)` — for example `pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)`. A body too long for one passage is split at its own top-level statements into `(part N)`, never mid-expression.
 
-**The model never reads a function body.** It sees a symbol's docstring or doc-comment when that is at least 80 characters long, README and markdown, and commit messages. Never bodies, never DDL. Extracting facts costs two model calls per passage, so this is most of the saving: in a repository only the documented symbols cost anything.
+**The model never reads a function body.** It sees a symbol's docstring or doc-comment when that is at least 80 characters long, README and markdown, and commit messages. Never bodies, never DDL. Extracting facts costs two model calls per passage at index time, so this is most of the saving: in a repository only the documented symbols cost anything.
 
 **What the parser writes.** Two new kinds of node beside the entities:
 
