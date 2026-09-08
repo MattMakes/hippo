@@ -7,9 +7,10 @@
 //   POST /api/graph/light-up   seeds, activated nodes with scores, ranked passages, paths
 //   GET  /api/graph/node/{id}  the side panel for one node
 //
-// Colours: nodes are coloured by tier (who may see them), kind, or source. After a light-up,
-// seeds turn gold, activated nodes take a heat colour by score, the ranked passages turn green,
-// everything else is dimmed, and particles run along the seed -> passage paths.
+// Colours: nodes are coloured by tier (who may see them), kind, source, or subsystem (the Leiden
+// community label - with code_community_boost at 0.0 this is that label's only visible surface).
+// After a light-up, seeds turn gold, activated nodes take a heat colour by score, the ranked
+// passages turn green, everything else is dimmed, and particles run along the seed -> passage paths.
 
 (() => {
   const dataEl = document.getElementById('graph-data');
@@ -20,7 +21,13 @@
   const COLORS = {
     entity: '#8d95d9', passage: '#e2b25a', dim: '#dedbd3', dimLink: '#ebe9e3', link: '#c9c6bd',
     seed: '#ffb300', passage_hit: '#1f9d55', path: '#4f5bd5', synonym: '#8fcab0', tuned: '#e0a83a',
+    symbol: '#5aa48f', data: '#a483c4', commit: '#bd8f6c', code_link: '#9ec8bb',
   };
+  const KIND_LABELS = {
+    entity: 'entity', passage: 'passage', symbol: 'symbol', data: 'data object', commit: 'commit',
+  };
+  const CODE_KINDS = ['symbol', 'data', 'commit'];
+  const isCode = (n) => CODE_KINDS.includes(n.kind);
   // One colour per tier, top of the ladder first (dark) to everyone (light).
   const TIER_COLORS = ['#2f2580', '#4f43c4', '#7a6fe6', '#a49bef', '#c9c3f3'];
   const HEAT = ['#f6d5a4', '#f4a55c', '#ef7b3a', '#e6522c', '#c9302c'];
@@ -30,6 +37,7 @@
   let nodeById = new Map();
   let tiers = []; // [{id, name, rank}] top first
   let sourceColor = new Map();
+  let communityColor = new Map(); // community label -> colour, filled on load
   let lit = null; // the last light-up result, or null
   let litNodes = new Map(); // id -> {score, stage, seed, rank}
   let litLinks = new Set(); // "a|b" keys of path edges
@@ -78,10 +86,14 @@
   }
   function baseColor(n) {
     const mode = $('g-color').value;
-    if (mode === 'kind') return n.kind === 'passage' ? COLORS.passage : COLORS.entity;
+    if (mode === 'kind') return COLORS[n.kind] || COLORS.entity;
     if (mode === 'source') {
-      if (n.kind === 'passage') return sourceColor.get(n.source_id) || COLORS.passage;
-      return COLORS.entity;
+      // Passages and code nodes both name their source; an entity belongs to as many as mention it.
+      return sourceColor.get(n.source_id) || (n.kind === 'passage' ? COLORS.passage : COLORS.entity);
+    }
+    if (mode === 'community') {
+      // Only code nodes have a subsystem. Everything else stays grey so the groups stand out.
+      return communityColor.get(n.community_label) || COLORS.dim;
     }
     return tierColor(n);
   }
@@ -99,7 +111,11 @@
     return heat(hit.score);
   }
   function nodeSize(n) {
-    const base = n.kind === 'passage' ? 5 : 1.5 + Math.min(6, Math.sqrt(n.degree || 1));
+    // A passage is a fixed block; everything else grows with its degree, code nodes a little
+    // larger than an entity of the same degree so a symbol is findable in a mostly-prose memory.
+    const base = n.kind === 'passage'
+      ? 5
+      : (isCode(n) ? 2.5 : 1.5) + Math.min(6, Math.sqrt(n.degree || 1));
     const hit = lit && litNodes.get(n.id);
     if (!hit || hit.stage > stage) return base;
     if (hit.seed) return base * 3;
@@ -115,12 +131,16 @@
     const a = litNodes.get(endId(l.source)), b = litNodes.get(endId(l.target));
     return !!(a && b && a.stage <= stage && b.stage <= stage);
   }
+  const CODE_LINK_KINDS = ['invokes', 'imports', 'inherits', 'overrides', 'contains', 'raises',
+    'catches', 'tested_by', 'reads', 'writes', 'defined_in', 'refers_to', 'modifies', 'precedes'];
   function linkColor(l) {
     if (isLitLink(l)) return COLORS.path;
     if (lit && $('g-dim').checked) return COLORS.dimLink;
     const kinds = l.kinds || [];
     if (kinds.includes('tuned')) return COLORS.tuned;
     if (kinds.includes('synonym')) return COLORS.synonym;
+    // `Edge.kinds` appends the lowercased code kinds after fact/mention/synonym/tuned.
+    if (kinds.some((k) => CODE_LINK_KINDS.includes(k))) return COLORS.code_link;
     return COLORS.link;
   }
   function refresh() {
@@ -129,9 +149,20 @@
       .linkWidth(graph.linkWidth()).linkDirectionalParticles(graph.linkDirectionalParticles());
   }
 
+  function whatItIs(n) {
+    if (n.kind === 'passage') return `passage · ${esc(n.source_name || '')}`;
+    if (isCode(n)) {
+      const what = esc(n.code_kind || KIND_LABELS[n.kind] || n.kind);
+      const where = n.path ? ` · ${esc(n.path)}` : '';
+      const group = n.community_label ? ` · subsystem ${esc(n.community_label)}` : '';
+      return `${what}${where}${group}`;
+    }
+    return `entity · in ${n.passage_count || 0} passages`;
+  }
+
   function tooltip(n) {
     const hit = lit && litNodes.get(n.id);
-    const bits = [`<b>${esc(n.label)}</b>`, n.kind === 'passage' ? `passage · ${esc(n.source_name || '')}` : `entity · in ${n.passage_count || 0} passages`, `visible to ${esc(n.tier)} +`];
+    const bits = [`<b>${esc(n.label)}</b>`, whatItIs(n), `visible to ${esc(n.tier)} +`];
     if (hit) {
       if (hit.seed) bits.push(`seed · weight ${hit.seedWeight.toFixed(3)}`);
       if (hit.rank) bits.push(`ranked #${hit.rank}`);
@@ -159,6 +190,8 @@
     tiers = out.tiers || [];
     const sources = [...new Set(out.nodes.filter((n) => n.source_id).map((n) => n.source_id))];
     sourceColor = new Map(sources.map((sid, i) => [sid, `hsl(${(i * 67) % 360} 55% 60%)`]));
+    const subsystems = [...new Set(out.nodes.map((n) => n.community_label).filter(Boolean))].sort();
+    communityColor = new Map(subsystems.map((name, i) => [name, `hsl(${(i * 47) % 360} 60% 55%)`]));
     data = { nodes: out.nodes, links: out.edges.map((e) => ({ ...e })) };
     nodeById = new Map(data.nodes.map((n) => [n.id, n]));
     graph.graphData(data);
@@ -173,10 +206,18 @@
 
   function legend() {
     const mode = $('g-color').value;
+    const present = new Set(data.nodes.map((n) => n.kind));
     let rows = [];
     if (mode === 'tier') rows = tiers.map((t) => [tierColor({ tier_rank: t.rank }), `${t.name} +`]);
-    else if (mode === 'kind') rows = [[COLORS.entity, 'entity'], [COLORS.passage, 'passage']];
-    else rows = [...sourceColor.entries()].map(([sid, c]) => [c, ($('g-source').querySelector(`option[value="${sid}"]`) || {}).textContent || sid]).slice(0, 12);
+    else if (mode === 'kind') {
+      rows = ['entity', 'passage', ...CODE_KINDS].filter((k) => present.has(k))
+        .map((k) => [COLORS[k], KIND_LABELS[k]]);
+    } else if (mode === 'community') {
+      // Capped like the source legend: a large repository has more subsystems than a legend fits.
+      rows = [...communityColor.entries()].slice(0, 12).map(([name, c]) => [c, name]);
+      if (!rows.length) rows = [[COLORS.dim, 'no subsystems (index some code)']];
+      else if (communityColor.size > 12) rows.push([COLORS.dim, `+ ${communityColor.size - 12} more`]);
+    } else rows = [...sourceColor.entries()].map(([sid, c]) => [c, ($('g-source').querySelector(`option[value="${sid}"]`) || {}).textContent || sid]).slice(0, 12);
     const litRows = lit ? [[COLORS.seed, 'seed entity'], [HEAT[3], 'activated (hotter = more)'], [COLORS.passage_hit, 'ranked passage'], [COLORS.path, 'path seed → passage']] : [];
     $('g-legend').innerHTML = [...rows, ...litRows].map(([c, t]) => `<span><i style="background:${c}"></i>${esc(t)}</span>`).join('');
   }
@@ -287,6 +328,47 @@
   }
 
   // ---------------------------------------------------------- one node
+
+  // A relation row from /api/graph/node: `a -[KIND ω provenance]-> b`, the S2.15 grammar the
+  // answer block and the Analyze page use, with the far end clickable.
+  function relationList(rows, far) {
+    if (!rows || !rows.length) return '<li class="muted">none</li>';
+    return rows.map((r) => {
+      const target = far === 'b' ? r.b : r.a;
+      const name = far === 'b' ? r.b_name : r.a_name;
+      const flags = `${r.in_branch ? ' in_branch' : ''}${r.is_await ? ' await' : ''}`;
+      return `<li><span class="muted">${esc(r.kind)} ${Number(r.omega).toFixed(2)} ${esc(r.provenance || '')}${esc(flags)}</span> ` +
+        `<a href="#" data-focus="${esc(target)}">${esc(name)}</a></li>`;
+    }).join('');
+  }
+  function block(title, body, open) {
+    return `<details ${open ? 'open' : ''}><summary class="small">${title}</summary><ul class="small g-list">${body}</ul></details>`;
+  }
+
+  function codePanel(n) {
+    if (n.kind === 'symbol') {
+      return `
+        ${n.signature ? `<p class="pre mono small">${esc(n.signature)}</p>` : ''}
+        <p class="small muted">${esc(n.path)}${n.line_start ? ` lines ${n.line_start}–${n.line_end}` : ''}${n.is_test ? ' · a test' : ''}${n.community_label ? ` · subsystem ${esc(n.community_label)}` : ''}</p>
+        ${n.doc ? `<details open><summary class="small">Doc</summary><p class="pre small">${esc(n.doc)}</p></details>` : ''}
+        ${block(`Calls out (${(n.callees || []).length})`, relationList(n.callees, 'b'), true)}
+        ${block(`Called by (${(n.callers || []).length})`, relationList(n.callers, 'a'), true)}
+        ${block(`Tests (${(n.tests || []).length})`, (n.tests || []).map((t) => `<li><a href="#" data-focus="${esc(t.id)}">${esc(t.name)}</a> <span class="muted">${esc(t.path)}</span></li>`).join('') || '<li class="muted">none</li>')}
+        ${block(`Commits (${(n.commits || []).length})`, (n.commits || []).map((c) => `<li><a href="#" data-focus="${esc(c.id)}"><code>${esc((c.sha || '').slice(0, 7))}</code></a> <span class="muted">${esc(c.date)} ${esc(c.subject)}</span></li>`).join('') || '<li class="muted">none</li>')}
+        ${n.raises && n.raises.length ? `<p class="small muted">Raises: ${n.raises.map(esc).join(', ')}</p>` : ''}`;
+    }
+    if (n.kind === 'data') {
+      return `
+        <p class="small muted">${esc(n.code_kind)}${n.dialect ? ` · ${esc(n.dialect)}` : ''}</p>
+        ${block(`Read by (${(n.readers || []).length})`, relationList(n.readers, 'a'), true)}
+        ${block(`Written by (${(n.writers || []).length})`, relationList(n.writers, 'a'), true)}`;
+    }
+    return `
+      <p class="small muted"><code>${esc(n.sha)}</code> · ${esc(n.author)} · ${esc((n.date || '').slice(0, 10))}</p>
+      ${n.message ? `<p class="pre small">${esc(n.message)}</p>` : ''}
+      ${block(`Modified (${(n.modifies || []).length})`, relationList(n.modifies, 'b'), true)}`;
+  }
+
   async function showNode(id) {
     selected = id;
     refresh();
@@ -298,13 +380,20 @@
     const facts = (n.facts || []).map((t) => `<li class="triple"><b>${esc(t[0])}</b> <i>${esc(t[1])}</i> <b>${esc(t[2])}</b></li>`).join('');
     const neighbours = n.neighbours.map((o) => `<li><a href="#" data-focus="${esc(o.id)}">${esc(o.label)}</a> <span class="muted">· ${o.kind} · ${o.weight} · ${(o.kinds || []).join('+')}</span></li>`).join('');
     const hit = lit && litNodes.get(id);
+    const code = isCode(n);
+    let what;
+    if (n.kind === 'passage') what = `passage from <b>${esc(n.source_name)}</b>`;
+    else if (code) what = `${esc(n.code_kind || KIND_LABELS[n.kind])} in <b>${esc(n.source_name)}</b>`;
+    else what = `entity · mentioned in ${n.passage_count} passages · boost ${n.boost}`;
     side.innerHTML = `
       <h4>${esc(n.label)}</h4>
-      <p class="small muted">${n.kind === 'passage' ? `passage from <b>${esc(n.source_name)}</b>` : `entity · mentioned in ${n.passage_count} passages · boost ${n.boost}`} · visible to <b>${esc(n.tier)} +</b> · ${n.degree} neighbours</p>
+      <p class="small muted">${what} · visible to <b>${esc(n.tier)} +</b> · ${n.degree} neighbours</p>
       ${hit ? `<p class="small">${hit.seed ? `<span class="pill warn">seed · ${hit.seedWeight.toFixed(3)}</span> ` : ''}${hit.rank ? `<span class="pill ok">ranked #${hit.rank}</span> ` : ''}${hit.score ? `<span class="pill">activation ${hit.score.toFixed(3)}</span>` : ''}</p>` : ''}
       ${n.kind === 'passage' ? `<details open><summary class="small">Text</summary><p class="pre small">${esc(n.text)}</p></details>` : ''}
-      <details ${n.kind === 'entity' ? 'open' : ''}><summary class="small">Facts (${n.fact_count ?? (n.facts || []).length})</summary><ul class="facts small">${facts || '<li class="muted">none</li>'}</ul></details>
+      ${code ? codePanel(n) : `<details ${n.kind === 'entity' ? 'open' : ''}><summary class="small">Facts (${n.fact_count ?? (n.facts || []).length})</summary><ul class="facts small">${facts || '<li class="muted">none</li>'}</ul></details>`}
       ${n.kind === 'entity' && n.passages ? `<details><summary class="small">Passages (${n.passages.length})</summary><ul class="small g-list">${n.passages.map((p) => `<li><a href="#" data-focus="${esc(p.id)}">${esc(p.title)}</a></li>`).join('')}</ul></details>` : ''}
+      ${code && n.defined_in && n.defined_in.length ? block(`Written down in (${n.defined_in.length})`, n.defined_in.map((p) => `<li><a href="#" data-focus="${esc(p.id)}">${esc(p.title)}</a></li>`).join('')) : ''}
+      ${n.kind === 'passage' && n.defines && n.defines.length ? block(`Defines (${n.defines.length})`, n.defines.map((s) => `<li><a href="#" data-focus="${esc(s.id)}">${esc(s.label)}</a></li>`).join('')) : ''}
       <details><summary class="small">Neighbours (weight · kind)</summary><ul class="small g-list">${neighbours}</ul></details>
       ${lit ? '<p class="small"><a href="#" id="g-back">← back to the question</a></p>' : ''}`;
     const back = $('g-back');
