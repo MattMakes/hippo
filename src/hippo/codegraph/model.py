@@ -140,6 +140,29 @@ class Symbol:
     header_end: int = 0  # last line of the header passage (module/class: before the first member)
     statement_lines: list[int] = field(default_factory=list)  # start lines of the body's statements
 
+    def row(self) -> dict:
+        """
+        Exactly what `store.add_symbols` takes, and nothing else. The five fields below the
+        line above are the chunker's and the resolver's; the store has no columns for them,
+        so the indexer writes `symbol.row()` rather than `asdict(symbol)`. `embedding` is
+        the indexer's to add -- it is the one field only Ollama can fill.
+        """
+        return {
+            "id": self.id,
+            "source_id": self.source_id,
+            "name": self.name,
+            "qualname": self.qualname,
+            "kind": self.kind,
+            "lang": self.lang,
+            "path": self.path,
+            "line_start": self.line_start,
+            "line_end": self.line_end,
+            "signature": self.signature,
+            "doc": self.doc,
+            "is_test": self.is_test,
+            "raises": list(self.raises),
+        }
+
 
 @dataclass
 class DataObject:
@@ -159,6 +182,18 @@ class DataObject:
     kind: str = "table"
     dialect: str = ""  # `sql`, `mongo`, `cypher`
     mentions: list[tuple[str, int]] = field(default_factory=list)  # (path, line), sorted, unique
+
+    def row(self) -> dict:
+        """What `store.add_data_objects` takes. `mentions` is not stored: it is how the
+        indexer knows which passages get a DEFINED_IN edge to this node (S2.5)."""
+        return {
+            "id": self.id,
+            "source_id": self.source_id,
+            "name": self.name,
+            "qualname": self.qualname,
+            "kind": self.kind,
+            "dialect": self.dialect,
+        }
 
 
 @dataclass

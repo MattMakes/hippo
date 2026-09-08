@@ -257,6 +257,25 @@ def test_fixture_header_and_statement_lines(fixture_graph):
     assert bare.header_end < bare.line_start  # opens with `class Base`: no header passage at all
 
 
+def test_row_is_exactly_the_store_shape(fixture_graph):
+    """
+    `Symbol` carries five fields the store has no columns for. `row()` is the boundary, so
+    the indexer never has to know which of them the schema happens to accept today.
+    """
+    from hippo.store.code import data_object_write_row, symbol_write_row
+
+    place = by_qualname(fixture_graph, "pyapp/orders.py", "OrderService.place")
+    row = place.row()
+    assert set(row) == {
+        "id", "source_id", "name", "qualname", "kind", "lang", "path",
+        "line_start", "line_end", "signature", "doc", "is_test", "raises",
+    }  # fmt: skip
+    assert symbol_write_row(row)["qualname"] == "OrderService.place"
+    orders = next(d for d in fixture_graph.data_objects if d.kind == "table" and d.qualname == "orders")
+    assert set(orders.row()) == {"id", "source_id", "name", "qualname", "kind", "dialect"}
+    assert data_object_write_row(orders.row())["dialect"] == "sql"
+
+
 def test_fixture_params_feed_the_arg_binding(fixture_graph):
     assert by_qualname(fixture_graph, "pyapp/orders.py", "OrderService.place").params == ["self", "order"]
     assert by_qualname(fixture_graph, "pyapp/billing.py", "total").params == ["order"]
@@ -708,6 +727,17 @@ def test_python_inherits_fuzzy_and_dotted():
     )
 
 
+def test_python_imported_class_method_call_is_0_90():
+    """2.2b's `Class.m()` row, imported half: the same call one file over is 0.90, not 1.00."""
+    graph = graph_of(
+        {
+            "lib.py": "class Root:\n    def ping(self):\n        return 1\n",
+            "app.py": "from lib import Root\n\ndef go():\n    return Root.ping(None)\n",
+        }
+    )
+    assert ("INVOKES", 0.90, "via_import", "app.py::go", "lib.py::Root.ping") in edges_of(graph, "INVOKES")
+
+
 def test_python_raises_and_catches():
     """In-repo exception classes get edges; builtins go on `Symbol.raises` and nowhere else."""
     graph = graph_of(
@@ -827,6 +857,38 @@ def test_typescript_this_super_new_and_throw():
     # `extends Error` is a builtin base, and `throw new Boom()` is not also a call to Boom.
     assert not any(b.endswith("::Error") for _, _, b in links(graph, "INHERITS"))
     assert ("INVOKES", "src/app.ts::Child.boom", "src/base.ts::Boom") not in links(graph)
+
+
+def test_typescript_this_reaches_a_resolved_base_at_0_90():
+    """`this.m()` where `m` lives on the base, not on this class: 0.90 `via_inheritance`."""
+    graph = graph_of(
+        {
+            "src/base.ts": "export class Widget {\n  go(): number { return 1; }\n}\n",
+            "src/app.ts": (
+                'import { Widget } from "./base";\n'
+                "\n"
+                "export class Child extends Widget {\n"
+                "  near(): number { return this.go(); }\n"
+                "}\n"
+            ),
+        }
+    )
+    assert ("INVOKES", 0.90, "via_inheritance", "src/app.ts::Child.near", "src/base.ts::Widget.go") in (
+        edges_of(graph, "INVOKES")
+    )
+
+
+def test_typescript_extends_a_unique_bare_name_is_0_50():
+    """2.2b's `extends B` fuzzy half: nothing imported `Special`, but only one class is called that."""
+    graph = graph_of(
+        {
+            "src/lib.ts": "export class Special {\n  go(): number { return 1; }\n}\n",
+            "src/app.ts": "export class Thing extends Special {}\n",
+        }
+    )
+    assert ("INHERITS", 0.50, "fuzzy_name", "src/app.ts::Thing", "src/lib.ts::Special") in edges_of(
+        graph, "INHERITS"
+    )
 
 
 def test_typescript_catch_needs_an_instanceof():
