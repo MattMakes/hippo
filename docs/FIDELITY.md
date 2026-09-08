@@ -72,11 +72,17 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
   rest are set to 0. Symbol seeds, which the reference has no counterpart for, are
   budgeted separately and do not take part in that cut (adaptation 15).
 * Passage seed weights: min-max normalised DPR score times `passage_node_weight`.
-* Reset vector = entity weights + passage weights; NaN or negative entries become 0.
+* Reset vector = entity weights + passage weights, plus code weights for a memory that holds a
+  code source (adaptation 15); NaN or negative entries become 0. With no code node in the graph —
+  or with `code_seed_weight` at 0 — the code term is an array of zeros and the sum is the
+  reference's exactly.
 * PPR: `graph.personalized_pagerank(vertices=range(n), damping=damping, directed=False,
   weights="weight", reset=reset, implementation="prpack")`, character for character.
 * Passages ranked by their PPR score; when no fact survives the filter the ranking is
-  plain dense passage retrieval (`No facts found after reranking, return DPR results`).
+  plain dense passage retrieval (`No facts found after reranking, return DPR results`) —
+  unless a lexical anchor fired, in which case the question named something the graph knows
+  and PPR runs from that instead (adaptation 15). A question that names no code takes the
+  reference's path, and a dense code seed deliberately does not count here.
 
 ### Reading (`answerer.py` vs `qa` + `prompts/templates/rag_qa_musique.py`)
 
