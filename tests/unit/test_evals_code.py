@@ -300,3 +300,50 @@ def test_the_baseline_run_turns_code_seeding_off(code_index):
     assert with_code["code_seeded"] == 1.0
     assert baseline["code_seeded"] == 0.0
     # No verdict assertion on either side: the fake judge has no opinion worth pinning here (R2-15).
+
+
+def test_commit_questions_over_real_git_history(git_index):
+    """
+    `commit_questions` and `path_fidelity` over WP2b's `git_index` (real `git log`/`git diff`,
+    not `write_commit_history`): the same shape the synthetic fixture above asserts.
+
+    The middle commit ("Total, invoice and log in place") only edits `place`'s body -- one
+    symbol -- so it never becomes a question. The root commit's diff is read as the whole tree
+    landing at once (S2.9's "no parent" case), so it touches every symbol *except*
+    `tsapp.models.base`: that module's only content is one class, so once the class's lines
+    are subtracted its own range is empty and no hunk ever lands on it -- only on the class
+    and its method nested inside.
+    """
+    ctx, source_id, _depths = git_index
+    index = ctx.graph()
+
+    questions = commit_questions(index, source_id, 5)
+
+    assert [q["text"] for q in questions] == [
+        'What changed in the commit "Raise on save, add the ts app"?',
+        'What changed in the commit "Add the order service"?',
+    ]
+    assert [q["kind"] for q in questions] == ["commit", "commit"]
+
+    newest = questions[0]
+    assert newest["notes"] == "touched: pyapp.orders.OrderService.save, tsapp.index, tsapp.index.main"
+    gold_titles = titles(ctx, newest["gold_passage_ids"])
+    assert gold_titles[0].startswith("commit ") and "Raise on save, add the ts app" in gold_titles[0]
+    assert gold_titles[1:] == [
+        SAVE_TITLE,
+        "tsapp/index.ts :: tsapp.index (lines 1-2)",
+        "tsapp/index.ts :: tsapp.index.main (lines 3-8)",
+    ]
+
+    root = questions[1]
+    touched_names = root["notes"].removeprefix("touched: ").split(", ")
+    assert "tsapp.models.base" not in touched_names
+    assert {"tsapp.models.base.Base", "tsapp.models.base.Base.log"} <= set(touched_names)
+
+    result = run_question(ctx, newest, ctx.store.get_settings())
+
+    assert result["error"] is None
+    # Three gold symbol passages behind the commit passage: the share of them in the top 5.
+    assert result["recall"]["path_fidelity"] in (0.0, 1 / 3, 2 / 3, 1.0)
+    assert result["recall"]["code_seeded"] in (0.0, 1.0)
+    assert "recall@5" in result["recall"]

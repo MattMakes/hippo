@@ -32,6 +32,8 @@ SUMMARY_CARDS = [
     ("recall@5", "Recall@5", "share of gold passages found in the top 5"),
     ("gold_in_top5", "Gold in top 5", "questions whose gold passage was in the top 5"),
     ("mean_gold_rank", "Mean gold rank", "average rank of the best gold passage (lower is better)"),
+    ("code_seeded", "Code seeded", "questions whose search opened a code seed from a lexical anchor"),
+    ("path_fidelity", "Path fidelity", "commit questions: share of the touched symbols found in the top 5"),
     ("dpr_fallbacks", "Fallbacks", "questions answered by embedding search only"),
     ("mean_latency_ms", "Latency (ms)", "average time per question"),
 ]
