@@ -26,7 +26,8 @@ from pydantic import BaseModel, Field
 from ... import ask as ask_service
 from ...access import EVERYONE_RANK, Principal
 from ...analysis.explain import explain
-from ...hipporag.graph_index import ENTITY, PASSAGE, GraphIndex
+from ...hipporag import paths as path_tools
+from ...hipporag.graph_index import CODE_KINDS, DATA, ENTITY, PASSAGE, SYMBOL, GraphIndex
 from ...ollama import OllamaError
 from ..auth import principal_of
 from ..render import ctx_of, render
@@ -60,10 +61,25 @@ def viewer(request: Request, as_role: str | None) -> tuple[Principal, dict[str, 
     return principal.as_role(role), role
 
 
+def label_at(index: GraphIndex, vertex: int) -> str:
+    """
+    What the page calls a node.
+
+    Entities and passages keep `name_of`. A code node gets its **display** name
+    (`pyapp.orders.OrderService.place`), because `Symbol.qualname` is module-relative by S2.6 - two
+    `Base` classes in two packages would otherwise be two nodes with one label and no way to tell
+    them apart in a filter, a tooltip or the side panel.
+    """
+    if index.node_kind[vertex] in CODE_KINDS:
+        return path_tools.display_at(index, vertex)
+    return index.name_of(vertex)
+
+
 def tiers_of(ctx, index: GraphIndex, access) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """
     Per source: its tier {id, name, rank}. Per node id: the most permissive tier it is visible from
-    (a passage's source tier; for an entity, the lowest tier among the visible passages mentioning it).
+    (a passage's or code node's source tier; for an entity, the lowest tier among the visible
+    passages mentioning it).
     """
     roles = {r["id"]: r for r in ctx.store.list_roles()}
     source_tier: dict[str, dict[str, Any]] = {}
@@ -75,6 +91,10 @@ def tiers_of(ctx, index: GraphIndex, access) -> tuple[dict[str, dict[str, Any]],
     node_tier: dict[str, dict[str, Any]] = {}
     for p in index.passages:
         node_tier[p.id] = source_tier.get(p.source_id, dict(EVERYONE_TIER))
+    # A code node carries its source directly. It has no MENTIONS edge (D1), so the mention loop
+    # below never reaches it and it would otherwise render as "Everyone" whatever its repo's tier.
+    for node in index.code_nodes:
+        node_tier[node.id] = source_tier.get(node.source_id, dict(EVERYONE_TIER))
     for (a, b), e in index.edges.items():
         if not e.mention:
             continue
@@ -142,6 +162,10 @@ def full_graph(
         if source:
             if index.node_kind[v] == PASSAGE:
                 return index.passages[index.passage_position(v)].source_id == source
+            if index.node_kind[v] in CODE_KINDS:
+                # a symbol, table or commit names its own source; it needs no mention edge
+                node = index.code_node_at(v)
+                return bool(node and node.source_id == source)
             # an entity belongs to a source when a passage of that source mentions it
             return any(
                 index.node_kind[o] == PASSAGE
@@ -153,7 +177,7 @@ def full_graph(
     for v in range(index.num_nodes):
         if not matches(v):
             continue
-        if text and text not in index.name_of(v).lower():
+        if text and text not in label_at(index, v).lower():
             continue
         wanted.add(v)
     if text:
@@ -166,12 +190,13 @@ def full_graph(
     ordered = sorted(wanted, key=lambda v: (-degree[v], v))
     shown = ordered[:limit]
     shown_set = set(shown)
+    labels = path_tools.community_labels(index)  # once: it walks every code node
     nodes = []
     for v in shown:
         node_id = index.node_ids[v]
         node: dict[str, Any] = {
             "id": node_id,
-            "label": index.name_of(v),
+            "label": label_at(index, v),
             "kind": index.node_kind[v],
             "degree": int(degree[v]),
             "tier": node_tier.get(node_id, EVERYONE_TIER)["name"],
@@ -181,6 +206,17 @@ def full_graph(
             p = index.passages[index.passage_position(v)]
             node["source_id"] = p.source_id
             node["source_name"] = p.source_name
+        elif index.node_kind[v] in CODE_KINDS:
+            code = index.code_node_at(v)
+            node.update(
+                code_kind=code.code_kind or code.kind,
+                lang=code.lang,
+                path=code.path,
+                source_id=code.source_id,
+                source_name=code.source_name,
+                community=code.community,
+                community_label=labels.get(code.community, "") if code.community is not None else "",
+            )
         else:
             node["passage_count"] = int(index.entity_passage_count[v])
         nodes.append(node)
@@ -316,16 +352,17 @@ def node_details(request: Request, node_id: str, as_role: str = ""):
         raise HTTPException(404, "unknown node")
     _source_tier, node_tier = tiers_of(ctx, index, principal.access)
     neighbours = sorted(index.neighbors(vertex), key=lambda t: -t[1])
+    kind = index.node_kind[vertex]
     out: dict[str, Any] = {
         "id": node_id,
-        "kind": index.node_kind[vertex],
-        "label": index.name_of(vertex),
+        "kind": kind,
+        "label": label_at(index, vertex),
         "tier": node_tier.get(node_id, EVERYONE_TIER)["name"],
         "degree": len(neighbours),
         "neighbours": [
             {
                 "id": index.node_ids[o],
-                "label": index.name_of(o),
+                "label": label_at(index, o),
                 "kind": index.node_kind[o],
                 "weight": round(float(w), 3),
                 "kinds": (index.edge_between(vertex, o) or _NO_EDGE).kinds,
@@ -333,7 +370,7 @@ def node_details(request: Request, node_id: str, as_role: str = ""):
             for o, w in neighbours[:60]
         ],
     }
-    if index.node_kind[vertex] == PASSAGE:
+    if kind == PASSAGE:
         p = index.passages[index.passage_position(vertex)]
         out.update(
             title=p.title,
@@ -342,7 +379,13 @@ def node_details(request: Request, node_id: str, as_role: str = ""):
             ordinal=p.ordinal,
             text=p.text,
             facts=[f.triple for f in index.facts if p.id in f.passage_ids][:40],
+            defines=[
+                {"id": index.node_ids[v], "label": label_at(index, v)}
+                for v in sorted(index.symbols_defined_in(vertex), key=lambda v: label_at(index, v))
+            ],
         )
+    elif kind in CODE_KINDS:
+        out.update(_code_panel(ctx, index, vertex))
     else:
         facts = [f for f in index.facts if node_id in (f.subject_id, f.object_id)]
         out.update(
@@ -355,6 +398,80 @@ def node_details(request: Request, node_id: str, as_role: str = ""):
                 for o, _w in neighbours
                 if index.node_kind[o] == PASSAGE
             ][:40],
+        )
+    return out
+
+
+MAX_PANEL_EDGES = 60  # a hub symbol has hundreds of callers; the panel shows the first page
+
+
+def sorted_edges(index: GraphIndex, edges) -> list:
+    """
+    Code relations in a backend-independent order: (kind, target name, source name).
+
+    `code_out`/`code_in` come back in load order and no graph promises one - Neo4j least of all -
+    so a panel that rendered them unsorted would list the same relations differently per backend
+    (WP1's handoff, and the same sort `paths._walkable` uses).
+    """
+    return sorted(
+        edges,
+        key=lambda e: (e.kind, path_tools.display_at(index, e.dst), path_tools.display_at(index, e.src)),
+    )
+
+
+def _code_panel(ctx, index: GraphIndex, vertex: int) -> dict[str, Any]:
+    """The per-kind body of the side panel for a symbol, data object or commit."""
+    node = index.code_node_at(vertex)
+    assert node is not None  # the caller checked node_kind
+    theta = float(ctx.store.get_settings().get("code_theta", 0.0))
+    rows = path_tools.triple_rows
+    out: dict[str, Any] = {
+        "code_kind": node.code_kind or node.kind,
+        "lang": node.lang,
+        "path": node.path,
+        "source_id": node.source_id,
+        "source_name": node.source_name,
+        "community": node.community,
+        "community_label": path_tools.community_labels(index).get(node.community, "")
+        if node.community is not None
+        else "",
+        "defined_in": [
+            {"id": index.node_ids[v], "title": index.name_of(v)}
+            for v in sorted(index.defining_passages(vertex), key=lambda v: index.name_of(v))
+        ],
+    }
+    out_edges = sorted_edges(index, index.out_edges(vertex))
+    in_edges = sorted_edges(index, index.in_edges(vertex))
+    if node.kind == SYMBOL:
+        out.update(
+            qualname=node.qualname,
+            signature=node.signature,
+            doc=node.doc,
+            line_start=node.line_start,
+            line_end=node.line_end,
+            is_test=node.is_test,
+            raises=list(node.raises),
+            callees=rows(index, [e for e in out_edges if index.node_kind[e.dst] in CODE_KINDS])[
+                :MAX_PANEL_EDGES
+            ],
+            callers=rows(index, [e for e in in_edges if index.node_kind[e.src] == SYMBOL])[:MAX_PANEL_EDGES],
+            tests=path_tools.test_rows(index, path_tools.tests_for(index, [vertex], theta=theta)),
+            commits=path_tools.history_rows(path_tools.history(index, vertex, limit=5)),
+        )
+    elif node.kind == DATA:
+        out.update(
+            dialect=node.dialect,
+            readers=rows(index, [e for e in in_edges if e.kind == "READS"])[:MAX_PANEL_EDGES],
+            writers=rows(index, [e for e in in_edges if e.kind == "WRITES"])[:MAX_PANEL_EDGES],
+        )
+    else:  # COMMIT
+        out.update(
+            sha=node.sha,
+            author=node.author,
+            date=node.date,
+            message=node.message,
+            ordinal=node.ordinal,
+            modifies=rows(index, [e for e in out_edges if e.kind == "MODIFIES"])[:MAX_PANEL_EDGES],
         )
     return out
 

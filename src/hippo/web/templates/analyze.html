@@ -106,7 +106,47 @@
   </table></div>
   <p class="muted small">Passages also seed the search a little by their own similarity to the question (× {{ trace.settings.passage_node_weight }}): {% for p in trace.seed_passages[:5] %}{{ p.title }} ({{ p.weight | fmt(3) }}){{ ', ' if not loop.last }}{% endfor %}.</p>
   {% endif %}
+
+  {% if trace.seed_symbols %}
+  <h3>Step 3b · seed symbols <span class="muted small">names the question spelled out, weighted by <code>code_seed_weight</code> ÷ specificity (in-degree + 1). Only a <b>lexical</b> anchor — an identifier, stack frame, exception, fenced block or diff — turns on the paths and the answer block; a <code>dense</code> row is a symbol defined by a passage that scored well and only adds starting weight.</span></h3>
+  <div class="scroll-x"><table class="table compact">
+    <thead><tr><th>Symbol</th><th>Kind</th><th>How</th><th>From</th><th class="num">Seed weight</th><th class="num">Specificity</th><th class="num">Matched</th><th>Kept</th></tr></thead>
+    <tbody>
+    {% for s in trace.seed_symbols %}
+    <tr class="{{ 'kept' if s.kept else 'muted' }}">
+      <td>{% if s.ambiguous %}<span class="muted">–</span>{% else %}<b>{{ s.name }}</b>{% endif %}</td>
+      <td class="muted small">{{ s.kind }}</td>
+      <td><span class="pill {{ 'warn' if s.how == 'dense' }}">{{ s.how }}</span></td>
+      {# A lexical anchor's `matched_by` is the token; a dense seed's is a passage id, resolved to
+         its title by `_seed_symbol_sources` so the column reads as something rather than a hash. #}
+      <td class="muted small">{% if s.how == 'dense' %}{{ seed_from.get(s.matched_by, s.matched_by) | short(50) }}{% else %}<code>{{ s.token or s.matched_by }}</code>{% endif %}</td>
+      <td class="num">{{ s.weight | fmt(3) }}</td>
+      <td class="num">{{ s.specificity | fmt(1) }}</td>
+      <td class="num">{{ s.n_matches }}</td>
+      <td class="muted small">{% if s.ambiguous %}too many matches to seed{% elif not s.kept %}cut{% else %}✓{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p class="muted small">A lexical anchor was found: <b>{{ 'yes' if trace.used_code_seeds else 'no' }}</b>.{% if trace.question_code %} The pasted half of the question (frames, fenced blocks, diff hunks) was kept out of the embedding and the fact filter: <code>{{ trace.question_code | short(120) }}</code>{% endif %}</p>
+  {% endif %}
 </section>
+
+{% if path_lines or trace.tests or trace.history %}
+<section class="card">
+  <h2>Paths <span class="muted small">the relations the answer block carried, in the fixed S2.15 grammar <code>a -[KIND ω provenance]-&gt; b</code>; only relations at or above <code>code_theta</code> ({{ trace.settings.code_theta }}) are walked</span></h2>
+  {% if path_lines %}<ul class="facts small mono">{% for line in path_lines %}<li>{{ line }}</li>{% endfor %}</ul>{% else %}<p class="muted">No relation cleared <code>code_theta</code>.</p>{% endif %}
+  {% if trace.tests %}<p class="small">Tests: {% for t in trace.tests %}<code>{{ t.name }}</code>{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+  {% if trace.history %}<p class="small">Commits: {% for c in trace.history %}<code>{{ c.sha[:7] }}</code> {{ c.date }} {{ c.subject | short(60) }}{{ ' · ' if not loop.last }}{% endfor %}</p>{% endif %}
+  {% if trace.select and trace.select.raw %}
+  <details>
+    <summary class="small">The keep/drop/expand pass{% if trace.select.error %} (failed: {{ trace.select.error }}){% endif %}</summary>
+    <p class="small">kept {{ trace.select.keep | length }} · dropped {{ trace.select.drop | length }} · expanded {{ trace.select.expand | length }}</p>
+    <p class="pre mono small muted">{{ trace.select.raw }}</p>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
 
 <section class="card">
   <div class="card-head"><h2>The part of the graph that lit up</h2><span class="muted small">circles are entities, squares are passages; bigger = more activation; blue ring = seed; green ring = gold passage. Click a node.</span></div>
@@ -141,6 +181,19 @@
       <div class="knob"><label for="ov-passage_node_weight">passage_node_weight</label><input id="ov-passage_node_weight" type="number" min="0" max="5" step="0.01" value="{{ trace.settings.passage_node_weight }}" data-original="{{ trace.settings.passage_node_weight }}"><span class="muted small">how much passages seed themselves</span></div>
       <div class="knob"><label for="ov-damping">damping</label><input id="ov-damping" type="number" min="0.05" max="0.95" step="0.05" value="{{ trace.settings.damping }}" data-original="{{ trace.settings.damping }}"><span class="muted small">how far activation travels</span></div>
       <div class="knob"><label for="ov-node_specificity">node_specificity</label><input id="ov-node_specificity" type="checkbox" {{ 'checked' if trace.settings.node_specificity }} data-original="{{ '1' if trace.settings.node_specificity else '0' }}"><span class="muted small">divide seed weight by passage count</span></div>
+      {# The code knobs. Bounds come from SETTING_RULES, the same ones validate_settings enforces;
+         the three ingest-only settings are deliberately absent (analysis/simulate.INGEST_SETTINGS)
+         because a slider that cannot move a ranking has no business on the page that explains one. #}
+      {% for key, hint in [
+        ('code_seed_weight', 'how hard a named symbol seeds'),
+        ('code_structural_scale', 'weight of every code-only edge; 0 takes code out of the search'),
+        ('code_theta', 'minimum confidence a relation needs to be walked or shown')] %}
+      {% set bounds = rules.get(key) %}
+      <div class="knob"><label for="ov-{{ key }}">{{ key }}</label><input id="ov-{{ key }}" type="number"
+        {% if bounds and bounds[1] is not none %}min="{{ bounds[1] }}"{% endif %}
+        {% if bounds and bounds[2] is not none %}max="{{ bounds[2] }}"{% endif %}
+        step="0.01" value="{{ trace.settings.get(key) }}" data-original="{{ trace.settings.get(key) }}"><span class="muted small">{{ hint }}</span></div>
+      {% endfor %}
       <div class="knob"><label for="ov-rerun-filter">re-run the fact filter</label><input id="ov-rerun-filter" type="checkbox"><span class="muted small">ask the model again instead of replaying its earlier choice (slower)</span></div>
       <div class="knob"><label for="ov-reanswer">re-generate the answer</label><input id="ov-reanswer" type="checkbox"><span class="muted small">read the new top passages and answer again (slower)</span></div>
     </div>

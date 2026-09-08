@@ -30,8 +30,10 @@ from ...analysis.changesets import save as save_changeset_ops
 from ...analysis.explain import explain
 from ...analysis.simulate import Overrides
 from ...analysis.simulate import simulate as run_simulation
+from ...hipporag.paths import render_triples
 from ...hipporag.retriever import Trace, trace_from_dict
 from ...ollama import OllamaError
+from ...store.base import SETTING_RULES
 from ..adhoc import ADHOC_LIMIT, recall_adhoc, remember_adhoc
 from ..auth import principal_of, require
 from ..render import ctx_of, render
@@ -127,12 +129,34 @@ def _render_analysis(request: Request, trace: Trace, *, result, answer, history,
         explanation=explanation,
         gold_ids=gold_ids,
         passage_text=passage_text,
+        # The S2.15 grammar is rendered here, by the same function the answer block uses, so the
+        # page and the block can never drift into two spellings of one relation.
+        path_lines=render_triples(trace.paths),
+        seed_from=_seed_symbol_sources(index, trace),
+        rules=SETTING_RULES,
         trace_key=trace_key,
         graph_changed=trace.graph_version != index.version,
         current_settings=ctx.store.get_settings(),
         ask_url=f"/ask?q={quote(trace.question)}",
         can_edit=principal.can("edit_graph"),
     )
+
+
+def _seed_symbol_sources(index, trace: Trace) -> dict[str, str]:
+    """
+    What to print in the seed-symbols table's "From" column, per `SeedSymbol.matched_by`.
+
+    A lexical anchor's `matched_by` is the token the reader typed and stands on its own. A dense
+    seed's is the id of the passage it was pulled from, and `passage-<32 hex>` says nothing - the
+    passage's title does. A passage this caller cannot see (a stored eval trace) keeps its id.
+    """
+    out: dict[str, str] = {}
+    for seed in trace.seed_symbols:
+        if seed.how != "dense" or not seed.matched_by:
+            continue
+        passage = index.passage_by_id(seed.matched_by)
+        out[seed.matched_by] = passage.title if passage else seed.matched_by
+    return out
 
 
 @router.get("/changesets")

@@ -5,7 +5,7 @@
 <div class="page-head row spread">
   <div>
     <h1>The graph{% if preview_role %} <span class="muted">as {{ preview_role.name }}</span>{% endif %}</h1>
-    <p class="muted">Every entity and passage {% if preview_role %}a <b>{{ preview_role.name }}</b>{% else %}you{% endif %} can see, in 3D. Search names, filter by source, then type a question to watch the search spread from its seed entities to the passages it picks. Drag to orbit, scroll to zoom, click a node for details.</p>
+    <p class="muted">Every entity, passage, symbol, data object and commit {% if preview_role %}a <b>{{ preview_role.name }}</b>{% else %}you{% endif %} can see, in 3D. Search names, filter by source or kind, then type a question to watch the search spread from its seeds to the passages it picks. Drag to orbit, scroll to zoom, click a node for details.</p>
   </div>
   {% if previewable %}
   <form method="get" action="/graph" class="row" title="See the graph as another tier would (only tiers at or below yours)">
@@ -41,12 +41,21 @@
       <option value="">every source</option>
       {% for s in sources %}<option value="{{ s.id }}" {{ 'selected' if request.query_params.get('source') == s.id }}>{{ s.name | short(40) }} ({{ s.passages }})</option>{% endfor %}
     </select>
-    <select id="g-kind" style="max-width: 150px"><option value="">entities + passages</option><option value="entity">entities only</option><option value="passage">passages only</option></select>
+    <select id="g-kind" style="max-width: 170px">
+      <option value="">every kind</option>
+      <option value="entity">entities only</option>
+      <option value="passage">passages only</option>
+      <option value="symbol">symbols only</option>
+      <option value="data">data objects only</option>
+      <option value="commit">commits only</option>
+    </select>
     <label class="small">min edge weight <input id="g-minw" type="number" min="0" step="0.1" value="0" style="width: 70px"></label>
     <label class="small">max nodes <input id="g-limit" type="number" min="50" max="8000" step="50" value="{{ default_limit }}" style="width: 90px"></label>
     <button class="btn" id="g-reload" type="button">Apply</button>
     <label class="small">colour by
-      <select id="g-color" style="max-width: 130px"><option value="tier">tier</option><option value="kind">kind</option><option value="source">source</option></select>
+      {# "community" is the Leiden subsystem label's main visible surface: with code_community_boost
+         at 0.0 the label changes no ranking, so this is where a person judges whether it is any good. #}
+      <select id="g-color" style="max-width: 150px"><option value="tier">tier</option><option value="kind">kind</option><option value="source">source</option><option value="community">subsystem</option></select>
     </label>
     <label class="small"><input id="g-dim" type="checkbox" checked> dim what did not light up</label>
   </div>

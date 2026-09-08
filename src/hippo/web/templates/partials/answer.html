@@ -18,6 +18,49 @@
   </p>
 </section>
 
+{# `used_code_seeds` is the gate, not "there are seed symbols": a dense seed is admitted on any
+   question, prose included, and flips nothing (Ruling 1a). Without it every prose answer would
+   grow a Code graph card the moment a repository was indexed alongside. #}
+{% set seed_symbols = trace.seed_symbols | selectattr('kept') | list if trace.used_code_seeds else [] %}
+{# Two rows, because they are two different claims. Only a LEXICAL anchor is something the question
+   said; a dense seed came from a passage that scored well and the question may never have named it
+   (on a real traceback question, twelve of seventeen seeds were dense). #}
+{# One chip per token the question actually contains: `self.log` reaches three different `log`
+   symbols and printing it three times says nothing the count in the tooltip does not. `unique`
+   keeps the first, which is the heaviest - the list is in weight order. #}
+{% set named = seed_symbols | rejectattr('how', 'equalto', 'dense') | unique(attribute='token') | list %}
+{% set nearby = seed_symbols | selectattr('how', 'equalto', 'dense') | list %}
+{% if answer.context_block or seed_symbols %}
+<section class="card">
+  <h3>Code graph</h3>
+  {% if named %}
+  <p class="row wrap">
+    <span class="muted small">the question named</span>
+    {# The token is what the user actually typed. Two different symbols can share a display name -
+       `pyapp.store.Base.log` and `tsapp.models.base.Base.log` are both "Base.log" - so the chip
+       carries the token and puts the resolved name in the tooltip beside the weight and the count
+       of everything that token matched. #}
+    {% for s in named %}<span class="pill" title="{{ s.name }} · {{ s.how | replace('_', ' ') }} · weight {{ s.weight | fmt(3) }}{% if s.n_matches > 1 %} · {{ s.n_matches }} matches{% endif %}">{{ s.token or s.name }} <span class="muted">{{ s.how }}</span></span>{% endfor %}
+  </p>
+  {% endif %}
+  {% if nearby %}
+  <p class="row wrap">
+    <span class="muted small">also reached by similarity</span>
+    {% for s in nearby %}<span class="pill" title="{{ s.how }} · weight {{ s.weight | fmt(3) }}">{{ s.name }}</span>{% endfor %}
+  </p>
+  {% endif %}
+  {% if answer.context_block %}
+  {# The block the model read, byte for byte: `a -[KIND ω provenance]-> b`, then Tests, Commits
+     and Subsystems (S2.15). It is evidence, so it is shown exactly as it was sent - but it runs to
+     dozens of lines, so it folds away like the reasoning above rather than burying the passages. #}
+  <details>
+    <summary>The relations the model read</summary>
+    <p class="pre mono small">{{ answer.context_block }}</p>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+
 {% set kept = trace.fact_candidates | selectattr('kept') | list %}
 {% if kept %}
 <section class="card">

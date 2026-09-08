@@ -9,7 +9,7 @@ import pytest
 from hippo.analysis.explain import MAX_PATH_HOPS, Explanation, explain
 from hippo.ask import search
 from hippo.hipporag.indexer import Chunk, index_source
-from hippo.hipporag.retriever import Retriever, Trace
+from hippo.hipporag.retriever import Retriever, SeedSymbol, Trace
 
 QUESTION = "In which state is the company founded by Priya Natarajan headquartered?"
 
@@ -226,3 +226,37 @@ def index_sample_into(store, ollama, sample_text: str) -> str:
         chunks.append(Chunk(ordinal, title.strip(), body.strip()))
     index_source(store, ollama, source_id, chunks, workers=2)
     return source_id
+
+
+# ---------------------------------------------------------------- code seeds
+
+CODE_QUESTION = "What does pyapp.orders.OrderService.place do?"
+
+
+def test_seed_symbols_join_the_subgraph_the_analyze_page_draws(code_index):
+    """
+    `explain()` read `trace.seed_entities` and nothing else, so on a code question the picture on
+    the Analyze page had no gold ring anywhere: the symbols the question actually anchored on were
+    only in the subgraph at all if PPR happened to rank them into `top_nodes` (R3.2/R3.5).
+    """
+    ctx, _source_id = code_index
+    trace = search(ctx, CODE_QUESTION)
+    kept = [s for s in trace.seed_symbols if s.kept and s.node_id]
+    assert kept, "the question names a symbol"
+
+    explanation = explain(ctx.graph(), trace)
+    nodes = {n["id"]: n for n in explanation.subgraph["nodes"]}
+    for seed in kept:
+        assert seed.node_id in nodes, seed.name
+        assert nodes[seed.node_id]["kind"] == seed.kind
+        assert nodes[seed.node_id]["is_seed"] is True
+        assert nodes[seed.node_id]["seed_weight"] == pytest.approx(seed.weight)
+    json.dumps(explanation.to_dict())
+
+
+def test_an_ambiguous_seed_symbol_has_no_node_to_draw(code_index):
+    ctx, _source_id = code_index
+    trace = search(ctx, CODE_QUESTION)
+    trace.seed_symbols.append(SeedSymbol(node_id="", name="log", token="log", ambiguous=True, n_matches=3))
+    explanation = explain(ctx.graph(), trace)
+    assert "" not in {n["id"] for n in explanation.subgraph["nodes"]}

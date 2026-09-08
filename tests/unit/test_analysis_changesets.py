@@ -8,8 +8,10 @@ from hippo.analysis import changesets
 from hippo.analysis.changesets import VALID_OPS, apply, describe, save, validate
 from hippo.analysis.simulate import Overrides
 from hippo.ask import search
+from hippo.codegraph.model import commit_id, data_id, symbol_id
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.hipporag.text import entity_id
+from tests.fakes.code_fixture import write_commit_history
 
 QUESTION = "In which state is the company founded by Priya Natarajan headquartered?"
 
@@ -200,3 +202,31 @@ def test_apply_refuses_junk_that_got_into_the_store(ctx):
     with pytest.raises(ValueError):
         changesets.apply(ctx, changeset_id)
     assert ctx.store.get_changeset(changeset_id)["status"] == "draft"
+
+
+def test_describe_resolves_symbol_data_and_commit_ids(code_index):
+    """
+    `_node_names` looked in `get_entities` and `get_passages` only, so an op on a symbol printed
+    its raw id - and the Changesets page is where a boost or a synonym on a symbol is reviewed
+    before it is applied to everyone's graph.
+    """
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
+    place = symbol_id(source_id, "pyapp/orders.py", "OrderService.place")
+    orders = data_id(source_id, "table", "orders")
+    commit = commit_id(source_id, "b2b2b2b")
+
+    assert describe(
+        ctx,
+        [
+            {"op": "set_node_boost", "entity_id": place, "boost": 2.0},
+            {"op": "add_synonym", "a": place, "b": orders, "score": 0.9},
+            {"op": "set_edge_weight", "a": commit, "b": place, "weight": 0},
+            {"op": "set_node_boost", "entity_id": "symbol-unknown", "boost": 1},
+        ],
+    ) == [
+        "Boost 'pyapp.orders.OrderService.place' x2",
+        "Link 'pyapp.orders.OrderService.place' ~ 'table orders' (0.9)",
+        "Remove the edge 'b2b2b2b' - 'pyapp.orders.OrderService.place'",
+        "Boost 'symbol-unknown' x1",
+    ]

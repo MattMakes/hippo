@@ -31,12 +31,24 @@
             'text-valign': 'bottom', 'text-margin-y': 3, width: 'data(size)', height: 'data(size)',
             'background-color': '#c7cbe8', 'border-width': 1, 'border-color': '#9aa0c9', color: '#1e2430' } },
         { selector: 'node[kind = "passage"]', style: { shape: 'round-rectangle', 'background-color': '#f3d9a4', 'border-color': '#d9b25f' } },
+        // The three code kinds. Cytoscape ignores a selector nothing matches, so these are purely
+        // additive: a prose-only memory draws exactly what it drew before.
+        { selector: 'node[kind = "symbol"]', style: { shape: 'diamond', 'background-color': '#a8d5c8', 'border-color': '#5aa48f' } },
+        { selector: 'node[kind = "data"]', style: { shape: 'barrel', 'background-color': '#d9c3ea', 'border-color': '#a483c4' } },
+        { selector: 'node[kind = "commit"]', style: { shape: 'hexagon', 'background-color': '#e7cbb4', 'border-color': '#bd8f6c' } },
         { selector: 'node[?is_seed]', style: { 'border-width': 4, 'border-color': '#4f5bd5' } },
         { selector: 'node[?gold]', style: { 'border-width': 4, 'border-color': '#1f9d55' } },
         { selector: 'node[?is_seed][?gold]', style: { 'border-style': 'double', 'border-width': 6 } },
         { selector: 'edge', style: { width: 'mapData(weight, 0, 3, 1, 5)', 'line-color': '#d4d2cb', 'curve-style': 'haystack', opacity: 0.9 } },
         { selector: 'edge[kinds *= "synonym"]', style: { 'line-color': '#9ad0b5', 'line-style': 'dashed' } },
         { selector: 'edge[kinds *= "tuned"]', style: { 'line-color': '#e0a83a' } },
+        // Code relations, by the lowercased kind `Edge.kinds` appends (invokes, imports, ...).
+        { selector: 'edge[kinds *= "invokes"]', style: { 'line-color': '#5aa48f' } },
+        { selector: 'edge[kinds *= "imports"]', style: { 'line-color': '#8fb8d0', 'line-style': 'dotted' } },
+        { selector: 'edge[kinds *= "contains"]', style: { 'line-color': '#c3c0b7' } },
+        { selector: 'edge[kinds *= "defined_in"]', style: { 'line-color': '#bcae9a', 'line-style': 'dashed' } },
+        { selector: 'edge[kinds *= "refers_to"]', style: { 'line-color': '#c8b6d8', 'line-style': 'dotted' } },
+        { selector: 'edge[kinds *= "modifies"]', style: { 'line-color': '#bd8f6c' } },
         { selector: 'node:selected', style: { 'background-color': '#4f5bd5', color: '#1e2430' } },
       ],
       layout: { name: 'cose', animate: false, nodeRepulsion: 9000, idealEdgeLength: 70, padding: 20 },
@@ -70,7 +82,7 @@
       const current = select.value;
       select.innerHTML = [...knownNodes.entries()]
         .sort((a, b) => a[1].label.localeCompare(b[1].label))
-        .map(([nid, n]) => `<option value="${nid}">${escapeHtml(n.label)} (${n.kind === 'passage' ? 'passage' : 'entity'})</option>`).join('');
+        .map(([nid, n]) => `<option value="${nid}">${escapeHtml(n.label)} (${escapeHtml(n.kind || 'entity')})</option>`).join('');
       if (current) select.value = current;
     }
   }
@@ -128,8 +140,12 @@
   // --------------------------------------------------------- collect & run
   function collectOverrides() {
     const settings = {};
-    for (const key of ['linking_top_k', 'passage_node_weight', 'damping']) {
+    // Every numeric knob in the panel. The code ones are simulatable (SIMULATABLE_SETTINGS); the
+    // three ingest-only settings are not rendered at all, so there is nothing here to send.
+    for (const key of ['linking_top_k', 'passage_node_weight', 'damping',
+      'code_seed_weight', 'code_structural_scale', 'code_theta']) {
       const el = $(`ov-${key}`);
+      if (!el) continue;
       if (Number(el.value) !== Number(el.dataset.original)) settings[key] = Number(el.value);
     }
     const spec = $('ov-node_specificity');
