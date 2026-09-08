@@ -170,6 +170,61 @@ def test_a_path_to_itself_is_empty(index: GraphIndex) -> None:
     assert shortest_code_path(index, place, place, theta=THETA) == []
 
 
+def test_only_the_strongest_seeds_are_searched_against_each_other(index: GraphIndex, monkeypatch) -> None:
+    """
+    AR1 fix 6. `_explain_code` hands over up to MAX_CODE_SEEDS = 20 seeds in weight order, and
+    every pair costs a directed *and* an undirected BFS whenever the two are unrelated - the
+    common case. All 20 would be 190 pairs and 380 traversals per question.
+    """
+    names = (
+        "OrderService.place",
+        "OrderService.save",
+        "OrderService.log",
+        "pyapp.billing.total",
+        "pyapp.cli.main",
+        "OrderService.archive",
+        "OrderService.list_open",
+    )
+    seeds = [vertex(index, name) for name in names]
+    assert len(seeds) > paths.PAIRED_SEEDS
+
+    searched: list[tuple[int, int]] = []
+    real = paths.shortest_code_path
+    monkeypatch.setattr(
+        paths,
+        "shortest_code_path",
+        lambda idx, a, b, **kw: (searched.append((a, b)), real(idx, a, b, **kw))[1],
+    )
+    edges = code_paths_for(index, seeds, theta=THETA)
+
+    top = seeds[: paths.PAIRED_SEEDS]
+    assert len(searched) == len(top) * (len(top) - 1) // 2 == 10
+    assert {v for pair in searched for v in pair} == set(top)
+    # Every seed still contributes its own direct edges, capped or not.
+    assert any(seeds[-1] in (e.src, e.dst) for e in edges)
+
+
+def test_a_walk_gives_up_once_it_has_spent_its_visit_budget(index: GraphIndex, monkeypatch) -> None:
+    # AR1 fix 6: `_bfs` had no time or visit budget at all - `cap` only truncates the result.
+    main, total = vertex(index, "pyapp.cli.main"), vertex(index, "pyapp.billing.total")
+    place = vertex(index, "OrderService.place")
+    assert len(shortest_code_path(index, main, total, theta=THETA)) == 2
+
+    monkeypatch.setattr(paths, "BFS_VISIT_BUDGET", 2)
+    assert shortest_code_path(index, main, total, theta=THETA) == []  # two hops: budget spent
+    assert len(shortest_code_path(index, main, place, theta=THETA)) == 1  # one hop still lands
+
+
+def test_display_at_is_memoised_on_the_index(index: GraphIndex) -> None:
+    # `_walkable` sorts on two `display_at` calls per edge at every vertex a walk visits.
+    place = vertex(index, "OrderService.place")
+    assert index.display_cache == {}
+    assert paths.display_at(index, place) == "pyapp.orders.OrderService.place"
+    assert index.display_cache[place] == "pyapp.orders.OrderService.place"
+    index.display_cache[place] = "cached"
+    assert paths.display_at(index, place) == "cached"
+
+
 # ------------------------------------------------------------- blast radius
 
 

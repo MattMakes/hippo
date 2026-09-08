@@ -213,6 +213,8 @@ class GraphIndex:
     communities: dict[int, str] = field(default_factory=dict)  # community -> its canonical label
     # One rebuilt igraph per non-default code_structural_scale; see graph_for_scale.
     _scaled: dict[float, ig.Graph] = field(default_factory=dict, repr=False, compare=False)
+    # vertex -> its display name, filled by `paths.display_at`; a walk asks for it per edge.
+    display_cache: dict[int, str] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def entity_passage_count(self) -> np.ndarray:
