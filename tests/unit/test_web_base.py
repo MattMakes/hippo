@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from hippo.config import Config
 from hippo.context import AppContext
 from hippo.hipporag.indexer import Chunk, index_source
+from hippo.hipporag.text import make_id
 from hippo.web.app import create_app
 from hippo.web.routes import pages
 from hippo.web.routes.pages import parse_settings_form
@@ -139,6 +140,58 @@ def test_entity_search_and_neighborhood(client):
     assert any(n["kind"] == "passage" for n in graph["nodes"])
     assert all("kinds" in e for e in graph["edges"])
     assert client.get("/api/graph/neighborhood?node_id=nope").status_code == 404
+
+
+def test_the_graph_endpoints_survive_an_index_that_contains_code(ctx, client):
+    """The Graph page renders per-kind panels in WP4. Until then a symbol may look like an entity,
+    but nothing may 500 - and every count must still be about the kind it names."""
+    source_id = ctx.store.create_source("repo", "pyapp")
+    symbol_id = make_id("symbol-", "place")
+    ctx.store.add_passages(
+        [
+            {
+                "id": "passage-code",
+                "source_id": source_id,
+                "ordinal": 0,
+                "title": "pyapp/orders.py :: place",
+                "text": "def place(self, order): ...",
+                "embedding": [1.0] + [0.0] * 127,
+            }
+        ]
+    )
+    ctx.store.add_symbols(
+        [
+            {
+                "id": symbol_id,
+                "source_id": source_id,
+                "name": "place",
+                "qualname": "pyapp.orders.OrderService.place",
+                "kind": "method",
+                "path": "pyapp/orders.py",
+                "line_start": 16,
+                "line_end": 23,
+            }
+        ]
+    )
+    ctx.store.link_definitions([(symbol_id, "passage-code")])
+    ctx.store.bump_graph_version()
+    ctx.invalidate_graph()
+
+    full = client.get("/api/graph/full?limit=500").json()
+    index = ctx.graph_for(None)
+    assert full["entities"] == index.num_entities  # entities only: the symbol is not counted as one
+    assert full["passages"] == len(index.passages)
+    by_id = {n["id"]: n for n in full["nodes"]}
+    assert by_id[symbol_id]["kind"] == "symbol"
+    assert by_id[symbol_id]["label"] == "pyapp.orders.OrderService.place"
+    # Every passage node still resolves to its own passage, which is what passages-last protects.
+    for node in full["nodes"]:
+        if node["kind"] == "passage":
+            assert node["source_id"] and node["source_name"]
+
+    assert client.get(f"/api/graph/node/{symbol_id}").status_code == 200
+    assert client.get(f"/api/graph/neighborhood?node_id={symbol_id}").status_code == 200
+    assert client.get("/api/graph/full?kind=symbol").json()["nodes"][0]["id"] == symbol_id
 
 
 def test_status_partial_renders_pills(client):
