@@ -103,21 +103,32 @@ def test_the_graph_reloads_after_new_text_is_indexed(indexed: AppContext) -> Non
 
 PLACE = "What does pyapp.orders.OrderService.place do?"
 
+# The four kept seeds, in weight order, are `OrderService.place` (the identifier anchor) and the
+# dense `tests.test_orders`, `pyapp.__init__`, `pyapp.cli`. Lines 1-6 are the six pairwise paths
+# between them (each new edge once); line 7 onwards is `code_paths_for`'s round-robin over the four
+# seeds' own relations, each seed's strongest first (QA1F).
 CODE_BLOCK_BODY = [
+    # place <-> tests.test_orders, then place <-> pyapp.__init__, place <-> pyapp.cli,
+    # tests.test_orders <-> pyapp.__init__; the last two pairs add nothing new.
     "pyapp.orders.OrderService.place -[TESTED_BY 0.85 test_import]-> tests.test_orders.test_place",
     "tests.test_orders -[CONTAINS 1.00 syntax]-> tests.test_orders.test_place",
     "pyapp.orders.OrderService -[CONTAINS 1.00 syntax]-> pyapp.orders.OrderService.place",
     "pyapp.__init__ -[IMPORTS 0.95 import_path]-> pyapp.orders.OrderService",
     "pyapp.cli -[IMPORTS 0.90 reexport]-> pyapp.orders.OrderService",
     "tests.test_orders -[IMPORTS 0.95 import_path]-> pyapp.orders.OrderService",
+    # Turn 1: the first three seeds' strongest edges are all above; only `pyapp.cli`'s is new.
+    "pyapp.cli -[CONTAINS 1.00 syntax]-> pyapp.cli.main",
+    # Turn 2: place's second-strongest (the other ω=1.00 relation, this one outgoing).
+    "pyapp.orders.OrderService.place -[INVOKES 1.00 same_file]-> pyapp.orders.OrderService.log",
+    # Turn 3: at ω=0.90 an *incoming* call now comes before place's own outgoing ones - this is
+    # the line that answers "who calls place", and out-then-in used to bury it (QA1 defect 1).
+    "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
+    "pyapp.orders -[TESTED_BY 0.75 test_filename]-> tests.test_orders",
+    # Turns 4-7: place's remaining ω=0.90 edges, in-then-out inside the tier.
     "pyapp.orders.OrderService.place -[CATCHES 0.90 resolved]-> pyapp.store.OrderError",
+    "tests.test_orders.test_place -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
     "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import in_branch]-> pyapp.billing.send_invoice",
     "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total",
-    "pyapp.orders.OrderService.place -[INVOKES 1.00 same_file]-> pyapp.orders.OrderService.log",
-    "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
-    "tests.test_orders.test_place -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
-    "pyapp.orders -[TESTED_BY 0.75 test_filename]-> tests.test_orders",
-    "pyapp.cli -[CONTAINS 1.00 syntax]-> pyapp.cli.main",
     "Tests: tests.test_orders.test_place",
     "Commits: b2b2b2b 2026-01-02 Total the order in place",
     "Subsystems: pyapp.__init__: pyapp.__init__, pyapp.billing.send_invoice, pyapp.billing.total, "
