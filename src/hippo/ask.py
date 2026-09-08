@@ -61,6 +61,29 @@ def answer_from_trace(ctx: AppContext, trace: Trace, access: Access | None = Non
     return answer_question(ctx.ollama, trace.question, passages, context_block=code_block(graph, trace))
 
 
+def code_fields(trace: Trace, block: str) -> dict[str, Any]:
+    """
+    What the question found in the code graph, as every surface reports it.
+
+    The MCP tools (`search_tool`, `ask_tool`) and the HTTP `/api/search` and `/api/ask` all spread
+    this dict into their answer, so the two cannot drift: a client that moves between them sees the
+    same five keys. They are always present, so nothing has to branch on whether the memory holds
+    code; on a prose question `paths`, `tests`, `history` and `code_graph` are all empty, which is
+    the same gate the answer block itself uses (`used_code_seeds`, Ruling 1a). `seed_symbols` is the
+    one that can still be non-empty there: a dense seed is recorded even though it never opens the
+    gate, which is exactly what makes "this named no code" readable in the trace.
+
+    The rows are the trace's own, so they match `/api/search`'s trace field for field.
+    """
+    return {
+        "seed_symbols": [vars(seed) for seed in trace.seed_symbols],
+        "paths": list(trace.paths),
+        "tests": list(trace.tests),
+        "history": list(trace.history),
+        "code_graph": block,
+    }
+
+
 def code_block(graph, trace: Trace) -> str:
     """
     The `Title: Code graph` pseudo-passage, or "" - gated on a *lexical* anchor having fired.

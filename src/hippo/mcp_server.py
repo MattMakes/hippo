@@ -62,7 +62,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .access import Access, Principal
-from .ask import ask, code_block, search
+from .ask import ask, code_block, code_fields, search
 from .context import AppContext
 from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
 from .web.auth import StoreDown, principal_from_bearer
@@ -263,7 +263,7 @@ def search_tool(
         "passages": passages,
         "kept_facts": kept_facts,
         "used_dpr_fallback": trace.used_dpr_fallback,
-        **_code_fields(trace, code_block(graph, trace)),
+        **code_fields(trace, code_block(graph, trace)),
     }
 
 
@@ -287,25 +287,7 @@ def ask_tool(ctx: AppContext, question: str, principal: Principal | None = None)
         "answer": answer.answer,
         "thought": answer.thought,
         "sources": sources,
-        **_code_fields(trace, answer.context_block),
-    }
-
-
-def _code_fields(trace, block: str) -> dict[str, Any]:
-    """
-    What the question found in the code graph, as `search` and `ask` both report it.
-
-    The keys are always present, so a client never has to branch on whether the memory holds code;
-    on a prose question over any memory they are all empty, which is the same gate the answer block
-    itself uses (`used_code_seeds`, Ruling 1a). The rows are the trace's own, so they match
-    `/api/search`'s trace field for field.
-    """
-    return {
-        "seed_symbols": [vars(seed) for seed in trace.seed_symbols],
-        "paths": list(trace.paths),
-        "tests": list(trace.tests),
-        "history": list(trace.history),
-        "code_graph": block,
+        **code_fields(trace, answer.context_block),
     }
 
 

@@ -34,6 +34,7 @@ src/hippo/access.py               Access(rank, user_id, unrestricted) + ACCESS_W
 src/hippo/jobs.py                 Jobs.start(key, fn) -> bool; is_running(key); running_keys(); cancel(key); is_cancelled(key); wait(key, timeout); wait_all()
 src/hippo/ask.py                  search(ctx, question, settings=None, access=None) -> Trace; ask(ctx, q, settings=None, access=None) -> (Trace, Answer);
                                   answer_from_trace(ctx, trace, access=None)      # access=None means unrestricted (CLI, open mode, tests)
+                                  code_block(graph, trace) -> str; code_fields(trace, block) -> the five code keys every surface returns
 src/hippo/store/                  Store (Neo4j) and LadybugStore (embedded LadybugDB file), same methods; open_store(config) picks one.
                                   Read store/__init__.py for the graph shape; read each file for the methods.
                                   Reads that return sources/passages/entities/facts take `access: Access | None` (memory.py); users.py holds
@@ -293,8 +294,11 @@ routes/api.py      (router prefix /api) everything about the whole memory rather
     GET  /api/status                   {store, store_backend, store_location, neo4j (alias of store), ollama, models, jobs, stats}
     GET/PUT /api/settings              the retrieval settings
     POST /api/models/pull              start the model download job
-    POST /api/ask {question} -> {answer, thought, trace}
-    POST /api/search {question} -> {trace}
+    POST /api/ask {question} -> {answer, thought, passage_ids, trace, + the five code fields}
+    POST /api/search {question} -> {trace, + the five code fields}
+    the five code fields (ask.code_fields, the same dict the MCP hippo_ask/hippo_search return, so the
+    two cannot drift): seed_symbols, paths, tests, history, code_graph (the rendered Code graph block).
+    Always present; on a prose question all are empty except seed_symbols, which can still hold dense seeds.
     GET  /api/entities?q=              search entities by name, for the boost / edge-edit pickers
     GET  /api/graph/neighborhood?node_id=&depth=1     small subgraph JSON for the graph picture
 routes/code.py     (router prefix /api/code) the code graph a repository source builds; every answer is

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from hippo import mcp_server, prompts
 from hippo.config import Config
 from hippo.context import AppContext
 from hippo.hipporag.indexer import Chunk, index_source
@@ -12,9 +13,11 @@ from hippo.hipporag.text import make_id
 from hippo.web.app import create_app
 from hippo.web.routes import pages
 from hippo.web.routes.pages import parse_settings_form
+from tests.fakes.code_fixture import write_commit_history
 
 MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 MCP_LIST_TOOLS = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+PLACE = "What does pyapp.orders.OrderService.place do?"
 
 
 def sample_chunks(sample_text: str) -> list[Chunk]:
@@ -181,10 +184,55 @@ def test_ask_api_returns_answer_and_trace(client):
     assert any(c["kept"] for c in data["trace"]["fact_candidates"])
 
 
-def test_search_api_returns_only_a_trace(client):
+def test_search_api_returns_a_trace_and_the_code_fields(client):
     data = client.post("/api/search", json={"question": "Who designed the Orion arm?"}).json()
     assert "answer" not in data
     assert data["trace"]["question"] == "Who designed the Orion arm?"
+    # A memory with no code at all: the keys are there anyway, so a client never branches on it.
+    assert {k: data[k] for k in CODE_FIELDS} == EMPTY_CODE_FIELDS
+
+
+# ------------------------------------------------------ the code fields (QA1 surprise 3)
+# The JSON routes used to return the trace and nothing else, so `answer.context_block` - the
+# rendered `Title: Code graph` block the model actually read - reached the Ask page and the MCP
+# tools but no HTTP client. All five keys now come from `ask.code_fields`, which the MCP tools
+# spread into their own answers, so the two shapes cannot drift.
+
+CODE_FIELDS = ("seed_symbols", "paths", "tests", "history", "code_graph")
+EMPTY_CODE_FIELDS = {"seed_symbols": [], "paths": [], "tests": [], "history": [], "code_graph": ""}
+
+
+def test_ask_api_returns_the_code_fields_the_mcp_tools_return(code_index):
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
+    with TestClient(create_app(ctx), base_url="http://localhost") as client:
+        data = client.post("/api/ask", json={"question": PLACE}).json()
+        # The same question through MCP, before the client's exit closes the store.
+        expected = mcp_server.ask_tool(ctx, PLACE)
+
+    assert data["code_graph"].startswith(prompts.CODE_GRAPH_HEADER)
+    assert [s["name"] for s in data["seed_symbols"] if s["how"] == "identifier"] == ["OrderService.place"]
+    assert any(row["kind"] == "INVOKES" for row in data["paths"])
+    assert [t["name"] for t in data["tests"]] == ["tests.test_orders.test_place"]
+    assert [h["sha"] for h in data["history"]] == ["b2b2b2b"]
+    # One helper, one shape: the HTTP payload and the MCP tool's agree field for field.
+    assert {k: data[k] for k in CODE_FIELDS} == {k: expected[k] for k in CODE_FIELDS}
+
+
+def test_ask_api_code_fields_are_empty_on_a_prose_question_over_a_code_memory(code_index):
+    """Ruling 1a's gate, seen from HTTP: the memory holds code, the question named none."""
+    ctx, _source_id = code_index
+    with TestClient(create_app(ctx), base_url="http://localhost") as client:
+        data = client.post("/api/ask", json={"question": "Where is Acme Robotics headquartered?"}).json()
+
+    assert data["trace"]["used_code_seeds"] is False
+    assert {k: data[k] for k in CODE_FIELDS if k != "seed_symbols"} == {
+        k: v for k, v in EMPTY_CODE_FIELDS.items() if k != "seed_symbols"
+    }
+    # `seed_symbols` is the one that is *not* empty here: this question pulls ten dense seeds out
+    # of the code memory, and not one of them opens the gate. Hiding them would make the payload
+    # disagree with the trace it is taken from.
+    assert data["seed_symbols"] and all(seed["how"] == "dense" for seed in data["seed_symbols"])
 
 
 def test_entity_search_and_neighborhood(client):
