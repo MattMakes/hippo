@@ -143,6 +143,53 @@ Step by step:
 
 Every step is recorded in a trace, which is what the Analyze page shows.
 
+## Code
+
+Give hippo a git repository or a zip of one and it does something different from the six steps above. Prose gets its facts from the language model; **code gets its facts from a parser**, because a parser already knows what a function calls and a language model only guesses. Prose sources are untouched by every word of this section: without a code graph the chunker, the indexer and the search behave exactly as they always have.
+
+**Two languages, plus the SQL beside them.** Python (`.py`, `.pyi`) and TypeScript/JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`), parsed with tree-sitter, plus `.sql` files. Every other language keeps today's behaviour — line windows read by the model — and gets no code edges. That is "unsupported rather than half-supported": a Go file in a Python repo is still indexed and still searchable, it just has no call graph.
+
+**One passage per symbol.** Instead of 1500-character windows that cut a function in half, each module header, class header, function and method becomes its own passage, titled `path :: module.qualname (lines a-b)` — for example `pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)`. A body too long for one passage is split at its own top-level statements into `(part N)`, never mid-expression.
+
+**The model never reads a function body.** It sees a symbol's docstring or doc-comment when that is at least 80 characters, README and markdown, and commit messages. Never bodies, never DDL. That is the cost saving: extracting facts costs two model calls per passage, and this cuts the number of passages that need them to the documented ones.
+
+**What the parser writes.** Two new kinds of node beside the entities:
+
+* **Symbols** — modules, classes, functions and methods, with their path, line range, signature, docstring, and whether they are a test.
+* **Data objects** — the tables, columns, collections, graph labels and relationship types the code actually talks to, read out of SQL, MongoDB and Cypher string literals *inside the repository's own files* and out of its `.sql` files.
+
+and ten kinds of edge between them, each carrying a confidence (`omega`, 0 to 1) and the rule that produced it (its *provenance*):
+
+| Edge | Means | Confidence |
+| --- | --- | --- |
+| `CONTAINS` | module holds this class, class holds this method, table holds this column | 1.00 |
+| `IMPORTS` | direct path / through a re-export / a wildcard import | 0.95 / 0.90 / 0.60 |
+| `INVOKES` | calls, resolved in the same file / through an import or a base class / by a unique bare name | 1.00 / 0.90 / 0.50 |
+| `INHERITS`, `OVERRIDES` | subclass, and a method that shadows its base's | 0.90 |
+| `RAISES`, `CATCHES` | raises or catches an exception class defined in this repository | 0.90 |
+| `TESTED_BY` | a test imports it / names it in its file name / mentions it | 0.85 / 0.75 / 0.60 |
+| `READS`, `WRITES` | uses a table, collection or label, from a parsed literal / a bare identifier | 0.85 / 0.60 |
+
+Plus the edges that tie the code graph to the prose one: `DEFINED_IN` (a symbol to the passage that defines it), `REFERS_TO` (a README or commit passage back to a symbol it names), and synonym links between a prose entity and a symbol, so asking about "the order service" reaches `OrderService`.
+
+**A call it cannot justify produces no edge.** Not a guess with a low score — nothing. A call into the standard library, a third-party package, or a name the resolver cannot bind is left out, and only *counted*, per file, so you can see how big the gap is (`meta["code"]["unresolved_calls"]` on the source, and `unresolved_calls_total` beside it).
+
+**What you see.** The Source page's `code` meta records what the parser found: `symbols`, `data_objects`, `edges` and `edges_by_kind`, `files_parsed`, `files_skipped` (by reason: too big, unsupported, parse error), `unresolved_calls` and `unresolved_calls_total`, and `truncated`. `GET /api/status` counts `symbols`, `data_objects`, `code_edges` and `commits` across the whole memory, beside the entity and fact counts it always reported.
+
+**Safety rails.** Extraction stops at 5,000 files or 50,000 symbols per source (`truncated` then says so), and a file over 512 KiB keeps its line windows rather than being parsed. These are constants, not knobs — the same class as the 20,000-passage ceiling. The knobs are on the Settings page and in [the table below](#settings-you-can-change-on-the-settings-page): eleven of them, all named `code_*`, and **none of them is an environment variable**.
+
+<!-- WP3/WP2b/WP4a: seeding a search from identifiers, stack traces and diffs; the Code graph
+     block in the answer; git history; the path tools over MCP and the CLI. Written once those merge. -->
+
+### Known limitations
+
+* **A repository large enough matters now where it did not before.** One passage per symbol makes about 2.4-3× as many passages as 1500-character line windows did for the same code, and a source over 20,000 passages is refused outright, not truncated. Measured: hippo's own `src/hippo` goes from ~335 windows to 807 passages (4% of the ceiling) and django from ~3,946 to 12,317 (62%), but pandas is 33,975 symbols and is **rejected**, where its line windows fitted before. If a repository used to index and no longer does, that is why; index a subdirectory instead.
+* **Reload cost grows with the graph.** Every graph-version bump — each index job, each applied changeset — reloads every stored vector. One passage *and* one name vector per symbol doubles that count for code: at the 20,000-passage ceiling it is 40,000 vectors, about 117 MiB re-read on each bump.
+* **Boosts and tuned weights do not survive a re-index.** Re-indexing a source deletes its code nodes and writes them fresh, so a boost or a hand-set edge weight on a symbol is gone. (Prose has its own version of this: an entity that loses its last mention is swept, taking its synonym and tuned edges with it. Neither is new here.)
+* **Cypher and SQL are read as literals only.** Indexing hippo itself finds `Settings`, `Passage` and `Source` in `MATCH` and `MERGE` string literals; it does not find tables declared by an f-string-interpolated `CREATE NODE TABLE {name}(...)`. "The databases our code talks to" means the literals in the code, not schema introspection.
+* **Writing a very large graph is slow.** Inserting 200,000 relationships was measured at 537 s on one machine, against 13.6 s for 100,000 — the cost of looking up both endpoints is sharply scale-sensitive. Writes go in batches of 5,000. A repository big enough to feel this hits the 20,000-passage wall first.
+* **The tests cannot show the noise improvement.** The fake model the test suite uses barely produces triples from code at all, so the tests prove the *number* of model calls fell, not that the facts got cleaner. That one you have to see on a real model.
+
 ## Evaluate and dig in
 
 * **Question sets.** On a source page click *Make sample questions*: hippo writes single-passage questions and two-passage ("multi-hop") questions whose answers need facts from both. Or write your own on the Evals page, one `question | answer` per line.
@@ -192,9 +239,37 @@ Everything is an environment variable (see `.env.example`; `docker compose` read
 | `HIPPO_ALLOWED_HOSTS` | *(empty)* | Extra host names or IPs the UI and `/mcp` answer to, comma-separated (`localhost`, `127.0.0.1` and `[::1]` always work). Other names are refused to stop websites you visit from reaching your memory; add your LAN name or IP here if you open hippo from another machine, or `*` to switch the check off. |
 | `HIPPO_TOKEN` | *(empty)* | (`hippo mcp` only) The user token the stdio MCP server acts as, once users exist. |
 
-Retrieval knobs (`linking_top_k`, `passage_node_weight`, `damping`,
-`node_specificity`, `synonymy_threshold`, `retrieval_top_k`, `qa_top_k`) are
-stored in the graph and changed on the Settings page, not through the environment.
+### Settings you can change on the Settings page
+
+These are **not** environment variables. They are stored in the graph itself and edited at `/settings`, or through `GET`/`PUT /api/settings`, so a change takes effect without a restart. The defaults are in `store/base.py` (`DEFAULT_SETTINGS`), and every value is range-checked on the way in (`SETTING_RULES`).
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `linking_top_k` | 5 | How many facts we pull for a question, and how many entities we start the graph search from. |
+| `passage_node_weight` | 0.05 | How much a passage's own similarity to the question counts as a starting point (0.05 = a whisper). |
+| `damping` | 0.5 | How far activation travels along the graph: 0.5 stays close to the seeds; 0.9 wanders far. |
+| `node_specificity` | on | Entities mentioned in many passages get a smaller starting weight (like IDF for search). |
+| `synonymy_threshold` | 0.8 | Embedding similarity above which two names get linked as synonyms (used while indexing). |
+| `retrieval_top_k` | 200 | How many passages a search returns and keeps in the trace. |
+| `qa_top_k` | 5 | How many passages the model reads before answering. |
+
+The code graph adds eleven more. All of them are inert on a memory with no code source, and setting the first four to `0 / 0 / 0 / off` makes a memory that *does* hold code rank a prose question exactly as if the code had never been indexed:
+
+| Setting | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `code_structural_scale` | 1.0 | 0.0–3.0 | Multiplier on every code-touching edge weight; 0 = no code vertex reaches the graph search at all. Capped at 3.0 so a code edge can never outrank three facts. |
+| `code_seed_weight` | 1.0 | 0.0–10.0 | Anchor seed mass; 0 = ignore symbols named in the question. |
+| `code_dense_seeds` | 5 | 0–20 | Code passages similar to the question that also seed their symbol. |
+| `code_select` | on | on/off | The extra keep/drop/expand pass by the model, when code seeds fired. |
+| `code_theta` | 0.5 | 0.0–1.0 | Minimum confidence for the path tools and the answer block (never the graph search). |
+| `code_triples_chars` | 1500 | 0–8000 | Size cap of the Code graph block shown to the model. |
+| `code_community_boost` | 0.0 | 0.0–1.0 | Post-search score bonus for passages in a seed's subsystem. Off by default. |
+| `code_expand_max` | 10 | 0–20 | Neighbours fetched per "expand", confidence 0.75 and above. |
+| `code_history_depth` | 200 | 0–2000 | First-parent commits read per repo source; 0 disables history. |
+| `code_git_timeout_s` | 10 | 1–120 | Per-commit `git show` budget; a timeout skips that commit. |
+| `code_history_total_s` | 120 | 10–3600 | Whole-pass budget for reading history; stops early and keeps what it read. |
+
+The last three are read once, while indexing, and never again by a search — so the Analyze page's simulate panel refuses them rather than showing a slider that cannot change a ranking.
 
 ## Development & tests
 
@@ -219,8 +294,10 @@ src/hippo/
   context.py        AppContext: config + store + ollama + jobs + the in-memory graph
   ask.py            search(ctx, q) -> Trace ; ask(ctx, q) -> (Trace, Answer)
   store/            all Cypher: sources, passages, entities, facts, evals, changesets (LadybugDB and Neo4j)
+    code.py         the code graph's half of it: symbols, data objects, commits and their edges
   remote.py         the CLI's client for a running server (the database file is single-process)
   hipporag/         the algorithm: openie -> indexer -> graph_index (PPR) -> retriever -> answerer
+  codegraph/        the parser: tree-sitter + sqlglot -> symbols, data objects and typed edges (no model, no store)
   ingest/           readers (txt, md, pdf, docx, epub, html, code), chunker, git repos, the indexing job
   evals/            metrics, the LLM judge, question generation, the run runner
   analysis/         explain a result, simulate changes, save/apply changesets
