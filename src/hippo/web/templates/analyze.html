@@ -117,7 +117,9 @@
       <td>{% if s.ambiguous %}<span class="muted">–</span>{% else %}<b>{{ s.name }}</b>{% endif %}</td>
       <td class="muted small">{{ s.kind }}</td>
       <td><span class="pill {{ 'warn' if s.how == 'dense' }}">{{ s.how }}</span></td>
-      <td class="muted small"><code>{{ s.token or s.matched_by }}</code></td>
+      {# A lexical anchor's `matched_by` is the token; a dense seed's is a passage id, resolved to
+         its title by `_seed_symbol_sources` so the column reads as something rather than a hash. #}
+      <td class="muted small">{% if s.how == 'dense' %}{{ seed_from.get(s.matched_by, s.matched_by) | short(50) }}{% else %}<code>{{ s.token or s.matched_by }}</code>{% endif %}</td>
       <td class="num">{{ s.weight | fmt(3) }}</td>
       <td class="num">{{ s.specificity | fmt(1) }}</td>
       <td class="num">{{ s.n_matches }}</td>

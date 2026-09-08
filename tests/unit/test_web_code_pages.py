@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from hippo import ask as ask_service
 from hippo.web.app import create_app
 from tests.fakes.code_fixture import write_commit_history
 
@@ -126,3 +127,21 @@ def test_a_prose_question_hides_the_code_sections(client):
     assert "Seed symbols" not in page
     # The knobs stay: they are settings, and a prose question may still want the scale at 0.
     assert 'id="ov-code_structural_scale"' in page
+
+
+def test_a_dense_seed_names_the_passage_it_came_from(client, coded):
+    """
+    A dense seed's `matched_by` is the passage id it was pulled from, not a token. Printing the
+    raw `passage-<hash>` in the table's "From" column tells a reader nothing; the title does.
+    """
+    ctx, _source_id = coded
+    page = analyze_page(client, PLACE)
+    # The ids do belong in the <script id="analyze-data"> block the graph picture reads; this is
+    # about the table a person looks at, so scope the assertion to it.
+    table = page.split("seed symbols", 1)[1].split("</table>", 1)[0]
+    dense = [s for s in ask_service.search(ctx, PLACE).seed_symbols if s.how == "dense" and s.kept]
+    assert dense, "the fixture's code passages score high enough to seed densely"
+    for seed in dense:
+        title = ctx.graph().passage_by_id(seed.matched_by).title
+        assert seed.matched_by not in table, f"raw id {seed.matched_by} leaked into the table"
+        assert title.split(" :: ")[0] in table, title
