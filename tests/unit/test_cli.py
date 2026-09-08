@@ -9,6 +9,7 @@ import pytest
 from hippo import cli
 from hippo.context import AppContext
 from hippo.hipporag.indexer import Chunk, index_source
+from tests.fakes.code_fixture import write_commit_history
 
 
 @pytest.fixture
@@ -57,6 +58,12 @@ def index_sample(ctx: AppContext, sample_text: str) -> str:
         (["user", "token", "ann", "--new"], "user", {"user_command": "token", "new": True}),
         (["user", "role", "ann", "local-admin"], "user", {"user_command": "role", "role_id": "local-admin"}),
         (["user", "remove", "ann"], "user", {"user_command": "remove"}),
+        (["path", "a.b", "c.d"], "path", {"a": "a.b", "b": "c.d"}),
+        (["blast", "OrderService.place"], "blast", {"symbol": "OrderService.place", "depth": 2}),
+        (["blast", "place", "--depth", "3"], "blast", {"symbol": "place", "depth": 3}),
+        (["raises", "save", "OrderError"], "raises", {"symbol": "save", "exception": "OrderError"}),
+        (["history", "place"], "history", {"symbol": "place", "limit": 3}),
+        (["history", "place", "--limit", "5"], "history", {"symbol": "place", "limit": 5}),
     ],
 )
 def test_parses_every_subcommand(argv, command, extra):
@@ -152,11 +159,105 @@ def test_pull_models_when_everything_is_installed(cli_ctx: AppContext, capsys):
     assert "All models are installed" in capsys.readouterr().out
 
 
-# ------------------------------------------- when `hippo serve` has the database
+# ------------------------------------------------------- the code graph
+
+# The same four answers have to come out of the local graph and out of a running server, so every
+# test below is written once and run against both fixtures. Only the plumbing differs; if the two
+# branches ever print different things, that is the bug these tests exist to catch.
+
+PLACE = "pyapp.orders.OrderService.place"
 
 
 @pytest.fixture
-def cli_behind_server(ctx: AppContext, sample_text: str, monkeypatch: pytest.MonkeyPatch):
+def code_cli_ctx(code_index, monkeypatch: pytest.MonkeyPatch) -> AppContext:
+    """The code sample (plus three commits) in a memory this process can open."""
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
+    monkeypatch.setattr(AppContext, "from_env", classmethod(lambda cls, ollama=None: ctx))
+    return ctx
+
+
+@pytest.fixture
+def code_cli_behind_server(code_index, monkeypatch: pytest.MonkeyPatch):
+    """The same memory, but only `hippo serve` can open it: every answer comes over /api/code."""
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
+    yield from behind_server(ctx, monkeypatch)
+
+
+@pytest.fixture(params=["local", "remote"])
+def code_cli(request):
+    """Both branches of `_context_or_running_server`, one test body."""
+    return request.getfixturevalue(
+        "code_cli_ctx" if request.param == "local" else "code_cli_behind_server"
+    )
+
+
+def test_path_prints_the_relations_that_connect_two_symbols(code_cli, capsys):
+    assert cli.main(["path", "pyapp.cli.main", "pyapp.billing.total"]) == 0
+    assert capsys.readouterr().out.splitlines()[-2:] == [
+        "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
+        "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total",
+    ]
+
+
+def test_path_says_so_when_nothing_connects_them(code_cli, capsys):
+    assert cli.main(["path", PLACE, "table customers"]) == 0
+    assert "No relations connect" in capsys.readouterr().out
+
+
+def test_blast_prints_the_levels_and_the_subsystems(code_cli, capsys):
+    assert cli.main(["blast", "pyapp.billing.total", "--depth", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "What depends on pyapp.billing.total (depth 1):" in out
+    assert "Level 1: pyapp.billing, pyapp.orders.OrderService.place" in out
+
+
+def test_raises_prints_the_route_to_the_exception(code_cli, capsys):
+    assert cli.main(["raises", "OrderService.save", "OrderError"]) == 0
+    assert (
+        "pyapp.orders.OrderService.save -[RAISES 0.90 resolved]-> pyapp.store.OrderError"
+        in capsys.readouterr().out
+    )
+
+
+def test_history_prints_the_commits_that_touched_a_symbol(code_cli, capsys):
+    assert cli.main(["history", PLACE]) == 0
+    assert "b2b2b2b 2026-01-02 Total the order in place" in capsys.readouterr().out
+
+
+def test_history_of_an_untouched_symbol_says_so(code_cli, capsys):
+    assert cli.main(["history", "pyapp.billing.send_invoice"]) == 0
+    assert "No commits" in capsys.readouterr().out
+
+
+def test_an_ambiguous_name_exits_two_and_lists_the_candidates(code_cli, capsys):
+    assert cli.main(["history", "log"]) == 2
+    err = capsys.readouterr().err
+    assert "could mean any of" in err
+    for candidate in ("pyapp.orders.OrderService.log", "pyapp.store.Base.log", "tsapp.models.base.Base.log"):
+        assert f"  {candidate}" in err
+
+
+def test_an_unknown_name_exits_two(code_cli, capsys):
+    assert cli.main(["blast", "no_such_thing"]) == 2
+    assert "no_such_thing" in capsys.readouterr().err
+
+
+def test_a_blank_name_exits_two(code_cli, capsys):
+    assert cli.main(["path", "  ", PLACE]) == 2
+    assert "required" in capsys.readouterr().err
+
+
+def test_the_remote_branch_really_went_to_the_server(code_cli_behind_server, capsys):
+    assert cli.main(["history", PLACE]) == 0
+    assert "asking the server at http://localhost" in capsys.readouterr().err
+
+
+# ------------------------------------------- when `hippo serve` has the database
+
+
+def behind_server(ctx: AppContext, monkeypatch: pytest.MonkeyPatch):
     """
     The embedded database is open in another process (the web server): AppContext.from_env() raises
     StoreLockedError, and the CLI must fall back to that server's JSON API. The "server" here is the real
@@ -168,8 +269,6 @@ def cli_behind_server(ctx: AppContext, sample_text: str, monkeypatch: pytest.Mon
     from hippo.store import StoreLockedError
     from hippo.web.app import create_app
 
-    index_sample(ctx, sample_text)
-
     def locked(cls, ollama=None):
         raise StoreLockedError("data/hippo.lbug is already open in another hippo process")
 
@@ -178,6 +277,12 @@ def cli_behind_server(ctx: AppContext, sample_text: str, monkeypatch: pytest.Mon
         remote = RemoteHippo("http://localhost", client=http)
         monkeypatch.setattr(RemoteHippo, "for_config", classmethod(lambda cls, config: remote))
         yield ctx
+
+
+@pytest.fixture
+def cli_behind_server(ctx: AppContext, sample_text: str, monkeypatch: pytest.MonkeyPatch):
+    index_sample(ctx, sample_text)
+    yield from behind_server(ctx, monkeypatch)
 
 
 def test_ask_uses_the_running_server_when_the_database_is_locked(cli_behind_server, capsys):

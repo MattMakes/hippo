@@ -6,6 +6,10 @@ The `hippo` command line.
     hippo pull-models           download the Ollama models hippo needs, showing progress
     hippo index <path-or-url>   remember a file, a folder, or a public git repo, and wait for it
     hippo ask "<question>"      ask the memory a question
+    hippo path A B              how one symbol reaches another in an indexed repository
+    hippo blast SYMBOL          who would feel a change to it, level by level
+    hippo raises SYMBOL EXC     how a function reaches an exception class
+    hippo history SYMBOL        the commits that touched a symbol, newest first
     hippo sources               list what is in the memory
     hippo settings              show the retrieval settings and where things are
     hippo users                 list users and roles (the access ladder)
@@ -40,7 +44,7 @@ from typing import Any
 
 from .config import load_config
 from .context import AppContext
-from .remote import RemoteError, RemoteHippo
+from .remote import RemoteAmbiguous, RemoteError, RemoteHippo
 from .store import StoreLockedError
 
 WAIT_SECONDS = 3600.0  # a big repo on a slow CPU model really can take an hour
@@ -70,6 +74,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     ask = sub.add_parser("ask", help="ask the memory a question")
     ask.add_argument("question")
+
+    # The code graph. A name may be fully qualified (pkg.module.Class.method), module-relative
+    # (Class.method) or bare when only one symbol answers to it; the defaults repeat
+    # web/routes/code.py's so that argparse stays free of a web import.
+    path = sub.add_parser("path", help="how one symbol reaches another")
+    path.add_argument("a", help="the symbol the route starts at")
+    path.add_argument("b", help="the symbol it should reach")
+    blast = sub.add_parser("blast", help="what a change to a symbol could break")
+    blast.add_argument("symbol")
+    blast.add_argument("--depth", type=int, default=2, help="levels of callers to walk (1-4, default 2)")
+    raises = sub.add_parser("raises", help="how a function reaches an exception class")
+    raises.add_argument("symbol")
+    raises.add_argument("exception", help="the exception class, e.g. OrderError")
+    history = sub.add_parser("history", help="the commits that touched a symbol")
+    history.add_argument("symbol")
+    history.add_argument("--limit", type=int, default=3, help="how many commits to show (default 3)")
 
     sub.add_parser("sources", help="list the sources in the memory")
     sub.add_parser("settings", help="show the retrieval settings")
@@ -104,6 +124,10 @@ def main(argv: list[str] | None = None) -> int:
         "pull-models": cmd_pull_models,
         "index": cmd_index,
         "ask": cmd_ask,
+        "path": cmd_path,
+        "blast": cmd_blast,
+        "raises": cmd_raises,
+        "history": cmd_history,
         "sources": cmd_sources,
         "settings": cmd_settings,
         "users": cmd_users,
@@ -111,6 +135,13 @@ def main(argv: list[str] | None = None) -> int:
     }
     try:
         return handlers[args.command](args)
+    except CodeNameError as exc:
+        # A name hippo cannot act on: unknown, blank, or meaning several things. When it means
+        # several, listing them is the whole answer, so they go out under the message.
+        print(f"error: {exc}", file=sys.stderr)
+        for candidate in exc.candidates:
+            print(f"  {candidate}", file=sys.stderr)
+        return 2
     except (StoreLockedError, RemoteError) as exc:
         # The embedded database belongs to one process at a time; usually `hippo serve` has it, and then
         # the command went to the server instead, which may have refused (no token, no permission).
@@ -209,6 +240,106 @@ def cmd_ask(args: argparse.Namespace) -> int:
         print(f"  {p['rank']:>2}. {p['score']:.4f}  {p['title']}  [{p['source_name']}]")
     if fallback[0]:
         print(f"\n(no facts matched, fell back to embedding search: {fallback[1]})")
+    return 0
+
+
+# ----------------------------------------------------------- the code graph
+# Four commands, two ways to answer each. Locally they run web/routes/code.py's builders on this
+# process's graph; behind a running server they call the same builders over /api/code. Both sides
+# return the same dict and raise the same two errors, so only the plumbing below differs - which is
+# what keeps `hippo path` printing one thing rather than two.
+
+
+class CodeNameError(RuntimeError):
+    """A name hippo cannot act on. `candidates` is non-empty when the name meant several things."""
+
+    def __init__(self, message: str, candidates: list[str] | None = None):
+        super().__init__(message)
+        self.candidates = candidates or []
+
+
+def _code_locally(ctx: AppContext, build) -> dict[str, Any]:
+    """`build(code, index, theta)` on this process's graph, with the path tools' errors normalised."""
+    from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
+    from .web.routes import code
+
+    index = ctx.graph()
+    theta = float(ctx.store.get_settings().get("code_theta", 0.5))
+    try:
+        return build(code, index, theta)
+    except AmbiguousSymbol as exc:
+        raise CodeNameError(str(exc), exc.candidates) from exc
+    except (UnknownSymbol, ValueError) as exc:
+        raise CodeNameError(str(exc)) from exc
+
+
+def _code_remotely(call) -> dict[str, Any]:
+    """The same answer from the running server; its 409 already carries the candidates."""
+    try:
+        return call()
+    except RemoteAmbiguous as exc:
+        raise CodeNameError(str(exc), exc.candidates) from exc
+
+
+def cmd_path(args: argparse.Namespace) -> int:
+    ctx, remote = _context_or_running_server()
+    data = (
+        _code_remotely(lambda: remote.code_path(args.a, args.b))
+        if remote is not None
+        else _code_locally(ctx, lambda c, i, t: c.path_payload(i, args.a, args.b, theta=t))
+    )
+    if not data["found"]:
+        print(f"No relations connect {data['a']} and {data['b']} (above the code_theta setting).")
+        return 0
+    print(f"How {data['a']} reaches {data['b']}:")
+    print("\n".join(data["lines"]))
+    return 0
+
+
+def cmd_blast(args: argparse.Namespace) -> int:
+    ctx, remote = _context_or_running_server()
+    data = (
+        _code_remotely(lambda: remote.code_blast_radius(args.symbol, args.depth))
+        if remote is not None
+        else _code_locally(ctx, lambda c, i, t: c.blast_payload(i, args.symbol, theta=t, depth=args.depth))
+    )
+    print(f"What depends on {data['symbol']} (depth {data['depth']}):")
+    print("\n".join(data["lines"]) if data["lines"] else "  nothing: no other symbol reaches it.")
+    return 0
+
+
+def cmd_raises(args: argparse.Namespace) -> int:
+    ctx, remote = _context_or_running_server()
+    data = (
+        _code_remotely(lambda: remote.code_exception_path(args.symbol, args.exception))
+        if remote is not None
+        else _code_locally(
+            ctx, lambda c, i, t: c.exception_payload(i, args.symbol, args.exception, theta=t)
+        )
+    )
+    if not data["found"]:
+        print(f"{data['symbol']} does not reach {data['exception']}.")
+        return 0
+    print(f"How {data['symbol']} reaches {data['exception']}:")
+    print("\n".join(data["lines"]))
+    return 0
+
+
+def cmd_history(args: argparse.Namespace) -> int:
+    ctx, remote = _context_or_running_server()
+    data = (
+        _code_remotely(lambda: remote.code_history(args.symbol, args.limit))
+        if remote is not None
+        else _code_locally(ctx, lambda c, i, _t: c.history_payload(i, args.symbol, limit=args.limit))
+    )
+    if not data["lines"]:
+        print(
+            f"No commits touched {data['symbol']}. "
+            "History comes from a repo source; `hippo index <git-url>` reads it."
+        )
+        return 0
+    print(f"Commits that touched {data['symbol']}, newest first:")
+    print("\n".join(data["lines"]))
     return 0
 
 
