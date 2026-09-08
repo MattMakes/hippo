@@ -24,6 +24,9 @@ src/hippo/ollama.py               Ollama(client): chat_json/chat_text/embed/embe
 src/hippo/prompts.py              every prompt + JSON schema (*_messages(...) builders)
 src/hippo/context.py              AppContext(config, store, ollama, jobs); ctx.graph() -> GraphIndex; ctx.graph_for(access) -> the caller's slice
                                   (cached by (graph version, visible source ids)); ctx.invalidate_graph(); ctx.invalidate_scoped()
+                                  ctx.close(): cancels every running job and WAITS for it before closing the store, because
+                                  the neo4j driver closing under another thread is unspecified behaviour (an intermittent
+                                  BufferError in practice)
 src/hippo/access.py               Access(rank, user_id, unrestricted) + ACCESS_WHERE (the Cypher predicate on a Source `s`) + access_params;
                                   Principal(user, role, access): .can(cap), .may_manage_source(row), .may_assign_role(role), .as_role(role);
                                   CAPABILITIES, DEFAULT_ROLES (arch-admin 40 > regional-admin 30 > local-admin 20 > local-assistant 10 > individual 0);
@@ -37,6 +40,7 @@ src/hippo/ask.py                  search(ctx, question, settings=None, access=No
                                   code_block(graph, trace) -> str; code_fields(trace, block) -> the five code keys every surface returns
 src/hippo/store/                  Store (Neo4j) and LadybugStore (embedded LadybugDB file), same methods; open_store(config) picks one.
                                   Read store/__init__.py for the graph shape; read each file for the methods.
+                                  code.py adds symbols, data objects, commits and their edges; see "the code graph" below
                                   Reads that return sources/passages/entities/facts take `access: Access | None` (memory.py); users.py holds
                                   roles/users: ensure_roles, list_roles, get_role, create_role, update_role (a rank change rewrites min_rank on
                                   its sources), delete_role (refused while in use), count_users, list_users, get_user, get_user_by_username,
@@ -44,20 +48,38 @@ src/hippo/store/                  Store (Neo4j) and LadybugStore (embedded Ladyb
 src/hippo/remote.py               RemoteHippo: the CLI's client for a running server (the embedded file is single-process).
 justfile                          `just ladybug` / `just neo4j` (docker), `just dev` / `just dev-neo4j` (local), `just test*`; each says its backend.
 src/hippo/hipporag/text.py        clean_phrase, entity_id, fact_id, fact_text, make_id, min_max_normalize, is_meaningful_phrase
+                                  label_of(node_id) -> "Entity"|"Passage"|"Symbol"|"DataObject"|"Commit", from the id prefix alone
+                                  split_identifier("OrderService") -> ["order", "service"]  (camelCase, snake_case, dots, digits)
 src/hippo/hipporag/openie.py      extract(ollama, passage_id, text) -> Extraction; extract_many(...)
 src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text, defines=[], extract_text=None); index_source(store, ollama, source_id, chunks, *, code=None,
                                   synonymy_threshold, workers, on_progress, should_stop) -> the nine COUNT_KEYS
                                   extract_text is the only gate on OpenIE: None = extract `text` (prose, as always), "" = skip, a string = extract that
                                   code=CodeGraph adds three stages: "writing code graph", "linking mentions" (REFERS_TO), "communities" (Leiden per module)
+                                  commit passages: title "commit <sha10>: <subject>", text = message + "Touched: <display names>"
+                                  (cut with "... (+N more)"), extract_text = the message alone, so OpenIE and the REFERS_TO scan
+                                  never see the Touched line -- those names were built from the graph, not written by a person
                                   GRAPH_WRITE_LOCK: held while entities/facts are written and linked, and by anything that ends in remove_orphans
 src/hippo/hipporag/graph_index.py GraphIndex.load(store); .scoped(visible_source_ids) -> induced subgraph (recomputed fact counts and passage
                                   counts); .ppr(); .neighbors(); .edge_between(); .graph_with_edits(); Passage; Fact; Edge; EdgeEdit
+                                  the code half (CodeNode, DirectedEdge, name_index, out_edges, graph_for_scale, ...) is under "the code graph" below
 src/hippo/hipporag/retriever.py   Retriever(index, ollama).retrieve(question, settings, *, fact_filter, force_include, force_exclude, node_boosts, graph) -> Trace
 src/hippo/hipporag/answerer.py    answer_question(ollama, question, [(id,title,text)]) -> Answer(answer, thought, raw, passage_ids)
 tests/fakes/fake_store.py         FakeStore: in-memory Store with identical methods/row shapes
 tests/fakes/fake_ollama.py        FakeOllama: rule-based model behind httpx.MockTransport
-tests/conftest.py                 fixtures: store, ollama, fake_ollama, ctx, sample_text
+tests/conftest.py                 fixtures: store, ollama, fake_ollama, ctx, sample_text, code_index (the code fixture
+                                  indexed through the real pipeline -> (ctx, source_id)), mixed_index (prose AND code in
+                                  ONE memory -- the fidelity claims are only checkable there); helpers
+                                  git_index (the same tree as a REPOSITORY source, with its history -> (ctx, source_id,
+                                  depths), where `depths` records what clone_repo was asked for, so a test can check that
+                                  code_history_depth really reaches git); helpers
+                                  code_sample_zip(), index_code_sample(ctx), index_prose_sample(ctx), sample_chunks(text),
+                                  CODE_SAMPLE_PATH, SAMPLE_PATH; and the --update-expected option (refused in CI)
 samples/acme_robotics.md          a tiny corpus whose sentences are "X <relation> Y." (the fake extractor understands it)
+tests/fixtures/code_sample/       a checked-in source tree (Python, TypeScript, SQL, one unparsed .go) that the code
+                                  graph is measured against; expected.json beside it IS the spec -- every symbol, edge
+                                  with its omega and provenance, data object, DEFINED_IN and REFERS_TO pair. A diff to
+                                  it is a reviewable change to the spec, never a green-the-build reflex.
+scripts/update_expected.py        regenerates expected.json; `--check` exits 1 when it would change
 ```
 
 Key data shapes (see the dataclasses in retriever.py): `Trace` has
@@ -65,6 +87,13 @@ Key data shapes (see the dataclasses in retriever.py): `Trace` has
 `filter` (raw_response, kept_triples, replayed), `seed_entities`, `seed_passages`, `top_nodes`,
 `passages` (RankedPassage: passage_id, rank, score, dpr_rank, dpr_score, title, source_id, source_name, preview),
 `used_dpr_fallback`, `fallback_reason`, `timing_ms`, `settings`, `graph_version`. `Trace.to_dict()` is JSON-safe.
+From the code graph it also has `seed_symbols` (SeedSymbol: node_id, name, vertex, weight, kind, how, token,
+matched_by, n_matches, ambiguous, kept, specificity, boost), `used_code_seeds` (the gate: a lexical anchor was kept),
+`question_prose` / `question_code` (the split; only the prose half is embedded and filtered), `paths`, `tests`,
+`history` (rendered rows for the answer block), `select` (keep/drop/expand/raw/error) and `expansions`;
+`RankedPassage` gains `community_boosted` and `via_expand`, and `TopNode.kind` may be `symbol`/`data`/`commit`.
+**Every one of those is defaulted and none may ever be removed**: evals store traces permanently and
+`trace_from_dict` rebuilds each row with `Cls(**row)`.
 
 Source rows (`store.get_source`/`list_sources`): id, kind ('text'|'file'|'archive'|'repo'|'sample'), name, status
 ('queued'|'reading'|'indexing'|'ready'|'failed'), stage (free text), progress_done, progress_total, error, meta (dict),
@@ -101,7 +130,9 @@ chunker.py   chunk_document(doc, size_chars, overlap_chars, code: CodeGraph | No
                     windows, still defines its tables, and never reaches OpenIE.
              ordinal counts up across the whole document list for a source (chunk_documents(docs, size, overlap, code=None) -> list[Chunk] does that).
 repos.py     is_git_url(url) -> bool  (https://, http://, git@, ssh:// forms only)
-             clone_repo(url, dest: Path, timeout=300) -> Path   # git clone --depth 1 --single-branch; raise RepoError with a friendly message
+             clone_repo(url, dest: Path, timeout=300, depth=1) -> Path   # git clone --depth N --single-branch; raise RepoError
+                     with a friendly message. The pipeline passes code_history_depth + 1: a shallow clone's oldest commit
+                     has no parent to diff against, so the depth is fixed at CLONE time, not at read time.
              walk_repo(root: Path, budget=None) -> list[Document]   # uses readers; skips IGNORED_DIRS, hidden dirs, files > MAX_FILE_BYTES, binaries
 pipeline.py  add_text(ctx, name, text, *, owner_id=None, access_role_id=None) -> source_id   # kind 'text', saves text under data_dir/sources/<id>/
              add_upload(ctx, filename, data: bytes, *, owner_id=None, access_role_id=None) -> source_id    # kind 'file' or 'archive' (.zip)
@@ -128,6 +159,210 @@ pipeline.py  add_text(ctx, name, text, *, owner_id=None, access_role_id=None) ->
              every add_* also calls start_indexing.
 ```
 
+### code graph — `codegraph/`, `store/code.py`, and the code half of `graph_index.py`
+
+Source code only. `extract_code` turns a source's `Document`s into a `CodeGraph`; the chunker makes
+one passage per symbol out of it, the indexer writes it, and `GraphIndex` loads it back as extra
+vertices beside the entities. Every edge carries an `omega` (0-1: how sure the resolver is) and a
+`provenance` (the rule that produced it). A prose source never reaches any of this: without a
+`CodeGraph` the chunker, the indexer and the index behave exactly as they always have.
+
+```
+src/hippo/codegraph/   pure: stdlib, tree-sitter, sqlglot and hipporag.text only. No store, no LLM, no ingest, no
+                       import of the chunker, so there is no cycle. Deterministic: the same files give the same graph.
+model.py         Symbol, DataObject, CodeEdge(a, b, kind, omega, provenance, extra), FileFacts, FileGraph, CodeGraph
+                 symbol_id(source_id, path, qualname); data_id(source_id, kind, qualname); commit_id(source_id, sha)
+                     -- prefixed md5s through make_id, so they cannot collide with entity-/fact-/passage- ids
+                 name_text(name) -> the text we embed for a symbol or data object (split tokens, then the name)
+                 lang_of(name) -> 'python'|'typescript'|'sql'|None. ingest/readers.py holds the same table on the
+                     ingest side of the dependency line; codegraph may not import ingest, so the two are kept in step
+                     by a test, not by an import.
+                 merge_edges(edges) -> one row per (a, b, kind): the best omega wins, the first call_line is kept and
+                     extra.call_lines lists the rest
+                 CODE_EDGE_KINDS, SYMBOL_KINDS ('module'|'class'|'function'|'method'), DATA_KINDS ('table'|'column'|
+                     'collection'|'label'|'rel_type'), SKIP_REASONS, LANG_BY_SUFFIX, ARG_BINDING_MAX_CHARS
+                 CODE_MAX_FILES = 5,000; CODE_MAX_FILE_BYTES = 512 KiB (above it a file keeps its line windows);
+                     CODE_MAX_SYMBOLS_PER_SOURCE = 50,000 (past it extraction stops and stats()["truncated"] is True)
+                     -- safety rails, module constants like MAX_CHUNKS, NOT settings. The history budgets are
+                     settings: code_history_depth, code_git_timeout_s, code_history_total_s.
+                 CodeGraph.by_path(path) / .parsed(path) / .symbol_by_id(id) / .stats() -> Source.meta["code"]
+                     = symbols, languages, data_objects, edges, edges_by_kind, files_parsed, files_skipped,
+                       unresolved_calls, unresolved_calls_total, truncated, commits, modifies, history_skipped
+treesitter.py    get_language(grammar), grammar_for(path, lang), new_parser(grammar) -- one Parser per extract_code
+                 call (parsers are not thread-safe and two index jobs can run at once); node helpers text_of,
+                 line_of, end_line_of, named_children, field_child, walk_tree.
+                 .js/.jsx/.mjs/.cjs all parse with the tsx grammar, so there is no third wheel.
+python.py        walk(path, root, source_id) -> FileFacts   # the symbols of one file plus its raw imports, calls,
+typescript.py    bases, raises/throws, assignments and string literals, all still unresolved
+                 python.py also: module_qualname(path) (repo path, / -> ., extension stripped, __init__ kept),
+                 is_test_path(path)
+resolve.py       the second pass over every file at once: build_index(files) -> SourceIndex, then resolve_imports,
+                 resolve_bases, resolve_overrides (breadth-first MRO, <= 5), resolve_calls, resolve_raises,
+                 resolve_data, resolve_tested_by, sql_file_objects. Resolution carries the omega and provenance the
+                 matching rule earns. A call it cannot bind emits NO EDGE; it is counted per file into
+                 CodeGraph.unresolved_calls instead.
+data_access.py   READS/WRITES against the tables, collections and graph labels the repo's own files name:
+                 classify_literal(text), sql_tables (sqlglot, errors ignored), cypher_objects, mongo_hit,
+                 mongoose_hit, read_sql_file, collect(literals). Cypher is tried BEFORE SQL, because
+                 `MERGE (s:Settings ...)` starts with a SQL keyword.
+git_history.py   read_history(checkout, symbols, source_id, *, depth, timeout_s, total_s, should_stop=None)
+                     -> History(commits, modifies, precedes, skipped, truncated)
+                 `source_id` is POSITIONAL: commit ids are namespaced per source, so the reader cannot build
+                     one without it.
+                 A commit with a parent is read as `git diff -U0 <first-parent> <sha>`, NOT `git show -U0`,
+                     which prints nothing at all for a merge commit.
+                 MODIFIES is the innermost enclosing symbol per touched line, one row per (commit, symbol) with
+                     churn summed. The ranges are the symbol's AT THAT COMMIT -- each touched file is re-parsed at
+                     each commit -- because a HEAD-range shortcut would make the commit eval measure its own drift.
+                     A module whose only content is one class therefore never appears: the class encloses the line.
+                 `skipped` counts BUDGET skips only (a cancellation is not a budget); `truncated` marks a walk
+                     that `should_stop` ended. HistoryError is a logged warning and an empty history, never a
+                     failed index job.
+                 MODIFIES_OMEGA = 1.0; LOG_FORMAT; HUNK_RE; DIFF_OPTIONS
+extract.py       extract_code(docs, source_id, *, should_stop=None) -> CodeGraph
+                 Each file parses in its own try/except, so one parse failure falls back to today's line windows for
+                 that file alone. should_stop() is checked between files, so a big repo stays cancellable.
+
+src/hippo/store/code.py   SYMBOL_KINDS, DATA_KINDS, CODE_EDGE_KINDS, SPECIFICITY_KINDS ('INVOKES','READS','WRITES'),
+                 CODE_EDGE_PAIRS, CODE_BATCH = 5000 (rows per UNWIND write), and the label tuples a writer groups its
+                 rows by: SYNONYM_LABELS, TUNED_LABELS, BOOSTABLE_LABELS, CODE_NODE_LABELS, DEFINABLE_LABELS,
+                 REFERABLE_LABELS
+                 node_label(id, allowed) (via text.label_of), check_edge_kind(kind), ordered_pairs(labels),
+                 grouped_by_labels(...) -- LadybugDB refuses a CREATE bound by multiple node labels, so every write
+                 is issued once per concrete label pair
+                 row shapers: symbol_write_row, data_object_write_row, commit_write_row, code_edge_write_rows,
+                 modifies_write_rows, refers_to_write_rows, and the read shapers _symbol_row/_data_object_row/_commit_row
+                 CodeQueries (the Neo4j mixin; LadybugStore and FakeStore carry the same names and row shapes,
+                 and a parity test asserts they do):
+                     writers  add_symbols, add_data_objects, add_commits, add_code_edges, link_definitions,
+                              add_modifies, add_precedes, add_refers_to, set_symbol_communities
+                     readers  get_symbols, get_data_objects, get_commits(ids, access=None) -> rows in the asked
+                              order, with source_name and passage_ids, visible only when the source is
+                     loaders  load_symbols, load_data_objects, load_commits, load_code_edges, load_definitions,
+                              load_modifies, load_precedes, load_refers_to, load_code_embeddings -- unrestricted,
+                              they feed GraphIndex.load
+                     delete   delete_code_nodes_for_source(source_id): THREE per-label statements, one each for
+                              Symbol, DataObject and Commit. Never chain them: `:Symbol:DataObject:Commit` is
+                              LadybugDB's OR but Neo4j's AND, so a chained match silently leaks every code node.
+                 store.stats() gains symbols, data_objects, code_edges, commits (fifteen keys in all).
+
+src/hippo/hipporag/graph_index.py   the code half of the in-memory index
+                 NodeKind is five-valued: ENTITY, PASSAGE, SYMBOL, DATA, COMMIT (CODE_KINDS = the last three)
+                 Vertex order is entities, symbols, data objects, commits, PASSAGES LAST, and that is load-bearing:
+                 passage_position(v) = v - first_passage_vertex, so a code vertex after the passages would give a
+                 negative index and silently serve the wrong passage. num_entities is len(entity_names);
+                 first_code_vertex and first_passage_vertex are where each block starts.
+                 CodeNode      one vertex -- a symbol, data object or commit -- with whatever its kind carries
+                 DirectedEdge(src, dst, kind, omega, provenance, extra)   one relation with its direction kept
+                               (named apart from codegraph.model.CodeEdge, which is the same relation before storage)
+                 Edge gains omega and code_kinds. Edge.weight_at(scale) is
+                     tuned if set else max(fact_count, 1.0 if mention, entity-entity synonym score, omega * scale)
+                     and Edge.weight is weight_at(1.0), which is what explain.py and the Graph page read.
+                 build_igraph(num_nodes, edges, scale=1.0); graph_for_scale(scale) rebuilds once and memoises per
+                     scale on the index; graph_with_edits(edits, scale=1.0) composes a simulation's edge edits with
+                     the scale in ONE rebuild, so moving the slider and editing an edge still applies both.
+                 code_nodes / code_vertices; code_out and code_in: vertex -> [DirectedEdge]. These are in LOAD ORDER
+                     and Neo4j promises none, so sort before you render or pin anything on them.
+                 name_index: lowercase name, lowercase qualname and each split token -> node ids. Built once and
+                     shared by scoped(), which is safe because every consumer filters its hits through idx_of.
+                 specificity: the DIVISOR per vertex, not its reciprocal -- entity: the passages that mention it;
+                     symbol and data: in_degree + 1 over INVOKES/READS/WRITES only (MODIFIES excluded, or a function
+                     touched by 150 of 200 commits would be crushed); commit: 1; passage: 0, never seeded.
+                     entity_passage_count is kept as an alias of it.
+                 code_node_by_id, code_node_at, out_edges(v), in_edges(v), defining_passages(v),
+                     symbols_defined_in(passage_v), community_of(v), community_name(c), communities
+                 scoped() keeps a symbol or data object iff one of its DEFINED_IN passages is visible, and a commit
+                     iff its commit passage is; omega and code_kinds are copied onto every surviving edge.
+
+What gets written (the shape the three stores agree on):
+    (Symbol|DataObject)-[:CODE_EDGE {kind, omega, provenance, extra}]->(Symbol|DataObject)   directed, one per (a,b,kind)
+    (Symbol|DataObject|Commit)-[:DEFINED_IN]->(Passage)         omega 1.0. A data object gets one from EVERY passage
+                                                                whose literal names it, not only its declaration site
+    (Passage)-[:REFERS_TO {omega, token}]->(Symbol|DataObject)  a prose or commit passage naming a symbol
+    (Commit)-[:MODIFIES {omega, hunk}]->(Symbol)    (Commit)-[:PRECEDES]->(Commit)   first-parent, newest to oldest
+    SYNONYM widens to (Entity|Symbol|DataObject)^2 and TUNED to (Entity|Passage|Symbol|DataObject)^2
+CODE_EDGE kinds: CONTAINS, IMPORTS, INHERITS, OVERRIDES, INVOKES, RAISES, CATCHES, TESTED_BY, READS, WRITES.
+PRECEDES is the one relation that does NOT enter igraph -- 200 commits would chain every symbol they touched into
+one neighbourhood -- so it exists only as a DirectedEdge, for the history tool.
+
+The rest of the code path is documented in its own block above:
+    ingest/readers.py    lang_of(name), beside is_code_name / is_supported_name on the same suffix sets
+    ingest/chunker.py    chunk_documents(docs, size, overlap, code=None): one passage per symbol
+    hipporag/indexer.py  Chunk.defines and Chunk.extract_text; index_source(..., code=None) and its three code stages
+    ingest/pipeline.py   the one insertion point: read_source -> "parsing code" -> chunk_documents -> index_source
+
+src/hippo/hipporag/anchors.py   what a question says about code. Pure: no store, no model.
+                 split_question(text) -> (prose, code)   the prose half is what gets EMBEDDED and what the fact
+                     filter reads; the QA prompt still gets the whole question. A one-line question with no fence
+                     returns (text, "") and takes exactly today's path -- this module's inert condition, and a test.
+                 find_anchors(question, index) -> [Anchor(node_id, vertex, token, how, weight, n_matches, ambiguous)]
+                     how is identifier | stack_trace | exception | fenced_code | diff. Reads BOTH halves.
+                     Every hit goes through this index's idx_of and must be a symbol or data object, so a scoped
+                     index can never surface a node the caller may not see.
+                 MAX_ANCHORS = 20; MAX_MATCHES_PER_TOKEN = 8; AMBIGUOUS_ABOVE = 10 (more matches than this and the
+                     token seeds NOTHING -- counted before the per-token cap, or the rule would be unreachable);
+                     MIN_NAME_CHARS = 3; MIN_QUALIFIED_PART = 2; FRAME_DECAY = 0.8; EXCEPTION_WEIGHT = 0.8; STOPLIST
+                 A bare word anchors only when it is code-shaped -- PascalCase, camelCase, snake_case or ALL_CAPS.
+                     Backticked and dotted spans skip that rule and are never split: the dots already say which one.
+
+src/hippo/hipporag/paths.py     deterministic walks over the code graph. No model anywhere in this file.
+                 resolve_symbol(index, name) -> node id, raising UnknownSymbol or AmbiguousSymbol(candidates)
+                 shortest_code_path(index, a, b, *, theta, max_hops=MAX_HOPS) -- over code_out, skipping
+                     NOT_A_STEP ("DEFINED_IN", "PRECEDES", "REFERS_TO", "MODIFIES") and any edge below theta,
+                     with an undirected second pass when the directed one finds nothing
+                 direct_edges(index, v, *, theta) -- one hop BOTH ways, STRONGEST FIRST: omega descending, and at
+                     equal omega incoming before outgoing. The order is load-bearing, not cosmetic: `code_triples_chars`
+                     cuts this list, so the old "out first, then in" meant a symbol with more outgoing calls than the
+                     budget fits never showed a single caller, and "where is X called" got a block that could not
+                     answer it however confident the calling edge was (QA1 defect 1).
+                 code_paths_for -- pairwise paths between seeds first, then each seed's direct edges round-robin, so
+                     one hub seed cannot spend the whole budget; deduped on display names
+                 expand_from (EXPAND_KINDS at EXPAND_OMEGA), tests_for, history,
+                     blast_radius -> BlastRadius(vertex, levels, truncated) (walks code_in: who depends on this),
+                     exception_path
+                 triple_rows / test_rows / history_rows -> the JSON-safe dicts that live on the Trace
+                 render_triples(rows) -> "a -[KIND 0.90 provenance in_branch await]-> b", the fixed grammar
+                     test_ask.py pins exactly; render_blast; block_lines; cut_to; render_block(index, trace, *,
+                     header, max_chars) cuts on a LINE boundary and appends MORE_LINE
+                 display_of / display_at -> the fully-qualified display name (pyapp.orders.OrderService.place)
+                 community_labels(index) -> the label a person reads: the smallest DISPLAY name in each community.
+                     Not GraphIndex.community_name, which uses module-relative qualnames and would label two
+                     different subsystems "Base".
+                 MAX_HOPS = 6; PATH_HOPS = 4; BLAST_DEPTH = 2; BLAST_CAP = 200; MAX_BLOCK_EDGES = 60
+                 A simulation's edge edits change the igraph PPR runs on, not these tools.
+
+src/hippo/hipporag/retriever.py   the code half of a search
+                 Trace gains nine fields, ALL DEFAULTED and none ever to be removed (stored traces are rebuilt with
+                     Cls(**row) forever): seed_symbols, used_code_seeds, question_prose, question_code, paths,
+                     tests, history, select, expansions. SeedSymbol is new; TopNode.kind may be symbol/data/commit;
+                     RankedPassage gains community_boosted and via_expand.
+                 used_code_seeds is the ONE gate: a *lexical* anchor was kept. A dense seed adds reset mass and
+                     nothing else -- it never opens the gate, so it never fires the select pass, writes
+                     timing["paths"], or adds the answer block.
+                 retrieve(..., select_fn: SelectFn | None = None). SelectFn is injected exactly as fact_filter is,
+                     so a unit test passes a plain function and the pass needs no Ollama. SelectResult carries
+                     keep / drop / expand / raw; unknown ids are ignored and any failure is keep-all.
+                 MAX_CODE_SEEDS = 20 -- symbol seeds have their own budget and are NOT subject to linking_top_k's
+                     entity cut. A dense seed is worth code_seed_weight x passage_node_weight x its similarity.
+src/hippo/ask.py                 code_block(graph, trace) renders the block; answer_from_trace passes it as
+                                 context_block=, gated on trace.used_code_seeds
+                                 code_fields(trace, block) -> the five keys {seed_symbols, paths, tests, history,
+                                 code_graph}. ONE helper, spread by the MCP search_tool/ask_tool AND by HTTP
+                                 /api/search and /api/ask, so the surfaces cannot drift. Always present. On a prose
+                                 question `paths`/`tests`/`history`/`code_graph` are empty (the `used_code_seeds`
+                                 gate), but `seed_symbols` MAY NOT BE: a dense seed is recorded there though it
+                                 never opens the gate. Read `how` to tell a lexical anchor from a dense one.
+src/hippo/hipporag/answerer.py   Answer.context_block (defaulted, so Answer(**old_row) still loads);
+                                 answer_question(..., context_block="") prepends it INSIDE as the pair
+                                 (CODE_GRAPH_TITLE, block), so it never enters Answer.passage_ids and rag_qa is
+                                 byte-identical
+src/hippo/prompts.py             CODE_GRAPH_HEADER (the block's one-sentence legend); CODE_SELECT_SYSTEM and
+                                 code_select_messages(question, [(id, title, text)])
+src/hippo/analysis/simulate.py   SIMULATABLE_SETTINGS / INGEST_SETTINGS partition SETTING_RULES;
+                                 validate_simulation_settings refuses an ingest-only setting;
+                                 replay_select(baseline) beside replay_filter, so a slider move costs no LLM call
+```
+
 ### `src/hippo/evals/` — asking questions and grading
 
 ```
@@ -137,7 +372,8 @@ metrics.py         normalize_answer(text) -> str (lowercase, strip punctuation/a
                    gold_rank(gold_ids, ranked_ids) -> int | None   # best rank of any gold passage, 1-based
 judge.py           Verdict(verdict: 'correct'|'partially_correct'|'incorrect', score: 1.0|0.5|0.0, reason: str)
                    judge(ollama, question, expected, actual) -> Verdict   # prompts.judge_messages; on OllamaError -> incorrect with reason
-question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_single=10, max_multihop=5, name=None, set_id=None, access=None) -> set_id
+question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_single=10, max_multihop=5, max_code=5,
+                     max_commits=5, name=None, set_id=None, access=None) -> set_id
                    - access: the caller's slice; passages and entity pairs come from ctx.graph_for(access)
                    - creates the QuestionSet first (origin 'generated', status 'generating'), fills it, sets status 'ready'
                      (update_question_set for stage/progress; on failure status 'failed' + error)
@@ -146,6 +382,14 @@ question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_sing
                      edges/neighbors, Edge.mention) preferring entities mentioned by exactly 2-3 passages; prompts.multihop_gen_messages;
                      skip empty questions; kind 'multihop'; gold_passage_ids = both passages
                    - each question row: {text, expected_answer, gold_passage_ids, kind, notes}
+                   - code_questions(index, source_id, limit=5): "What does <display> call?", expected
+                     "<display> calls <callee>."; kind 'code'. Qualifies: a function or method with a doc >= 80 chars
+                     and an INVOKES out-edge at omega >= 0.5. Gold = its own passage plus the strongest callee's.
+                     The question names the symbol, so find_anchors seeds from it and recall["code_seeded"] reads 1.0.
+                   - commit_questions(index, source_id, limit=5): 'What changed in the commit "<subject>"?', expected
+                     'The commit "<subject>" changed <names>.'; kind 'commit'. A commit MODIFYING >= 2 symbols,
+                     newest first. Gold = the commit passage FIRST, then one entry per modified symbol.
+                   - both are pure and deterministic: they read the GraphIndex and never call the model.
                    start_generation_job(ctx, source_id, **kw) -> set_id   # creates the set, then Jobs key "generate:<set_id>"
 runner.py          start_run(ctx, set_id, name=None, settings=None, access=None) -> run_id   # Jobs key "run:<run_id>"; the run searches and
                                                                              # answers on the starter's slice of the memory (hippo/access.py)
@@ -153,6 +397,14 @@ runner.py          start_run(ctx, set_id, name=None, settings=None, access=None)
                                                                              # dict that store.add_result wants (answer, thought, verdict,
                                                                              # judge_score, judge_reason, exact_match, f1, recall, gold_rank, used_dpr_fallback,
                                                                              # latency_ms, trace(dict), error)
+                   BASELINE_SETTINGS  # the four that switch code retrieval off: code_seed_weight 0, code_dense_seeds 0,
+                                      # code_structural_scale 0, code_select False -- what the fidelity claim rests on
+                   compare_with_baseline(ctx, set_id) -> (with_code, baseline)   # runs the set twice, returns both
+                                      # summaries; STORES NOTHING, so it is a measurement, not history
+                   recall["code_seeded"]  # on EVERY question: 1.0 when a *lexical* anchor seeded a symbol. It describes
+                                      # the trace, not the ranking -- not a quality metric
+                   recall["path_fidelity"]  # commit questions only, k=5: the share of the modified symbols' passages
+                                      # that came back
                    summarize(results: list[dict]) -> dict   # accuracy (mean judge_score), correct/partial/incorrect counts, exact_match,
                                                             # f1, recall@k means, mean_gold_rank, gold_in_top5 rate, dpr_fallbacks, mean_latency_ms
                    the run node: progress_done per question; status running -> done | failed; summary_json at the end; settings_json = the
@@ -225,17 +477,31 @@ routes/users.py   Users & roles (the access ladder)
     api: GET/POST /api/users, PATCH/DELETE /api/users/{id}, POST /api/users/{id}/token, GET/POST /api/roles, PATCH/DELETE /api/roles/{id}
 routes/graph.py   the Graph page (3D, vendor/3d-force-graph.min.js, static/graph.js)
     GET  /graph?as_role=&q=&source=    the whole visible graph in 3D; "View as" a role (manage_users/manage_roles, tiers at or below yours)
-    GET  /api/graph/full               nodes [{id,label,kind,degree,tier,tier_rank,source_id?,passage_count?}] + edges [{source,target,weight,kinds}]
+    GET  /api/graph/full               nodes [{id,label,kind,degree,tier,tier_rank,source_id?,passage_count?,community_label?}]
+                                       + edges [{source,target,weight,kinds}]. kind is five-valued now; a code node carries
+                                       community_label (paths.community_labels, NOT GraphIndex.community_name) for the
+                                       "subsystem" colour mode, which is the Leiden label's third and most visible surface.
                                        after filters q (name substring + one hop of context), source, kind, min_weight; capped by degree
                                        (limit, default 2500); plus totals, tiers and the viewer
     POST /api/graph/light-up {question, settings?, as_role?, top_passages?}   runs ask.search on the viewer's slice and returns seeds,
+                                       # `seeds` is trace.seed_entities ONLY, so a symbol the question named is heat-coloured
+                                       # like any activated node but carries no seed badge. Known gap, stated in the README.
                                        kept_facts, top_nodes (PPR scores), ranked passages with "why", paths (seed -> passage node ids)
                                        and the lit subgraph, so the page can animate the spread
-    GET  /api/graph/node/{id}          side-panel details: passage text/source/facts, or entity facts/passages/boost; neighbours
+    GET  /api/graph/node/{id}          side-panel details, BRANCHED PER KIND -- passage text/source/facts; entity
+                                       facts/passages/boost; symbol signature/path/lines/doc/callers/callees/tests/commits/
+                                       community; data object code_kind/dialect/readers/writers; commit sha/author/date/
+                                       message/modifies; plus neighbours. The old else-branch assumed "not passage" meant
+                                       "entity" and returned a wrong-shaped 200 for a symbol id rather than failing.
+                                       tiers_of reads a code node's tier from its source_id directly: a symbol has no
+                                       MENTIONS edge (D1), so the mention loop would leave it badged "Everyone".
 routes/pages.py   the pages that fit nowhere else
     GET  /partials/status              header partial: Neo4j/Ollama/model-pull status, polled by every page
     GET  /ask, POST /ask               Ask: a question box; the POST runs the search + answer (on the caller's slice) and renders the
-                                       same page with the answer, thought, top passages with scores, kept facts, seeds; link "Analyze
+                                       same page with the answer, thought, top passages with scores, kept facts, seeds, and -- when the
+                                       question named code -- a collapsible "Code graph" card holding answer.context_block, with the
+                                       seed chips split into "the question named" and "also reached by similarity" (the lexical/dense
+                                       distinction that decides the gate); link "Analyze
                                        this question"; the page says "searching N of M sources visible to you as <role>"
     GET  /settings, POST /settings     Ollama status (url, models installed vs required, pull progress, "Pull now"), Neo4j status +
                                        stats, retrieval settings form (the DEFAULT_SETTINGS keys with one-line explanations),
@@ -247,7 +513,10 @@ routes/sources.py  the Library (everything scoped to the caller; adding needs ad
                                        text, git URL, "Load the sample"), each with a "Visible to" picker defaulting to the caller's tier
     POST /sources/{id}/access          the tier pickers post here (visibility=<role id>|everyone, back=<path>)
     GET  /partials/sources             the sources table, polled while something is indexing (HTMX)
-    GET  /sources/{id}                 Source detail: meta, progress, passages (paged) with the entities/triples the LLM extracted,
+    GET  /sources/{id}                 Source detail: meta (for a repository, a code card: symbols, data objects, edges by kind,
+                                       languages, files parsed/skipped, unresolved calls, commits, history_skipped), progress,
+                                       passages (paged) with the entities/triples the LLM extracted, an "In the code graph"
+                                       <details> under each symbol passage (signature, relations, tests, commits),
                                        "Make sample questions" button (-> generation job), question sets about this source, "Reindex", "Delete"
     GET  /partials/sources/{id}/status the progress block of the source page, polled while it is busy (HTMX)
     POST /sources/upload | /sources/text | /sources/repo | /sources/sample     the Library forms; redirect back to / (with ?error=)
@@ -317,7 +586,13 @@ The Analyze page shows, top to bottom:
     3. the graph picture (Cytoscape): seeds highlighted, passages as squares, gold passage(s) outlined, node size ~ PPR score; click a node
        to see its neighbours/edges (weights, kinds)
     4. ranked passages with the explanation sentence ("why") and rank/score/DPR rank; gold ones marked
-    5. "Tweak & simulate" panel: sliders/inputs for linking_top_k, passage_node_weight, damping, node_specificity; checkboxes on each
+    4b. for a code question only (trace.used_code_seeds): the seed-symbols table -- name, how (identifier / stack_trace /
+       exception / fenced_code / diff / dense), the token that matched, weight, specificity, and the ambiguous rows that
+       seeded nothing -- and a Paths section rendered by paths.render_triples. explain() reads trace.seed_entities and
+       nothing else, so symbol seeds are joined in explicitly rather than found there.
+    5. "Tweak & simulate" panel: sliders/inputs for linking_top_k, passage_node_weight, damping, node_specificity,
+       and code_seed_weight / code_structural_scale / code_theta (a setting is simulatable only once it is in
+       SETTING_RULES and outside INGEST_SETTINGS); checkboxes on each
        candidate fact (force in/out); entity boost inputs on seeds (+ entity search to boost any entity); edge edits (pick two nodes,
        set weight; a new entity-entity edge behaves like a synonym link, and Overrides.to_ops emits set_edge_weight for it: the
        add_synonym op is only reachable by hand-writing ops to POST /api/changesets); toggles "re-run the LLM filter" and
@@ -344,6 +619,17 @@ mcp_server.py  build_server(ctx) -> MCPServer (mcp>=2: from mcp.server.mcpserver
                           visibility = a role id at or below the caller's tier, or "everyone"; default the caller's own tier)
                       hippo_sources() -> the sources the caller may see, with visible_to and owner
                       hippo_whoami() -> {open_mode, user, role, can, sources_visible, sources_total, ladder, visibility_you_may_use}
+                      the four code tools, each a module-level *_tool(ctx, ..., principal=None) with a one-line
+                          @server.tool closure, and each sharing routes/code.py's payload builder so the two never drift:
+                      hippo_explain_path(a, b) ; hippo_blast_radius(symbol, depth=2) ;
+                      hippo_exception_path(symbol, exception) ; hippo_history(symbol, limit=3)
+                          AmbiguousSymbol / UnknownSymbol / ValueError -> ToolError with the message verbatim, the
+                          candidates inline: ToolError is the one error a client is shown, so anything a caller could
+                          act on has to be inside it
+               hippo_search and hippo_ask gained seed_symbols, paths, tests, history, code_graph (_code_fields).
+                      ALWAYS PRESENT, empty unless a lexical anchor fired, so a client never branches on whether the
+                      memory holds code. Trap: seed_symbols[].name is the MODULE-RELATIVE qualname (index.name_of),
+                      while paths[].a_name and the code_graph block use the fully-qualified display name.
                mount(app: FastAPI, ctx)   # streamable HTTP at /mcp, stateless_http=True; DNS-rebinding protection on, hosts from config.allowed_hosts (HIPPO_ALLOWED_HOSTS)
                                           # (it runs inside docker; users connect at http://localhost:8000/mcp); wire session_manager.run()
                                           # into the FastAPI lifespan
@@ -351,6 +637,18 @@ mcp_server.py  build_server(ctx) -> MCPServer (mcp>=2: from mcp.server.mcpserver
 cli.py         main(argv=None): subcommands  serve (uvicorn), mcp (stdio), pull-models, index <path-or-git-url> [--name], ask "<question>",
                sources, settings, users, user add|token|role|remove. Uses AppContext.from_env(); talks to Neo4j directly, so it is not
                gated (it is how the first admin is created from `docker exec`).
+               over an indexed repository: path A B, blast SYMBOL [--depth N], raises SYMBOL EXCEPTION,
+               history SYMBOL [--limit N]. Each runs through _context_or_running_server(), so it works against the
+               local file or a running server, and _code_locally / _code_remotely normalise both error paths into
+               CodeNameError -> "error: <message>" plus one indented candidate per line on stderr, exit 2.
+               A "not found" answer (no path, nothing depends on it, no commits) is exit 0 with a sentence, not an error.
+src/hippo/remote.py    RemoteHippo gained code_path, code_blast_radius, code_exception_path, code_history;
+               a 409 from the server becomes RemoteAmbiguous, which already carries the candidates.
+src/hippo/status.py    the "code" card: {symbols, data_objects, code_edges, commits, languages, unresolved_calls,
+               history_skipped}. The four counts come from store.stats(); languages / unresolved_calls /
+               history_skipped are summed from each source's meta["code"], because a count cannot carry them.
+               Deliberately NOT from ctx.graph(): system_status runs on every page render and must not pay for
+               a full GraphIndex.load.
 ```
 
 ### Docker, CI, docs

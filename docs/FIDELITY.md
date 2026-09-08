@@ -69,13 +69,20 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
   mention the entity when that number is > 0 (node specificity); the sums are
   divided by the number of occurrences (`np.divide(..., where=number_of_occurs != 0)`);
   only the top `linking_top_k` entities keep their weight (`get_top_k_weights`), the
-  rest are set to 0.
+  rest are set to 0. Symbol seeds, which the reference has no counterpart for, are
+  budgeted separately and do not take part in that cut (adaptation 15).
 * Passage seed weights: min-max normalised DPR score times `passage_node_weight`.
-* Reset vector = entity weights + passage weights; NaN or negative entries become 0.
+* Reset vector = entity weights + passage weights, plus code weights for a memory that holds a
+  code source (adaptation 15); NaN or negative entries become 0. With no code node in the graph —
+  or with `code_seed_weight` at 0 — the code term is an array of zeros and the sum is the
+  reference's exactly.
 * PPR: `graph.personalized_pagerank(vertices=range(n), damping=damping, directed=False,
   weights="weight", reset=reset, implementation="prpack")`, character for character.
 * Passages ranked by their PPR score; when no fact survives the filter the ranking is
-  plain dense passage retrieval (`No facts found after reranking, return DPR results`).
+  plain dense passage retrieval (`No facts found after reranking, return DPR results`) —
+  unless a lexical anchor fired, in which case the question named something the graph knows
+  and PPR runs from that instead (adaptation 15). A question that names no code takes the
+  reference's path, and a dense code seed deliberately does not count here.
 
 ### Reading (`answerer.py` vs `qa` + `prompts/templates/rag_qa_musique.py`)
 
@@ -118,7 +125,11 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
    everything in a graph database (LadybugDB by default, or Neo4j; see `store/__init__.py` for the shape) and rebuilds the
    in-memory igraph plus the numpy embedding matrices (`GraphIndex.load`) whenever a
    `graph_version` counter changes. Edge weights are recomputed at load time with the
-   same `max(fact count, 1.0 if mention, synonym score)` rule. Two things the
+   same `max(fact count, 1.0 if mention, synonym score)` rule, plus a fourth term for
+   the code graph: `max(fact count, 1.0 if mention, entity–entity synonym score,
+   best code ω × code_structural_scale)` (`Edge.weight_at`, adaptation 15). On a memory
+   with no code source that fourth term is 0.0, which cannot raise a max, so the rule is
+   the reference's exactly. Two things the
    reference does not have: a `TUNED` edge weight that replaces that number, and a
    per-entity `boost` multiplier on seed weights. Both are 1:1 / absent unless you
    apply a changeset, so a fresh memory behaves like the reference. Every graph version bump (each index job, including every `hippo_remember` call, and every
@@ -150,9 +161,14 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
 11. **OpenIE failures.** If the model fails on one passage, hippo stores the passage
     with no facts (still reachable through dense retrieval) and records the error on
     it, instead of failing the whole index run.
-12. **Single-step retrieval only.** The reference also offers IRCoT-style multi-step
-    retrieval (`retrieve_ircot`); hippo implements the default single step
-    (`max_qa_steps = 1`).
+12. **Single-step retrieval over facts, with an optional second pass over passages.** The
+    reference also offers IRCoT-style multi-step retrieval (`retrieve_ircot`); hippo implements the
+    default single step (`max_qa_steps = 1`), and never goes back to the graph for more facts. It
+    does add one pass the reference does not have, and only when a question named code: with
+    `code_select` on (the default) the model sees the passages it is about to read and says which
+    to keep, drop or expand (adaptation 15). That is a second LLM step, and it is recorded here
+    rather than tucked into adaptation 15 alone because it costs this guarantee its old, simpler
+    form. Setting `code_select` to `False` restores it exactly.
 13. **Evaluation.** Exact match and F1 use the reference's MRQA-style normalisation
     (`evals/metrics.py`). The LLM judge, question generation, simulations and
     changesets are hippo's own and have no counterpart in the reference.
@@ -160,3 +176,90 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
     non-ASCII character, so a name like `東京都` or `москва` never gets synonym edges. hippo uses
     `str.isalnum`, which counts letters and digits in any script, so non-Latin names are linked
     like Latin ones. For English text the two rules agree exactly.
+15. **Code graph.** The reference has no notion of code: every passage is prose and every node in
+    the graph is an OpenIE phrase or a passage. For a source that is a repository hippo adds three
+    more kinds of node — `Symbol` (module, class, function, method), `DataObject` (a table,
+    collection or graph label the code names) and `Commit` — written by a parser rather than by the
+    model, with typed directed edges between them (`CONTAINS`, `IMPORTS`, `INVOKES`, `INHERITS`,
+    `OVERRIDES`, `RAISES`, `CATCHES`, `TESTED_BY`, `READS`, `WRITES`), each carrying a confidence
+    ω from 1.00 (syntax) down to 0.50 (a unique bare-name match) and the provenance that earned it.
+    Reason: an engineer's question about code carries evidence a prose pipeline throws away — an
+    identifier, a stack frame, a diff — and a parser knows what a function calls where a model
+    guesses. Each part below is separately gated, and the last paragraph is what "gated" means.
+    * **Edge weight.** The load-time rule gains a fourth term (adaptation 5). Every term that
+      exists only because code was indexed is inside that multiplication — `CODE_EDGE`,
+      `DEFINED_IN`, `REFERS_TO`, `MODIFIES` and cross-kind synonyms — and `code_structural_scale`
+      is capped at 3.0, so a pair joined by three facts can at most be *tied* by a code edge and
+      never beaten by one. `TUNED` is exempt, as it always is: a person set it.
+    * **PPR itself is untouched.** `personalized_pagerank(...)` is still character for character
+      the reference's call, still `directed=False`. Direction exists only outside igraph, in
+      `code_out` / `code_in`, where the path tools read it; the graph PPR runs on never sees it.
+    * **Node specificity per kind.** The reference divides a seed by the number of passages that
+      mention its entity. A symbol has no `MENTIONS`, so that count would be 0 and the division
+      would be skipped, leaving hub functions undamped. hippo puts `in_degree + 1` in the same
+      shared array instead — over `INVOKES`, `READS` and `WRITES` only, since a function touched by
+      150 of 200 commits would otherwise be crushed. The retriever is unchanged: it divides by
+      whatever it finds in the array.
+    * **Symbol seeds have their own budget.** The reference cuts entity seeds to `linking_top_k`
+      (`get_top_k_weights`). Symbols the question named are not in that competition; they have
+      `MAX_CODE_SEEDS = 20` of their own, by weight. The other two jobs `linking_top_k` does — how
+      many facts reach the filter, and how far the kept list is cut — are untouched.
+    * **The question is split before it is embedded.** The reference embeds the question verbatim.
+      When a question contains a fenced block, a stack frame or a diff hunk, hippo embeds and
+      filters on the *prose* half only, so a forty-line traceback cannot dominate one query vector;
+      the QA prompt still receives the whole thing, and anchors are read from both halves. A
+      question of one line with no fence splits to `(text, "")` and takes exactly the reference's
+      path — that is this part's inert condition, and it is a test (`anchors.split_question`).
+    * **A second way to seed.** Identifiers, stack frames, exception names, fenced blocks and diff
+      hunks in the question seed PPR directly, at `code_seed_weight`. A code passage that scored
+      well on plain similarity also seeds the symbols it defines, but at
+      `code_seed_weight × passage_node_weight × its similarity`: `dpr_scores` are min-max
+      normalised, so the full weight would put the top passage at exactly 1.0 and let it outrank an
+      exact identifier match on every question. What someone typed has to beat what merely looked
+      similar. Only a *lexical* anchor sets `used_code_seeds`, which is the single gate on
+      everything else in this adaptation; a similarity seed adds reset mass and nothing more.
+    * **A bare word anchors only when it was written as code.** `PascalCase`, `camelCase`,
+      `snake_case` or `ALL_CAPS`, or backticked, or dotted, or inside a frame, fence or diff. A
+      question whose words are ordinary English produces no anchor at all — including one
+      containing a word that is also a symbol name here, like `status`, `config` or `run` — so it
+      never opens the gate above and never reaches anything below it.
+    * **A community prior, off by default.** Symbols are grouped into subsystems by Leiden over the
+      file projection, and `code_community_boost` lifts a passage whose symbol shares a subsystem
+      with a seed. It ships at 0.0, so today the grouping only labels rather than ranks: a
+      `Subsystems:` line in the answer block and in a blast radius, and a `subsystem` colour mode on
+      the Graph page. Whether the prior is worth turning on is a question for an eval set.
+    * **A second LLM pass, over passages.** The reference filters *facts* once and stops
+      (adaptation 12). When a question named code, hippo runs one more pass over the passages the
+      model is about to read, keeping, dropping or expanding them (`code_select`, on by default).
+      It judges a window *wider* than the slice the answer is built from, so that dropping a
+      passage promotes one the model never saw into its place; judging exactly the slice would make
+      a drop inert, reordering the same list. A dropped passage sinks below the kept ones and the
+      unjudged ones alike, but is never removed — a wrong drop should cost a position, not erase
+      evidence — and an unparsable or failing reply keeps everything, mirroring the fact filter's
+      own fallback. Expanded neighbours are appended at score 0.0 and excluded from the `qa_top_k`
+      slice, so they are never cited.
+    * **A pseudo-passage of typed relations.** `rag_qa` is byte-identical: it formats
+      `(title, text)` pairs and assumes nothing about a passage, so the code block is prepended as
+      one more pair titled `Code graph`, inside `answer_question`. It never enters
+      `Answer.passage_ids`. Its body is a fixed grammar — `a -[KIND ω provenance]-> b`, then
+      `Tests:`, `Commits:`, `Subsystems:` — under a one-sentence legend, cut at
+      `code_triples_chars` on a line boundary, with the most confident relations first so the cut
+      drops the weakest evidence rather than an arbitrary tail.
+    * **OpenIE never reads code.** The model sees a symbol's docstring or doc-comment when it is at
+      least 80 characters, README and markdown, and commit messages. Never a function body, never
+      DDL. Structure comes from tree-sitter and sqlglot.
+    * **Nothing lets the model author a graph query.** No reply is turned into Cypher, a path
+      expression or a graph query. The path tools are ordinary walks over the same in-memory graph,
+      and the model's role stays the reference's: filter, and read.
+
+    With no code sources indexed nothing changes: no code vertex exists, and the fourth term in the
+    edge-weight `max` is 0.0, which cannot raise a max. With code indexed,
+    `code_structural_scale = 0` drops **every** pair that exists only because code was indexed —
+    `CODE_EDGE`, `DEFINED_IN`, `REFERS_TO`, `MODIFIES` and cross-kind `SYNONYM` — out of igraph,
+    because each is multiplied by that scale and `build_igraph` keeps only `weight > 0`; every code
+    vertex therefore has degree 0 and cannot receive or pass PPR mass. Adding `code_seed_weight = 0`
+    and `code_dense_seeds = 0` restores fact-only seeding and `code_select = False` removes the
+    second LLM pass. Under those four settings a prose corpus indexed alongside code ranks
+    identically to the same corpus indexed alone; the only surviving code-touching edge is a `TUNED`
+    weight a person set by hand. Code passages remain ordinary passages and still receive DPR seed
+    mass, as any passage does. That is a test on a mixed prose-and-code memory, not a claim.

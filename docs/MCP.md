@@ -113,7 +113,7 @@ Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for all proje
 }
 ```
 
-Cursor lists the five tools under Settings, MCP.
+Cursor lists the nine tools under Settings, MCP.
 
 ## stdio alternative: `hippo mcp`
 
@@ -131,7 +131,11 @@ Remember that this opens the database file itself, so stop `hippo serve` first
 Nothing may be printed to stdout in this mode (it is the protocol channel);
 hippo sends its logs to stderr.
 
-## The five tools
+## The nine tools
+
+Five are about the memory as a whole. The other four answer structural questions about indexed
+source code, and only return anything once a repository has been indexed (see "Code" in the
+README). All nine work on the part of the memory the caller may see.
 
 ### `hippo_search(question, top_k=5)`
 
@@ -152,9 +156,44 @@ the client wants the raw material and will reason over it itself.
      "score": 0.183, "rank": 1}
   ],
   "kept_facts": [["boulder workshop", "is managed by", "tomas reyes"]],
-  "used_dpr_fallback": false
+  "used_dpr_fallback": false,
+  "seed_symbols": [], "paths": [], "tests": [], "history": [], "code_graph": ""
 }
 ```
+
+The last five keys are the code graph's, and they are **always present** so a client never has to
+branch on whether the memory holds code. On a memory with no code in it they are all empty, as
+above. One caveat if your memory mixes prose and code: `paths`, `tests`, `history` and `code_graph`
+stay empty unless the question actually *named* code, but `seed_symbols` can still carry entries —
+a code passage that merely scored well on similarity is recorded there even though it changes
+nothing else. Check `how` to tell them apart. When the question does name code, all five fill in:
+
+```json
+{
+  "seed_symbols": [
+    {"node_id": "symbol-...", "name": "OrderService.place", "vertex": 11, "weight": 0.333,
+     "how": "identifier", "token": "OrderService.place", "kind": "symbol", "n_matches": 1,
+     "matched_by": "OrderService.place", "ambiguous": false, "specificity": 3.0, "boost": 1.0,
+     "kept": true}
+  ],
+  "paths": [
+    {"a": "symbol-...", "b": "symbol-...", "a_name": "pyapp.orders.OrderService.place",
+     "b_name": "pyapp.billing.total", "kind": "INVOKES", "omega": 0.9, "provenance": "via_import",
+     "in_branch": false, "is_await": false, "call_line": 18}
+  ],
+  "tests": [{"id": "symbol-...", "name": "tests.test_orders.test_place", "path": "tests/test_orders.py"}],
+  "history": [],
+  "code_graph": "Relations read from the code graph, not from prose. INVOKES = calls, ...\npyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total\nTests: tests.test_orders.test_place"
+}
+```
+
+Two things to know about those rows. `how` says *why* a symbol was seeded — `identifier`,
+`stack_trace`, `exception`, `fenced_code` or `diff` when the question said so, or `dense` when the
+symbol came from a passage that merely scored well. **Only the first five mean the question named
+code**, and only they cause the other four keys to fill in; a `dense` row on its own is a note in
+the trace and nothing more. And `seed_symbols[].name` is the **module-relative** qualname (`OrderService.place`),
+while `paths[].a_name` and everything in `code_graph` use the fully-qualified display name
+(`pyapp.orders.OrderService.place`). The path tools below accept either form.
 
 ### `hippo_ask(question)`
 
@@ -168,9 +207,17 @@ Search, then let the local LLM read the top passages and answer.
 {
   "answer": "Marcus Lee",
   "thought": "The Orion arm was designed by Marcus Lee.",
-  "sources": [{"passage_id": "passage-...", "title": "The Orion arm", "source": "Acme guide", "rank": 1, "score": 0.21}]
+  "sources": [{"passage_id": "passage-...", "title": "The Orion arm", "source": "Acme guide", "rank": 1, "score": 0.21}],
+  "seed_symbols": [], "paths": [], "tests": [], "history": [], "code_graph": ""
 }
 ```
+
+It carries the same five code-graph keys as `hippo_search`, in the same shapes and under the same
+rule, `seed_symbols` included: always present, and empty unless the question named something in
+indexed code — except for the dense-seed rows noted above. Here `code_graph`
+is exactly the block the model was shown before it answered, so it is the evidence behind the
+answer rather than a separate lookup. `sources` lists only the passages the model actually read;
+the code block is never one of them.
 
 ### `hippo_remember(name, text)`
 
@@ -225,3 +272,154 @@ may pass as `visibility` to `hippo_remember`.
 `hippo_remember(name, text, visibility=None)` records you as the owner and,
 by default, makes the text visible to your own tier and above; pass
 `"everyone"` or a role id at or below yours to choose otherwise.
+
+## The four code tools
+
+These answer structural questions about indexed source code — the kind a call graph can answer
+exactly and an embedding can only guess at. They read the code graph directly and never call the
+language model, so they are fast and their answers are the same every time.
+
+Each takes a symbol by name. A **fully-qualified** name (`pyapp.orders.OrderService.place`), a
+module-relative one (`OrderService.place`) or a bare one (`place`) all work, as long as the name
+picks out one symbol. If it does not, the tool fails with the candidates in the message rather than
+guessing:
+
+```json
+{"name": "hippo_blast_radius", "arguments": {"symbol": "log"}}
+```
+
+```
+ToolError: 'log' could mean any of: pyapp.orders.OrderService.log, pyapp.store.Base.log, tsapp.models.base.Base.log
+```
+
+A name nothing matches fails the same way — `no symbol or data object called 'nope'` — and so does a
+blank one. `ToolError` is the one error an MCP client is shown verbatim, so everything you could act
+on is inside the message. Every tool also returns `lines`: the same answer already rendered for a
+person to read, so a client can show it without walking the JSON.
+
+An edge's `omega` is how sure the resolver is (1.00 = read straight from the syntax, 0.50 = matched
+on a unique name) and `provenance` names the rule that produced it. Edges below `code_theta` (0.5 by
+default) are not walked at all.
+
+### `hippo_explain_path(a, b)`
+
+How one symbol reaches another: the shortest chain of calls, imports and inheritance between them.
+Answers "how does this end up calling that?".
+
+```json
+{"name": "hippo_explain_path", "arguments": {"a": "OrderService.place", "b": "billing.total"}}
+```
+
+```json
+{
+  "a": "pyapp.orders.OrderService.place",
+  "b": "pyapp.billing.total",
+  "a_id": "symbol-f32134b3...", "b_id": "symbol-1127d1fb...",
+  "found": true,
+  "edges": [
+    {"a": "symbol-f32134b3...", "b": "symbol-1127d1fb...",
+     "a_name": "pyapp.orders.OrderService.place", "b_name": "pyapp.billing.total",
+     "kind": "INVOKES", "omega": 0.9, "provenance": "via_import",
+     "in_branch": false, "is_await": false, "call_line": 18}
+  ],
+  "lines": ["pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total"]
+}
+```
+
+`found` is `false` with an empty `edges` when the two are not connected — that is an answer, not an
+error. `in_branch` says the call sits inside an `if` or a `try`, and `is_await` that it is awaited.
+
+### `hippo_blast_radius(symbol, depth=2)`
+
+What a change here could break: everything that depends on this symbol, level by level outwards.
+`depth` is clamped to 1–4.
+
+```json
+{"name": "hippo_blast_radius", "arguments": {"symbol": "OrderService.log", "depth": 2}}
+```
+
+```json
+{
+  "symbol": "pyapp.orders.OrderService.log",
+  "symbol_id": "symbol-ac1f20eb...",
+  "depth": 2,
+  "levels": [
+    ["pyapp.orders.OrderService", "pyapp.orders.OrderService.place"],
+    ["pyapp.__init__", "pyapp.cli", "pyapp.cli.main", "pyapp.orders", "tests.test_orders", "tests.test_orders.test_place"]
+  ],
+  "truncated": false,
+  "lines": [
+    "Level 1: pyapp.orders.OrderService, pyapp.orders.OrderService.place",
+    "Level 2: pyapp.__init__, pyapp.cli, pyapp.cli.main, pyapp.orders, tests.test_orders, tests.test_orders.test_place",
+    "Subsystems: pyapp.__init__: pyapp.__init__, pyapp.cli, ..."
+  ]
+}
+```
+
+This walks dependencies *inwards* — who calls this — not what this calls. `truncated: true` means the
+200-node cap stopped the walk, which for a hub symbol is itself the answer.
+
+### `hippo_exception_path(symbol, exception)`
+
+How a function reaches an exception class: the chain of calls ending in whatever raises it. Answers
+"where can this error actually come from?".
+
+```json
+{"name": "hippo_exception_path", "arguments": {"symbol": "OrderService.save", "exception": "OrderError"}}
+```
+
+```json
+{
+  "symbol": "pyapp.orders.OrderService.save",
+  "symbol_id": "symbol-bb1109bc...",
+  "exception": "pyapp.store.OrderError",
+  "found": true,
+  "edges": [
+    {"a": "symbol-bb1109bc...", "b": "symbol-57da82b6...",
+     "a_name": "pyapp.orders.OrderService.save", "b_name": "pyapp.store.OrderError",
+     "kind": "RAISES", "omega": 0.9, "provenance": "resolved",
+     "in_branch": false, "is_await": false, "call_line": 0}
+  ],
+  "lines": ["pyapp.orders.OrderService.save -[RAISES 0.90 resolved]-> pyapp.store.OrderError"]
+}
+```
+
+Only exception classes defined *in the repository* are nodes. A `raise ValueError` is recorded on the
+function itself and has no path, because there is nothing in the repository to point at.
+
+### `hippo_history(symbol, limit=3)`
+
+The commits that touched this symbol, newest first. Needs a source added as a **git repository** — a
+zip or a folder has no history to read — and returns an empty `commits` list otherwise.
+
+```json
+{"name": "hippo_history", "arguments": {"symbol": "OrderService.place", "limit": 3}}
+```
+
+```json
+{
+  "symbol": "pyapp.orders.OrderService.place",
+  "symbol_id": "symbol-1cdd45af...",
+  "commits": [
+    {"id": "commit-2bd173ee...", "sha": "c9be063124adf79f45bba65782c07aad68f3678f",
+     "date": "2024-01-02", "subject": "Total, invoice and log in place"},
+    {"id": "commit-ef638094...", "sha": "dea088d7cd0c7a44ffb0d8c55a6fbcdcc9b84612",
+     "date": "2024-01-01", "subject": "Add the order service"}
+  ],
+  "lines": [
+    "c9be063 2024-01-02 Total, invoice and log in place",
+    "dea088d 2024-01-01 Add the order service"
+  ]
+}
+```
+
+`sha` is the full hash and `date` the day it was authored; `lines` abbreviates both for reading.
+`subject` is the first line of the commit message.
+
+How far back this goes is the `code_history_depth` setting (200 first-parent commits by default; 0
+turns history off), and it is fixed at **clone** time — hippo clones `code_history_depth + 1`
+commits, because a shallow clone's oldest commit has no parent to diff against. Raising the setting
+therefore only takes effect on the next index of that source. A commit is attributed to a symbol
+when its diff touched the symbol's lines *as they were at that commit*, so a function that has since
+moved is still credited correctly. Renames are the exception: history before a rename is not carried
+across.
