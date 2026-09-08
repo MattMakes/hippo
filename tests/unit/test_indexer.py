@@ -14,6 +14,23 @@ from hippo.hipporag.indexer import Chunk, find_synonyms, index_source, passage_i
 from hippo.hipporag.text import entity_id
 from tests.fakes.fake_ollama import DIM, embed_text
 
+COUNT_KEYS = (
+    "passages",
+    "entities",
+    "facts",
+    "synonyms",
+    "symbols",
+    "data_objects",
+    "code_edges",
+    "commits",
+    "refers_to",
+)
+
+
+def counts(**written: int) -> dict[str, int]:
+    """The nine keys `index_source` always returns, zero unless this run wrote some."""
+    return {**dict.fromkeys(COUNT_KEYS, 0), **written}
+
 
 def sample_chunks(sample_text: str) -> list[Chunk]:
     chunks = []
@@ -51,8 +68,8 @@ def test_the_sample_is_split_into_eight_sections(chunks: list[Chunk]) -> None:
 
 
 def test_indexing_the_sample_returns_the_counts(store, ollama, source_id: str, chunks: list[Chunk]) -> None:
-    counts = index_source(store, ollama, source_id, chunks)
-    assert counts == {"passages": 8, "entities": 31, "facts": 34, "synonyms": 0}
+    written = index_source(store, ollama, source_id, chunks)
+    assert written == counts(passages=8, entities=31, facts=34)
 
     stats = store.stats()
     assert (stats["passages"], stats["entities"], stats["facts"]) == (8, 31, 34)
@@ -93,9 +110,9 @@ def test_reindexing_the_same_chunks_adds_no_duplicates(store, ollama, source_id:
     index_source(store, ollama, source_id, chunks)
     before = store.stats()
 
-    counts = index_source(store, ollama, source_id, chunks)
+    written = index_source(store, ollama, source_id, chunks)
 
-    assert counts == {"passages": 8, "entities": 0, "facts": 0, "synonyms": 0}
+    assert written == counts(passages=8)
     assert store.stats() == before
     assert len(store.load_fact_edges()) == len({(e["a"], e["b"]) for e in store.load_fact_edges()})
 
@@ -119,7 +136,7 @@ def test_near_identical_names_get_a_synonym_edge(store, ollama, source_id: str, 
     index_source(store, ollama, source_id, chunks, synonymy_threshold=0.7)
 
     other = store.create_source("text", "Press release")
-    counts = index_source(
+    written = index_source(
         store,
         ollama,
         other,
@@ -127,7 +144,7 @@ def test_near_identical_names_get_a_synonym_edge(store, ollama, source_id: str, 
         synonymy_threshold=0.7,
     )
 
-    assert counts["synonyms"] == 1
+    assert written["synonyms"] == 1
     (row,) = store.load_synonyms()
     assert {row["a"], row["b"]} == {entity_id("acme robotics"), entity_id("acme robotics inc")}
     assert row["score"] == pytest.approx(similarity, abs=1e-5)
@@ -137,10 +154,10 @@ def test_near_identical_names_get_a_synonym_edge(store, ollama, source_id: str, 
 def test_a_strict_threshold_links_nothing(store, ollama, source_id: str, chunks) -> None:
     index_source(store, ollama, source_id, chunks, synonymy_threshold=0.99)
     other = store.create_source("text", "Press release")
-    counts = index_source(
+    written = index_source(
         store, ollama, other, [Chunk(0, "Press", "Acme Robotics Inc is located in Boulder.")]
     )
-    assert counts["synonyms"] == 0
+    assert written["synonyms"] == 0
     assert store.load_synonyms() == []
 
 
@@ -209,33 +226,25 @@ def test_progress_is_reported_stage_by_stage(store, ollama, source_id: str, chun
 
 def test_blank_chunks_are_skipped_and_an_empty_source_changes_nothing(store, ollama, source_id: str) -> None:
     before = store.graph_version()
-    assert index_source(store, ollama, source_id, []) == {
-        "passages": 0,
-        "entities": 0,
-        "facts": 0,
-        "synonyms": 0,
-    }
-    assert index_source(store, ollama, source_id, [Chunk(0, "Blank", "   \n")]) == {
-        "passages": 0,
-        "entities": 0,
-        "facts": 0,
-        "synonyms": 0,
-    }
+    assert index_source(store, ollama, source_id, []) == counts()
+    assert index_source(store, ollama, source_id, [Chunk(0, "Blank", "   \n")]) == counts()
     assert store.graph_version() == before
     assert store.stats()["passages"] == 0
 
-    counts = index_source(
+    written = index_source(
         store,
         ollama,
         source_id,
         [Chunk(0, "Blank", " "), Chunk(1, "Real", "Boulder is located in Colorado.")],
     )
-    assert counts["passages"] == 1 and counts["entities"] == 2 and counts["facts"] == 1
+    assert written["passages"] == 1 and written["entities"] == 2 and written["facts"] == 1
 
 
 def test_a_chunk_with_no_facts_still_becomes_a_passage(store, ollama, source_id: str) -> None:
-    counts = index_source(store, ollama, source_id, [Chunk(0, "Chatter", "Nothing here matches a relation.")])
-    assert counts == {"passages": 1, "entities": 0, "facts": 0, "synonyms": 0}
+    written = index_source(
+        store, ollama, source_id, [Chunk(0, "Chatter", "Nothing here matches a relation.")]
+    )
+    assert written == counts(passages=1)
     assert store.get_source(source_id)["passages"] == 1
 
 
@@ -266,8 +275,8 @@ def test_the_existence_queries_run_once_per_index_run_not_once_per_id(
 ) -> None:
     """31 entities used to mean 31 UNWIND queries each carrying all 31 ids (a comprehension called the store per element)."""
     counting = CountingStore(store)
-    counts = index_source(counting, ollama, source_id, chunks)
-    assert counts["entities"] == 31 and counts["facts"] == 34
+    written = index_source(counting, ollama, source_id, chunks)
+    assert written["entities"] == 31 and written["facts"] == 34
     assert counting.calls == {"existing_entity_ids": 1, "existing_fact_ids": 1}
 
 
@@ -312,9 +321,9 @@ def test_ids_pruned_between_the_check_and_the_write_are_written_again(
     hq = fact_id("acme robotics", "is headquartered in", "boulder")
     lying = PrunedMeanwhileStore(store, boulder, hq)
 
-    counts = index_source(lying, ollama, source_id, chunks)
+    written = index_source(lying, ollama, source_id, chunks)
 
-    assert counts == {"passages": 8, "entities": 31, "facts": 34, "synonyms": 0}  # nothing lost
+    assert written == counts(passages=8, entities=31, facts=34)  # nothing lost
     assert store.existing_entity_ids([boulder]) == {boulder}
     assert store.existing_fact_ids([hq]) == {hq}
     (row,) = store.get_entities([boulder])
@@ -361,3 +370,305 @@ def test_the_write_phase_holds_the_graph_write_lock_and_releases_it_after(
         m: False for m in ("add_entities", "add_facts", "link_passage_entities", "link_passage_facts")
     }
     assert other_thread_can_take_the_lock() is True
+
+
+# ------------------------------------------------------------- the code graph
+#
+# `index_source(..., code=)` writes the symbols, data objects and edges `extract_code` found,
+# links each passage to what it defines, and -- the point of the whole work package -- keeps
+# OpenIE off function bodies and DDL (S2.7).
+
+from hippo.codegraph import extract_code  # noqa: E402
+from hippo.codegraph.model import CodeGraph, Symbol, name_text, symbol_id  # noqa: E402
+from hippo.hipporag import openie  # noqa: E402
+from hippo.ingest.chunker import chunk_documents  # noqa: E402
+from tests.conftest import code_sample_docs  # noqa: E402
+
+NER_PREFIX = "Your task is to extract named entities"
+TRIPLES_PREFIX = "Your task is to construct an RDF"
+
+
+@pytest.fixture
+def code_source(store) -> str:
+    return store.create_source("archive", "code_sample")
+
+
+@pytest.fixture
+def code_chunks(code_source: str):
+    """The fixture tree through the real extractor and the real chunker, ready to index."""
+    docs = code_sample_docs()
+    graph = extract_code(docs, code_source)
+    return graph, chunk_documents(docs, 1500, 150, code=graph)
+
+
+def ner_texts(fake_ollama) -> list[str]:
+    """The paragraph of every NER call. Filtering by system prompt is the only way to tell
+    an OpenIE call from the fact filter or the answerer (R2-5)."""
+    return [
+        call["messages"][-1]["content"]
+        for call in fake_ollama.calls
+        if call["messages"][0]["content"].startswith(NER_PREFIX)
+    ]
+
+
+def openie_calls(fake_ollama) -> int:
+    return len(
+        [
+            call
+            for call in fake_ollama.calls
+            if call["messages"][0]["content"].startswith((NER_PREFIX, TRIPLES_PREFIX))
+        ]
+    )
+
+
+def test_indexing_a_code_source_returns_all_nine_counts(store, ollama, code_source, code_chunks):
+    graph, chunks = code_chunks
+    written = index_source(store, ollama, code_source, chunks, code=graph)
+    assert written == counts(
+        passages=len(chunks),
+        entities=written["entities"],
+        facts=written["facts"],
+        synonyms=written["synonyms"],
+        symbols=30,
+        data_objects=12,
+        code_edges=64,
+        refers_to=2,  # the README names `OrderService.place` and "the order service"
+    )
+    assert (store.stats()["symbols"], store.stats()["data_objects"]) == (30, 12)
+    assert len(store.load_code_edges()) == 64
+
+
+def test_every_passage_is_linked_to_what_it_defines(store, ollama, code_source, code_chunks):
+    graph, chunks = code_chunks
+    index_source(store, ollama, code_source, chunks, code=graph)
+    defined = {(row["node_id"], row["passage_id"]) for row in store.load_definitions()}
+    place = symbol_id(code_source, "pyapp/orders.py", "OrderService.place")
+    (place_chunk,) = [c for c in chunks if place in c.defines]
+    assert (place, passage_id(code_source, place_chunk)) in defined
+    # Every DEFINED_IN pair the chunker asked for was written, and nothing else.
+    assert defined == {(node, passage_id(code_source, c)) for c in chunks for node in c.defines}
+
+
+def test_re_indexing_a_code_source_changes_nothing(store, ollama, code_source, code_chunks):
+    graph, chunks = code_chunks
+    first = index_source(store, ollama, code_source, chunks, code=graph)
+    before = store.stats()
+
+    again = index_source(store, ollama, code_source, chunks, code=graph)
+
+    assert store.stats() == before
+    # The code counts say what this run wrote, not what was new to the store, so they repeat.
+    # Entities and facts count only the new ones, exactly as they do for a prose source.
+    assert again == {**first, "entities": 0, "facts": 0}
+
+
+def test_openie_never_reads_a_function_body_or_ddl(store, ollama, fake_ollama, code_source, code_chunks):
+    graph, chunks = code_chunks
+    index_source(store, ollama, code_source, chunks, code=graph)
+    texts = ner_texts(fake_ollama)
+    assert not any("billing.total(order)" in t for t in texts)
+    assert not any("CREATE TABLE" in t for t in texts)
+    assert len([t for t in texts if "Keeps orders. Acme Robotics is headquartered" in t]) == 1
+    assert [t for t in texts if "package main" in t] == ["package main\n\nfunc main() {}"]
+
+
+def test_the_openie_bill_is_two_calls_per_extracted_passage(
+    store, ollama, fake_ollama, code_source, code_chunks
+):
+    """S2.7's gate, counted: NER + triples for every prose chunk and every code passage whose
+    doc-comment was long enough, and nothing for the rest."""
+    graph, chunks = code_chunks
+    extracted = [c for c in chunks if c.extract_text is None or c.extract_text != ""]
+    index_source(store, ollama, code_source, chunks, code=graph)
+    assert openie_calls(fake_ollama) == 2 * len(extracted)
+    assert len(extracted) == 5  # README, build.go, and three docstrings of 80+ characters
+
+
+def test_a_skipped_passage_still_stores_an_empty_extraction_without_an_error(
+    store, ollama, code_source, code_chunks
+):
+    graph, chunks = code_chunks
+    index_source(store, ollama, code_source, chunks, code=graph)
+    skipped = next(c for c in chunks if c.extract_text == "")
+    (row,) = [p for p in store.passages_for_source(code_source) if p["title"] == skipped.title]
+    assert row["entities"] == [] and row["triples"] == [] and row["extraction_error"] is None
+
+
+def test_prose_passages_refer_to_the_symbols_they_name(store, ollama, code_source, code_chunks):
+    graph, chunks = code_chunks
+    index_source(store, ollama, code_source, chunks, code=graph)
+    readme = next(c for c in chunks if c.title.startswith("Code sample"))
+    rows = {row["node_id"]: row for row in store.load_refers_to()}
+    place = symbol_id(code_source, "pyapp/orders.py", "OrderService.place")
+    service = symbol_id(code_source, "pyapp/orders.py", "OrderService")
+    assert rows[place]["omega"] == 0.85 and rows[place]["token"] == "OrderService.place"
+    assert rows[service]["omega"] == 0.60 and rows[service]["token"] == "order service"
+    assert {row["passage_id"] for row in rows.values()} == {passage_id(code_source, readme)}
+
+
+def test_symbols_and_prose_entities_become_synonyms_in_both_directions(
+    store, ollama, code_source, code_chunks, sample_text
+):
+    graph, chunks = code_chunks
+    service = symbol_id(code_source, "pyapp/orders.py", "OrderService")
+    order_service = entity_id("order service")
+    # The symbol arrives first and the entity second: the symbol is a key, the entity a query.
+    index_source(store, ollama, code_source, chunks, code=graph)
+    later = store.create_source("text", "Press release")
+    index_source(store, ollama, later, [Chunk(0, "Press", "The order service is located in Boulder.")])
+    assert {order_service, service} in [{row["a"], row["b"]} for row in store.load_synonyms()]
+
+
+def test_a_one_token_symbol_is_kept_out_of_the_cross_kind_synonym_search(store, ollama):
+    """
+    S0 spike 2: under the real embedder 40% of the symbol-entity pairs above 0.80 are nonsense,
+    and raising the threshold makes it worse because generic one-word names score highest. The
+    rule that works is on the symbol side -- two split tokens or no cross-kind link at all.
+    """
+    source = store.create_source("archive", "tiny")
+    one = Symbol(
+        id=symbol_id(source, "a.py", "boulder"),
+        source_id=source,
+        name="boulder",
+        qualname="boulder",
+        kind="function",
+        path="a.py",
+        display="a.boulder",
+        line_start=1,
+        line_end=1,
+    )
+    two = Symbol(
+        id=symbol_id(source, "a.py", "BoulderOffice"),
+        source_id=source,
+        name="BoulderOffice",
+        qualname="BoulderOffice",
+        kind="class",
+        path="a.py",
+        display="a.BoulderOffice",
+        line_start=3,
+        line_end=3,
+    )
+    # An entity whose name is exactly the text each symbol embeds: the vectors are identical,
+    # so only the two-token rule can keep them apart.
+    store.add_entities(
+        [
+            {
+                "id": entity_id(name_text(s.name)),
+                "name": name_text(s.name),
+                "embedding": embed_text(name_text(s.name)).tolist(),
+            }
+            for s in (one, two)
+        ]
+    )
+    graph = CodeGraph(source_id=source, symbols=[one, two])
+    index_source(
+        store,
+        ollama,
+        source,
+        [Chunk(0, "a.py :: a.boulder (lines 1-1)", "def boulder(): ...", defines=[one.id], extract_text="")],
+        code=graph,
+    )
+
+    linked = [{row["a"], row["b"]} for row in store.load_synonyms()]
+    assert {two.id, entity_id(name_text(two.name))} in linked
+    assert not any(one.id in pair for pair in linked)
+    # It is absent from the key matrix too, so a later prose source cannot link to it either.
+    assert one.id not in store.load_code_embeddings()[0]
+    later = store.create_source("text", "Notes")
+    index_source(store, ollama, later, [Chunk(0, "Notes", "Boulder is located in Colorado.")])
+    assert not any(one.id in {row["a"], row["b"]} for row in store.load_synonyms())
+
+
+def test_symbols_carry_a_community_from_the_module_projection(store, ollama, code_source, code_chunks):
+    graph, chunks = code_chunks
+    index_source(store, ollama, code_source, chunks, code=graph)
+    by_qualname = {row["qualname"]: row for row in store.load_symbols()}
+    # Every symbol of one module shares that module's community.
+    assert by_qualname["OrderService.place"]["community"] == by_qualname["pyapp.orders"]["community"]
+    # `pyapp` and `tsapp` share no edge, so Leiden must not put them together.
+    assert by_qualname["pyapp.orders"]["community"] != by_qualname["tsapp.index"]["community"]
+    assert all(row["community"] is not None for row in store.load_symbols())
+
+
+def test_stopping_before_the_code_graph_stage_writes_no_code(store, ollama, code_source, code_chunks):
+    graph, chunks = code_chunks
+    with pytest.raises(openie.Stopped, match="writing code graph"):
+        index_source(store, ollama, code_source, chunks, code=graph, should_stop=lambda: True)
+    assert store.load_symbols() == [] and store.load_data_objects() == []
+    assert store.load_code_edges() == [] and store.load_definitions() == []
+
+
+def test_the_code_stages_are_reported_and_only_run_for_a_code_source(store, ollama, code_source, code_chunks):
+    graph, chunks = code_chunks
+    seen: list[str] = []
+    index_source(
+        store,
+        ollama,
+        code_source,
+        chunks,
+        code=graph,
+        on_progress=lambda stage, done, total: seen.append(stage),
+    )
+    assert list(dict.fromkeys(seen)) == [
+        "embedding passages",
+        "writing code graph",
+        "extracting facts",
+        "saving entities and facts",
+        "linking synonyms",
+        "linking mentions",
+        "communities",
+    ]
+
+
+def test_indexing_the_same_tree_twice_gives_the_same_graph(store, ollama, code_chunks, code_source):
+    """
+    CI gate 1. The fields compared are named here on purpose: ids, kinds, qualnames, paths, line
+    ranges, edges with kind/omega/provenance, DEFINED_IN and REFERS_TO. `community` is excluded --
+    Leiden is randomised, and S2.10 seeds and relabels it rather than pinning the integers.
+    """
+    graph, chunks = code_chunks
+    index_source(store, ollama, code_source, chunks, code=graph)
+
+    other = store.create_source("archive", "code_sample again")
+    docs = code_sample_docs()
+    second = extract_code(docs, other)
+    index_source(store, ollama, other, chunks_for(docs, second), code=second)
+
+    assert comparable(store, code_source) == comparable(store, other)
+
+
+def chunks_for(docs, graph):
+    return chunk_documents(docs, 1500, 150, code=graph)
+
+
+def comparable(store, source_id: str):
+    """One source's code graph with every source-dependent value replaced by a stable key."""
+    symbols = {
+        r["id"]: (r["path"], r["qualname"]) for r in store.load_symbols() if r["source_id"] == source_id
+    }
+    data = {
+        r["id"]: (r["kind"], r["qualname"]) for r in store.load_data_objects() if r["source_id"] == source_id
+    }
+    keys = {**symbols, **data}
+    passages = {p["id"]: p["title"] for p in store.passages_for_source(source_id)}
+    nodes = sorted(
+        (keys[r["id"]], r["kind"], r["lang"], r["line_start"], r["line_end"], r["signature"], r["doc"])
+        for r in store.load_symbols()
+        if r["source_id"] == source_id
+    )
+    edges = sorted(
+        (keys[e["a"]], keys[e["b"]], e["kind"], e["omega"], e["provenance"])
+        for e in store.load_code_edges()
+        if e["a"] in keys and e["b"] in keys
+    )
+    defined = sorted(
+        (keys[d["node_id"]], passages[d["passage_id"]])
+        for d in store.load_definitions()
+        if d["node_id"] in keys and d["passage_id"] in passages
+    )
+    refers = sorted(
+        (passages[r["passage_id"]], keys[r["node_id"]], r["omega"], r["token"])
+        for r in store.load_refers_to()
+        if r["node_id"] in keys and r["passage_id"] in passages
+    )
+    return nodes, sorted(data.values()), edges, defined, refers
