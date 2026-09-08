@@ -138,4 +138,13 @@ class AppContext:
             self._scoped.clear()
 
     def close(self) -> None:
+        """
+        Stop background jobs before closing the store: none may still be using it once this
+        returns. A job (an index, a model pull) runs in its own thread against `self.store`, and
+        the neo4j driver's own `close()` warns that closing it while another thread is still using
+        it "results in unspecified behaviour" -- observed as an intermittent BufferError.
+        """
+        for key in self.jobs.running_keys():
+            self.jobs.cancel(key)
+        self.jobs.wait_all()
         self.store.close()

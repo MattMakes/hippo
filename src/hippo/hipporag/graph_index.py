@@ -54,6 +54,8 @@ COMMIT = "commit"
 
 CODE_KINDS: tuple[str, ...] = (SYMBOL, DATA, COMMIT)
 
+MAX_SCALED_GRAPHS = 3  # how many non-default `code_structural_scale` igraphs an index keeps
+
 
 @dataclass
 class Passage:
@@ -207,9 +209,12 @@ class GraphIndex:
     code_out: dict[int, list[DirectedEdge]] = field(default_factory=dict)
     code_in: dict[int, list[DirectedEdge]] = field(default_factory=dict)
     name_index: dict[str, list[str]] = field(default_factory=dict)  # lowercase name/token -> node ids
+    path_index: dict[str, list[str]] = field(default_factory=dict)  # file basename -> symbol ids
     communities: dict[int, str] = field(default_factory=dict)  # community -> its canonical label
     # One rebuilt igraph per non-default code_structural_scale; see graph_for_scale.
     _scaled: dict[float, ig.Graph] = field(default_factory=dict, repr=False, compare=False)
+    # vertex -> its display name, filled by `paths.display_at`; a walk asks for it per edge.
+    display_cache: dict[int, str] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def entity_passage_count(self) -> np.ndarray:
@@ -409,6 +414,7 @@ class GraphIndex:
             code_out=code_out,
             code_in=code_in,
             name_index=_name_index(code_nodes),
+            path_index=_path_index(code_nodes),
             communities=_community_labels(code_nodes),
         )
 
@@ -689,6 +695,7 @@ class GraphIndex:
             # Shared, not rebuilt: every consumer filters its hits through this index's `idx_of`,
             # so a hidden symbol can be named here and still never be reached.
             name_index=self.name_index,
+            path_index=self.path_index,
             communities=self.communities,
         )
 
@@ -702,7 +709,11 @@ class GraphIndex:
         returns straight to `retrieve(graph=)`: applying the scale anywhere else would be silently
         thrown away the moment a simulation also edited an edge. Simulation edits change the igraph
         PPR runs on, not the directed code relations the path tools walk.
+
+        The scale is quantized here as `graph_for_scale` quantizes it, so one slider position
+        means the same graph whether or not the simulation also edited an edge.
         """
+        scale = round(scale, 2)
         if not edits:
             return self.graph_for_scale(scale)
         changed = {k: Edge(**vars(v)) for k, v in self.edges.items()}
@@ -722,11 +733,19 @@ class GraphIndex:
         rebuild, because `Edge.weight` is a property with no access to settings and `build_igraph`
         runs once inside `load()`. The memo lives and dies with the index, which `graph_version`
         already invalidates; a `scoped()` index gets its own.
+
+        The scale is quantized to the settings form's own `step="0.01"` and at most
+        `MAX_SCALED_GRAPHS` are kept, oldest first. `code_structural_scale` is a user-supplied
+        float that nothing rounds, so an unbounded memo keyed by it grows one full igraph per
+        distinct float - hundreds of MB from one deliberate drag of the slider (AR1 fix 2).
         """
+        scale = round(scale, 2)
         if scale == 1.0:
             return self.graph
         cached = self._scaled.get(scale)
         if cached is None:
+            if len(self._scaled) >= MAX_SCALED_GRAPHS:
+                del self._scaled[next(iter(self._scaled))]  # insertion order: the oldest goes
             cached = build_igraph(self.num_nodes, self.edges, scale)
             self._scaled[scale] = cached
         return cached
@@ -819,6 +838,29 @@ def _name_index(code_nodes: list[CodeNode]) -> dict[str, list[str]]:
         for token in node.name_tokens or split_identifier(node.name):
             add(token, node.id)
     return index
+
+
+def _path_index(code_nodes: list[CodeNode]) -> dict[str, list[str]]:
+    """
+    A file's basename -> the ids of the symbols defined in it, in `code_nodes` order.
+
+    Keyed by the *basename*, not the whole path, because `anchors._same_path` matches either way
+    round on a suffix: a traceback names `/Users/me/proj/pyapp/orders.py` and the index holds
+    `pyapp/orders.py`. Every such match has equal basenames, so this is a superset the caller
+    still filters with `_same_path` - and, like `name_index`, it is shared with `scoped()` and
+    every consumer filters its hits through the scoped `idx_of` (AR1 fix 5).
+    """
+    index: dict[str, list[str]] = {}
+    for node in code_nodes:
+        if node.kind != SYMBOL or not node.path:
+            continue
+        index.setdefault(path_key(node.path), []).append(node.id)
+    return index
+
+
+def path_key(path: str) -> str:
+    """The lowercase basename of a path, in the one normalisation `_same_path` uses."""
+    return path.replace("\\", "/").rsplit("/", 1)[-1].lower()
 
 
 def _community_labels(code_nodes: list[CodeNode]) -> dict[int, str]:

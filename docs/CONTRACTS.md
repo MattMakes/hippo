@@ -87,7 +87,9 @@ readers.py   Document(title: str, text: str, path: str, is_code: bool)
              TextBudget(limit=MAX_TEXT_CHARS).add(chars, where)   # one per source; raises TooLarge(ReadError) past the limit, which
                                                                  # readers never swallow (pdf pages, epub chapters and zip members count as they go)
              MAX_TEXT_CHARS = 20_000_000; MAX_ZIP_MEMBERS = 5_000; MAX_ZIP_TOTAL_BYTES = 50_000_000 (unpacked); MAX_DOCX_XML_BYTES = 20_000_000
-chunker.py   chunk_document(doc: Document, size_chars: int, overlap_chars: int, code: CodeGraph | None = None) -> list[Chunk]
+chunker.py   chunk_document(doc, size_chars, overlap_chars, code: CodeGraph | None = None, mentions: Mentions | None = None) -> list[Chunk]
+             mentions = _mention_index(code): (path, line) -> the data objects named there. chunk_documents builds it once per source and
+                    passes it down; a caller with one document may leave it out and chunk_document builds its own.
              prose: split on markdown headings first (title becomes "Doc › Heading"), then pack paragraphs into <= size chunks, splitting
                     long paragraphs on sentence ends; overlap = tail of previous chunk (whole sentences). Chunk titles: "Title (part N)" when a
                     section spills into several chunks.
@@ -295,6 +297,14 @@ routes/api.py      (router prefix /api) everything about the whole memory rather
     POST /api/search {question} -> {trace}
     GET  /api/entities?q=              search entities by name, for the boost / edge-edit pickers
     GET  /api/graph/neighborhood?node_id=&depth=1     small subgraph JSON for the graph picture
+routes/code.py     (router prefix /api/code) the code graph a repository source builds; every answer is
+    on the caller's slice, and the payload builders are shared with mcp_server.py so the two never drift.
+    An unknown name is 404, an ambiguous one 409 with {detail, candidates}, a blank argument 400.
+    GET  /api/code/symbols?q=&limit=   name substring -> [{id,display,name,qualname,kind,code_kind,lang,path,line_start,line_end}]
+    GET  /api/code/path?a=&b=          -> {a,b,a_id,b_id,found,edges,lines}   edges are the trace's triple rows
+    GET  /api/code/blast-radius?symbol=&depth=   -> {symbol,symbol_id,depth,levels,truncated,lines}  depth clamped 1-4
+    GET  /api/code/exception-path?symbol=&exception=   -> {symbol,symbol_id,exception,found,edges,lines}
+    GET  /api/code/history?symbol=&limit=        -> {symbol,symbol_id,commits,lines}
 Mounted, not routes: /static (files), /mcp (the MCP server), /api/docs (FastAPI's own docs).
 The Analyze page shows, top to bottom:
     1. the question, expected answer (if any), the answer given, judge verdict/reason, metrics; "History" of this question across runs

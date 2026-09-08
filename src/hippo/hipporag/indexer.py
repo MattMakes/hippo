@@ -84,6 +84,13 @@ COUNT_KEYS = (
 # (embedding) happen *before* taking the lock: the lock is for database writes only.
 GRAPH_WRITE_LOCK = threading.RLock()
 
+# igraph's RNG is *process-global* and `_leiden` seeds it, runs and restores it. `jobs.py` runs
+# each index job in its own thread and two can run at once, so without this lock they interleave
+# as seed(A) -> seed(B) -> run(A) -> restore(A) -> run(B): job B partitions with an unseeded RNG
+# and gets community integers a re-index will not reproduce (AR1 fix 3). Leiden costs 0.027 s on
+# 10k vertices, so serialising it is free.
+LEIDEN_LOCK = threading.Lock()
+
 # Called as on_progress(stage, done, total). `stage` is a short phrase for the UI.
 Progress = Callable[[str, int, int], None]
 
@@ -182,17 +189,24 @@ def index_source(
     # 3. OpenIE. `extract_text` decides what the model sees, and whether it is called at all.
     progress("extracting facts", 0, len(chunks))
     checkpoint("extracting facts")
-    wanted = [(pid, c) for pid, c in zip(ids, chunks, strict=True) if _openie_text(c) is not None]
+    wanted = [
+        (pid, text)
+        for pid, c in zip(ids, chunks, strict=True)
+        if (text := _openie_text(c)) is not None  # once per chunk, not twice
+    ]
     extractions = openie.extract_many(
         ollama,
-        [(pid, _openie_text(c)) for pid, c in wanted],
+        wanted,
         workers=workers,
         on_progress=lambda done, total: progress("extracting facts", done, total),
         should_stop=should_stop,
     )
     # A passage we deliberately did not extract still gets a row, so the Source page shows an
     # empty extraction rather than a missing one, and re-indexing does not retry it.
-    skipped = [pid for pid in ids if pid not in {p for p, _ in wanted}]
+    # The set is hoisted, not rebuilt inside the comprehension: at MAX_CHUNKS that was 4e8 hash
+    # inserts of pure waste, growing quadratically with the corpus (AR1 fix 4).
+    wanted_ids = {pid for pid, _ in wanted}
+    skipped = [pid for pid in ids if pid not in wanted_ids]
     extractions.extend(openie.Extraction(passage_id=pid) for pid in skipped)
     for ex in extractions:
         store.save_extraction(ex.passage_id, ex.entities, ex.triples, ex.error)
@@ -278,7 +292,7 @@ def index_source(
         checkpoint("linking mentions")
         progress("linking mentions", 0, 1)
         refers = refers_to_rows(
-            code, [(pid, c.text) for pid, c in zip(ids, chunks, strict=True) if _is_prose(c)]
+            code, [(pid, _scanned(c)) for pid, c in zip(ids, chunks, strict=True) if _is_prose(c)]
         )
         store.add_refers_to(refers)
         progress("linking mentions", 1, 1)
@@ -320,6 +334,19 @@ def _openie_text(chunk: Chunk) -> str | None:
     if chunk.extract_text is None:
         return chunk.text
     return chunk.extract_text if len(chunk.extract_text.strip()) >= MIN_OPENIE_DOC_CHARS else None
+
+
+def _scanned(chunk: Chunk) -> str:
+    """
+    The text the name scanner reads: what a *person* wrote, never what hippo generated.
+
+    For every prose passage that is the passage itself, unchanged. For a commit passage it is
+    the message alone, not the `Touched: …` line the chunker appended: those names were built
+    from this source's own MODIFIES edges, so scanning them back out would manufacture a
+    REFERS_TO for every pair MODIFIES already has -- evidence derived from itself, at a lower
+    omega than the edge it came from.
+    """
+    return chunk.text if chunk.extract_text is None else (chunk.extract_text or chunk.text)
 
 
 def _is_prose(chunk: Chunk) -> bool:
@@ -421,13 +448,27 @@ def find_synonyms(
             self_index = key_index.get(eid)
             if self_index is not None:
                 row[self_index] = -1.0  # never link an entity to itself
-            top = np.argsort(-row)[:SYNONYM_MAX_NEIGHBOURS]
-            for j in top:
+            for j in _top_neighbours(row):
                 score = float(row[j])
                 if score < threshold:
                     break
                 pairs.append((eid, all_ids[j], score))
     return pairs
+
+
+def _top_neighbours(row: np.ndarray) -> np.ndarray:
+    """
+    The `SYNONYM_MAX_NEIGHBOURS` highest scores of one similarity row, best first.
+
+    `np.argsort(-row)` sorted the *whole* key row to take 100 of it, once per new id. D7 put code
+    ids on both sides of this search, so a repository contributing 20k symbols against a key matrix
+    of the same order sorted 20k rows of 20k (AR1 fix 9). `argpartition` is linear; only the
+    partition is sorted. Ties are broken by key index, so the order is fully determined - which
+    the full sort, at numpy's default unstable `quicksort`, was not.
+    """
+    count = min(SYNONYM_MAX_NEIGHBOURS, row.size)
+    part = np.argpartition(-row, count - 1)[:count] if row.size > count else np.arange(row.size)
+    return part[np.lexsort((part, -row[part]))]
 
 
 # ------------------------------------------------------------- the code graph
@@ -623,15 +664,20 @@ def module_communities(code: CodeGraph) -> dict[str, int]:
 
 
 def _leiden(graph: ig.Graph, weights: list[int]) -> list[int]:
-    """Seeded, so the same projection always partitions the same way."""
-    previous = random.Random(LEIDEN_SEED)
-    ig.set_random_number_generator(previous)
-    try:
-        clustering = graph.community_leiden(
-            objective_function="modularity", weights=weights or None, n_iterations=2
-        )
-    finally:
-        ig.set_random_number_generator(random)  # a global; never leave it seeded for someone else
+    """Seeded, so the same projection always partitions the same way.
+
+    Under LEIDEN_LOCK because the seeded RNG is process-global and two index jobs run in two
+    threads: seed, run and restore have to be one atomic triple or the second job partitions
+    unseeded (AR1 fix 3).
+    """
+    with LEIDEN_LOCK:
+        ig.set_random_number_generator(random.Random(LEIDEN_SEED))
+        try:
+            clustering = graph.community_leiden(
+                objective_function="modularity", weights=weights or None, n_iterations=2
+            )
+        finally:
+            ig.set_random_number_generator(random)  # a global; never leave it seeded for someone else
     return list(clustering.membership)
 
 
