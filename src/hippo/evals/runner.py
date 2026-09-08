@@ -113,10 +113,10 @@ def run_question(
     * `code_seeded` - 1.0 when a *lexical* anchor in the question seeded a symbol. It describes the
       trace, not the gold set, so it is written for every question, including one with no gold
       passages at all. `summarize` keeps it out of the gold-only means.
-    * `path_fidelity` - commit questions only: the share of the symbols the commit modified whose
-      passages came back in the top `GOLD_TOP`. It reads `gold_passage_ids` positionally, on the
-      contract `question_maker.commit_questions` writes: the commit's own message passage first,
-      one entry per modified symbol after it.
+    * `path_fidelity` - commit questions only: the share of the *symbol passages* of the symbols
+      that commit modified which came back in the top `GOLD_TOP`. It reads `gold_passage_ids`
+      positionally, on the contract `question_maker.commit_questions` writes: the commit's own
+      message passage first, the modified symbols' passages after it.
     """
     text = question_row["text"]
     expected = (question_row.get("expected_answer") or "").strip()

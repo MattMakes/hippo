@@ -54,13 +54,14 @@ def code_history(code_index):
         [
             {
                 "commit_id": commit_id(source_id, sha),
-                "symbol_id": symbol_id(source_id, "pyapp/orders.py", qualname)
-                if qualname.startswith("OrderService")
-                else symbol_id(source_id, "pyapp/billing.py", qualname),
+                "symbol_id": symbol_id(source_id, path, qualname),
                 "omega": 1.0,
-                "hunk": {"file": "pyapp/orders.py", "old_range": [1, 0], "new_range": [1, 1], "churn": 1},
+                "hunk": {"file": path, "old_range": [1, 0], "new_range": [1, 1], "churn": 1},
             }
-            for sha, qualname in (("c3c3c3c", "OrderService.run"), ("b2b2b2b", "total"))
+            for sha, path, qualname in (
+                ("c3c3c3c", "pyapp/orders.py", "OrderService.run"),
+                ("b2b2b2b", "pyapp/billing.py", "total"),
+            )
         ]
     )
     ctx.invalidate_graph()
