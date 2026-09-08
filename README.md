@@ -178,8 +178,40 @@ Plus the edges that tie the code graph to the prose one: `DEFINED_IN` (a symbol 
 
 **Safety rails.** Extraction stops at 5,000 files or 50,000 symbols per source (`truncated` then says so), and a file over 512 KiB keeps its line windows rather than being parsed. These are constants, not knobs — the same class as the 20,000-passage ceiling. The knobs are on the Settings page and in [the table below](#settings-you-can-change-on-the-settings-page): eleven of them, all named `code_*`, and **none of them is an environment variable**.
 
-<!-- WP3/WP2b/WP4a: seeding a search from identifiers, stack traces and diffs; the Code graph
-     block in the answer; git history; the path tools over MCP and the CLI. Written once those merge. -->
+### Asking about code
+
+Everything above is indexing. The other half is what happens when your question *contains* code.
+
+**The question is read for names before it is embedded.** A question can carry an identifier, a pasted stack trace, a fenced snippet or a diff hunk. hippo pulls the code nodes out of all four and starts the graph search from them directly, instead of hoping a fact happened to mention them:
+
+* an identifier — `OrderService.place`, a backticked `` `place` ``, or a bare word *written as code* (`PascalCase`, `camelCase`, `snake_case`, `ALL_CAPS`);
+* a **stack trace** — `File "pyapp/orders.py", line 18, in place`, `at fn (path:12:4)`, or a plain `path.py:18`. Frames are resolved by path and by the line falling inside a symbol's range, and they get lighter the further out from the innermost one they are;
+* the trailing `SomeError:` line of a traceback, matched against the exception classes in the repository;
+* a **fenced block**, tokenised the same way, and a **unified diff**, whose hunks map to the symbols whose lines they touch.
+
+A word that matches more than ten symbols seeds nothing at all and is recorded as ambiguous — better than silently picking eight arbitrary ones. A word that matches three splits its weight three ways.
+
+**A long paste no longer drowns the question.** A question with a traceback in it is split: the prose half is what gets embedded and what the fact filter reads, so forty lines of frames cannot swamp one query vector; the model still receives the whole question when it writes the answer, and names are read from both halves. A one-line question with no fenced block is not split at all and takes exactly the path it always did.
+
+**Naming a function brings its passage to where the model will read it,** and makes that symbol the most activated node in the graph. A stack trace still seeds the search even when no fact survives the filter — which is the case the old pipeline could only answer by falling back to plain similarity search.
+
+**The answer gets a Code graph block.** When the question named code, the model is shown one extra passage of typed relations, in a fixed grammar under a one-line legend:
+
+```
+pyapp.orders.OrderService.place -[INVOKES 1.00 same_file]-> pyapp.billing.total
+pyapp.orders.OrderService.save -[WRITES 0.85 sql_literal]-> orders
+Tests: test_place
+Subsystems: pyapp.orders.OrderService: pyapp.orders.OrderService.place, pyapp.orders.OrderService.save
+```
+
+It is cut at `code_triples_chars` on a line boundary. It is not a real passage: it never appears in the answer's list of sources.
+
+**And one more pass by the model, when code was named.** `code_select` (on by default) shows the model the passages it is about to read and lets it keep, drop or expand them. A dropped passage is ranked below the kept ones, never removed, and a failed or unparsable reply keeps everything. A prose question never reaches this pass, so it costs nothing on a memory you only ask prose questions about.
+
+Every one of these is off on a memory with no code in it, and can be switched off on one that has: see [the settings table](#settings-you-can-change-on-the-settings-page). `docs/FIDELITY.md` adaptation 15 states the guarantee precisely and says which test checks it.
+
+<!-- WP2b/WP4a: git history and `code_history_depth`; the four path tools over MCP and the CLI
+     (`hippo path` / `blast` / `raises` / `history`). Written once those merge. -->
 
 ### Known limitations
 
@@ -188,6 +220,7 @@ Plus the edges that tie the code graph to the prose one: `DEFINED_IN` (a symbol 
 * **Boosts and tuned weights do not survive a re-index.** Re-indexing a source deletes its code nodes and writes them fresh, so a boost or a hand-set edge weight on a symbol is gone. (Prose has its own version of this: an entity that loses its last mention is swept, taking its synonym and tuned edges with it. Neither is new here.)
 * **Cypher and SQL are read as literals only.** Indexing hippo itself finds `Settings`, `Passage` and `Source` in `MATCH` and `MERGE` string literals; it does not find tables declared by an f-string-interpolated `CREATE NODE TABLE {name}(...)`. "The databases our code talks to" means the literals in the code, not schema introspection.
 * **Writing a very large graph is slow.** Inserting 200,000 relationships was measured at 537 s on one machine, against 13.6 s for 100,000 — the cost of looking up both endpoints is sharply scale-sensitive. Writes go in batches of 5,000. A repository big enough to feel this hits the 20,000-passage wall first.
+* **You can see how many calls did not resolve, not which.** `unresolved_calls` is a count per file. The leaderboard that would name them — so you could write a binding rule for the ones that matter — is phase 2.
 * **The tests cannot show the noise improvement.** The fake model the test suite uses barely produces triples from code at all, so the tests prove the *number* of model calls fell, not that the facts got cleaner. That one you have to see on a real model.
 
 ## Evaluate and dig in
@@ -297,6 +330,8 @@ src/hippo/
     code.py         the code graph's half of it: symbols, data objects, commits and their edges
   remote.py         the CLI's client for a running server (the database file is single-process)
   hipporag/         the algorithm: openie -> indexer -> graph_index (PPR) -> retriever -> answerer
+    anchors.py      what a question says about code: identifiers, stack frames, exceptions, fences, diffs
+    paths.py        deterministic walks over the code graph: call paths, blast radius, the answer block
   codegraph/        the parser: tree-sitter + sqlglot -> symbols, data objects and typed edges (no model, no store)
   ingest/           readers (txt, md, pdf, docx, epub, html, code), chunker, git repos, the indexing job
   evals/            metrics, the LLM judge, question generation, the run runner
@@ -312,7 +347,7 @@ docs/CONTRACTS.md   the function signatures each package exposes
 
 ## Fidelity to HippoRAG
 
-hippo follows the reference implementation step for step (same prompts, same defaults, same PPR call, same edge weights) and adapts a few things for a small local model and a database instead of pickled files. The full list, with reasons, is in [docs/FIDELITY.md](docs/FIDELITY.md).
+hippo follows the reference implementation step for step (same prompts, same defaults, same PPR call, same edge weights on prose) and adapts a few things for a small local model and a database instead of pickled files. The code graph is one of those adaptations, and its settings turn it off completely. The full list, with reasons, is in [docs/FIDELITY.md](docs/FIDELITY.md).
 
 ## Credits
 
