@@ -3,13 +3,23 @@ The MCP server: lets an AI client (Claude Code, Claude Desktop, Cursor, ...)
 use hippo's memory as tools.
 
 MCP ("Model Context Protocol") is a small standard for "here are some tools
-you can call". We expose five:
+you can call". We expose nine:
 
-    hippo_search    rank passages for a question (no LLM answer)
-    hippo_ask       search, then let the local LLM answer from the passages
-    hippo_remember  add a text to the memory and index it in the background
-    hippo_sources   list what is in the memory and whether it is indexed
-    hippo_whoami    who the server thinks you are, and what you may see and do
+    hippo_search          rank passages for a question (no LLM answer)
+    hippo_ask             search, then let the local LLM answer from the passages
+    hippo_remember        add a text to the memory and index it in the background
+    hippo_sources         list what is in the memory and whether it is indexed
+    hippo_whoami          who the server thinks you are, and what you may see and do
+    hippo_explain_path    the relations that lead from one symbol to another
+    hippo_blast_radius    who would feel a change to a symbol, level by level
+    hippo_exception_path  how a function reaches an exception class
+    hippo_history         the commits that touched a symbol, newest first
+
+The last four walk the code graph a repository source builds. They answer in
+the same shapes as `/api/code/*` (`web/routes/code.py` holds the builders both
+surfaces call), and a name that could mean several symbols comes back as a
+ToolError listing them, because a tool's error message is the only thing an MCP
+client is shown.
 
 Who is calling (hippo/access.py): every tool works on the caller's slice of
 the memory. Over HTTP the caller is identified by `Authorization: Bearer
@@ -42,7 +52,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -51,10 +61,19 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
-from .access import Principal
-from .ask import ask, search
+from .access import Access, Principal
+from .ask import ask, code_block, search
 from .context import AppContext
+from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
 from .web.auth import StoreDown, principal_from_bearer
+from .web.routes.code import (
+    DEFAULT_DEPTH,
+    DEFAULT_HISTORY_LIMIT,
+    blast_payload,
+    exception_payload,
+    history_payload,
+    path_payload,
+)
 from .web.security import ANY_HOST
 
 log = logging.getLogger(__name__)
@@ -67,7 +86,9 @@ INSTRUCTIONS = (
     "hippo is a long-term memory built on a knowledge graph (HippoRAG). "
     "Use hippo_search or hippo_ask to recall things that were stored, "
     "hippo_remember to store new text, hippo_sources to see what is stored, "
-    "and hippo_whoami to learn which part of the memory you may see."
+    "and hippo_whoami to learn which part of the memory you may see. "
+    "When the memory holds a code repository, hippo_explain_path, hippo_blast_radius, "
+    "hippo_exception_path and hippo_history walk its code graph directly."
 )
 TOKEN_ENV = "HIPPO_TOKEN"
 
@@ -109,7 +130,7 @@ def caller(ctx: AppContext, mcp_ctx: Context | None) -> Principal:
 
 
 def build_server(ctx: AppContext) -> MCPServer:
-    """Create the MCP server with the four hippo tools bound to this AppContext."""
+    """Create the MCP server with the nine hippo tools bound to this AppContext."""
     server = MCPServer(name="hippo", instructions=INSTRUCTIONS)
 
     @server.tool(
@@ -165,6 +186,51 @@ def build_server(ctx: AppContext) -> MCPServer:
     def hippo_whoami(mcp_ctx: Context | None = None) -> dict[str, Any]:
         return whoami_tool(ctx, principal=caller(ctx, mcp_ctx))
 
+    @server.tool(
+        description=(
+            "Explain how one symbol reaches another in an indexed repository: the fewest calls, "
+            "imports, inheritance or data-access relations that lead from `a` to `b`, each with its "
+            "confidence and why it was inferred. Names may be fully qualified "
+            "(pkg.module.Class.method), module-relative (Class.method) or bare when unambiguous."
+        )
+    )
+    def hippo_explain_path(a: str, b: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
+        return explain_path_tool(ctx, a, b, principal=caller(ctx, mcp_ctx))
+
+    @server.tool(
+        description=(
+            "What a change to this symbol could break: everything that depends on it, `depth` "
+            "levels of callers out (1-4, default 2), grouped by subsystem. Use before editing a "
+            "function to see who else is affected."
+        )
+    )
+    def hippo_blast_radius(
+        symbol: str, depth: int = DEFAULT_DEPTH, mcp_ctx: Context | None = None
+    ) -> dict[str, Any]:
+        return blast_radius_tool(ctx, symbol, depth, principal=caller(ctx, mcp_ctx))
+
+    @server.tool(
+        description=(
+            "How a function reaches an exception class: the RAISES relation itself, or the calls "
+            "that lead to one. Use to answer 'where does this error come from'."
+        )
+    )
+    def hippo_exception_path(
+        symbol: str, exception: str, mcp_ctx: Context | None = None
+    ) -> dict[str, Any]:
+        return exception_path_tool(ctx, symbol, exception, principal=caller(ctx, mcp_ctx))
+
+    @server.tool(
+        description=(
+            "The commits that touched this symbol, newest first: sha, date and subject. Needs a "
+            "repository source indexed with git history; otherwise the list is empty."
+        )
+    )
+    def hippo_history(
+        symbol: str, limit: int = DEFAULT_HISTORY_LIMIT, mcp_ctx: Context | None = None
+    ) -> dict[str, Any]:
+        return history_tool(ctx, symbol, limit, principal=caller(ctx, mcp_ctx))
+
     return server
 
 
@@ -199,6 +265,7 @@ def search_tool(
         "passages": passages,
         "kept_facts": kept_facts,
         "used_dpr_fallback": trace.used_dpr_fallback,
+        **_code_fields(trace, code_block(graph, trace)),
     }
 
 
@@ -218,7 +285,82 @@ def ask_tool(ctx: AppContext, question: str, principal: Principal | None = None)
         for p in trace.passages
         if p.passage_id in read
     ]
-    return {"answer": answer.answer, "thought": answer.thought, "sources": sources}
+    return {
+        "answer": answer.answer,
+        "thought": answer.thought,
+        "sources": sources,
+        **_code_fields(trace, answer.context_block),
+    }
+
+
+def _code_fields(trace, block: str) -> dict[str, Any]:
+    """
+    What the question found in the code graph, as `search` and `ask` both report it.
+
+    The keys are always present, so a client never has to branch on whether the memory holds code;
+    on a prose question over any memory they are all empty, which is the same gate the answer block
+    itself uses (`used_code_seeds`, Ruling 1a). The rows are the trace's own, so they match
+    `/api/search`'s trace field for field.
+    """
+    return {
+        "seed_symbols": [vars(seed) for seed in trace.seed_symbols],
+        "paths": list(trace.paths),
+        "tests": list(trace.tests),
+        "history": list(trace.history),
+        "code_graph": block,
+    }
+
+
+# ------------------------------------------------------- the code graph tools
+# Thin over `web/routes/code.py`'s builders: the shapes MCP returns and the shapes /api/code
+# returns are the same objects, so a client can move between the two without relearning anything.
+
+
+def _code_graph(ctx: AppContext, principal: Principal | None) -> tuple[Any, float]:
+    access: Access | None = principal.access if principal else None
+    return ctx.graph_for(access), float(ctx.store.get_settings().get("code_theta", 0.5))
+
+
+def _code_answer(build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """
+    ToolError is the one exception an MCP client is shown verbatim, so everything a caller could
+    act on has to be inside its message - the candidates of an ambiguous name above all.
+    """
+    try:
+        return build()
+    except (AmbiguousSymbol, UnknownSymbol, ValueError) as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def explain_path_tool(
+    ctx: AppContext, a: str, b: str, principal: Principal | None = None
+) -> dict[str, Any]:
+    index, theta = _code_graph(ctx, principal)
+    return _code_answer(lambda: path_payload(index, a, b, theta=theta))
+
+
+def blast_radius_tool(
+    ctx: AppContext, symbol: str, depth: int = DEFAULT_DEPTH, principal: Principal | None = None
+) -> dict[str, Any]:
+    index, theta = _code_graph(ctx, principal)
+    return _code_answer(lambda: blast_payload(index, symbol, theta=theta, depth=depth))
+
+
+def exception_path_tool(
+    ctx: AppContext, symbol: str, exception: str, principal: Principal | None = None
+) -> dict[str, Any]:
+    index, theta = _code_graph(ctx, principal)
+    return _code_answer(lambda: exception_payload(index, symbol, exception, theta=theta))
+
+
+def history_tool(
+    ctx: AppContext,
+    symbol: str,
+    limit: int = DEFAULT_HISTORY_LIMIT,
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    index, _theta = _code_graph(ctx, principal)
+    return _code_answer(lambda: history_payload(index, symbol, limit=limit))
 
 
 def remember_tool(
