@@ -468,7 +468,14 @@ def _exception_anchors(text: str, index: GraphIndex) -> list[Anchor]:
 
 
 def _diff_anchors(text: str, index: GraphIndex) -> list[Anchor]:
-    """A pasted patch names its symbols by line: the new-side hunk ranges, intersected."""
+    """
+    A pasted patch names its symbols by line: the new-side hunk ranges, intersected.
+
+    Only the *innermost* symbol over each hunk, the same rule a stack frame follows. A class spans
+    every method it contains, so without this a one-line change inside one method would seed the
+    class, the method, and on a nested class everything in between - and "what did this patch
+    touch" would answer "most of the file".
+    """
     out: list[Anchor] = []
     path = ""
     for line in text.splitlines():
@@ -481,14 +488,26 @@ def _diff_anchors(text: str, index: GraphIndex) -> list[Anchor]:
             continue
         start = int(hunk.group(1))
         end = start + max(1, int(hunk.group(2) or 1)) - 1
-        for node in index.code_nodes:
-            if node.kind != SYMBOL or node.code_kind == "module" or not _same_path(node.path, path):
-                continue
-            if node.line_start <= end and start <= node.line_end:
-                anchor = _anchor(index, node.id, f"{path}:{start}", DIFF, 1.0, 1)
-                if anchor is not None:
-                    out.append(anchor)
+        touched = [
+            node
+            for node in index.code_nodes
+            if node.kind == SYMBOL
+            and node.code_kind != "module"
+            and _same_path(node.path, path)
+            and node.line_start <= end
+            and start <= node.line_end
+        ]
+        for node in touched:
+            if any(_contains(node, other) for other in touched):
+                continue  # something more specific inside this one also matched
+            anchor = _anchor(index, node.id, f"{path}:{start}", DIFF, 1.0, 1)
+            if anchor is not None:
+                out.append(anchor)
     return out
+
+
+def _contains(outer: CodeNode, inner: CodeNode) -> bool:
+    return outer.id != inner.id and outer.line_start <= inner.line_start and inner.line_end <= outer.line_end
 
 
 __all__ = [

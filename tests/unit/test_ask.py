@@ -10,7 +10,7 @@ from hippo.context import AppContext
 from hippo.hipporag.answerer import Answer
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.hipporag.retriever import Trace
-from tests.fakes.code_fixture import build_code_source
+from tests.fakes.code_fixture import write_commit_history
 
 DIRECT = "Where is Acme Robotics headquartered?"
 
@@ -97,8 +97,9 @@ def test_the_graph_reloads_after_new_text_is_indexed(indexed: AppContext) -> Non
 
 
 # ==================================================================== the code graph
-# WP3. The block is a fixed grammar, not free text (S2.15): the whole point of pinning it exactly
-# is that a rendering change has to be argued for rather than absorbed.
+# WP3, over `tests/fixtures/code_sample/` indexed through the real pipeline. The block is a fixed
+# grammar, not free text (S2.15): the point of pinning it exactly is that a rendering change has to
+# be argued for rather than absorbed.
 
 PLACE = "What does pyapp.orders.OrderService.place do?"
 
@@ -106,27 +107,31 @@ CODE_BLOCK_BODY = [
     "pyapp.orders.OrderService.place -[TESTED_BY 0.85 test_import]-> tests.test_orders.test_place",
     "tests.test_orders -[CONTAINS 1.00 syntax]-> tests.test_orders.test_place",
     "pyapp.orders.OrderService -[CONTAINS 1.00 syntax]-> pyapp.orders.OrderService.place",
+    "pyapp.__init__ -[IMPORTS 0.95 import_path]-> pyapp.orders.OrderService",
     "pyapp.cli -[IMPORTS 0.90 reexport]-> pyapp.orders.OrderService",
     "tests.test_orders -[IMPORTS 0.95 import_path]-> pyapp.orders.OrderService",
     "pyapp.orders.OrderService.place -[CATCHES 0.90 resolved]-> pyapp.store.OrderError",
     "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import in_branch]-> pyapp.billing.send_invoice",
     "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total",
-    "pyapp.orders.OrderService.place -[INVOKES 0.90 via_inheritance]-> pyapp.store.Base.log",
-    "pyapp.cli.main -[INVOKES 0.50 fuzzy_name]-> pyapp.orders.OrderService.place",
+    "pyapp.orders.OrderService.place -[INVOKES 1.00 same_file]-> pyapp.orders.OrderService.log",
+    "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
+    "tests.test_orders.test_place -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
+    "pyapp.orders -[TESTED_BY 0.75 test_filename]-> tests.test_orders",
     "pyapp.cli -[CONTAINS 1.00 syntax]-> pyapp.cli.main",
     "Tests: tests.test_orders.test_place",
     "Commits: b2b2b2b 2026-01-02 Total the order in place",
-    "Subsystems: OrderService: pyapp.cli, pyapp.cli.main, pyapp.orders.OrderService, "
-    "pyapp.orders.OrderService.place",
-    "Subsystems: pyapp.billing: pyapp.billing.send_invoice, pyapp.billing.total",
-    "Subsystems: Base: pyapp.store.Base.log, pyapp.store.OrderError",
-    "Subsystems: test_place: tests.test_orders, tests.test_orders.test_place",
+    "Subsystems: pyapp.__init__: pyapp.__init__, pyapp.billing.send_invoice, pyapp.billing.total, "
+    "pyapp.cli, pyapp.cli.main, pyapp.orders, pyapp.orders.OrderService, "
+    "pyapp.orders.OrderService.log, pyapp.orders.OrderService.place, pyapp.store.OrderError, "
+    "tests.test_orders, tests.test_orders.test_place",
 ]
 
 
 @pytest.fixture
-def coded(ctx: AppContext) -> AppContext:
-    build_code_source(ctx.store, ctx.ollama)
+def coded(code_index) -> AppContext:
+    """The fixture tree, plus the three commits WP2b will build from a real checkout."""
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
     return ctx
 
 

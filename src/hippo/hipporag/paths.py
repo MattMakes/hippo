@@ -417,6 +417,25 @@ def render_triples(rows: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def community_labels(index: GraphIndex) -> dict[int, str]:
+    """
+    Each community's label: the lexicographically smallest **display** name among its members.
+
+    `GraphIndex.community_name` uses the smallest *qualname*, which is module-relative by S2.6 - so
+    a repository with `pyapp/store.py`'s `Base` and `tsapp/models/base.ts`'s `Base` gets two
+    different subsystems both labelled "Base", and the block says nothing. The display name is the
+    form S2.6 makes unique, and it is what a person reads everywhere else here.
+    """
+    labels: dict[int, str] = {}
+    for node in index.code_nodes:
+        if node.community is None:
+            continue
+        name = display_of(node)
+        if node.community not in labels or name < labels[node.community]:
+            labels[node.community] = name
+    return labels
+
+
 def _subsystem_lines(index: GraphIndex, vertices: list[int]) -> list[str]:
     """One `Subsystems:` line per community present among these vertices (Ruling 4)."""
     groups: dict[int, list[str]] = {}
@@ -427,9 +446,10 @@ def _subsystem_lines(index: GraphIndex, vertices: list[int]) -> list[str]:
         name = display_at(index, vertex)
         if name and name not in groups.setdefault(community, []):
             groups[community].append(name)
+    labels = community_labels(index) if groups else {}
     lines = []
     for community in sorted(groups):
-        label = index.community_name(community) or str(community)
+        label = labels.get(community) or index.community_name(community) or str(community)
         lines.append(f"Subsystems: {label}: " + ", ".join(sorted(groups[community])))
     return lines
 
@@ -492,6 +512,7 @@ __all__ = [
     "blast_radius",
     "block_lines",
     "code_paths_for",
+    "community_labels",
     "cut_to",
     "direct_edges",
     "display_at",

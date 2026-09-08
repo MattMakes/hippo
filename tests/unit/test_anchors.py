@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from hippo.codegraph.model import symbol_id
 from hippo.hipporag import anchors
 from hippo.hipporag.anchors import (
     AMBIGUOUS_ABOVE,
@@ -23,9 +24,7 @@ from hippo.hipporag.anchors import (
     split_question,
 )
 from hippo.hipporag.graph_index import GraphIndex
-from hippo.hipporag.indexer import Chunk, index_source
-from hippo.hipporag.text import make_id
-from tests.fakes.code_fixture import build_code_source, symbol_id
+from tests.fakes.code_fixture import many_symbols
 
 TRACEBACK = (
     "Traceback (most recent call last):\n"
@@ -57,14 +56,10 @@ PROSE = [
 
 
 @pytest.fixture
-def index(store, ollama) -> GraphIndex:
-    build_code_source(store, ollama)
-    return GraphIndex.load(store)
-
-
-@pytest.fixture
-def source_id(store, ollama) -> str:
-    return build_code_source(store, ollama)
+def index(code_index) -> GraphIndex:
+    """`tests/fixtures/code_sample/` indexed through the real pipeline, extractor and all."""
+    ctx, _source_id = code_index
+    return ctx.graph()
 
 
 def names(index: GraphIndex, found: list[Anchor]) -> list[str]:
@@ -198,84 +193,54 @@ def test_a_unified_diff_seeds_the_symbols_its_hunks_touch(index: GraphIndex) -> 
 # ------------------------------------------------------------- fan-out (S2.13)
 
 
-def many_symbols(store, source_id: str, name: str, how_many: int) -> None:
-    """`how_many` symbols that all answer to the same bare name, in different files."""
-    rows = []
-    for i in range(how_many):
-        path = f"pkg/mod{i}.py"
-        rows.append(
-            {
-                "id": make_id("symbol-", f"{source_id}:{path}:{name}"),
-                "source_id": source_id,
-                "name": name,
-                "qualname": name,
-                "kind": "function",
-                "lang": "python",
-                "path": path,
-                "line_start": 1,
-                "line_end": 2,
-            }
-        )
-    store.add_symbols(rows)
-    chunks = [
-        Chunk(900 + i, f"pkg/mod{i}.py :: pkg.mod{i}.{name} (lines 1-2)", f"def {name}(): ...")
-        for i in range(how_many)
-    ]
-    return rows, chunks
+def index_with(code_index, name: str, how_many: int) -> GraphIndex:
+    """The fixture tree plus `how_many` functions all called `name` - a shape ten files cannot make."""
+    ctx, source_id = code_index
+    many_symbols(ctx, source_id, name, how_many)
+    return ctx.graph()
 
 
-def index_with(store, ollama, name: str, how_many: int) -> GraphIndex:
-    source_id = build_code_source(store, ollama)
-    rows, chunks = many_symbols(store, source_id, name, how_many)
-    index_source(store, ollama, source_id, chunks)
-    from hippo.hipporag.indexer import passage_id
-
-    store.link_definitions([(r["id"], passage_id(source_id, c)) for r, c in zip(rows, chunks, strict=True)])
-    return GraphIndex.load(store)
-
-
-def test_an_ambiguous_name_splits_its_weight_and_is_capped(store, ollama) -> None:
-    index = index_with(store, ollama, "handle_it", MAX_MATCHES_PER_TOKEN + 1)
+def test_an_ambiguous_name_splits_its_weight_and_is_capped(code_index) -> None:
+    index = index_with(code_index, "handle_it", MAX_MATCHES_PER_TOKEN + 1)
     found = [a for a in find_anchors("what does handle_it do?", index) if not a.ambiguous]
     assert len(found) == MAX_MATCHES_PER_TOKEN
     assert all(a.n_matches == MAX_MATCHES_PER_TOKEN + 1 for a in found)
     assert all(a.weight == pytest.approx(1.0 / (MAX_MATCHES_PER_TOKEN + 1)) for a in found)
 
 
-def test_a_three_way_split_sums_to_one_share_of_the_seed_weight(store, ollama) -> None:
-    index = index_with(store, ollama, "handle_it", 3)
-    found = find_anchors("what does handle_it do?", index)
-    assert len(found) == 3
+def test_a_three_way_split_sums_to_one_share_of_the_seed_weight(index: GraphIndex) -> None:
+    # `log` is a method on OrderService, on pyapp's Base and on tsapp's Base: three real symbols.
+    found = find_anchors("what does `log` do?", index)
+    assert sorted(names(index, found)) == ["Base.log", "Base.log", "OrderService.log"]
     assert sum(a.weight for a in found) == pytest.approx(1.0)
+    assert {a.n_matches for a in found} == {3}
 
 
-def test_a_name_matching_more_than_ten_symbols_seeds_nothing_and_says_so(store, ollama) -> None:
-    index = index_with(store, ollama, "handle_it", AMBIGUOUS_ABOVE + 1)
+def test_a_name_matching_more_than_ten_symbols_seeds_nothing_and_says_so(code_index) -> None:
+    index = index_with(code_index, "handle_it", AMBIGUOUS_ABOVE + 1)
     found = find_anchors("what does handle_it do?", index)
     assert [a.ambiguous for a in found] == [True]
     assert found[0].node_id == "" and found[0].vertex == -1 and found[0].weight == 0.0
     assert found[0].n_matches == AMBIGUOUS_ABOVE + 1
 
 
-def test_a_path_qualified_match_is_never_split(store, ollama) -> None:
-    index = index_with(store, ollama, "handle_it", 3)
-    found = find_anchors("what does pkg.mod1.handle_it do?", index)
-    assert len(found) == 1
-    assert found[0].weight == 1.0
+def test_a_path_qualified_match_is_never_split(index: GraphIndex) -> None:
+    # Three symbols are called `log`; naming one of them by its module picks that one, whole.
+    found = find_anchors("what does pyapp.store.Base.log do?", index)
+    assert names(index, found) == ["Base.log"]
+    assert found[0].weight == 1.0 and found[0].n_matches == 1
 
 
 # ------------------------------------------------------------------ scoping
 
 
-def test_a_scoped_index_never_surfaces_a_hidden_symbol(store, ollama, sample_text) -> None:
-    source_id = build_code_source(store, ollama)
-    other = store.create_source("sample", "Acme Robotics")
-    index_source(store, ollama, other, [Chunk(0, "The company", sample_text.split("## ")[1])])
-    full = GraphIndex.load(store)
+def test_a_scoped_index_never_surfaces_a_hidden_symbol(mixed_index) -> None:
+    ctx, prose_source_id, code_source_id = mixed_index
+    full = ctx.graph()
     assert find_anchors("what does `place` do?", full)
 
-    scoped = full.scoped({other})
-    assert symbol_id(source_id, "pyapp/orders.py", "OrderService.place") not in scoped.idx_of
+    scoped = full.scoped({prose_source_id})
+    assert symbol_id(code_source_id, "pyapp/orders.py", "OrderService.place") not in scoped.idx_of
     assert find_anchors("what does `place` do?", scoped) == []
 
 

@@ -20,7 +20,7 @@ from hippo.ask import search
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.hipporag.retriever import RankedPassage, Trace
 from hippo.store.base import SETTING_RULES
-from tests.fakes.code_fixture import build_code_source
+from tests.conftest import index_code_sample
 
 QUESTION = "In which state is the company founded by Priya Natarajan headquartered?"
 
@@ -276,7 +276,7 @@ CODE_QUESTION = "What does pyapp.orders.OrderService.place do?"
 
 @pytest.fixture
 def code_baseline(ctx) -> Trace:
-    build_code_source(ctx.store, ctx.ollama)
+    index_code_sample(ctx)
     return search(ctx, CODE_QUESTION)
 
 

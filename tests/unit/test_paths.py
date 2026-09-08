@@ -34,16 +34,26 @@ from hippo.hipporag.paths import (
     shortest_code_path,
     triple_rows,
 )
-from tests.fakes.code_fixture import build_code_source
+from tests.fakes.code_fixture import write_commit_history
 
 THETA = 0.5
 HEADER = "Relations from the code graph."
 
 
 @pytest.fixture
-def index(store, ollama) -> GraphIndex:
-    build_code_source(store, ollama)
-    return GraphIndex.load(store)
+def index(code_index) -> GraphIndex:
+    """`tests/fixtures/code_sample/` indexed through the real pipeline, extractor and all."""
+    ctx, _source_id = code_index
+    return ctx.graph()
+
+
+@pytest.fixture
+def index_with_history(code_index) -> GraphIndex:
+    """The same tree plus three commits. WP2b builds these from a real checkout; `GraphIndex` has
+    loaded `Commit`, `MODIFIES` and `PRECEDES` since WP1, so the tools need nothing from it."""
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
+    return ctx.graph()
 
 
 def vertex(index: GraphIndex, name: str) -> int:
@@ -77,7 +87,11 @@ def test_an_id_resolves_to_itself(index: GraphIndex) -> None:
 def test_an_ambiguous_name_lists_its_candidates(index: GraphIndex) -> None:
     with pytest.raises(AmbiguousSymbol) as raised:
         resolve_symbol(index, "log")
-    assert raised.value.candidates == ["pyapp.orders.OrderService.log", "pyapp.store.Base.log"]
+    assert raised.value.candidates == [
+        "pyapp.orders.OrderService.log",
+        "pyapp.store.Base.log",
+        "tsapp.models.base.Base.log",
+    ]
     assert "could mean any of" in str(raised.value)
 
 
@@ -117,16 +131,21 @@ def test_a_two_hop_path_is_found(index: GraphIndex) -> None:
     walk = shortest_code_path(
         index, vertex(index, "pyapp.cli.main"), vertex(index, "pyapp.billing.total"), theta=THETA
     )
-    assert [e.kind for e in walk] == ["INVOKES", "INVOKES"]
-    assert lines(index, walk)[0].startswith("pyapp.cli.main -[INVOKES 0.50 fuzzy_name]->")
+    assert lines(index, walk) == [
+        "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
+        "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total",
+    ]
 
 
 def test_theta_above_an_edge_hides_it(index: GraphIndex) -> None:
-    main, place = vertex(index, "pyapp.cli.main"), vertex(index, "OrderService.place")
-    assert [e.kind for e in shortest_code_path(index, main, place, theta=0.5)] == ["INVOKES"]
-    # The fuzzy 0.50 call is gone above theta; what is left is the undirected "same class" route.
-    assert "INVOKES" not in {e.kind for e in shortest_code_path(index, main, place, theta=0.6)}
-    assert not [e for e in direct_edges(index, main, theta=0.6) if e.kind == "INVOKES"]
+    # `graph` calls `self.run` through an unresolvable receiver, so the resolver emits the 0.50
+    # fuzzy-name tier for it. Above theta that call is gone and only the longer route survives.
+    caller, callee = vertex(index, "OrderService.graph"), vertex(index, "OrderService.run")
+    assert lines(index, shortest_code_path(index, caller, callee, theta=0.5)) == [
+        "pyapp.orders.OrderService.graph -[INVOKES 0.50 fuzzy_name]-> pyapp.orders.OrderService.run"
+    ]
+    assert len(shortest_code_path(index, caller, callee, theta=0.6)) == 2
+    assert not [e for e in direct_edges(index, caller, theta=0.6) if e.kind == "INVOKES"]
 
 
 def test_a_backwards_pair_is_found_by_the_undirected_second_pass(index: GraphIndex) -> None:
@@ -158,7 +177,12 @@ def test_blast_radius_walks_callers_level_by_level(index: GraphIndex) -> None:
     blast = blast_radius(index, vertex(index, "pyapp.billing.total"), theta=THETA, depth=2)
     assert [sorted(display_of(index.code_node_at(v)) for v in level) for level in blast.levels] == [
         ["pyapp.billing", "pyapp.orders.OrderService.place"],
-        ["pyapp.cli.main", "pyapp.orders", "pyapp.orders.OrderService"],
+        [
+            "pyapp.cli.main",
+            "pyapp.orders",
+            "pyapp.orders.OrderService",
+            "tests.test_orders.test_place",
+        ],
     ]
     assert blast.truncated is False
 
@@ -191,7 +215,10 @@ def test_exception_path_for_an_unknown_exception_raises(index: GraphIndex) -> No
         exception_path(index, vertex(index, "OrderService.save"), "NoSuchError", theta=THETA)
 
 
-def test_history_lists_the_commits_that_touched_a_symbol_newest_first(index: GraphIndex) -> None:
+def test_history_lists_the_commits_that_touched_a_symbol_newest_first(
+    index_with_history: GraphIndex,
+) -> None:
+    index = index_with_history
     commits = history(index, vertex(index, "OrderService.place"), limit=3)
     assert [c.sha for c in commits] == ["b2b2b2b"]
     assert history_rows(commits) == [
@@ -225,7 +252,7 @@ def test_in_branch_and_await_flags_appear_in_the_line(index: GraphIndex) -> None
     ]
 
 
-def fake_trace(index: GraphIndex):
+def block_trace(index: GraphIndex):
     seeds = [vertex(index, "OrderService.place")]
     return SimpleNamespace(
         paths=triple_rows(index, code_paths_for(index, seeds, theta=THETA)),
@@ -234,8 +261,11 @@ def fake_trace(index: GraphIndex):
     )
 
 
-def test_the_block_carries_triples_then_tests_commits_and_subsystems(index: GraphIndex) -> None:
-    block = render_block(index, fake_trace(index), header=HEADER, max_chars=8000)
+def test_the_block_carries_triples_then_tests_commits_and_subsystems(
+    index_with_history: GraphIndex,
+) -> None:
+    index = index_with_history
+    block = render_block(index, block_trace(index), header=HEADER, max_chars=8000)
     body = block.splitlines()
     assert body[0] == HEADER
     assert "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total" in body
@@ -247,8 +277,9 @@ def test_the_block_carries_triples_then_tests_commits_and_subsystems(index: Grap
     assert kinds == sorted(kinds, key=["Tests", "Commits", "Subsystems"].index)
 
 
-def test_the_block_is_cut_on_a_line_boundary(index: GraphIndex) -> None:
-    trace = fake_trace(index)
+def test_the_block_is_cut_on_a_line_boundary(index_with_history: GraphIndex) -> None:
+    index = index_with_history
+    trace = block_trace(index)
     full = render_block(index, trace, header=HEADER, max_chars=8000).splitlines()[1:]
     cut = render_block(index, trace, header=HEADER, max_chars=60).splitlines()[1:]
     assert cut[:-1] == full[: len(cut) - 1]
@@ -257,7 +288,7 @@ def test_the_block_is_cut_on_a_line_boundary(index: GraphIndex) -> None:
 
 
 def test_a_zero_budget_keeps_no_line_but_still_counts_them(index: GraphIndex) -> None:
-    body = render_block(index, fake_trace(index), header=HEADER, max_chars=0).splitlines()
+    body = render_block(index, block_trace(index), header=HEADER, max_chars=0).splitlines()
     assert body[0] == HEADER
     assert len(body) == 2 and body[1].startswith("… (+")
 

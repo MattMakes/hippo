@@ -15,6 +15,8 @@ import numpy as np
 import pytest
 
 from hippo import prompts
+from hippo.ask import answer_from_trace
+from hippo.codegraph.model import symbol_id
 from hippo.hipporag.graph_index import CODE_KINDS, EdgeEdit, GraphIndex
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.hipporag.retriever import (
@@ -26,8 +28,10 @@ from hippo.hipporag.retriever import (
     match_triples,
     trace_from_dict,
 )
+from hippo.hipporag.text import entity_id
 from hippo.store.base import DEFAULT_SETTINGS
-from tests.fakes.code_fixture import build_code_source, symbol_id, write_code_graph
+from tests.conftest import index_code_sample, index_prose_sample
+from tests.fakes.code_fixture import write_commit_history
 
 DIRECT = "Where is Acme Robotics headquartered?"
 MULTI_HOP = "In which state is the company founded by Priya Natarajan headquartered?"
@@ -383,10 +387,10 @@ def test_a_small_linking_top_k_still_records_the_trace_cap(retriever: Retriever)
 
 
 # ==================================================================== the code graph
-# WP3. The first test here is the one that matters most: a prose question over a memory that also
-# contains code must behave as it does on a prose-only memory. Every other "prose stays green"
-# assertion in this file runs on a prose-only fixture, which is exactly why the two fidelity
-# defects V2.5 found were invisible.
+# WP3, over `tests/fixtures/code_sample/` indexed through the real pipeline. The first test here is
+# the one that matters most: a prose question over a memory that *also* contains code must behave as
+# it does on a prose-only memory. Every other "prose stays green" assertion in this file runs on a
+# prose-only fixture, which is exactly why the two fidelity defects V2.5 found were invisible.
 
 PLACE = "What does pyapp.orders.OrderService.place do?"
 TRACEBACK = (
@@ -407,27 +411,27 @@ CODE_OFF = {
 
 
 @pytest.fixture
-def code_source(store, ollama) -> str:
-    return build_code_source(store, ollama)
+def code_retriever(code_index) -> Retriever:
+    ctx, _source_id = code_index
+    return Retriever(ctx.graph(), ctx.ollama)
 
 
 @pytest.fixture
-def code_retriever(store, ollama, code_source: str) -> Retriever:
-    return Retriever(GraphIndex.load(store), ollama)
+def code_source(code_index) -> str:
+    return code_index[1]
 
 
 @pytest.fixture
-def mixed(store, ollama, sample_text: str):
-    """The prose sample searched alone, then the code fixture added to the *same* memory."""
-    source_id = store.create_source("sample", "Acme Robotics")
-    index_source(store, ollama, source_id, sample_chunks(sample_text))
-    prose_only = Retriever(GraphIndex.load(store), ollama).retrieve(DIRECT, settings())
-    build_code_source(store, ollama)
-    return prose_only, Retriever(GraphIndex.load(store), ollama)
+def mixed(ctx):
+    """The prose sample searched alone, then the code tree added to the *same* memory."""
+    index_prose_sample(ctx)
+    prose_only = Retriever(ctx.graph(), ctx.ollama).retrieve(DIRECT, settings())
+    index_code_sample(ctx)
+    return prose_only, Retriever(ctx.graph(), ctx.ollama)
 
 
-def place_vertex(retriever: Retriever, source_id: str) -> int:
-    return retriever.index.idx_of[symbol_id(source_id, "pyapp/orders.py", "OrderService.place")]
+def place_id(index: GraphIndex, source_id: str) -> str:
+    return symbol_id(source_id, "pyapp/orders.py", "OrderService.place")
 
 
 # ------------------------------------------------------- a mixed memory (V2.5)
@@ -445,6 +449,7 @@ def test_a_prose_question_over_a_mixed_memory_asks_nothing_extra(mixed, fake_oll
     assert trace.select == {} and trace.expansions == []
     assert trace.question_prose == DIRECT and trace.question_code == ""
     assert not any(p.via_expand or p.community_boosted for p in trace.passages)
+    assert trace.passages[0].title == prose_only.passages[0].title
     # Dense seeds still add reset mass - they are the one thing code contributes to a prose
     # question - but the prose passages keep their order among themselves exactly.
     prose_titles = {p.title for p in prose_only.passages}
@@ -465,34 +470,41 @@ def test_one_dense_seed_leaves_the_prose_winner_on_top(mixed) -> None:
     ]
 
 
-def test_with_the_four_code_settings_off_the_code_graph_contributes_nothing(store, ollama) -> None:
+def test_with_the_four_code_settings_off_the_code_graph_contributes_nothing(mixed_index) -> None:
     """
     docs/FIDELITY.md's inertness claim, in its checkable form.
 
     Not "the same as a prose-only corpus" - a code passage that happens to answer the question is
-    an ordinary DPR hit and should rank. What must be true is that the *graph* contributes nothing:
-    the same passages, searched with and without a code graph written over them, rank identically.
+    an ordinary DPR hit and should rank, and PLAN.md's fixture puts one there on purpose. What must
+    be true is that the *graph* contributes nothing: the same passages, searched with and without a
+    code graph over them, rank identically. Deleting the code nodes is how the graph goes away
+    without the passages going with it.
     """
-    source_id = build_code_source(store, ollama, with_graph=False)
-    before = Retriever(GraphIndex.load(store), ollama).retrieve(DIRECT, settings(**CODE_OFF))
-
-    write_code_graph(store, ollama, source_id)
-    index = GraphIndex.load(store)
-    after = Retriever(index, ollama).retrieve(DIRECT, settings(**CODE_OFF))
-
-    assert index.code_nodes, "the graph really is there"
-    # Including the cross-kind synonym, which is one of the five terms scale 0 has to drop.
+    ctx, _prose_source_id, code_source_id = mixed_index
+    index = GraphIndex.load(ctx.store)
+    # A cross-kind SYNONYM is one of the five terms scale 0 has to drop, and neither this fixture
+    # nor FakeOllama's OpenIE produces an Entity-Symbol one, so write it by hand.
+    symbol = place_id(index, code_source_id)
+    ctx.store.add_synonyms([(entity_id("acme robotics"), symbol, 0.87)])
+    index = GraphIndex.load(ctx.store)
     assert any(
         {row["a"].split("-")[0], row["b"].split("-")[0]} == {"entity", "symbol"}
-        for row in store.load_synonyms()
-    ), "the fixture writes an Entity-Symbol synonym, or this test covers nothing"
+        for row in ctx.store.load_synonyms()
+    )
+    before = Retriever(index, ctx.ollama).retrieve(DIRECT, settings(**CODE_OFF))
+    assert index.code_nodes, "the graph really is there"
+    # And the mechanism behind it: at scale 0 no code vertex is in the graph PPR runs on at all.
+    assert {index.graph_for_scale(0.0).degree(int(v)) for v in index.code_vertices} == {0}
+
+    ctx.store.delete_code_nodes_for_source(code_source_id)
+    after_index = GraphIndex.load(ctx.store)
+    after = Retriever(after_index, ctx.ollama).retrieve(DIRECT, settings(**CODE_OFF))
+
+    assert after_index.code_nodes == []
     assert [(p.passage_id, p.score) for p in after.passages] == [
         (p.passage_id, p.score) for p in before.passages
     ]
-    assert after.seed_symbols == [] and after.used_code_seeds is False
-    # And the mechanism behind it: at scale 0 no code vertex is in the graph PPR runs on at all.
-    scaled = index.graph_for_scale(0.0)
-    assert {scaled.degree(int(v)) for v in index.code_vertices} == {0}
+    assert before.seed_symbols == [] and before.used_code_seeds is False
 
 
 # ---------------------------------------------------------------- code seeding
@@ -504,14 +516,15 @@ def test_naming_a_symbol_lifts_its_passage_into_what_the_model_reads(
     """
     PLAN.md asks for "in the top 3". What is pinned here is the durable part of that: naming a
     symbol lifts its passage from wherever dense similarity had it into the `qa_top_k` slice the
-    answerer actually reads. The exact position is a function of `FakeOllama`'s feature-hashed
-    vectors, which rank a three-line module header above an eight-line function body for a
-    question containing both their names; phase 2 re-checks the literal top-3 against the real
-    `code_index` fixture and a passage set the chunker produced.
+    answerer actually reads, and makes the symbol itself the most activated node in the graph.
+
+    The exact position is a function of `FakeOllama`'s feature-hashed vectors, which rank a
+    three-line module header above an eight-line function body on a question naming both. Measured
+    against this fixture: the passage moves from dense rank 9 to rank 5, and `place` is the top
+    node by a factor of three. A real embedder is what would make the literal top 3 hold.
     """
     index = code_retriever.index
-    symbol = index.idx_of[symbol_id(code_source, "pyapp/orders.py", "OrderService.place")]
-    passage_id = index.node_ids[index.defining_passages(symbol)[0]]
+    passage_id = index.node_ids[index.defining_passages(index.idx_of[place_id(index, code_source)])[0]]
 
     without = code_retriever.retrieve(PLACE, settings(code_seed_weight=0.0, code_dense_seeds=0))
     trace = code_retriever.retrieve(PLACE, settings())
@@ -520,7 +533,8 @@ def test_naming_a_symbol_lifts_its_passage_into_what_the_model_reads(
     ranks = {p.passage_id: p.rank for p in trace.passages}
     assert ranks[passage_id] < {p.passage_id: p.rank for p in without.passages}[passage_id]
     assert ranks[passage_id] <= settings()["qa_top_k"]
-    assert "OrderService.place" in {n.name for n in trace.top_nodes}
+    assert trace.top_nodes[0].name == "OrderService.place"
+    assert trace.top_nodes[0].score > 2 * trace.top_nodes[1].score
 
 
 def test_a_stack_trace_seeds_ppr_even_when_no_fact_survives(code_retriever: Retriever) -> None:
@@ -556,14 +570,15 @@ def test_a_seed_records_its_fan_out_specificity_and_boost(code_retriever: Retrie
     seed = next(s for s in trace.seed_symbols if s.name == "OrderService.place")
     assert seed.how == "identifier" and seed.kind == "symbol" and seed.kept is True
     assert seed.n_matches == 1 and seed.token == "pyapp.orders.OrderService.place"
-    assert seed.specificity == pytest.approx(2.0)  # one INVOKES in-edge, plus one
+    # `place` is invoked by cli.main and by test_place, so in_degree 2 -> specificity 3.
+    assert seed.specificity == pytest.approx(3.0)
     assert seed.weight == pytest.approx(1.0 / seed.specificity)
     without = code_retriever.retrieve(PLACE, settings(node_specificity=False))
     assert next(s for s in without.seed_symbols if s.name == "OrderService.place").weight == 1.0
 
 
 def test_a_node_boost_of_zero_mutes_a_symbol_seed(code_retriever: Retriever, code_source: str) -> None:
-    node_id = symbol_id(code_source, "pyapp/orders.py", "OrderService.place")
+    node_id = place_id(code_retriever.index, code_source)
     trace = code_retriever.retrieve(PLACE, settings(), node_boosts={node_id: 0.0})
     seed = next(s for s in trace.seed_symbols if s.node_id == node_id)
     assert seed.boost == 0.0 and seed.weight == 0.0 and seed.kept is False
@@ -592,7 +607,7 @@ def test_top_nodes_may_be_code_nodes_on_a_code_question(code_retriever: Retrieve
 
 def test_the_structural_scale_is_a_live_lever(code_retriever: Retriever, code_source: str) -> None:
     index = code_retriever.index
-    place = place_vertex(code_retriever, code_source)
+    place = index.idx_of[place_id(index, code_source)]
     assert index.graph_for_scale(1.0).degree(place) > 0
     assert index.graph_for_scale(0.0).degree(place) == 0
     # And a search picks the scaled graph up without being handed one.
@@ -652,6 +667,17 @@ def keep_all(question, ranked):
     return SelectResult(keep=[p.passage_id for p in ranked], raw="kept all")
 
 
+def expand_place(question, ranked):
+    """Expand whichever passage defines `place`, wherever the ranking put it."""
+    wanted = [p.passage_id for p in ranked if "OrderService.place " in p.title]
+    return SelectResult(keep=[p.passage_id for p in ranked], expand=wanted)
+
+
+def expand_all(question, ranked):
+    ids = [p.passage_id for p in ranked]
+    return SelectResult(keep=ids, expand=ids)
+
+
 def test_the_select_pass_is_not_called_unless_it_is_switched_on(code_retriever: Retriever) -> None:
     calls: list[str] = []
 
@@ -707,17 +733,6 @@ def test_a_failing_select_pass_keeps_every_passage(code_retriever: Retriever) ->
     assert [p.passage_id for p in trace.passages] == [p.passage_id for p in base.passages]
 
 
-def expand_place(question, ranked):
-    """Expand whichever passage defines `place`, wherever the ranking put it."""
-    wanted = [p.passage_id for p in ranked if "OrderService.place " in p.title]
-    return SelectResult(keep=[p.passage_id for p in ranked], expand=wanted)
-
-
-def expand_all(question, ranked):
-    ids = [p.passage_id for p in ranked]
-    return SelectResult(keep=ids, expand=ids)
-
-
 def test_expand_appends_neighbours_after_the_kept_list_at_score_zero(code_retriever: Retriever) -> None:
     # `retrieval_top_k` cuts the ranked list, which is the situation "expand" exists for: a
     # neighbour the ranking left out. A neighbour already in the list keeps its own rank and is
@@ -735,16 +750,14 @@ def test_expand_appends_neighbours_after_the_kept_list_at_score_zero(code_retrie
     assert [p.rank for p in trace.passages] == list(range(1, len(trace.passages) + 1))
 
 
-def test_expanded_passages_are_never_part_of_what_the_model_reads(
-    ctx, store, ollama, code_source: str
-) -> None:
+def test_expanded_passages_are_never_part_of_what_the_model_reads(code_index) -> None:
     # S2.14c: `answer_from_trace`'s slice *is* the citation list, so a neighbour fetched by
     # "expand" must not enter it. It is summarised inside the Code graph block instead.
-    from hippo.ask import answer_from_trace
-
+    ctx, _source_id = code_index
     retriever = Retriever(ctx.graph(), ctx.ollama)
     trace = retriever.retrieve(PLACE, settings(retrieval_top_k=8, qa_top_k=5), select_fn=expand_all)
     assert any(p.via_expand for p in trace.passages)
+
     answer = answer_from_trace(ctx, trace)
     expanded = {p.passage_id for p in trace.passages if p.via_expand}
     assert set(answer.passage_ids).isdisjoint(expanded)
@@ -762,19 +775,26 @@ def test_expand_max_zero_fetches_nothing(code_retriever: Retriever) -> None:
 # ------------------------------------------------------- paths, tests, history
 
 
-def test_a_code_question_carries_its_triples_tests_and_commits(code_retriever: Retriever) -> None:
+def test_a_code_question_carries_its_triples_and_tests(code_retriever: Retriever) -> None:
     trace = code_retriever.retrieve(PLACE, settings())
     assert "paths" in trace.timing_ms
     rendered = {f"{row['a_name']} {row['kind']} {row['b_name']}" for row in trace.paths}
     assert "pyapp.orders.OrderService.place INVOKES pyapp.billing.total" in rendered
-    assert [row["name"] for row in trace.tests] == ["tests.test_orders.test_place"]
-    assert [row["sha"] for row in trace.history] == ["b2b2b2b"]
+    assert "tests.test_orders.test_place" in {row["name"] for row in trace.tests}
     assert all(row["kind"] not in ("DEFINED_IN", "REFERS_TO", "MODIFIES") for row in trace.paths)
 
 
+def test_a_code_question_carries_the_commits_that_touched_the_symbol(code_index) -> None:
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
+    trace = Retriever(ctx.graph(), ctx.ollama).retrieve(PLACE, settings())
+    assert [row["sha"] for row in trace.history] == ["b2b2b2b"]
+    assert trace.history[0]["subject"] == "Total the order in place"
+
+
 def test_code_theta_filters_what_the_block_will_show(code_retriever: Retriever) -> None:
-    loose = code_retriever.retrieve("What does pyapp.cli.main do?", settings(code_theta=0.5))
-    strict = code_retriever.retrieve("What does pyapp.cli.main do?", settings(code_theta=0.95))
+    loose = code_retriever.retrieve("What does OrderService.graph do?", settings(code_theta=0.5))
+    strict = code_retriever.retrieve("What does OrderService.graph do?", settings(code_theta=0.95))
     assert any(row["omega"] == 0.50 for row in loose.paths)
     assert all(row["omega"] >= 0.95 for row in strict.paths)
 
