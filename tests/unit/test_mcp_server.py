@@ -232,7 +232,13 @@ def test_ask_carries_the_same_code_graph_fields(code_server):
 
 
 def test_a_prose_question_carries_the_fields_empty(server):
-    """The keys are always there so a client need not branch; on prose they are empty (Ruling 1a)."""
+    """
+    The keys are always there so a client need not branch; on prose they are empty (Ruling 1a).
+
+    This memory holds no code at all, so `seed_symbols` is empty too. Over a memory that *does*
+    hold code a prose question can still list dense seeds - they add reset mass without opening
+    the gate, which `test_web_base.py` pins on the same helper's HTTP side.
+    """
     data = structured(call(server, "hippo_search", question="Where is Acme Robotics headquartered?"))
     assert data["seed_symbols"] == [] and data["paths"] == []
     assert data["tests"] == [] and data["history"] == []

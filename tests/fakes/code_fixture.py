@@ -1,11 +1,11 @@
 """
-The two code-graph shapes `tests/fixtures/code_sample/` cannot produce, written through the store.
+The code-graph shapes `tests/fixtures/code_sample/` cannot produce, written through the store.
 
 Everything else moved to the real thing when WP2 and WP2i landed: `code_index` (and `mixed_index`)
 in `tests/conftest.py` index the checked-in tree through the actual pipeline, so the symbols, edges,
 omegas and provenances the retrieval tests assert are the extractor's, not a hand-written guess.
 
-What is left here is the two cases a fixed tree of ten files genuinely cannot express:
+What is left here is the three cases a fixed tree of ten files genuinely cannot express:
 
 * **history** - `Commit` nodes, `MODIFIES` and `PRECEDES`. A nested `.git` cannot be checked in, so
   WP2b builds these from a repository created at test time; until that lands, `write_commit_history`
@@ -14,6 +14,9 @@ What is left here is the two cases a fixed tree of ten files genuinely cannot ex
 * **a name that means too many things** - S2.13 drops a token matching more than ten symbols, and
   the fixture tree's most ambiguous name (`log`) means three. `many_symbols` writes as many
   same-named functions as a test asks for.
+* **a symbol busy enough to crowd the answer block** - the tree's busiest function makes three
+  calls, and QA1 defect 1 needs ten of them plus one caller before `code_triples_chars` bites.
+  `call_hub` writes that shape, plus a second unrelated seed to watch the round-robin with.
 """
 
 from __future__ import annotations
@@ -131,3 +134,85 @@ def many_symbols(ctx, source_id: str, name: str, how_many: int) -> list[str]:
     )
     ctx.invalidate_graph()
     return [row["id"] for row in rows]
+
+
+# The hub the real-model smoke tripped over (QA1 defect 1): `find_anchors` had sixteen outgoing
+# calls and one resolved caller, and `code_triples_chars` fitted fourteen lines. The ten-file tree's
+# busiest symbol makes three outgoing calls, so it cannot express the shape at all.
+HUB_OUT_OMEGAS = (1.0, 1.0, 0.95, 0.95, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9)
+
+
+def call_hub(ctx, source_id: str) -> dict[str, str]:
+    """
+    A well-connected function: ten outgoing `INVOKES` at ω 0.90-1.00 and one caller at ω 0.90.
+
+    Also a second, unrelated seed (`pkg.other.other_seed`, one outgoing call) so a test can watch
+    `code_paths_for` round-robin between two seeds instead of exhausting the busier one first.
+    Returns the display names, keyed `hub` / `caller` / `other` / `step0`. Symbols get a passage and
+    a `DEFINED_IN` like `many_symbols`, so the shape is one the real indexer could have written.
+    """
+    names = {  # (path, qualname) per symbol; the display name is `module_of(path) + "." + qualname`
+        "hub": ("pkg/anchors.py", "find_anchors"),
+        "caller": ("pkg/retriever.py", "Retriever.code_seeds"),
+        "other": ("pkg/other.py", "other_seed"),
+        "other_helper": ("pkg/other.py", "other_helper"),
+        **{f"step{i}": ("pkg/anchors.py", f"_step{i}") for i in range(len(HUB_OUT_OMEGAS))},
+    }
+    rows, chunks = [], []
+    for ordinal, (key, (path, qualname)) in enumerate(names.items()):
+        rows.append(
+            {
+                "id": symbol_id(source_id, path, qualname),
+                "source_id": source_id,
+                "name": qualname.rsplit(".", 1)[-1],
+                "qualname": qualname,
+                "kind": "function",
+                "lang": "python",
+                "path": path,
+                "line_start": 1,
+                "line_end": 2,
+            }
+        )
+        chunks.append(Chunk(700 + ordinal, f"{path} :: {qualname} (lines 1-2)", f"def {key}():\n    pass"))
+    ids = {key: row["id"] for key, row in zip(names, rows, strict=True)}
+    ctx.store.add_symbols(rows)
+    index_source(ctx.store, ctx.ollama, source_id, chunks)
+    ctx.store.link_definitions(
+        [(row["id"], passage_id(source_id, chunk)) for row, chunk in zip(rows, chunks, strict=True)]
+    )
+    ctx.store.add_code_edges(
+        [
+            *(
+                {
+                    "a": ids["hub"],
+                    "b": ids[f"step{i}"],
+                    "kind": "INVOKES",
+                    "omega": omega,
+                    "provenance": "same_file",
+                }
+                for i, omega in enumerate(HUB_OUT_OMEGAS)
+            ),
+            # The one edge that answers "who calls find_anchors", at the same ω as six of the ten.
+            {
+                "a": ids["caller"],
+                "b": ids["hub"],
+                "kind": "INVOKES",
+                "omega": 0.9,
+                "provenance": "via_import",
+            },
+            {
+                "a": ids["other"],
+                "b": ids["other_helper"],
+                "kind": "INVOKES",
+                "omega": 0.9,
+                "provenance": "same_file",
+            },
+        ]
+    )
+    ctx.invalidate_graph()
+    return {
+        "hub": "pkg.anchors.find_anchors",
+        "caller": "pkg.retriever.Retriever.code_seeds",
+        "other": "pkg.other.other_seed",
+        "other_helper": "pkg.other.other_helper",
+    }
