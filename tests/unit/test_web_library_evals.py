@@ -178,3 +178,22 @@ def test_run_table_says_which_questions_fell_back_to_embeddings(client, ctx):
     assert page.status_code == 200
     assert ">embeddings<" in page.text and ">graph<" not in page.text
     assert ctx.store.list_results(run_id)[0]["used_dpr_fallback"] is True
+
+
+def test_summary_shows_code_seeded_and_path_fidelity_cards(client, ctx):
+    # A prose-only run still carries both keys (S2.11): `code_seeded` reads 0.0 for every
+    # question and `path_fidelity` has no commit questions to average, so its card must still
+    # render rather than crash on a missing key.
+    set_id = client.post(
+        "/api/evals/sets",
+        json={"name": "empty", "questions": [{"text": "Where is Acme?", "expected_answer": "Boulder"}]},
+    ).json()["set_id"]
+    run_id = client.post(f"/api/evals/sets/{set_id}/run", json={}).json()["run_id"]
+    ctx.jobs.wait_all()
+    run = ctx.store.get_run(run_id)
+    assert run["summary"]["code_seeded"] == 0.0
+    assert run["summary"]["path_fidelity"] is None
+    page = client.get(f"/evals/runs/{run_id}")
+    assert page.status_code == 200
+    assert "Code seeded" in page.text
+    assert "Path fidelity" in page.text
