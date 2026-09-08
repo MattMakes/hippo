@@ -605,6 +605,14 @@ at 20 000.
 > as D3 requires. This is LadybugDB only — Neo4j can `MERGE` under `UNWIND` and was not measured here, so
 > nothing in this spike bears on the Neo4j backend.
 >
+> Be precise about what the guard gives you, because it is not all of `MERGE`: it is **create-if-absent, with
+> no `ON MATCH SET`**. The dedupe half was verified incidentally — a first run whose synthetic `(a, b, kind)`
+> triples collided wrote 1 000 of 2 000 rows, exactly the duplicates skipped. The missing half does not matter
+> here: PLAN.md:98 has the extractor collapse repeated call sites into one row (highest ω, first `call_line`,
+> the rest in `extra.call_lines`) **before the store sees them**, so there is no second row whose ω would need
+> to win a comparison. If that ever changes, the guard silently keeps the first ω rather than the highest, and
+> that is the line to revisit.
+>
 > **The number worth watching is vectors, not write time.** One passage embedding plus one name vector per
 > symbol is 24 634 vectors (72 MiB) for django and 40 000 (117 MiB) at the `MAX_CHUNKS` ceiling, and
 > `docs/FIDELITY.md:124-127` says every graph-version bump — each index job, each `hippo_remember`, each
