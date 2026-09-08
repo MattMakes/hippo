@@ -256,9 +256,20 @@ def test_the_source_header_names_the_files_the_code_pass_could_not_read(client, 
     assert "INVOKES" in page.text
 
 
-def test_an_archive_source_shows_no_empty_commit_count(client, coded):
-    """`meta["code"]` has no `commits` key at all without a repository, and Undefined is not None."""
-    _ctx, source_id = coded
+def test_a_meta_written_before_history_existed_shows_no_empty_commit_count(client, coded):
+    """
+    A source indexed before WP2b has no `commits` key in its stored `meta["code"]`, ever.
+
+    Stored meta is never rewritten, so the key stays missing for the life of that source, and
+    Jinja's `none` test asks `value is None` - which Undefined is not. The guard must be
+    `is defined`. Written against a patched meta rather than the fixture's, because a source
+    indexed *after* WP2b does carry `commits`, at 0.
+    """
+    ctx, source_id = coded
+    meta = dict(ctx.store.get_source(source_id)["meta"])
+    meta["code"] = {k: v for k, v in meta["code"].items() if k != "commits"}
+    ctx.store.update_source(source_id, meta_json=json.dumps(meta))
+
     page = client.get(f"/sources/{source_id}")
     assert page.status_code == 200
     assert "Code graph" in page.text
