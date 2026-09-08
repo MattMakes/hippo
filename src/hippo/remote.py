@@ -29,6 +29,21 @@ class RemoteError(RuntimeError):
     """The server refused or could not do what was asked; the message is fit to print."""
 
 
+class RemoteAmbiguous(RemoteError):
+    """
+    A name the caller gave means several things in the code graph (the server's 409).
+
+    Its message and `candidates` are exactly what `hipporag.paths.AmbiguousSymbol` carries, so the
+    CLI prints the same thing whether it answered from this process or from a running server. The
+    name is not resolvable here - only the server has the graph - which is why the candidates have
+    to travel in the response body.
+    """
+
+    def __init__(self, message: str, candidates: list[str]):
+        super().__init__(message)
+        self.candidates = candidates
+
+
 class RemoteHippo:
     """A thin client for /api on a running hippo."""
 
@@ -67,11 +82,16 @@ class RemoteHippo:
             )
         if response.status_code >= 400:
             detail = response.text
+            body = None
             try:
                 body = response.json()
                 detail = body.get("detail") or body.get("error") or detail
-            except ValueError:
+            except (ValueError, AttributeError):
                 pass
+            # A 409 from /api/code carries what the name could have meant; that list is the whole
+            # point of the status code, so it is raised as itself rather than flattened into text.
+            if isinstance(body, dict) and body.get("candidates"):
+                raise RemoteAmbiguous(str(detail), list(body["candidates"]))
             raise RemoteError(f"{self.base_url}{response.request.url.path}: {response.status_code} {detail}")
         return response.json()
 
@@ -93,6 +113,24 @@ class RemoteHippo:
 
     def add_repo(self, url: str) -> str:
         return self._json(self._client.post("/api/sources/repo", json={"url": url}))["source_id"]
+
+    # ---- the code graph (see web/routes/code.py for the shapes; these are the same dicts)
+
+    def code_path(self, a: str, b: str) -> dict[str, Any]:
+        return self._json(self._client.get("/api/code/path", params={"a": a, "b": b}))
+
+    def code_blast_radius(self, symbol: str, depth: int) -> dict[str, Any]:
+        return self._json(
+            self._client.get("/api/code/blast-radius", params={"symbol": symbol, "depth": depth})
+        )
+
+    def code_exception_path(self, symbol: str, exception: str) -> dict[str, Any]:
+        return self._json(
+            self._client.get("/api/code/exception-path", params={"symbol": symbol, "exception": exception})
+        )
+
+    def code_history(self, symbol: str, limit: int) -> dict[str, Any]:
+        return self._json(self._client.get("/api/code/history", params={"symbol": symbol, "limit": limit}))
 
     # ---- users and roles (see web/routes/users.py for who may do what)
 

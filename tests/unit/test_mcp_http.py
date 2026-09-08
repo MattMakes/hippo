@@ -21,6 +21,7 @@ from mcp.client.streamable_http import streamable_http_client
 
 from hippo.ingest import pipeline
 from hippo.web.app import create_app
+from tests.fakes.code_fixture import write_commit_history
 
 
 def free_port() -> int:
@@ -29,10 +30,8 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
-@pytest.fixture
-def server_url(ctx):
-    pipeline.add_sample(ctx)
-    ctx.jobs.wait_all()
+def serve(ctx):
+    """Run the real app on a free port in a background thread; yields the /mcp URL."""
     port = free_port()
     server = uvicorn.Server(uvicorn.Config(create_app(ctx), host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -44,6 +43,21 @@ def server_url(ctx):
     yield f"http://127.0.0.1:{port}/mcp"
     server.should_exit = True
     thread.join(timeout=10)
+
+
+@pytest.fixture
+def server_url(ctx):
+    pipeline.add_sample(ctx)
+    ctx.jobs.wait_all()
+    yield from serve(ctx)
+
+
+@pytest.fixture
+def code_server_url(code_index):
+    """The same server over a memory that holds a code graph, so the path tools have something to walk."""
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
+    yield from serve(ctx)
 
 
 def tool_payload(result):
@@ -64,6 +78,10 @@ def test_a_real_mcp_client_can_list_and_call_the_tools(server_url):
                     "hippo_remember",
                     "hippo_sources",
                     "hippo_whoami",
+                    "hippo_explain_path",
+                    "hippo_blast_radius",
+                    "hippo_exception_path",
+                    "hippo_history",
                 ]
 
                 sources = tool_payload(await session.call_tool("hippo_sources", {}))
@@ -93,5 +111,52 @@ def test_a_real_mcp_client_can_list_and_call_the_tools(server_url):
 
                 empty = await session.call_tool("hippo_search", {"question": "  "})
                 assert empty.is_error and "empty" in empty.content[0].text
+
+    asyncio.run(scenario())
+
+
+def test_a_real_mcp_client_can_walk_the_code_graph(code_server_url):
+    """The four code tools over the wire, including how an ambiguous name comes back."""
+
+    async def scenario():
+        async with streamable_http_client(code_server_url) as streams:
+            async with ClientSession(streams[0], streams[1]) as session:
+                await session.initialize()
+
+                walked = tool_payload(
+                    await session.call_tool(
+                        "hippo_explain_path",
+                        {"a": "pyapp.cli.main", "b": "pyapp.billing.total"},
+                    )
+                )
+                assert walked["lines"] == [
+                    "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
+                    "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total",
+                ]
+
+                blast = tool_payload(
+                    await session.call_tool(
+                        "hippo_blast_radius", {"symbol": "pyapp.billing.total", "depth": 1}
+                    )
+                )
+                assert blast["levels"] == [["pyapp.billing", "pyapp.orders.OrderService.place"]]
+
+                raised = tool_payload(
+                    await session.call_tool(
+                        "hippo_exception_path",
+                        {"symbol": "OrderService.save", "exception": "OrderError"},
+                    )
+                )
+                assert raised["found"] is True
+
+                past = tool_payload(
+                    await session.call_tool("hippo_history", {"symbol": "pyapp.orders.OrderService.place"})
+                )
+                assert [c["sha"] for c in past["commits"]] == ["b2b2b2b"]
+
+                # A name meaning three things is an error the client can act on: it lists them.
+                unclear = await session.call_tool("hippo_history", {"symbol": "log"})
+                assert unclear.is_error
+                assert "pyapp.store.Base.log" in unclear.content[0].text
 
     asyncio.run(scenario())

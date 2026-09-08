@@ -401,6 +401,7 @@ class CodeGraph:
             skipped[reason] = skipped.get(reason, 0) + 1
         return {
             "symbols": len(self.symbols),
+            "languages": sorted({s.lang for s in self.symbols}),
             "data_objects": len(self.data_objects),
             "edges": len(self.edges),
             "edges_by_kind": {k: by_kind[k] for k in sorted(by_kind)},

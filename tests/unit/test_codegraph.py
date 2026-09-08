@@ -1060,6 +1060,7 @@ def test_stats_shape(fixture_graph):
     stats = fixture_graph.stats()
     assert set(stats) == {
         "symbols",
+        "languages",  # WP4a: the status page's Code card reads this out of Source.meta["code"]
         "data_objects",
         "edges",
         "edges_by_kind",
