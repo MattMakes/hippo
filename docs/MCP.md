@@ -394,15 +394,27 @@ zip or a folder has no history to read — and returns an empty `commits` list o
 ```json
 {
   "symbol": "pyapp.orders.OrderService.place",
-  "symbol_id": "symbol-f32134b3...",
+  "symbol_id": "symbol-1cdd45af...",
   "commits": [
-    {"id": "commit-...", "sha": "9f3c1ab...", "date": "2026-08-14T09:12:03+00:00", "subject": "Total the order before invoicing"}
+    {"id": "commit-2bd173ee...", "sha": "c9be063124adf79f45bba65782c07aad68f3678f",
+     "date": "2024-01-02", "subject": "Total, invoice and log in place"},
+    {"id": "commit-ef638094...", "sha": "dea088d7cd0c7a44ffb0d8c55a6fbcdcc9b84612",
+     "date": "2024-01-01", "subject": "Add the order service"}
   ],
-  "lines": ["9f3c1ab 2026-08-14T09:12:03+00:00 Total the order before invoicing"]
+  "lines": [
+    "c9be063 2024-01-02 Total, invoice and log in place",
+    "dea088d 2024-01-01 Add the order service"
+  ]
 }
 ```
 
+`sha` is the full hash and `date` the day it was authored; `lines` abbreviates both for reading.
+`subject` is the first line of the commit message.
+
 How far back this goes is the `code_history_depth` setting (200 first-parent commits by default; 0
-turns history off). A commit is attributed to a symbol when its diff touched the symbol's lines *as
-they were at that commit*, so a function that has since moved is still credited correctly. Renames
-are the exception: history before a rename is not carried across.
+turns history off), and it is fixed at **clone** time — hippo clones `code_history_depth + 1`
+commits, because a shallow clone's oldest commit has no parent to diff against. Raising the setting
+therefore only takes effect on the next index of that source. A commit is attributed to a symbol
+when its diff touched the symbol's lines *as they were at that commit*, so a function that has since
+moved is still credited correctly. Renames are the exception: history before a rename is not carried
+across.

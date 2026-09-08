@@ -51,6 +51,9 @@ src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text, defines=[], extrac
                                   synonymy_threshold, workers, on_progress, should_stop) -> the nine COUNT_KEYS
                                   extract_text is the only gate on OpenIE: None = extract `text` (prose, as always), "" = skip, a string = extract that
                                   code=CodeGraph adds three stages: "writing code graph", "linking mentions" (REFERS_TO), "communities" (Leiden per module)
+                                  commit passages: title "commit <sha10>: <subject>", text = message + "Touched: <display names>"
+                                  (cut with "... (+N more)"), extract_text = the message alone, so OpenIE and the REFERS_TO scan
+                                  never see the Touched line -- those names were built from the graph, not written by a person
                                   GRAPH_WRITE_LOCK: held while entities/facts are written and linked, and by anything that ends in remove_orphans
 src/hippo/hipporag/graph_index.py GraphIndex.load(store); .scoped(visible_source_ids) -> induced subgraph (recomputed fact counts and passage
                                   counts); .ppr(); .neighbors(); .edge_between(); .graph_with_edits(); Passage; Fact; Edge; EdgeEdit
@@ -62,6 +65,9 @@ tests/fakes/fake_ollama.py        FakeOllama: rule-based model behind httpx.Mock
 tests/conftest.py                 fixtures: store, ollama, fake_ollama, ctx, sample_text, code_index (the code fixture
                                   indexed through the real pipeline -> (ctx, source_id)), mixed_index (prose AND code in
                                   ONE memory -- the fidelity claims are only checkable there); helpers
+                                  git_index (the same tree as a REPOSITORY source, with its history -> (ctx, source_id,
+                                  depths), where `depths` records what clone_repo was asked for, so a test can check that
+                                  code_history_depth really reaches git); helpers
                                   code_sample_zip(), index_code_sample(ctx), index_prose_sample(ctx), sample_chunks(text),
                                   CODE_SAMPLE_PATH, SAMPLE_PATH; and the --update-expected option (refused in CI)
 samples/acme_robotics.md          a tiny corpus whose sentences are "X <relation> Y." (the fake extractor understands it)
@@ -118,7 +124,9 @@ chunker.py   chunk_document(doc: Document, size_chars: int, overlap_chars: int, 
                     windows, still defines its tables, and never reaches OpenIE.
              ordinal counts up across the whole document list for a source (chunk_documents(docs, size, overlap, code=None) -> list[Chunk] does that).
 repos.py     is_git_url(url) -> bool  (https://, http://, git@, ssh:// forms only)
-             clone_repo(url, dest: Path, timeout=300) -> Path   # git clone --depth 1 --single-branch; raise RepoError with a friendly message
+             clone_repo(url, dest: Path, timeout=300, depth=1) -> Path   # git clone --depth N --single-branch; raise RepoError
+                     with a friendly message. The pipeline passes code_history_depth + 1: a shallow clone's oldest commit
+                     has no parent to diff against, so the depth is fixed at CLONE time, not at read time.
              walk_repo(root: Path, budget=None) -> list[Document]   # uses readers; skips IGNORED_DIRS, hidden dirs, files > MAX_FILE_BYTES, binaries
 pipeline.py  add_text(ctx, name, text, *, owner_id=None, access_role_id=None) -> source_id   # kind 'text', saves text under data_dir/sources/<id>/
              add_upload(ctx, filename, data: bytes, *, owner_id=None, access_role_id=None) -> source_id    # kind 'file' or 'archive' (.zip)
@@ -172,6 +180,8 @@ model.py         Symbol, DataObject, CodeEdge(a, b, kind, omega, provenance, ext
                      -- safety rails, module constants like MAX_CHUNKS, NOT settings. The history budgets are
                      settings: code_history_depth, code_git_timeout_s, code_history_total_s.
                  CodeGraph.by_path(path) / .parsed(path) / .symbol_by_id(id) / .stats() -> Source.meta["code"]
+                     = symbols, languages, data_objects, edges, edges_by_kind, files_parsed, files_skipped,
+                       unresolved_calls, unresolved_calls_total, truncated, commits, modifies, history_skipped
 treesitter.py    get_language(grammar), grammar_for(path, lang), new_parser(grammar) -- one Parser per extract_code
                  call (parsers are not thread-safe and two index jobs can run at once); node helpers text_of,
                  line_of, end_line_of, named_children, field_child, walk_tree.
@@ -189,6 +199,20 @@ data_access.py   READS/WRITES against the tables, collections and graph labels t
                  classify_literal(text), sql_tables (sqlglot, errors ignored), cypher_objects, mongo_hit,
                  mongoose_hit, read_sql_file, collect(literals). Cypher is tried BEFORE SQL, because
                  `MERGE (s:Settings ...)` starts with a SQL keyword.
+git_history.py   read_history(checkout, symbols, source_id, *, depth, timeout_s, total_s, should_stop=None)
+                     -> History(commits, modifies, precedes, skipped, truncated)
+                 `source_id` is POSITIONAL: commit ids are namespaced per source, so the reader cannot build
+                     one without it.
+                 A commit with a parent is read as `git diff -U0 <first-parent> <sha>`, NOT `git show -U0`,
+                     which prints nothing at all for a merge commit.
+                 MODIFIES is the innermost enclosing symbol per touched line, one row per (commit, symbol) with
+                     churn summed. The ranges are the symbol's AT THAT COMMIT -- each touched file is re-parsed at
+                     each commit -- because a HEAD-range shortcut would make the commit eval measure its own drift.
+                     A module whose only content is one class therefore never appears: the class encloses the line.
+                 `skipped` counts BUDGET skips only (a cancellation is not a budget); `truncated` marks a walk
+                     that `should_stop` ended. HistoryError is a logged warning and an empty history, never a
+                     failed index job.
+                 MODIFIES_OMEGA = 1.0; LOG_FORMAT; HUNK_RE; DIFF_OPTIONS
 extract.py       extract_code(docs, source_id, *, should_stop=None) -> CodeGraph
                  Each file parses in its own try/except, so one parse failure falls back to today's line windows for
                  that file alone. should_stop() is checked between files, so a big repo stays cancellable.

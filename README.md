@@ -175,7 +175,7 @@ Plus the edges that tie the code graph to the prose one: `DEFINED_IN` (a symbol 
 
 **A call it cannot justify produces no edge.** Not a guess with a low score — nothing. A call into the standard library, a third-party package, or a name the resolver cannot bind is left out, and only *counted*, per file, so you can see how big the gap is (`meta["code"]["unresolved_calls"]` on the source, and `unresolved_calls_total` beside it).
 
-**What you see.** The Source page's `code` meta records what the parser found: `symbols`, `languages` (which of the three it actually parsed), `data_objects`, `edges` and `edges_by_kind`, `files_parsed`, `files_skipped` (by reason: too big, unsupported, parse error), `unresolved_calls` and `unresolved_calls_total`, and `truncated`. `GET /api/status` has a `code` card summing the same things across the whole memory — `symbols`, `data_objects`, `code_edges`, `commits`, `languages`, `unresolved_calls`, `history_skipped` — beside the entity and fact counts it always reported. Every value is zero or empty until you index a repository.
+**What you see.** The Source page's `code` meta records what the parser found: `symbols`, `languages` (which of the three it actually parsed), `data_objects`, `edges` and `edges_by_kind`, `files_parsed`, `files_skipped` (by reason: too big, unsupported, parse error), `unresolved_calls` and `unresolved_calls_total`, `truncated`, and — for a repository — `commits`, `modifies` and `history_skipped`. `GET /api/status` has a `code` card summing the same things across the whole memory — `symbols`, `data_objects`, `code_edges`, `commits`, `languages`, `unresolved_calls`, `history_skipped` — beside the entity and fact counts it always reported. Every value is zero or empty until you index a repository.
 
 **Safety rails.** Extraction stops at 5,000 files or 50,000 symbols per source (`truncated` then says so), and a file over 512 KiB keeps its line windows rather than being parsed. These are constants, not knobs — the same class as the 20,000-passage ceiling. The knobs are on the Settings page and in [the table below](#settings-you-can-change-on-the-settings-page): eleven of them, all named `code_*`, and **none of them is an environment variable**.
 
@@ -244,7 +244,15 @@ Over HTTP the same four live under `/api/code` (plus `/api/code/symbols?q=` to s
 
 **And the answer itself says more now.** `hippo_search` and `hippo_ask` gained `seed_symbols`, `paths`, `tests`, `history` and `code_graph` — always present, empty on a prose question, so a client never has to ask whether the memory holds code.
 
-<!-- WP2b: git history and `code_history_depth`. Written once that merges. -->
+### Git history
+
+Add a source as a **git repository** (not a zip, not a folder) and hippo also reads its history: the last 200 first-parent commits by default, as `code_history_depth` says.
+
+Each commit becomes a node and a passage — titled `commit c9be0631: Total, invoice and log in place`, holding the message and a `Touched:` line naming the symbols it changed. The model reads the message only, never the diff. Commits are chained oldest to newest, and each is linked to the symbols it actually touched, so `hippo history OrderService.place` answers "which commits changed this function?" exactly rather than approximately.
+
+That precision has a cost worth knowing about. A commit's diff is intersected with the symbol ranges **as they were at that commit**, not as they are now — which means re-parsing each touched file at each commit. A function that has since moved down the file is still credited correctly. Two budgets keep that bounded: `code_git_timeout_s` per commit and `code_history_total_s` for the whole pass. Whatever was read is kept, and the number of commits a budget cost you shows up as `history_skipped` on the source and in the status card. If history cannot be read at all — no git, no repository, a bare checkout — that is a logged warning and an empty history, never a failed index.
+
+One thing to plan for: the depth is fixed when the repository is **cloned**, not when it is read. hippo clones `code_history_depth + 1` commits, because a shallow clone's oldest commit has no parent to diff against. Raising the setting later only takes effect the next time that source is indexed.
 
 ### Known limitations
 
@@ -253,6 +261,7 @@ Over HTTP the same four live under `/api/code` (plus `/api/code/symbols?q=` to s
 * **Boosts and tuned weights do not survive a re-index.** Re-indexing a source deletes its code nodes and writes them fresh, so a boost or a hand-set edge weight on a symbol is gone. (Prose has its own version of this: an entity that loses its last mention is swept, taking its synonym and tuned edges with it. Neither is new here.)
 * **Cypher and SQL are read as literals only.** Indexing hippo itself finds `Settings`, `Passage` and `Source` in `MATCH` and `MERGE` string literals; it does not find tables declared by an f-string-interpolated `CREATE NODE TABLE {name}(...)`. "The databases our code talks to" means the literals in the code, not schema introspection.
 * **Writing a very large graph is slow.** Inserting 200,000 relationships was measured at 537 s on one machine, against 13.6 s for 100,000 — the cost of looking up both endpoints is sharply scale-sensitive. Writes go in batches of 5,000. A repository big enough to feel this hits the 20,000-passage wall first.
+* **History stops at renames.** A commit is attributed to a symbol by intersecting its diff with the symbol's line ranges *at that commit*, so line drift is not a source of error. But rename detection is off, so a symbol's history before it was renamed or moved to another file is not attributed to it. Commits that exceed `code_git_timeout_s`, or that fall outside the whole-pass `code_history_total_s`, are skipped and counted in `history_skipped`.
 * **You can see how many calls did not resolve, not which.** `unresolved_calls` is a count per file. The leaderboard that would name them — so you could write a binding rule for the ones that matter — is phase 2.
 * **The tests cannot show the noise improvement.** The fake model the test suite uses barely produces triples from code at all, so the tests prove the *number* of model calls fell, not that the facts got cleaner. That one you have to see on a real model.
 
