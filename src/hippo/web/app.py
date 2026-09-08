@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from ..context import AppContext
 from . import auth
 from .render import STATIC_DIR, render
-from .routes import analyze, api, evals, graph, pages, sources, users
+from .routes import analyze, api, code, evals, graph, pages, sources, users
 from .security import HostAndOriginGuard
 
 log = logging.getLogger(__name__)
@@ -59,6 +59,9 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
     app.include_router(analyze.router)
     app.include_router(analyze.api)
     app.include_router(api.router)
+    app.include_router(code.api)
+    # Every include_router must come before this: _mount_mcp mounts a catch-all at "/", and
+    # Starlette tries routes in order, so anything added after it would never be reached.
     _mount_mcp(app, ctx)
     return app
 
