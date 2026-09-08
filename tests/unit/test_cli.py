@@ -188,9 +188,7 @@ def code_cli_behind_server(code_index, monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture(params=["local", "remote"])
 def code_cli(request):
     """Both branches of `_context_or_running_server`, one test body."""
-    return request.getfixturevalue(
-        "code_cli_ctx" if request.param == "local" else "code_cli_behind_server"
-    )
+    return request.getfixturevalue("code_cli_ctx" if request.param == "local" else "code_cli_behind_server")
 
 
 def test_path_prints_the_relations_that_connect_two_symbols(code_cli, capsys):

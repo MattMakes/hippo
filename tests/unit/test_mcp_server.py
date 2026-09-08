@@ -161,9 +161,7 @@ def code_server(code_index):
 
 
 def test_explain_path_renders_the_relations_between_two_symbols(code_server):
-    data = structured(
-        call(code_server, "hippo_explain_path", a="pyapp.cli.main", b="pyapp.billing.total")
-    )
+    data = structured(call(code_server, "hippo_explain_path", a="pyapp.cli.main", b="pyapp.billing.total"))
     assert data["found"] is True
     assert data["lines"] == [
         "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",

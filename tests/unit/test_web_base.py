@@ -143,6 +143,32 @@ def test_status_endpoint_reports_everything_ready(client):
     assert status["stats"]["passages"] == 8
 
 
+def test_the_code_card_is_all_zeros_when_no_code_is_indexed(client):
+    """Purely additive: a prose memory reports the card, empty, rather than not reporting it."""
+    assert client.get("/api/status").json()["code"] == {
+        "symbols": 0,
+        "data_objects": 0,
+        "code_edges": 0,
+        "commits": 0,
+        "languages": [],
+        "unresolved_calls": 0,
+        "history_skipped": 0,
+    }
+
+
+def test_the_code_card_counts_an_indexed_repository(code_index):
+    ctx, _source_id = code_index
+    with TestClient(create_app(ctx), base_url="http://localhost") as client:
+        card = client.get("/api/status").json()["code"]
+    assert card["symbols"] == 30 and card["data_objects"] == 12
+    assert card["code_edges"] > 0
+    # Both come from Source.meta["code"], which the indexer wrote; nothing here loads the graph.
+    assert card["languages"] == ["python", "typescript"]
+    assert card["unresolved_calls"] >= 2  # os.path.join and print in pyapp/orders.py
+    # No repo source, so no history: WP2b's commits and skips stay at zero.
+    assert card["commits"] == 0 and card["history_skipped"] == 0
+
+
 def test_settings_api_rejects_unknown_keys(client):
     assert client.put("/api/settings", json={"damping": 0.6}).json()["damping"] == 0.6
     assert client.put("/api/settings", json={"nonsense": 1}).status_code == 400

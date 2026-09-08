@@ -215,9 +215,7 @@ def build_server(ctx: AppContext) -> MCPServer:
             "that lead to one. Use to answer 'where does this error come from'."
         )
     )
-    def hippo_exception_path(
-        symbol: str, exception: str, mcp_ctx: Context | None = None
-    ) -> dict[str, Any]:
+    def hippo_exception_path(symbol: str, exception: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
         return exception_path_tool(ctx, symbol, exception, principal=caller(ctx, mcp_ctx))
 
     @server.tool(
@@ -332,9 +330,7 @@ def _code_answer(build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         raise ToolError(str(exc)) from exc
 
 
-def explain_path_tool(
-    ctx: AppContext, a: str, b: str, principal: Principal | None = None
-) -> dict[str, Any]:
+def explain_path_tool(ctx: AppContext, a: str, b: str, principal: Principal | None = None) -> dict[str, Any]:
     index, theta = _code_graph(ctx, principal)
     return _code_answer(lambda: path_payload(index, a, b, theta=theta))
 

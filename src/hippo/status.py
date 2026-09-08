@@ -51,6 +51,7 @@ def _compute(ctx: AppContext) -> dict[str, Any]:
         "is_pulling": bool(ctx.models and ctx.models.is_pulling()),
         "jobs": ctx.jobs.running_keys(),
         "stats": stats,
+        "code": _code_card(ctx, stats, store_ok),
         "embed_model_built": embed_model_built,
         "embed_model_mismatch": bool(embed_model_built and embed_model_built != ctx.ollama.embed_model),
         "ready": store_ok and ollama_ok and all(models.values()),
@@ -60,3 +61,44 @@ def _compute(ctx: AppContext) -> dict[str, Any]:
 def _installed(name: str, installed: list[str]) -> bool:
     full = name if ":" in name else name + ":latest"
     return name in installed or full in installed
+
+
+def _code_card(ctx: AppContext, stats: dict[str, Any], store_ok: bool) -> dict[str, Any]:
+    """
+    What the code graph holds. Every value is zero or empty until a repository is indexed.
+
+    The four counts come from the `stats()` call above, so this costs no extra query for them. The
+    three things a count cannot carry - which languages were parsed, how many calls went
+    unresolved, how many commits a budget skipped - come from each source's `meta["code"]`, which
+    the indexer wrote and `list_sources` already returns.
+
+    Deliberately not from `ctx.graph()`: `system_status` runs on every page render, and the first
+    render after a restart must not pay for a full `GraphIndex.load`.
+    """
+    languages: set[str] = set()
+    unresolved = skipped = 0
+    for source in ctx.store.list_sources() if store_ok else []:
+        code = (source.get("meta") or {}).get("code") or {}
+        languages.update(code.get("languages") or [])
+        unresolved += _tally(code.get("unresolved_calls_total"))
+        skipped += _tally(code.get("history_skipped"))
+    return {
+        "symbols": int(stats.get("symbols", 0)),
+        "data_objects": int(stats.get("data_objects", 0)),
+        "code_edges": int(stats.get("code_edges", 0)),
+        "commits": int(stats.get("commits", 0)),
+        "languages": sorted(languages),
+        "unresolved_calls": unresolved,
+        "history_skipped": skipped,
+    }
+
+
+def _tally(value: Any) -> int:
+    """A count out of `meta`, whether it was written as a number or as the list of what was skipped."""
+    if isinstance(value, bool) or value is None:
+        return 0
+    if isinstance(value, int | float):
+        return int(value)
+    if isinstance(value, list | tuple | set | dict):
+        return len(value)
+    return 0

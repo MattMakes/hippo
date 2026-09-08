@@ -144,9 +144,7 @@ def exception_payload(index: GraphIndex, symbol: str, exception: str, *, theta: 
     }
 
 
-def history_payload(
-    index: GraphIndex, symbol: str, *, limit: int = DEFAULT_HISTORY_LIMIT
-) -> dict[str, Any]:
+def history_payload(index: GraphIndex, symbol: str, *, limit: int = DEFAULT_HISTORY_LIMIT) -> dict[str, Any]:
     """The commits that touched a symbol, newest first. Empty when no history was indexed."""
     node_id = resolve_symbol(index, _required(symbol, "symbol"))
     limit = max(1, min(int(limit), MAX_HISTORY_LIMIT))

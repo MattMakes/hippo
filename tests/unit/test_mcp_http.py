@@ -150,9 +150,7 @@ def test_a_real_mcp_client_can_walk_the_code_graph(code_server_url):
                 assert raised["found"] is True
 
                 past = tool_payload(
-                    await session.call_tool(
-                        "hippo_history", {"symbol": "pyapp.orders.OrderService.place"}
-                    )
+                    await session.call_tool("hippo_history", {"symbol": "pyapp.orders.OrderService.place"})
                 )
                 assert [c["sha"] for c in past["commits"]] == ["b2b2b2b"]
 

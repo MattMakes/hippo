@@ -313,9 +313,7 @@ def cmd_raises(args: argparse.Namespace) -> int:
     data = (
         _code_remotely(lambda: remote.code_exception_path(args.symbol, args.exception))
         if remote is not None
-        else _code_locally(
-            ctx, lambda c, i, t: c.exception_payload(i, args.symbol, args.exception, theta=t)
-        )
+        else _code_locally(ctx, lambda c, i, t: c.exception_payload(i, args.symbol, args.exception, theta=t))
     )
     if not data["found"]:
         print(f"{data['symbol']} does not reach {data['exception']}.")
