@@ -24,8 +24,10 @@ from hippo.hipporag.text import (
     fact_id,
     fact_text,
     is_meaningful_phrase,
+    label_of,
     make_id,
     min_max_normalize,
+    split_identifier,
 )
 
 REFERENCE_MISC_UTILS = Path("/home/user/osu-nlp-group/hipporag/src/hipporag/utils/misc_utils.py")
@@ -196,3 +198,48 @@ def test_tiny_phrases_are_not_meaningful(phrase: str) -> None:
 @pytest.mark.parametrize("phrase", ["usa", "123", "a b c", "boulder", "2015"])
 def test_phrases_with_more_than_two_letters_or_digits_are_meaningful(phrase: str) -> None:
     assert is_meaningful_phrase(phrase)
+
+
+# --------------------------------------------------------------------- label_of
+
+
+@pytest.mark.parametrize(
+    ("node_id", "expected"),
+    [
+        (entity_id("boulder"), "Entity"),
+        (make_id("passage-", "some passage text"), "Passage"),
+        (make_id("symbol-", "src/x.py:OrderService.ship"), "Symbol"),
+        (make_id("data-", "orders:table"), "DataObject"),
+        (make_id("commit-", "abc123"), "Commit"),
+        (fact_id("a", "b", "c"), "Fact"),
+    ],
+)
+def test_label_of_maps_id_prefix_to_label(node_id: str, expected: str) -> None:
+    assert label_of(node_id) == expected
+
+
+@pytest.mark.parametrize("bad_id", ["unknown-abc123", "", "Entity-abc123", 42, None])
+def test_label_of_raises_on_unrecognised_prefix_or_non_string(bad_id) -> None:
+    with pytest.raises(ValueError):
+        label_of(bad_id)
+
+
+# --------------------------------------------------------------- split_identifier
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("OrderService", ["order", "service"]),
+        ("get_user2", ["get", "user", "2"]),
+        ("pkg.HTTPServer", ["pkg", "http", "server"]),
+        ("XMLHttpRequest", ["xml", "http", "request"]),
+        ("__init__", ["init"]),
+        ("snake_case_name", ["snake", "case", "name"]),
+        ("a.b.c", ["a", "b", "c"]),
+        ("", []),
+        ("café_name", ["café", "name"]),
+    ],
+)
+def test_split_identifier_examples(name: str, expected: list[str]) -> None:
+    assert split_identifier(name) == expected
