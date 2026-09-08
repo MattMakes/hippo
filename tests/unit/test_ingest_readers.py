@@ -342,3 +342,38 @@ def test_walk_repo_does_not_swallow_too_large(tmp_path: Path) -> None:
     assert len(walk_repo(tmp_path, readers.TextBudget(limit=80))) == 2
     with pytest.raises(readers.TooLarge):
         walk_repo(tmp_path, readers.TextBudget(limit=79))
+
+
+# ------------------------------------------------------- the code-graph language
+
+
+def test_lang_of() -> None:
+    """Which grammar the code graph reads a file with; None for everything else."""
+    for name in ("a.py", "pkg/mod.pyi", "src/hippo/store/ladybug.py"):
+        assert readers.lang_of(name) == "python"
+    for name in ("a.ts", "a.tsx", "a.js", "a.jsx", "a.mjs", "a.cjs"):
+        assert readers.lang_of(name) == "typescript"
+    assert readers.lang_of("schema/orders.sql") == "sql"
+    # Code we have no grammar for, prose, and files with no extension are all None.
+    for name in ("tool.go", "main.rs", "app.css", "README.md", "notes.txt", "Makefile"):
+        assert readers.lang_of(name) is None, name
+
+
+def test_lang_of_only_claims_files_is_code_name_claims() -> None:
+    """A file can never be code for the chunker and unknown to the extractor, or vice versa."""
+    for suffix in readers.PYTHON_EXTENSIONS | readers.TYPESCRIPT_EXTENSIONS | readers.SQL_EXTENSIONS:
+        assert suffix in readers.CODE_EXTENSIONS, suffix
+        assert readers.is_code_name(f"file{suffix}")
+        assert readers.lang_of(f"file{suffix}") is not None
+
+
+def test_lang_of_agrees_with_the_codegraph_side() -> None:
+    """
+    `codegraph.model.lang_of` is the same table on the other side of the dependency line
+    (codegraph may not import ingest). The two are kept in step by convention and by this.
+    """
+    from hippo.codegraph.model import lang_of as codegraph_lang_of
+
+    for suffix in sorted(readers.CODE_EXTENSIONS | readers.PROSE_EXTENSIONS | {""}):
+        name = f"pkg/file{suffix}"
+        assert readers.lang_of(name) == codegraph_lang_of(name), suffix

@@ -69,6 +69,10 @@ CODE_EXTENSIONS = {
     ".cfg", ".conf", ".properties", ".proto", ".graphql", ".tf", ".hcl", ".vue", ".svelte",
     ".csv", ".tsv", ".dockerfile", ".lock",
 }  # fmt: skip
+# The subsets of CODE_EXTENSIONS the code graph has a grammar (or a parser) for; see `lang_of`.
+PYTHON_EXTENSIONS = {".py", ".pyi"}
+TYPESCRIPT_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+SQL_EXTENSIONS = {".sql"}
 # Extensionless files that we know are text.
 KNOWN_TEXT_NAMES = {"makefile", "dockerfile", "license", "readme", "notice", "authors", "changelog"}
 
@@ -132,6 +136,27 @@ def is_probably_binary(data: bytes) -> bool:
 
 def is_code_name(name: str) -> bool:
     return _suffix(name) in CODE_EXTENSIONS
+
+
+def lang_of(name: str) -> str | None:
+    """
+    Which language the code graph can read this file as: "python", "typescript", "sql", or
+    None for every other file (including code we have no grammar for, like Go).
+
+    Keyed on the same suffixes `is_code_name` uses, so a file can never be code for the
+    chunker and unknown to the extractor. `.js/.jsx/.mjs/.cjs` are "typescript": the TSX
+    grammar parses plain JavaScript cleanly (R4 T9), so there is no third grammar.
+    `codegraph.model.lang_of` is the same table on the other side of the dependency line;
+    `test_ingest_readers.py` pins the two together.
+    """
+    suffix = _suffix(name)
+    if suffix not in CODE_EXTENSIONS:
+        return None
+    if suffix in PYTHON_EXTENSIONS:
+        return "python"
+    if suffix in TYPESCRIPT_EXTENSIONS:
+        return "typescript"
+    return "sql" if suffix in SQL_EXTENSIONS else None
 
 
 def is_supported_name(name: str) -> bool:
