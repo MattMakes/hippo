@@ -160,6 +160,9 @@ def code_details_for(ctx, principal: Principal, passages: list[dict[str, Any]]) 
     A prose source has none of this and gets an empty dict, which the template checks. The
     relations are rendered by `paths.render_triples`, so the page and the block the model reads
     say the same thing in the same S2.15 grammar rather than in two hand-written formats.
+
+    `is_commit` and `touched` are for the one passage kind that is not code: a commit's own
+    passage, which the template introduces by what it changed rather than by what it "defines".
     """
     index = ctx.graph_for(principal.access)
     if not index.code_nodes:
@@ -179,7 +182,18 @@ def code_details_for(ctx, principal: Principal, passages: list[dict[str, Any]]) 
             for commit in paths.history(index, v, limit=CODE_COMMITS_SHOWN):
                 if commit.id not in {c.id for c in commits}:
                     commits.append(commit)
+        # `paths.history` is newest-first per symbol, but a passage can define several symbols and
+        # the loop above concatenates their histories in display-name order. Sort the merged list
+        # before the cut, or the newest commit of the second symbol lands under the oldest of the
+        # first - and, once the cut bites, drops off the page entirely. `ordinal` 0 is newest.
+        commits.sort(key=lambda c: (c.ordinal, c.sha))
+        nodes = [index.code_node_at(v) for v in symbols]
         out[passage["id"]] = {
+            # A commit is DEFINED_IN its own passage too, so a commit passage arrives here with the
+            # commit as its only "symbol". Saying it *defines* a sha is nonsense; what a reader
+            # wants is what the commit touched, which is exactly its MODIFIES targets.
+            "is_commit": all(n is not None and n.kind == "commit" for n in nodes),
+            "touched": sorted({paths.display_at(index, e.dst) for e in edges if e.kind == "MODIFIES"}),
             "symbols": [
                 {
                     "id": index.node_ids[v],
