@@ -151,7 +151,7 @@ Give hippo a git repository or a zip of one and it does something different from
 
 **One passage per symbol.** Instead of 1500-character windows that cut a function in half, each module header, class header, function and method becomes its own passage, titled `path :: module.qualname (lines a-b)` — for example `pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)`. A body too long for one passage is split at its own top-level statements into `(part N)`, never mid-expression.
 
-**The model never reads a function body.** It sees a symbol's docstring or doc-comment when that is at least 80 characters, README and markdown, and commit messages. Never bodies, never DDL. That is the cost saving: extracting facts costs two model calls per passage, and this cuts the number of passages that need them to the documented ones.
+**The model never reads a function body.** It sees a symbol's docstring or doc-comment when that is at least 80 characters long, README and markdown, and commit messages. Never bodies, never DDL. Extracting facts costs two model calls per passage, so this is most of the saving: in a repository only the documented symbols cost anything.
 
 **What the parser writes.** Two new kinds of node beside the entities:
 
@@ -183,7 +183,7 @@ Plus the edges that tie the code graph to the prose one: `DEFINED_IN` (a symbol 
 
 ### Known limitations
 
-* **A repository large enough matters now where it did not before.** One passage per symbol makes about 2.4-3× as many passages as 1500-character line windows did for the same code, and a source over 20,000 passages is refused outright, not truncated. Measured: hippo's own `src/hippo` goes from ~335 windows to 807 passages (4% of the ceiling) and django from ~3,946 to 12,317 (62%), but pandas is 33,975 symbols and is **rejected**, where its line windows fitted before. If a repository used to index and no longer does, that is why; index a subdirectory instead.
+* **A big repository can hit a wall it used to fit through.** One passage per symbol makes about 2.4-3× as many passages as 1500-character line windows did for the same code, and a source over 20,000 passages is refused outright, not truncated. Measured: hippo's own `src/hippo` goes from ~335 windows to 807 passages (4% of the ceiling) and django from ~3,946 to 12,317 (62%), but pandas is 33,975 symbols and is **rejected**, where its line windows fitted before. If a repository used to index and no longer does, that is why; index a subdirectory instead.
 * **Reload cost grows with the graph.** Every graph-version bump — each index job, each applied changeset — reloads every stored vector. One passage *and* one name vector per symbol doubles that count for code: at the 20,000-passage ceiling it is 40,000 vectors, about 117 MiB re-read on each bump.
 * **Boosts and tuned weights do not survive a re-index.** Re-indexing a source deletes its code nodes and writes them fresh, so a boost or a hand-set edge weight on a symbol is gone. (Prose has its own version of this: an entity that loses its last mention is swept, taking its synonym and tuned edges with it. Neither is new here.)
 * **Cypher and SQL are read as literals only.** Indexing hippo itself finds `Settings`, `Passage` and `Source` in `MATCH` and `MERGE` string literals; it does not find tables declared by an f-string-interpolated `CREATE NODE TABLE {name}(...)`. "The databases our code talks to" means the literals in the code, not schema introspection.
