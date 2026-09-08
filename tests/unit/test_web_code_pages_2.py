@@ -130,6 +130,23 @@ def test_the_card_separates_what_the_question_named_from_what_similarity_found(c
     assert "also reached by similarity" in page.text
 
 
+def test_one_chip_per_token_the_question_typed(client, coded):
+    """`self.log` reaches three different `log` symbols; three identical chips say nothing."""
+    ctx, _source_id = coded
+    question = "Why does self.log fail in pyapp.orders.OrderService.place?"
+    trace = ask_service.search(ctx, question)
+    tokens = [s.token for s in trace.seed_symbols if s.kept and s.how != "dense"]
+    assert len(tokens) > len(set(tokens)), "expected one token to have matched several symbols"
+
+    page = client.post("/ask", data={"question": question})
+    named_row = page.text.split("the question named", 1)[1].split("</p>", 1)[0]
+    # The label only - the title carries the resolved name, which differs per matched symbol.
+    chips = [
+        pill.split(">", 1)[1].split("<span", 1)[0].strip() for pill in named_row.split('class="pill"')[1:]
+    ]
+    assert chips and len(chips) == len(set(chips)), chips
+
+
 def test_the_code_graph_block_folds_away(client):
     """Two dozen relation lines must not push the passages the model read off the screen."""
     page = client.post("/ask", data={"question": PLACE})
