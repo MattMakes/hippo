@@ -207,7 +207,7 @@ Subsystems: pyapp.orders.OrderService: pyapp.orders.OrderService.place, pyapp.or
 
 It is cut at `code_triples_chars` on a line boundary. It is not a real passage: it never appears in the answer's list of sources.
 
-**And one more pass by the model, when code was named.** `code_select` (on by default) shows the model the passages it is about to read and lets it keep, drop or expand them. A dropped passage is ranked below the kept ones, never removed, and a failed or unparsable reply keeps everything. A prose question never reaches this pass, so it costs nothing on a memory you only ask prose questions about.
+**And one more pass by the model, when code was named.** `code_select` (on by default) shows the model the passages it is about to read and lets it keep, drop or expand them. A dropped passage is ranked below the kept ones, never removed, and a failed or unparsable reply keeps everything. It only runs when the question *named* code, and the rule for that is about how you wrote the word, not about what the memory holds: a question of ordinary English words costs nothing extra even on a repository.
 
 Every one of these is off on a memory with no code in it, and can be switched off on one that has: see [the settings table](#settings-you-can-change-on-the-settings-page). `docs/FIDELITY.md` adaptation 15 states the guarantee precisely and says which test checks it.
 
@@ -248,7 +248,7 @@ Over HTTP the same four live under `/api/code` (plus `/api/code/symbols?q=` to s
 
 Add a source as a **git repository** (not a zip, not a folder) and hippo also reads its history: the last 200 first-parent commits by default, as `code_history_depth` says.
 
-Each commit becomes a node and a passage — titled `commit c9be0631: Total, invoice and log in place`, holding the message and a `Touched:` line naming the symbols it changed. The model reads the message only, never the diff. Commits are chained oldest to newest, and each is linked to the symbols it actually touched, so `hippo history OrderService.place` answers "which commits changed this function?" exactly rather than approximately.
+Each commit becomes a node and a passage — titled `commit c9be063124: Total, invoice and log in place`, holding the message and a `Touched:` line naming the symbols it changed. The model reads the message only — never the diff, and never the `Touched:` line, whose names hippo wrote itself. Commits are chained newest to oldest, and each is linked to the symbols it actually touched, so `hippo history OrderService.place` answers "which commits changed this function?" exactly rather than approximately.
 
 That precision has a cost worth knowing about. A commit's diff is intersected with the symbol ranges **as they were at that commit**, not as they are now — which means re-parsing each touched file at each commit. A function that has since moved down the file is still credited correctly. Two budgets keep that bounded: `code_git_timeout_s` per commit and `code_history_total_s` for the whole pass. Whatever was read is kept, and the number of commits a budget cost you shows up as `history_skipped` on the source and in the status card. If history cannot be read at all — no git, no repository, a bare checkout — that is a logged warning and an empty history, never a failed index.
 
