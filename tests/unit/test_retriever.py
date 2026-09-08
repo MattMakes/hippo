@@ -481,6 +481,11 @@ def test_with_the_four_code_settings_off_the_code_graph_contributes_nothing(stor
     after = Retriever(index, ollama).retrieve(DIRECT, settings(**CODE_OFF))
 
     assert index.code_nodes, "the graph really is there"
+    # Including the cross-kind synonym, which is one of the five terms scale 0 has to drop.
+    assert any(
+        {row["a"].split("-")[0], row["b"].split("-")[0]} == {"entity", "symbol"}
+        for row in store.load_synonyms()
+    ), "the fixture writes an Entity-Symbol synonym, or this test covers nothing"
     assert [(p.passage_id, p.score) for p in after.passages] == [
         (p.passage_id, p.score) for p in before.passages
     ]

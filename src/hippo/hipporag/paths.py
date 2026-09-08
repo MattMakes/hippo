@@ -142,11 +142,25 @@ def resolve_symbol(index: GraphIndex, name: str) -> str:
 # ----------------------------------------------------------------- walking
 
 
+def _walkable(index: GraphIndex, edges: list[DirectedEdge], theta: float) -> list[DirectedEdge]:
+    """
+    The edges of one direction that a walk may take, in a backend-independent order.
+
+    The sort is load-bearing, not cosmetic. `code_out`/`code_in` are built in whatever order
+    `load_code_edges()` returned, and a graph promises none: LadybugDB and the FakeStore hand back
+    insertion order, Neo4j does not. Without a sort here the same question would produce the same
+    *set* of relations in a different order on a different backend, which shows up as a different
+    answer block and a different tie-break in the shortest-path search.
+    """
+    kept = [e for e in edges if e.kind not in NOT_A_STEP and e.omega >= theta]
+    return sorted(kept, key=lambda e: (e.kind, display_at(index, e.dst), display_at(index, e.src)))
+
+
 def _steps(index: GraphIndex, vertex: int, *, theta: float, undirected: bool) -> list[DirectedEdge]:
     """The edges a walk may take from `vertex`, forwards (and backwards when undirected)."""
-    out = [e for e in index.out_edges(vertex) if e.kind not in NOT_A_STEP and e.omega >= theta]
+    out = _walkable(index, index.out_edges(vertex), theta)
     if undirected:
-        out += [e for e in index.in_edges(vertex) if e.kind not in NOT_A_STEP and e.omega >= theta]
+        out += _walkable(index, index.in_edges(vertex), theta)
     return out
 
 
@@ -237,7 +251,7 @@ def expand_from(
     out: list[DirectedEdge] = []
     seen: set[int] = set(vertices)
     for vertex in vertices:
-        for edge in index.out_edges(vertex):
+        for edge in _walkable(index, index.out_edges(vertex), 0.0):
             if edge.kind in EXPAND_KINDS and edge.omega >= omega and edge.dst not in seen:
                 seen.add(edge.dst)
                 out.append(edge)
@@ -275,8 +289,8 @@ def blast_radius(
     for _ in range(max(0, depth)):
         found: list[int] = []
         for current in frontier:
-            for edge in index.in_edges(current):
-                if edge.kind in NOT_A_STEP or edge.omega < theta or edge.src in seen:
+            for edge in _walkable(index, index.in_edges(current), theta):
+                if edge.src in seen:
                     continue
                 if len(seen) >= cap:
                     truncated = True
@@ -334,8 +348,8 @@ def tests_for(index: GraphIndex, vertices: list[int], *, theta: float) -> list[C
     out: list[CodeNode] = []
     seen: set[str] = set()
     for vertex in vertices:
-        for edge in index.out_edges(vertex):
-            if edge.kind != "TESTED_BY" or edge.omega < theta:
+        for edge in _walkable(index, index.out_edges(vertex), theta):
+            if edge.kind != "TESTED_BY":
                 continue
             node = index.code_node_at(edge.dst)
             if node is not None and node.id not in seen:

@@ -588,7 +588,7 @@ class Retriever:
             for position in dpr_order[:dense_seeds]:
                 position = int(position)
                 passage = index.passages[position]
-                for vertex in index.symbols_defined_in(int(index.passage_vertices[position])):
+                for vertex in sorted(index.symbols_defined_in(int(index.passage_vertices[position]))):
                     if index.node_kind[vertex] not in (SYMBOL, DATA) or vertex in already:
                         continue
                     already.add(vertex)
@@ -681,11 +681,14 @@ class Retriever:
         for passage_id in passage_ids:
             vertex = index.idx_of.get(passage_id)
             if vertex is not None:
-                vertices.extend(index.symbols_defined_in(vertex))
+                # Vertex numbers are assigned at load in a backend-independent order, so sorting
+                # here is what keeps "which neighbours did `expand` reach first" the same on all
+                # three stores - `code_out` itself is in whatever order the store returned rows.
+                vertices.extend(sorted(index.symbols_defined_in(vertex)))
         seen = {p.passage_id for p in trace.passages}
         out: list[RankedPassage] = []
         for edge in paths.expand_from(index, vertices, limit=limit):
-            for passage_vertex in index.defining_passages(edge.dst):
+            for passage_vertex in sorted(index.defining_passages(edge.dst)):
                 passage = index.passages[index.passage_position(passage_vertex)]
                 if passage.id in seen:
                     continue

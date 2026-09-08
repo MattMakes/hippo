@@ -594,7 +594,9 @@ def write_code_graph(store, ollama, source_id: str, *, with_history: bool = True
     store.set_symbol_communities({ids[s.display]: s.community for s in SYMBOLS if s.community is not None})
     # The cross-kind synonym WP2i's `find_synonyms` writes when prose and code are indexed
     # together. It is a code-only weight term, so `code_structural_scale = 0` must drop it too.
-    store.add_synonyms([(entity_id("order service"), ids["pyapp.orders.OrderService"], 0.87)])
+    # The entity has to be one the fake OpenIE really found in these passages, or all three stores
+    # skip the row for a missing endpoint and the inertness test covers nothing.
+    store.add_synonyms([(entity_id("acme robotics"), ids["pyapp.orders.OrderService"], 0.87)])
 
     if with_history:
         _write_history(store, source_id, ids, passage_of_title)
