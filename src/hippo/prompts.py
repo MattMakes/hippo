@@ -369,6 +369,45 @@ def split_answer(response: str) -> tuple[str, str]:
     return "", response.strip()
 
 
+# ================================================ 4b. The code graph (hippo's own)
+# Two things that only exist when a question named code. Neither touches `rag_qa` above: the block
+# rides in as one more `Title:`/text pair, which is why `qa_messages` stays byte-identical (D19).
+
+CODE_GRAPH_HEADER = (
+    "Relations read from the code graph, not from prose. INVOKES = calls, IMPORTS = imports, "
+    "INHERITS = subclasses, OVERRIDES = replaces, CONTAINS = defines, RAISES / CATCHES = throws or "
+    "handles, TESTED_BY = is covered by, READS / WRITES = uses or changes a table or collection. "
+    "The number in brackets is a confidence between 0 and 1."
+)
+
+CODE_SELECT_SYSTEM = (
+    "You are helping a code search tool decide what an engineer should read. You are given a "
+    "question and a numbered list of passages, each with an id, a title and the first lines of its "
+    'text. Return JSON with three lists of passage ids: "keep" for the passages that help answer '
+    'the question, "drop" for the ones that do not, and "expand" for a passage whose immediate '
+    "callees or subclasses would probably help too. Use only ids from the list. When in doubt, keep."
+)
+
+CODE_SELECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "keep": {"type": "array", "items": {"type": "string"}},
+        "drop": {"type": "array", "items": {"type": "string"}},
+        "expand": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["keep"],
+}
+
+
+def code_select_messages(question: str, passages: list[tuple[str, str, str]]) -> list[dict[str, str]]:
+    """`passages` is a list of (passage_id, title, preview), best first."""
+    listed = "".join(f"id: {pid}\nTitle: {title}\n{preview}\n\n" for pid, title, preview in passages)
+    return [
+        {"role": "system", "content": CODE_SELECT_SYSTEM},
+        {"role": "user", "content": f"Question: {question}\n\n{listed}Return the JSON."},
+    ]
+
+
 # ============================== 5. Making sample evaluation questions (hippo's own)
 
 QUESTION_GEN_SYSTEM = (
