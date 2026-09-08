@@ -1068,12 +1068,36 @@ def test_stats_shape(fixture_graph):
         "unresolved_calls",
         "unresolved_calls_total",
         "truncated",
+        "commits",
+        "modifies",
+        "history_skipped",
     }
     assert stats["symbols"] == 30
     assert stats["files_parsed"] == 10
     assert stats["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # tools/build.go
     assert stats["unresolved_calls"]["pyapp/orders.py"] == 2  # os.path.join and print
     assert stats["truncated"] is False
+    # An archive has no history to read, so the three history counts are zero rather than absent:
+    # `meta["code"]` has one shape whatever the source kind, and 0 commits is a fact about it.
+    assert (stats["commits"], stats["modifies"], stats["history_skipped"]) == (0, 0, 0)
+    assert json.loads(json.dumps(stats)) == stats
+
+
+def test_history_is_carried_on_the_graph_for_the_indexer_to_write():
+    """
+    `read_history` fills these; `extract_code` never does. They live on `CodeGraph` because the
+    indexer writes one object, and because `stats()` is what tells a user their history was cut
+    short (`history_skipped`) rather than their repository being small.
+    """
+    graph = graph_of({"a.py": "def one():\n    return 1\n"})
+    assert (graph.commits, graph.modifies, graph.precedes, graph.history_skipped) == ([], [], [], 0)
+
+    graph.commits = [{"id": "commit-1", "sha": "abc", "ordinal": 0}]
+    graph.modifies = [{"commit_id": "commit-1", "symbol_id": "symbol-1", "omega": 1.0, "hunk": {}}]
+    graph.precedes = [("commit-1", "commit-2")]
+    graph.history_skipped = 4
+    stats = graph.stats()
+    assert (stats["commits"], stats["modifies"], stats["history_skipped"]) == (1, 1, 4)
     assert json.loads(json.dumps(stats)) == stats
 
 

@@ -261,6 +261,44 @@ def code_index(ctx: AppContext):
     yield ctx, source_id
 
 
+@pytest.fixture
+def git_index(ctx: AppContext, tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """
+    The fixture tree as a *repository* source, indexed with its history: `(ctx, source_id)`.
+
+    `repos.is_git_url` refuses a local path -- deliberately, so a typed URL can never reach the
+    filesystem -- while `git clone` is perfectly happy with one. So the source is created
+    directly rather than through `add_repo`, and `clone_repo` is replaced by a real local clone
+    that keeps the `depth` it was given. Everything after the clone is the production path:
+    `walk_repo`, `extract_code`, `read_history`, the chunker and the indexer.
+
+    `depths` on the fixture records what `clone_repo` was asked for, so a test can check that
+    `code_history_depth` really reaches git.
+    """
+    from hippo.ingest import pipeline, repos
+
+    checkout = make_code_checkout(tmp_path / "origin")
+    depths: list[int] = []
+
+    def clone_locally(url: str, dest: Path, timeout: int = 300, depth: int = 1) -> Path:
+        depths.append(depth)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", str(depth), "--single-branch", "--", url, str(dest)],
+            check=True,
+            env=git_env(),
+        )
+        return dest
+
+    monkeypatch.setattr(repos, "clone_repo", clone_locally)
+    source_id = ctx.store.create_source("repo", "code_sample", {"url": f"file://{checkout}"})
+    pipeline.source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
+    pipeline.run_indexing(ctx, source_id)
+    source = ctx.store.get_source(source_id)
+    assert source["status"] == "ready", source["error"]
+    yield ctx, source_id, depths
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     """
     `--update-expected` rewrites `tests/fixtures/code_sample/expected.json` from this run.

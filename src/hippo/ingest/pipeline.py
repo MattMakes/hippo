@@ -261,6 +261,11 @@ def _read_chunk_index(ctx: AppContext, source: dict[str, Any], *, should_stop) -
     if should_stop():
         raise openie.Stopped("stopped before 'chunking'")
 
+    settings = ctx.store.get_settings()
+    _read_history(ctx, source, code, settings, should_stop=should_stop)
+    if should_stop():
+        raise openie.Stopped("stopped before 'chunking'")
+
     chunks = chunk_documents(docs, config.chunk_size_chars, config.chunk_overlap_chars, code=code)
     if not chunks:
         raise ValueError("no readable text was found in this source")
@@ -279,7 +284,7 @@ def _read_chunk_index(ctx: AppContext, source: dict[str, Any], *, should_stop) -
         source_id,
         chunks,
         code=code,
-        synonymy_threshold=float(ctx.store.get_settings()["synonymy_threshold"]),
+        synonymy_threshold=float(settings["synonymy_threshold"]),
         workers=config.openie_workers,
         on_progress=lambda stage, done, total: ctx.store.update_source(
             source_id, stage=stage, progress_done=done, progress_total=total
@@ -297,6 +302,62 @@ def _read_chunk_index(ctx: AppContext, source: dict[str, Any], *, should_stop) -
         error=None,
         meta_json=json.dumps(meta),
     )
+
+
+def _clone_depth(ctx: AppContext) -> int:
+    """
+    How many commits to fetch: one more than the history reads, or 1 when history is off.
+
+    The extra commit is not a rounding-up. A shallow clone's oldest commit reports *no parent*,
+    so its diff would be taken against the empty tree and it would look like the commit that
+    added every file in the repository -- one commit modifying every symbol. Fetching one more
+    than we walk puts that boundary outside the walk, so it is never read at all.
+    (`read_history` also refuses to diff a `.git/shallow` commit, which covers a clone this
+    function did not make -- a user's own checkout, or a repo cloned before this setting moved.)
+    """
+    depth = int(ctx.store.get_settings()["code_history_depth"])
+    return depth + 1 if depth > 0 else 1
+
+
+def _read_history(ctx: AppContext, source: dict[str, Any], code, settings, *, should_stop) -> None:
+    """
+    Fill a repo source's commits, MODIFIES and PRECEDES onto its `CodeGraph`.
+
+    Only a repository has a history: every other kind keeps the empty lists and writes nothing.
+    `code_history_depth = 0` disables the pass entirely (S2.11).
+
+    A history that cannot be read is a warning, not a failed index job: the user still gets the
+    code graph they asked for, and `stats()["commits"] == 0` is visible on the Source page. It is
+    the one part of indexing where "some of it" is a perfectly good answer.
+    """
+    if source["kind"] != "repo":
+        return
+    depth = int(settings["code_history_depth"])
+    if depth <= 0:
+        return
+
+    from ..codegraph.git_history import HistoryError, read_history
+
+    ctx.store.update_source(source["id"], stage="reading history", progress_done=0, progress_total=1)
+    checkout = source_dir(ctx, source["id"]) / REPO_DIR
+    try:
+        history = read_history(
+            checkout,
+            code.symbols,
+            source["id"],
+            depth=depth,
+            timeout_s=int(settings["code_git_timeout_s"]),
+            total_s=int(settings["code_history_total_s"]),
+            should_stop=should_stop,
+        )
+    except HistoryError as err:
+        log.warning("No git history for source %s: %s", source["id"], err)
+        return
+    code.commits = history.commits
+    code.modifies = history.modifies
+    code.precedes = history.precedes
+    code.history_skipped = history.skipped
+    ctx.store.update_source(source["id"], stage="reading history", progress_done=1, progress_total=1)
 
 
 def _sweep_if_deleted(ctx: AppContext, source_id: str) -> bool:
@@ -331,7 +392,7 @@ def read_source(ctx: AppContext, source: dict[str, Any]) -> list[Document]:
         ctx.store.update_source(source["id"], stage="cloning")
         checkout = folder / REPO_DIR
         shutil.rmtree(checkout, ignore_errors=True)  # a reindex should see the latest commit
-        repos.clone_repo(meta["url"], checkout)
+        repos.clone_repo(meta["url"], checkout, depth=_clone_depth(ctx))
         return repos.walk_repo(checkout, budget)
     raise ValueError(f"unknown source kind '{kind}'")
 

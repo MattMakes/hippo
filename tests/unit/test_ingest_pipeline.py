@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import zipfile
 
 import pytest
@@ -10,6 +11,8 @@ import pytest
 from hippo.context import AppContext
 from hippo.ingest import pipeline
 from hippo.ingest.repos import RepoError
+from hippo.store.base import DEFAULT_SETTINGS
+from tests.conftest import CODE_CHECKOUT_SUBJECTS, git_env, make_code_checkout
 
 SETTLE_SECONDS = 60
 
@@ -189,7 +192,7 @@ def test_add_repo_records_clone_failures(ctx: AppContext) -> None:
 def test_add_repo_indexes_a_checkout(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
     """Stand in for `git clone` by writing files into the destination, then check the whole flow."""
 
-    def fake_clone(url: str, dest, timeout: int = 300):
+    def fake_clone(url: str, dest, timeout: int = 300, depth: int = 1):
         (dest / "src").mkdir(parents=True)
         (dest / "src" / "app.py").write_text("def lift():\n    return 12\n")
         (dest / "README.md").write_text("Acme Robotics builds robot arms.")
@@ -344,3 +347,83 @@ def code_sample_paths() -> list[str]:
         for p in CODE_SAMPLE_PATH.rglob("*")
         if p.is_file() and p.name != "expected.json"
     ]
+
+
+# ------------------------------------------------------ repo history (WP2b)
+
+
+def test_a_repo_source_indexes_its_git_history(git_index) -> None:
+    ctx, source_id, _ = git_index
+    code = ctx.store.get_source(source_id)["meta"]["code"]
+
+    assert (code["commits"], code["history_skipped"]) == (3, 0)
+    assert code["modifies"] > 0
+    assert ctx.store.stats()["commits"] == 3
+    # The whole point: a commit is reachable from the symbol it changed, on every backend.
+    commits = {c["id"]: c for c in ctx.store.load_commits()}
+    assert {c["ordinal"] for c in commits.values()} == {0, 1, 2}
+    symbols = {s["id"]: s for s in ctx.store.load_symbols()}
+    touched = {
+        (commits[m["commit_id"]]["ordinal"], symbols[m["symbol_id"]]["qualname"])
+        for m in ctx.store.load_modifies()
+    }
+    assert (1, "OrderService.place") in touched
+    assert (1, "OrderService") not in touched  # innermost only, S2.9
+    assert [(a["a"], a["b"]) for a in ctx.store.load_precedes()] == [
+        (o[0], o[1])
+        for o in zip(
+            [c["id"] for c in sorted(commits.values(), key=lambda c: c["ordinal"])],
+            [c["id"] for c in sorted(commits.values(), key=lambda c: c["ordinal"])][1:],
+            strict=False,
+        )
+    ]
+
+
+def test_a_commit_gets_a_passage_of_its_own(git_index) -> None:
+    ctx, source_id, _ = git_index
+    titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
+    assert "commit " in "".join(titles)
+    subjects = sorted(t.split(": ", 1)[1] for t in titles if t.startswith("commit "))
+    assert subjects == sorted(CODE_CHECKOUT_SUBJECTS)
+    # DEFINED_IN: the commit node is reachable from its passage, like every other code node.
+    passage_ids = {
+        c["id"]: c["passage_ids"] for c in ctx.store.get_commits([c["id"] for c in ctx.store.load_commits()])
+    }
+    assert all(len(ids) == 1 for ids in passage_ids.values())
+
+
+def test_the_history_depth_setting_reaches_git_and_zero_disables_history(ctx, tmp_path, monkeypatch) -> None:
+    from hippo.ingest import pipeline, repos
+
+    checkout = make_code_checkout(tmp_path / "origin")
+    seen: list[int] = []
+
+    def clone_locally(url, dest, timeout=300, depth=1):
+        seen.append(depth)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", str(depth), "--single-branch", "--", url, str(dest)],
+            check=True,
+            env=git_env(),
+        )
+        return dest
+
+    monkeypatch.setattr(repos, "clone_repo", clone_locally)
+    ctx.store.update_settings({"code_history_depth": 0})
+    source_id = ctx.store.create_source("repo", "no history", {"url": f"file://{checkout}"})
+    pipeline.source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
+    pipeline.run_indexing(ctx, source_id)
+
+    code = ctx.store.get_source(source_id)["meta"]["code"]
+    assert (code["commits"], code["modifies"]) == (0, 0)
+    assert ctx.store.stats()["commits"] == 0
+    assert code["symbols"] > 0  # the code graph itself is unaffected
+    assert seen == [1]  # history off still clones, but only the tip
+
+
+def test_history_depth_clones_one_commit_deeper_than_it_reads(git_index) -> None:
+    # A shallow clone's oldest commit reports no parent, so its diff would be taken against the
+    # empty tree and it would look like the commit that added the whole repository. Fetching one
+    # extra commit puts that boundary outside the walk instead.
+    _, _, depths = git_index
+    assert depths == [DEFAULT_SETTINGS["code_history_depth"] + 1]

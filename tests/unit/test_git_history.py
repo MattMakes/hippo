@@ -403,3 +403,18 @@ def test_a_shallow_clones_oldest_commit_does_not_claim_the_whole_tree(tmp_path: 
     touched = modified(history, symbols)
     assert touched[0] == {"OrderService.save", "tsapp.index", "main"}  # the real tip diff
     assert 1 not in touched  # the boundary claims nothing, rather than claiming everything
+
+
+def test_a_symbol_with_no_lines_of_its_own_is_never_modified(tmp_path: Path) -> None:
+    # `tsapp/models/base.ts` is nothing but `export class Base { ... }`, so the module symbol
+    # spans exactly the same lines as the class and owns none of them. It therefore never
+    # appears in MODIFIES -- not even in the commit that created the file. That is the
+    # innermost rule being consistent rather than a gap: every line of that file belongs to
+    # the class, and the class is what changed. Named here because WP4's commit eval will see
+    # it, and a module symbol quietly missing from every commit should be a decision.
+    checkout = make_code_checkout(tmp_path)
+    history, symbols = history_of(checkout)
+    touched = {q for names in modified(history, symbols).values() for q in names}
+    assert "Base" in touched and "Base.log" in touched
+    assert "tsapp.models.base" not in touched
+    assert "pyapp.store" in touched  # a module with a line of its own is modified as usual

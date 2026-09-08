@@ -376,6 +376,13 @@ class CodeGraph:
     files_skipped: dict[str, str] = field(default_factory=dict)  # path -> one of SKIP_REASONS
     unresolved_calls: dict[str, int] = field(default_factory=dict)  # path -> count (D15)
     truncated: bool = False
+    # ---- the git history, filled by `codegraph.git_history.read_history` and by nothing else.
+    # A source with no repository behind it simply keeps the empty lists, and the indexer writes
+    # nothing. Rows are already in the shapes `add_commits` / `add_modifies` / `add_precedes` take.
+    commits: list[dict] = field(default_factory=list)
+    modifies: list[dict] = field(default_factory=list)
+    precedes: list[tuple[str, str]] = field(default_factory=list)
+    history_skipped: int = 0  # commits a budget cost us; 0 means "the history is all here"
 
     def by_path(self, path: str) -> list[Symbol]:
         """The symbols of one file, in source order. What the chunker asks for."""
@@ -409,4 +416,7 @@ class CodeGraph:
             "unresolved_calls": {p: self.unresolved_calls[p] for p in sorted(self.unresolved_calls)},
             "unresolved_calls_total": sum(self.unresolved_calls.values()),
             "truncated": self.truncated,
+            "commits": len(self.commits),
+            "modifies": len(self.modifies),
+            "history_skipped": self.history_skipped,
         }
