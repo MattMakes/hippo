@@ -7,6 +7,10 @@ tests run against FakeStore locally and a real Neo4j in CI.
 
 from __future__ import annotations
 
+import random
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -588,6 +592,39 @@ def test_symbols_carry_a_community_from_the_module_projection(store, ollama, cod
     # `pyapp` and `tsapp` share no edge, so Leiden must not put them together.
     assert by_qualname["pyapp.orders"]["community"] != by_qualname["tsapp.index"]["community"]
     assert all(row["community"] is not None for row in store.load_symbols())
+
+
+def test_two_leiden_runs_in_two_threads_do_not_interleave(code_chunks, monkeypatch) -> None:
+    """
+    AR1 fix 3. igraph's RNG is process-global and `_leiden` seeds it, runs and restores it, while
+    `jobs.py` runs each index job in its own thread. Without a lock two jobs interleave as
+    seed(A) -> seed(B) -> run(A) -> restore(A) -> run(B) and job B partitions unseeded: community
+    integers a re-index would not reproduce, on a single-threaded CI gate that stays green.
+    """
+    import igraph as ig
+
+    from hippo.hipporag.indexer import module_communities
+
+    graph, _chunks = code_chunks
+    events: list[str] = []
+    real = ig.set_random_number_generator
+
+    def spy(generator):
+        events.append("seed" if isinstance(generator, random.Random) else "restore")
+        time.sleep(0.01)  # wide enough that an unlocked interleave is a certainty, not a race
+        return real(generator)
+
+    monkeypatch.setattr(ig, "set_random_number_generator", spy)
+
+    results: list[dict[str, int]] = []
+    threads = [threading.Thread(target=lambda: results.append(module_communities(graph))) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert events == ["seed", "restore"] * 4, "seed/run/restore is one atomic triple"
+    assert len(results) == 4 and all(r == results[0] for r in results)
 
 
 def test_stopping_before_the_code_graph_stage_writes_no_code(store, ollama, code_source, code_chunks):
