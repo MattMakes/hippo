@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -48,13 +48,29 @@ GRAPH_WRITE_LOCK = threading.RLock()
 Progress = Callable[[str, int, int], None]
 
 
+# A doc-comment shorter than this says nothing OpenIE could turn into a fact, so it is skipped
+# rather than extracted (S2.7). The chunker applies the same rule when it fills `extract_text`.
+MIN_OPENIE_DOC_CHARS = 80
+
+
 @dataclass
 class Chunk:
-    """What the indexer needs to know about one passage of a source."""
+    """
+    What the indexer needs to know about one passage of a source.
+
+    The two fields below the line are the code chunker's; positional `Chunk(ordinal, title, text)`
+    still produces a plain prose chunk. `defines` are the code nodes this passage defines, which
+    become DEFINED_IN edges. `extract_text` is the only gate on what OpenIE sees, and it is
+    three-valued (S2.7): `None` means "extract `text`", today's behaviour and what every prose
+    chunk carries; `""` means "skip OpenIE entirely"; a non-empty string is extracted in place of
+    `text`, so a function's docstring reaches OpenIE and its body never does.
+    """
 
     ordinal: int
     title: str
     text: str
+    defines: list[str] = field(default_factory=list)
+    extract_text: str | None = None
 
 
 def passage_id(source_id: str, chunk: Chunk) -> str:

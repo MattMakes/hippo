@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from hippo.codegraph import extract_code
 from hippo.hipporag.indexer import Chunk
 from hippo.ingest.chunker import (
     chunk_document,
@@ -13,8 +16,10 @@ from hippo.ingest.chunker import (
     split_sentences,
 )
 from hippo.ingest.readers import Document
+from tests.conftest import CODE_SAMPLE_PATH, code_sample_docs
 
 SAMPLE = Path(__file__).resolve().parents[2] / "samples" / "acme_robotics.md"
+FIXTURE_SOURCE = "fixture"
 
 
 def prose(text: str, title: str = "doc.md") -> Document:
@@ -203,3 +208,181 @@ def test_a_markdown_h1_names_the_document_and_a_file_without_one_keeps_its_file_
     without = Document(title="notes.md", text="## Part one\n\nText.", path="notes.md", is_code=False)
     assert document_title(without) == "notes.md"
     assert chunk_document(without, 1500, 100)[0].title == "notes.md › Part one"
+
+
+# ------------------------------------------------------ one passage per symbol
+#
+# With a `CodeGraph` in hand the chunker stops cutting a parsed file into line windows and
+# cuts it by symbol instead (PLAN 2.3). These tests pin the exact titles, the placeholder
+# lines a header keeps in place of its members, and the three-valued `extract_text` (S2.7).
+
+ORDERS = "pyapp/orders.py"
+
+
+@pytest.fixture(scope="module")
+def code_graph():
+    """The fixture tree's code graph. Extraction is pure, so one per module is plenty."""
+    return extract_code(code_sample_docs(), FIXTURE_SOURCE)
+
+
+def fixture_doc(path: str) -> Document:
+    return Document(title=path, text=(CODE_SAMPLE_PATH / path).read_text(), path=path, is_code=True)
+
+
+def chunks_of(path: str, code_graph, size: int = 1500) -> list[Chunk]:
+    return chunk_document(fixture_doc(path), size_chars=size, overlap_chars=150, code=code_graph)
+
+
+def test_a_parsed_file_becomes_one_passage_per_symbol_in_source_order(code_graph) -> None:
+    assert [c.title for c in chunks_of(ORDERS, code_graph)] == [
+        "pyapp/orders.py :: pyapp.orders (lines 1-8)",
+        "pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.log (lines 25-25)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.list_open (lines 27-28)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.save (lines 30-32)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.run (lines 40-40)",
+    ]
+
+
+def test_the_module_header_keeps_its_own_lines_and_a_placeholder_for_each_member(code_graph) -> None:
+    header = chunks_of(ORDERS, code_graph)[0]
+    assert header.text.splitlines()[:4] == [
+        "import os",
+        "from . import billing",
+        "from .billing import send_invoice as invoice",
+        "from pyapp.store import Base, OrderError",
+    ]
+    assert 'DEFAULT_STATUS = "open"' in header.text
+    assert "class OrderService(Base): ...  # lines 9-40" in header.text
+    assert "def place" not in header.text  # the body lives in its own passage, not here
+
+
+def test_the_class_header_keeps_its_own_lines_and_a_placeholder_for_each_method(code_graph) -> None:
+    klass = chunks_of(ORDERS, code_graph)[1]
+    assert klass.text.startswith("class OrderService(Base):")
+    assert '__tablename__ = "orders"' in klass.text
+    assert "    def place(self, order): ...  # lines 16-23" in klass.text
+    assert "    def run(self, sql): ...  # lines 40-40" in klass.text
+    assert "billing.total(order)" not in klass.text
+
+
+def test_a_typescript_header_uses_a_line_comment_placeholder(code_graph) -> None:
+    module = chunks_of("tsapp/models/order.ts", code_graph)[0]
+    assert "class Order extends Base { ... }  // lines 7-11" in module.text
+    assert "OrderModel = mongoose.model" in module.text  # module-level code after the members
+
+
+def test_every_passage_defines_its_symbol_and_the_data_objects_it_names(code_graph) -> None:
+    from hippo.codegraph.model import data_id, symbol_id
+
+    defines = {c.title: c.defines for c in chunks_of(ORDERS, code_graph)}
+    orders_table = data_id(FIXTURE_SOURCE, "table", "orders")
+    assert defines["pyapp/orders.py :: pyapp.orders (lines 1-8)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "pyapp.orders")
+    ]
+    # `__tablename__ = "orders"` sits on line 14, inside the class header, not inside a method.
+    assert defines["pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService"),
+        orders_table,
+    ]
+    assert defines["pyapp/orders.py :: pyapp.orders.OrderService.list_open (lines 27-28)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.list_open"),
+        orders_table,
+    ]
+    assert defines["pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.archive"),
+        data_id(FIXTURE_SOURCE, "collection", "archive_orders"),
+    ]
+    # Data ids follow the symbol in a stable (kind, qualname) order, so a passage's `defines`
+    # never depends on the order the extractor happened to see the literals in.
+    assert defines["pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.graph"),
+        data_id(FIXTURE_SOURCE, "label", "Customer"),
+        data_id(FIXTURE_SOURCE, "label", "Order"),
+        data_id(FIXTURE_SOURCE, "rel_type", "PLACED_BY"),
+    ]
+
+
+def test_extract_text_is_the_doc_when_it_is_long_enough_and_empty_otherwise(code_graph) -> None:
+    """S2.7: OpenIE never sees a function body. A short doc is '' (skip), never None (extract)."""
+    by_title = {c.title: c.extract_text for c in chunks_of(ORDERS, code_graph)}
+    klass = by_title["pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)"]
+    assert klass.startswith("Keeps orders. Acme Robotics is headquartered in Boulder.")
+    place = by_title["pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)"]
+    assert place.startswith("Place an order: total it with billing")
+    assert by_title["pyapp/orders.py :: pyapp.orders (lines 1-8)"] == ""  # no module docstring
+    assert by_title["pyapp/orders.py :: pyapp.orders.OrderService.save (lines 30-32)"] == ""
+    assert all(text is not None for text in by_title.values())
+
+
+def test_a_short_doc_comment_is_dropped_rather_than_shrunk(code_graph) -> None:
+    short = chunks_of("pyapp/billing.py", code_graph)[0]
+    assert short.title == "pyapp/billing.py :: pyapp.billing (lines 1-3)"
+    assert short.extract_text == ""  # "Billing helpers." is under MIN_OPENIE_DOC_CHARS
+
+
+def test_a_file_that_opens_with_a_class_has_no_header_passage(code_graph) -> None:
+    titles = [c.title for c in chunks_of("pyapp/store.py", code_graph)]
+    assert titles == [
+        "pyapp/store.py :: pyapp.store.Base (lines 1-3)",
+        "pyapp/store.py :: pyapp.store.Base.log (lines 4-5)",
+        "pyapp/store.py :: pyapp.store.OrderError (lines 8-9)",
+    ]
+
+
+def test_a_sql_file_keeps_line_windows_but_defines_its_tables_and_skips_openie(code_graph) -> None:
+    from hippo.codegraph.model import data_id
+
+    (chunk,) = chunks_of("schema/orders.sql", code_graph)
+    assert chunk.title == "schema/orders.sql (lines 1-2)"
+    assert chunk.extract_text == ""  # never OpenIE over DDL
+    assert data_id(FIXTURE_SOURCE, "table", "orders") in chunk.defines
+    assert data_id(FIXTURE_SOURCE, "column", "orders.total") in chunk.defines
+    assert data_id(FIXTURE_SOURCE, "table", "customers") in chunk.defines
+
+
+def test_a_code_file_with_no_grammar_is_chunked_exactly_as_before(code_graph) -> None:
+    (chunk,) = chunks_of("tools/build.go", code_graph)
+    assert chunk.title == "tools/build.go (lines 1-3)"
+    assert chunk.extract_text is None and chunk.defines == []  # OpenIE as today
+
+
+def test_an_oversized_body_splits_at_statement_starts_with_only_part_one_extracting() -> None:
+    doc = code(
+        'def big():\n    """'
+        + "Long docstring. " * 8
+        + '"""\n'
+        + "\n".join(f"    x{i} = {i}" for i in range(200))
+        + "\n",
+        title="big.py",
+    )
+    graph = extract_code([doc], FIXTURE_SOURCE)
+    chunks = chunk_document(doc, size_chars=500, overlap_chars=0, code=graph)
+
+    assert len(chunks) > 3
+    assert chunks[0].title.startswith("big.py :: big.big (lines 1-")
+    assert chunks[0].title.endswith("(part 1)")
+    assert [c.extract_text != "" for c in chunks] == [True] + [False] * (len(chunks) - 1)
+    assert all(c.defines == chunks[0].defines for c in chunks)  # DEFINED_IN from every part
+
+    covered: list[int] = []
+    for chunk in chunks:
+        first, last = chunk.title.split("(lines ")[1].split(")")[0].split("-")
+        covered.extend(range(int(first), int(last) + 1))
+    assert covered == list(range(1, 203))  # every line once, in order
+
+
+def test_chunk_document_without_a_code_graph_is_unchanged(code_graph) -> None:
+    doc = fixture_doc(ORDERS)
+    assert chunk_document(doc, 1500, 150) == chunk_document(doc, 1500, 150, code=None)
+    assert [c.title for c in chunk_document(doc, 1500, 150)] == ["pyapp/orders.py (lines 1-40)"]
+
+
+def test_chunk_documents_numbers_symbol_passages_continuously(code_graph) -> None:
+    docs = [fixture_doc(ORDERS), prose("Boulder is located in Colorado.", "notes.md")]
+    chunks = chunk_documents(docs, 1500, 150, code=code_graph)
+    assert [c.ordinal for c in chunks] == list(range(len(chunks)))
+    assert chunks[-1].title == "notes.md" and chunks[-1].extract_text is None
