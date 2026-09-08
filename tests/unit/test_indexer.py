@@ -789,3 +789,15 @@ def _json(value) -> str:
     import json
 
     return json.dumps(value or {}, sort_keys=True)
+
+
+def test_a_prose_entity_indexed_first_still_finds_the_symbol(store, ollama, code_source, code_chunks):
+    """The other direction: the entity is already a key when the symbol arrives as a query."""
+    graph, chunks = code_chunks
+    earlier = store.create_source("text", "Press release")
+    index_source(store, ollama, earlier, [Chunk(0, "Press", "The order service is located in Boulder.")])
+
+    index_source(store, ollama, code_source, chunks, code=graph)
+
+    service = symbol_id(code_source, "pyapp/orders.py", "OrderService")
+    assert {entity_id("order service"), service} in [{r["a"], r["b"]} for r in store.load_synonyms()]
