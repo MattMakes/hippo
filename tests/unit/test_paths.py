@@ -310,3 +310,22 @@ def test_simulation_edge_edits_do_not_reach_the_path_tools(index: GraphIndex) ->
     place, total = vertex(index, "OrderService.place"), vertex(index, "pyapp.billing.total")
     index.graph_with_edits([EdgeEdit(index.node_ids[place], index.node_ids[total], 0.0)])
     assert shortest_code_path(index, place, total, theta=THETA)
+
+
+def test_a_scoped_index_cannot_be_walked_to_a_hidden_symbol(mixed_index) -> None:
+    """
+    S2.5's second leg. WP1 proved `scoped()` drops a hidden source's symbols and every edge
+    touching them; this is the half that needed `paths.py`: the tools built on `code_out` cannot
+    route through a vertex that is not there, and `resolve_symbol` cannot even name it.
+    """
+    ctx, prose_source_id, _code_source_id = mixed_index
+    full = ctx.graph()
+    place, total = vertex(full, "OrderService.place"), vertex(full, "pyapp.billing.total")
+    assert shortest_code_path(full, place, total, theta=THETA)
+    assert blast_radius(full, total, theta=THETA, depth=2).levels
+
+    scoped = full.scoped({prose_source_id})
+    assert scoped.code_nodes == []
+    with pytest.raises(UnknownSymbol):
+        resolve_symbol(scoped, "pyapp.orders.OrderService.place")
+    assert code_paths_for(scoped, [], theta=THETA) == []
