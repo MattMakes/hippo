@@ -10,8 +10,9 @@ from fastapi.testclient import TestClient
 
 from hippo import ask
 from hippo.hipporag.indexer import Chunk, EmbeddingMismatch, index_source
-from hippo.store.base import validate_settings
+from hippo.store.base import DEFAULT_SETTINGS, SETTING_RULES, validate_settings
 from hippo.web.app import create_app
+from hippo.web.routes.pages import SETTING_HELP
 
 
 def sample_chunks(sample_text: str) -> list[Chunk]:
@@ -23,6 +24,40 @@ def sample_chunks(sample_text: str) -> list[Chunk]:
 
 
 # ---------------------------------------------------------------- validation
+
+
+def test_every_setting_has_a_rule_a_default_and_a_help_line():
+    # A setting without a SETTING_HELP line renders a blank hint and nobody notices.
+    assert set(DEFAULT_SETTINGS) == set(SETTING_RULES) == set(SETTING_HELP)
+    assert all(text.strip() for text in SETTING_HELP.values())
+
+
+def test_the_code_settings_ship_at_their_documented_defaults_and_bounds():
+    code = {k: v for k, v in DEFAULT_SETTINGS.items() if k.startswith("code_")}
+    assert code == {
+        "code_seed_weight": 1.0,
+        "code_structural_scale": 1.0,
+        "code_theta": 0.5,
+        "code_dense_seeds": 5,
+        "code_triples_chars": 1500,
+        "code_community_boost": 0.0,  # the mechanism ships; the prior is off until an eval says otherwise
+        "code_select": True,
+        "code_expand_max": 10,
+        "code_history_depth": 200,
+        "code_git_timeout_s": 10,
+        "code_history_total_s": 120,
+    }
+    # The cap that keeps "three facts beat any code edge" true rather than true-below-some-value.
+    assert SETTING_RULES["code_structural_scale"] == (float, 0.0, 3.0)
+    assert SETTING_RULES["code_seed_weight"] == (float, 0.0, 10.0)
+    assert SETTING_RULES["code_select"] == (bool, None, None)
+    with pytest.raises(ValueError, match="between 0.0 and 3.0"):
+        validate_settings({"code_structural_scale": 5})
+
+
+def test_a_code_setting_saves_through_the_store(store):
+    assert store.update_settings({"code_seed_weight": 2.0, "code_select": False})["code_seed_weight"] == 2.0
+    assert store.get_settings()["code_select"] is False
 
 
 def test_validate_settings_coerces_and_checks_ranges():
