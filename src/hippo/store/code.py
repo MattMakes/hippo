@@ -628,13 +628,17 @@ class CodeQueries(Neo4jBase):
         ]
 
     def load_precedes(self) -> list[dict[str, Any]]:
-        return self.run(
+        # Sorted here rather than in Cypher: `RETURN a.id AS a ... ORDER BY a.ordinal` binds `a` to
+        # the returned string, not the node, on both dialects. A graph promises no row order, so
+        # the commit ordinal is what makes this reproducible.
+        rows = self.run(
             """
             MATCH (a:Commit)-[:PRECEDES]->(b:Commit)
-            RETURN a.id AS a, b.id AS b
-            ORDER BY a.ordinal, b.ordinal
+            RETURN a.id AS a, b.id AS b, a.ordinal AS a_ordinal, b.ordinal AS b_ordinal
             """
         )
+        rows.sort(key=lambda r: (int(r["a_ordinal"] or 0), int(r["b_ordinal"] or 0)))
+        return [{"a": r["a"], "b": r["b"]} for r in rows]
 
     def load_refers_to(self) -> list[dict[str, Any]]:
         rows = self.run(

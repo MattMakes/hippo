@@ -432,9 +432,8 @@ class FakeStore:
 
     def _synonym_node(self, node_id: str) -> bool:
         """Entity, symbol or data object: the three kinds SYNONYM has endpoints for (S2.2)."""
-        return (
-            node_label(node_id, SYNONYM_LABELS) is not None
-            and node_id in (self.entities | self.symbols | self.data_objects)
+        return node_label(node_id, SYNONYM_LABELS) is not None and node_id in (
+            self.entities | self.symbols | self.data_objects
         )
 
     def add_synonyms(self, rows: list[tuple[str, str, float]], manual: bool = False) -> None:
@@ -456,7 +455,7 @@ class FakeStore:
             if shaped["source_id"] not in self.sources:
                 continue  # the real stores MATCH (s:Source) and skip the row
             existing = table.get(shaped["id"], {})
-            embedding = shaped.pop("embedding")
+            embedding = shaped.pop("embedding", [])  # commits carry no vector
             table[shaped["id"]] = {
                 **{"boost": None, "created_at": now_iso()},
                 **existing,

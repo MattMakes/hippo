@@ -65,7 +65,15 @@ def small_graph(store) -> str:
             },
         ]
     )
-    store.link_passage_entities([("passage-1", "entity-a"), ("passage-1", "entity-b"), ("passage-2", "entity-a"), ("passage-2", "entity-b"), ("passage-2", "entity-c")])
+    store.link_passage_entities(
+        [
+            ("passage-1", "entity-a"),
+            ("passage-1", "entity-b"),
+            ("passage-2", "entity-a"),
+            ("passage-2", "entity-b"),
+            ("passage-2", "entity-c"),
+        ]
+    )
     store.link_passage_facts([("passage-1", "fact-1"), ("passage-2", "fact-1"), ("passage-2", "fact-self")])
     return source_id
 
@@ -103,7 +111,13 @@ def test_a_fact_in_two_passages_counts_twice_and_self_loops_are_excluded(store, 
 
 def test_load_mentions_rows(store, small_graph: str) -> None:
     mentions = {(m["passage_id"], m["entity_id"]) for m in store.load_mentions()}
-    assert mentions == {("passage-1", "entity-a"), ("passage-1", "entity-b"), ("passage-2", "entity-a"), ("passage-2", "entity-b"), ("passage-2", "entity-c")}
+    assert mentions == {
+        ("passage-1", "entity-a"),
+        ("passage-1", "entity-b"),
+        ("passage-2", "entity-a"),
+        ("passage-2", "entity-b"),
+        ("passage-2", "entity-c"),
+    }
 
 
 def test_load_synonyms_and_tuned_edges_start_empty(store, small_graph: str) -> None:

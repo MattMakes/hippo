@@ -191,7 +191,9 @@ def test_delete_source_removes_its_passages_and_orphaned_entities_and_facts(stor
     add_entity(store, "entity-only-drop")
     add_fact(store, "f-shared", "entity-shared", "entity-shared", "self")
     add_fact(store, "f-drop", "entity-shared", "entity-only-drop")
-    store.link_passage_entities([("p-keep", "entity-shared"), ("p-drop", "entity-shared"), ("p-drop", "entity-only-drop")])
+    store.link_passage_entities(
+        [("p-keep", "entity-shared"), ("p-drop", "entity-shared"), ("p-drop", "entity-only-drop")]
+    )
     store.link_passage_facts([("p-keep", "f-shared"), ("p-drop", "f-drop")])
     store.add_synonyms([("entity-shared", "entity-only-drop", 0.9)])
     store.set_edge_weight("entity-shared", "entity-only-drop", 2.0)
