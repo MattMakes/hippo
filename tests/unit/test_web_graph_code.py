@@ -168,3 +168,17 @@ def test_an_entity_and_a_passage_keep_the_panels_they_always_had(client):
     panel = details(client, passage["id"])
     assert panel["kind"] == "passage"
     assert {"title", "source_id", "source_name", "ordinal", "text", "facts"} <= set(panel)
+
+
+# ------------------------------------------------------------ the toolbar
+
+
+def test_the_toolbar_can_filter_and_colour_by_the_new_kinds(client):
+    page = client.get("/graph")
+    assert page.status_code == 200
+    kinds = page.text.split('id="g-kind"', 1)[1].split("</select>", 1)[0]
+    for kind in ("entity", "passage", "symbol", "data", "commit"):
+        assert f'value="{kind}"' in kinds, kind
+    colours = page.text.split('id="g-color"', 1)[1].split("</select>", 1)[0]
+    for mode in ("tier", "kind", "source", "community"):
+        assert f'value="{mode}"' in colours, mode
