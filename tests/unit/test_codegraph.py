@@ -516,9 +516,11 @@ def test_expected_json_matches_the_extractor(fixture_graph):
 
 
 def test_expected_json_reserves_the_later_sections():
-    """WP2i and WP2b fill these in; `update_expected.py` must not erase them."""
-    for section in ("definitions", "refers_to", "commits", "modifies"):
+    """WP2b fills these in; `update_expected.py` must not erase them. WP2i filled the other
+    two -- `definitions` and `refers_to` -- and `test_indexer.py` is what compares against them."""
+    for section in ("commits", "modifies"):
         assert EXPECTED[section] == []
+    assert EXPECTED["definitions"] and EXPECTED["refers_to"]
 
 
 def test_expected_json_never_stores_node_ids():

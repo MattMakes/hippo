@@ -162,7 +162,376 @@
       "qualname": "orders"
     }
   ],
-  "definitions": [],
+  "definitions": [
+    {
+      "node": [
+        "data",
+        "collection",
+        "Order"
+      ],
+      "passage": "tsapp/index.ts :: tsapp.index.main (lines 3-8)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "Order"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order (lines 1-17)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "customers.id"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "customers.name"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "orders.id"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "orders.status"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "orders.total"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+    },
+    {
+      "node": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "customers"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.list_open (lines 27-28)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.save (lines 30-32)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/__init__.py",
+        "pyapp.__init__"
+      ],
+      "passage": "pyapp/__init__.py :: pyapp.__init__ (lines 1-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/billing.py",
+        "pyapp.billing"
+      ],
+      "passage": "pyapp/billing.py :: pyapp.billing (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/billing.py",
+        "send_invoice"
+      ],
+      "passage": "pyapp/billing.py :: pyapp.billing.send_invoice (lines 8-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/billing.py",
+        "total"
+      ],
+      "passage": "pyapp/billing.py :: pyapp.billing.total (lines 4-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/cli.py",
+        "main"
+      ],
+      "passage": "pyapp/cli.py :: pyapp.cli.main (lines 4-6)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/cli.py",
+        "pyapp.cli"
+      ],
+      "passage": "pyapp/cli.py :: pyapp.cli (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.archive"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.list_open"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.list_open (lines 27-28)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.log"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.log (lines 25-25)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.run (lines 40-40)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.save (lines 30-32)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders (lines 1-8)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "passage": "pyapp/store.py :: pyapp.store.Base (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/store.py",
+        "Base.log"
+      ],
+      "passage": "pyapp/store.py :: pyapp.store.Base.log (lines 4-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "passage": "pyapp/store.py :: pyapp.store.OrderError (lines 8-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/store.py",
+        "pyapp.store"
+      ],
+      "passage": "pyapp/store.py :: pyapp.store.Base (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "passage": "tests/test_orders.py :: tests.test_orders.test_place (lines 4-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tests/test_orders.py",
+        "tests.test_orders"
+      ],
+      "passage": "tests/test_orders.py :: tests.test_orders (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "passage": "tsapp/index.ts :: tsapp.index.main (lines 3-8)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/index.ts",
+        "tsapp.index"
+      ],
+      "passage": "tsapp/index.ts :: tsapp.index (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "passage": "tsapp/models/base.ts :: tsapp.models.base.Base (lines 1-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base.log"
+      ],
+      "passage": "tsapp/models/base.ts :: tsapp.models.base.Base.log (lines 2-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "tsapp.models.base"
+      ],
+      "passage": "tsapp/models/base.ts :: tsapp.models.base.Base (lines 1-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order.Order (lines 7-11)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order.total"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order.Order.total (lines 8-10)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "compute"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order.compute (lines 13-15)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "tsapp.models.order"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order (lines 1-17)"
+    }
+  ],
   "edges": [
     {
       "a": [
@@ -1222,7 +1591,28 @@
     }
   ],
   "modifies": [],
-  "refers_to": [],
+  "refers_to": [
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "omega": 0.6,
+      "passage": "Code sample",
+      "token": "order service"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "omega": 0.85,
+      "passage": "Code sample",
+      "token": "OrderService.place"
+    }
+  ],
   "symbols": [
     {
       "display": "pyapp.__init__",
