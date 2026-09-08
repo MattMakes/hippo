@@ -16,3 +16,6 @@ data/
 .idea/
 .vscode/
 .DS_Store
+
+# git worktrees used by the herdr fleet
+.worktrees/
