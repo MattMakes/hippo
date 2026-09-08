@@ -12,9 +12,8 @@ Usage, from the repo root:
     .venv/bin/python scripts/update_expected.py           # rewrite the file
     .venv/bin/python scripts/update_expected.py --check   # exit 1 if it would change
 
-The file has six top-level sections. This script owns the first three and leaves the other
-three exactly as it found them, so a later work package can fill them in without this
-script erasing the work:
+The file has seven top-level sections. This script owns the first five and leaves the last
+two exactly as it found them, so WP2b can fill them in without this script erasing the work:
 
     symbols       [{path, qualname, display, kind, lang, line_start, line_end, header_end,
                     signature, doc, is_test, raises, params, statement_lines}]
@@ -28,8 +27,12 @@ script erasing the work:
                   `a` and `b` are ["symbol", path, qualname] or ["data", kind, qualname];
                   never node ids, which depend on the run's `source_id`. `extra` is present
                   only on INVOKES.
-    definitions   [] -- WP2i: (node, passage) DEFINED_IN pairs, once the chunker exists.
-    refers_to     [] -- WP2i: prose/commit passages naming a symbol.
+    definitions   [{node, passage}]
+                  One DEFINED_IN pair per (node, passage title). A data object is defined by
+                  every passage whose literal names it, not just by its declaration (S2.5).
+    refers_to     [{passage, node, omega, token}]
+                  A prose passage naming code: 0.85 for a backticked or dotted name, 0.60 for
+                  a run of words matching a name's split tokens.
     commits       [] -- WP2b: keyed by (ordinal, subject), NEVER by sha (S2.17: a sha
                   hashes author, committer and timestamps, so it is not reproducible).
     modifies      [] -- WP2b: keyed by (ordinal, path, qualname).
@@ -49,12 +52,15 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 from hippo.codegraph import extract_code  # noqa: E402
+from hippo.config import Config  # noqa: E402
+from hippo.hipporag.indexer import passage_id, refers_to_rows  # noqa: E402
+from hippo.ingest.chunker import chunk_documents  # noqa: E402
 from tests.conftest import CODE_SAMPLE_PATH, code_sample_docs  # noqa: E402
 
 EXPECTED = CODE_SAMPLE_PATH / "expected.json"
 SOURCE_ID = "fixture"
-OWNED = ("symbols", "data_objects", "edges")
-LATER = ("definitions", "refers_to", "commits", "modifies")
+OWNED = ("symbols", "data_objects", "edges", "definitions", "refers_to")
+LATER = ("commits", "modifies")
 
 
 def build(source_id: str = SOURCE_ID) -> dict:
@@ -102,10 +108,31 @@ def build(source_id: str = SOURCE_ID) -> dict:
         }
         for e in graph.edges
     ]
+    # The chunker and the name scanner are pure, so the passage half of the spec needs no
+    # store and no LLM: the same chunks the pipeline would build, at the same default sizes.
+    chunks = chunk_documents(
+        code_sample_docs(), Config.chunk_size_chars, Config.chunk_overlap_chars, code=graph
+    )
+    titles = {passage_id(source_id, c): c.title for c in chunks}
+    definitions = [
+        {"node": labels[node], "passage": chunk.title} for chunk in chunks for node in chunk.defines
+    ]
+    prose = [(passage_id(source_id, c), c.text) for c in chunks if c.extract_text is None]
+    refers_to = [
+        {
+            "passage": titles[row["passage_id"]],
+            "node": labels[row["node_id"]],
+            "omega": row["omega"],
+            "token": row["token"],
+        }
+        for row in refers_to_rows(graph, prose)
+    ]
     return {
         "symbols": sorted(symbols, key=lambda s: (s["path"], s["qualname"])),
         "data_objects": sorted(data_objects, key=lambda d: (d["kind"], d["qualname"])),
         "edges": sorted(edges, key=lambda e: (e["kind"], e["a"], e["b"])),
+        "definitions": sorted(definitions, key=lambda d: (d["node"], d["passage"])),
+        "refers_to": sorted(refers_to, key=lambda r: (r["passage"], r["node"])),
     }
 
 

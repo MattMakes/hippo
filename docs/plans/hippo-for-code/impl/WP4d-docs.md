@@ -3,12 +3,19 @@
 Read `impl/00-impl-context.md` first. Worktree `.worktrees/wp4d`, branch `wp/wp4d`. No Neo4j leg: you
 change no code. `just lint` must still pass (it does not lint markdown outside `docs/plans`, but run it).
 
-`code-graph` now contains WP1-WP3, and WP4a/b/c (API+MCP+CLI, web pages, evals) are being built in
-parallel by three other workers. **You edit only `docs/CONTRACTS.md`, `docs/FIDELITY.md`, `docs/MCP.md`,
-`README.md` and the new `docs/design/` directory.** Where a name you must document is owned by a parallel
-worker (endpoint query parameters, MCP response fields, CLI flags, eval metric names), take it from the
-plan; the orchestrator will hand you their ledger summaries when they land so you can correct the few
-that differ, before your branch merges.
+You start EARLY. `code-graph` contains WP1, WP2 and WP2i (store, extractors, indexing); WP3 (retrieval,
+`anchors.py`, `paths.py`, the answer block) and WP2b (git history) are in flight and will merge while you
+work; WP4a/b/c (API+MCP+CLI, web pages, evals) come after them. **You edit only `docs/CONTRACTS.md`,
+`docs/FIDELITY.md`, `docs/MCP.md`, `README.md` and the new `docs/design/` directory.** Order your work by
+what is merged: first everything that documents WP1/WP2/WP2i (the CONTRACTS code-graph block for the
+store, `codegraph/`, `graph_index.py`, `indexer.py`, `chunker.py`; the README "Code" section's indexing
+half and its settings rows; `docs/design/`; Known limitations), then — when the orchestrator tells you
+WP3/WP2b have merged — `git merge code-graph` into `wp/wp4d` (the one time you may merge; docs only, so
+no conflicts expected) and write the retrieval half (FIDELITY adaptation 15 and its three sentence
+edits, the answer block, seeding). Where a name is owned by a not-yet-merged worker (endpoint query
+parameters, MCP response fields, CLI flags, eval metric names), take it from the plan and mark it
+`<!-- verify against WPxx -->`; the orchestrator will send their summaries so you can correct the few
+that differ before your branch merges.
 
 Your spec is PLAN.md **§Docs to update (lines 528-568)** in full — it prescribes the exact format of each
 file — plus the FIDELITY paragraph and the three sentence edits in §Retrieval rule (lines 121-125),
@@ -37,7 +44,41 @@ exceeds `MAX_CHUNKS = 20_000` where its line windows fit before, and vector relo
 
 ## What the previous workers built (read their code — the code is the truth, the plan is the intent)
 
-<!-- ORCHESTRATOR FILLS FROM THE WP1-WP3 LEDGER SUMMARIES; WP4a/b/c arrive as they land -->
+**WP1 (store + GraphIndex), 240d348.** 22 store methods on all three backends (writers `add_symbols`,
+`add_data_objects`, `add_commits`, `add_code_edges`, `link_definitions`, `add_modifies`, `add_precedes`,
+`add_refers_to`, `set_symbol_communities`; readers `get_symbols`/`get_data_objects`/`get_commits`
+(access-scoped, `source_name` + `passage_ids`); nine `load_*` loaders; `delete_code_nodes_for_source`);
+`stats()` has `symbols`, `data_objects`, `code_edges`, `commits`. `GraphIndex`: `NodeKind` five-valued
+(`entity`, `passage`, `symbol`, `data`, `commit`), vertex order entities → symbols → data → commits →
+passages LAST, `first_passage_vertex`, `CodeNode`, `DirectedEdge(src, dst, kind, omega, provenance,
+extra)`, `code_out`/`code_in`, `name_index`, `Edge.omega`/`code_kinds`/`weight_at(scale)`,
+`specificity` (denominator; `entity_passage_count` alias), `graph_for_scale(scale)`, `scoped()` per-kind
+visibility, `community_of`/`community_name`, `code_node_by_id`, `out_edges`/`in_edges`,
+`defining_passages`, `symbols_defined_in`. All eleven `code_*` settings in `DEFAULT_SETTINGS`/
+`SETTING_RULES`/`SETTING_HELP`; `analysis/simulate.py` has `SIMULATABLE_SETTINGS` + `INGEST_SETTINGS`
+which a test asserts partition `SETTING_RULES`. **`code_out`/`code_in` are in load order and Neo4j
+promises none** — anything that renders or walks them must sort (WP3 sorts by (kind, target name,
+source name)); never pin an order-dependent string without sorting.
+
+**WP2 (extractors), 9ba5e39.** `src/hippo/codegraph/` (`model`, `treesitter`, `python`, `typescript`,
+`resolve`, `data_access`, `extract`); `extract_code(docs, source_id, *, should_stop=None) -> CodeGraph`;
+`Symbol.display` is the fully-qualified display name (`pyapp.orders.OrderService.place`); ids via
+`symbol_id`/`data_id`/`commit_id` in `codegraph/model.py`; `readers.lang_of(name)`. Fixture:
+`tests/fixtures/code_sample/` (30 symbols, 12 data objects, 64 edges; `expected.json` is the spec;
+`scripts/update_expected.py --check`). Two pinned rulings: `cli.main -> OrderService.place` INVOKES 0.90
+`via_import`; `place -> OrderService.log` INVOKES 1.00 `same_file`, no `place -> Base.log` edge.
+
+**WP2i (indexing), 143480d.** Passage titles `path :: module.qualname (lines a-b)` (`(part N)` when
+split); `Chunk.defines`/`extract_text`; `index_source(..., code=)` stages `"writing code graph"`,
+`"linking mentions"` (REFERS_TO 0.85/0.60), `"communities"` (seeded Leiden, relabelled); nine-key
+counts; `meta["code"]` = `symbols`, `data_objects`, `edges`, `edges_by_kind`, `files_parsed`,
+`files_skipped`, `unresolved_calls`, `unresolved_calls_total`, `truncated` (+ WP2b's commit keys and
+`history_skipped`). `tests/conftest.py`: `code_index` fixture yields `(ctx, source_id)` (kind
+`"archive"`, store-generated id), `code_sample_zip()`, `CODE_SAMPLE_PATH`, `--update-expected`. A symbol
+whose name splits into < 2 tokens carries NO embedding by design (`enters_synonym_search`); DataObject
+exempt. Full handoffs: `horch sessions` entries `backend-developer-1`, `opus-1`, `backend-developer-2`.
+
+<!-- ORCHESTRATOR FILLS FROM THE WP2b / WP3 LEDGER SUMMARIES -->
 
 ## Scope
 

@@ -44,7 +44,10 @@ src/hippo/remote.py               RemoteHippo: the CLI's client for a running se
 justfile                          `just ladybug` / `just neo4j` (docker), `just dev` / `just dev-neo4j` (local), `just test*`; each says its backend.
 src/hippo/hipporag/text.py        clean_phrase, entity_id, fact_id, fact_text, make_id, min_max_normalize, is_meaningful_phrase
 src/hippo/hipporag/openie.py      extract(ollama, passage_id, text) -> Extraction; extract_many(...)
-src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text); index_source(store, ollama, source_id, chunks, *, synonymy_threshold, workers, on_progress, should_stop)
+src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text, defines=[], extract_text=None); index_source(store, ollama, source_id, chunks, *, code=None,
+                                  synonymy_threshold, workers, on_progress, should_stop) -> the nine COUNT_KEYS
+                                  extract_text is the only gate on OpenIE: None = extract `text` (prose, as always), "" = skip, a string = extract that
+                                  code=CodeGraph adds three stages: "writing code graph", "linking mentions" (REFERS_TO), "communities" (Leiden per module)
                                   GRAPH_WRITE_LOCK: held while entities/facts are written and linked, and by anything that ends in remove_orphans
 src/hippo/hipporag/graph_index.py GraphIndex.load(store); .scoped(visible_source_ids) -> induced subgraph (recomputed fact counts and passage
                                   counts); .ppr(); .neighbors(); .edge_between(); .graph_with_edits(); Passage; Fact; Edge; EdgeEdit
@@ -84,12 +87,16 @@ readers.py   Document(title: str, text: str, path: str, is_code: bool)
              TextBudget(limit=MAX_TEXT_CHARS).add(chars, where)   # one per source; raises TooLarge(ReadError) past the limit, which
                                                                  # readers never swallow (pdf pages, epub chapters and zip members count as they go)
              MAX_TEXT_CHARS = 20_000_000; MAX_ZIP_MEMBERS = 5_000; MAX_ZIP_TOTAL_BYTES = 50_000_000 (unpacked); MAX_DOCX_XML_BYTES = 20_000_000
-chunker.py   chunk_document(doc: Document, size_chars: int, overlap_chars: int) -> list[Chunk]
+chunker.py   chunk_document(doc: Document, size_chars: int, overlap_chars: int, code: CodeGraph | None = None) -> list[Chunk]
              prose: split on markdown headings first (title becomes "Doc › Heading"), then pack paragraphs into <= size chunks, splitting
                     long paragraphs on sentence ends; overlap = tail of previous chunk (whole sentences). Chunk titles: "Title (part N)" when a
                     section spills into several chunks.
              code: pack lines into <= size chunks, preferring to break at blank lines / lines starting at column 0; title "path (lines a-b)".
-             ordinal counts up across the whole document list for a source (chunk_documents(docs, size, overlap) -> list[Chunk] does that).
+             code with a symbol tree (code= is given and code.parsed(path)): one passage per symbol -- module header with a placeholder line per
+                    member, class header with one per method, one per function/method, title "path :: module.qualname (lines a-b)", "(part N)" when a
+                    body is split at the walker's statement starts. Each carries `defines` (-> DEFINED_IN) and `extract_text`. A .sql file keeps its
+                    windows, still defines its tables, and never reaches OpenIE.
+             ordinal counts up across the whole document list for a source (chunk_documents(docs, size, overlap, code=None) -> list[Chunk] does that).
 repos.py     is_git_url(url) -> bool  (https://, http://, git@, ssh:// forms only)
              clone_repo(url, dest: Path, timeout=300) -> Path   # git clone --depth 1 --single-branch; raise RepoError with a friendly message
              walk_repo(root: Path, budget=None) -> list[Document]   # uses readers; skips IGNORED_DIRS, hidden dirs, files > MAX_FILE_BYTES, binaries
@@ -99,10 +106,10 @@ pipeline.py  add_text(ctx, name, text, *, owner_id=None, access_role_id=None) ->
              add_repo(ctx, url, *, owner_id=None, access_role_id=None) -> source_id                        # kind 'repo'
              add_sample(ctx, *, owner_id=None, access_role_id=None) -> source_id                           # kind 'sample': samples/acme_robotics.md
              every add_* records who added the source and the lowest role that may see it (None = everyone; see hippo/access.py)
-             start_indexing(ctx, source_id) -> bool                 # background job "index:<source_id>": read -> chunk -> index_source
+             start_indexing(ctx, source_id) -> bool                 # background job "index:<source_id>": read -> parse code -> chunk -> index_source
                                                                     # status flow: reading -> indexing -> ready | failed (error text kept)
                                                                     # stage/progress_done/progress_total updated through on_progress
-                                                                    # meta gets {"chunks": n, "documents": n, "counts": {...}}
+                                                                    # meta gets {"chunks": n, "documents": n, "counts": {...}, "code": CodeGraph.stats()}
                                                                     # reads with TextBudget(max_text_chars(ctx)); > MAX_CHUNKS (20,000) passages
                                                                     # or TooLarge from a reader -> 'failed' with "TooLarge: too large: ..."
                                                                     # on failure the passages written so far are cleared; when the job is
