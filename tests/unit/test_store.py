@@ -209,6 +209,89 @@ def test_delete_source_removes_its_passages_and_orphaned_entities_and_facts(stor
     assert store.get_source(keep)["passages"] == 1
 
 
+# ---------------------------------------------------- deleting the code graph
+
+
+def two_code_sources(store) -> tuple[str, str]:
+    """A source whose code is about to be deleted, and one that must be left completely alone."""
+    keep, drop = store.create_source("repo", "Keep"), store.create_source("repo", "Drop")
+    add_passage(store, keep, "passage-keep")
+    add_passage(store, drop, "passage-drop")
+    add_entity(store, "entity-order-service")
+    store.link_passage_entities([("passage-drop", "entity-order-service")])
+    for source_id, symbol_id, data_id, commit_id in (
+        (keep, "symbol-keep", "data-keep", "commit-keep"),
+        (drop, "symbol-drop", "data-drop", "commit-drop"),
+    ):
+        store.add_symbols([{"id": symbol_id, "source_id": source_id, "name": "place", "embedding": VEC}])
+        store.add_data_objects(
+            [{"id": data_id, "source_id": source_id, "name": "orders", "kind": "table", "embedding": VEC}]
+        )
+        store.add_commits([{"id": commit_id, "source_id": source_id, "sha": "abc", "ordinal": 0}])
+    store.add_code_edges([{"a": "symbol-drop", "b": "data-drop", "kind": "READS", "omega": 0.85}])
+    store.add_code_edges([{"a": "symbol-keep", "b": "data-keep", "kind": "READS", "omega": 0.85}])
+    store.link_definitions([("symbol-drop", "passage-drop"), ("symbol-keep", "passage-keep")])
+    store.add_modifies([{"commit_id": "commit-drop", "symbol_id": "symbol-drop", "omega": 1.0, "hunk": {}}])
+    store.add_refers_to(
+        [{"passage_id": "passage-drop", "node_id": "symbol-drop", "omega": 0.85, "token": "place"}]
+    )
+    store.add_synonyms([("entity-order-service", "symbol-drop", 0.87)])
+    store.set_edge_weight("symbol-drop", "passage-drop", 2.0)
+    return keep, drop
+
+
+def assert_only_the_kept_source_is_left(store, keep: str) -> None:
+    assert store.existing_entity_ids([]) == set()  # nothing raised getting here
+    assert {r["id"] for r in store.load_symbols()} == {"symbol-keep"}
+    assert {r["id"] for r in store.load_data_objects()} == {"data-keep"}
+    assert {r["id"] for r in store.load_commits()} == {"commit-keep"}
+    assert [(r["a"], r["b"]) for r in store.load_code_edges()] == [("symbol-keep", "data-keep")]
+    assert store.load_definitions() == [{"node_id": "symbol-keep", "passage_id": "passage-keep"}]
+    assert store.load_modifies() == [] and store.load_refers_to() == []
+    assert store.load_synonyms() == [] and store.load_tuned_edges() == []
+    assert store.get_source(keep)["passages"] == 1
+
+
+def test_delete_source_takes_its_code_nodes_and_every_edge_touching_them(store) -> None:
+    keep, drop = two_code_sources(store)
+    store.delete_source(drop)
+    assert_only_the_kept_source_is_left(store, keep)
+
+
+def test_delete_passages_for_source_takes_the_code_too(store) -> None:
+    # Re-indexing goes through here, so a source's old symbols must not survive into the new graph.
+    keep, drop = two_code_sources(store)
+    store.delete_passages_for_source(drop)
+    assert store.get_source(drop)["passages"] == 0  # the Source row stays, for re-indexing
+    assert_only_the_kept_source_is_left(store, keep)
+
+
+def test_remove_orphans_leaves_an_edgeless_symbol_alone(store) -> None:
+    # It sweeps facts nothing states and entities nothing mentions; a code node has neither, and a
+    # symbol nothing points at is still a real symbol.
+    source_id = store.create_source("repo", "pyapp")
+    store.add_symbols([{"id": "symbol-lonely", "source_id": source_id, "name": "place", "embedding": VEC}])
+    store.remove_orphans()
+    assert [r["id"] for r in store.load_symbols()] == ["symbol-lonely"]
+
+
+def test_sweeping_an_entity_drops_its_synonym_to_a_symbol(store) -> None:
+    # A known limitation, pinned so it is a decision rather than a surprise: the entity is swept by
+    # remove_orphans when it loses its last mention, and DETACH DELETE takes the cross-kind edge.
+    source_id = store.create_source("repo", "pyapp")
+    add_passage(store, source_id, "passage-1")
+    add_entity(store, "entity-order-service")
+    store.add_symbols([{"id": "symbol-place", "source_id": source_id, "name": "place", "embedding": VEC}])
+    store.link_passage_entities([("passage-1", "entity-order-service")])
+    store.add_synonyms([("entity-order-service", "symbol-place", 0.87)])
+    assert len(store.load_synonyms()) == 1
+
+    store.delete_passages_for_source(source_id)
+
+    assert store.existing_entity_ids(["entity-order-service"]) == set()
+    assert store.load_synonyms() == []
+
+
 # -------------------------------------------------------------------- passages
 
 
