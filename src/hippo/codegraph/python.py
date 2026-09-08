@@ -103,7 +103,7 @@ def walk(path: str, root: Node, source_id: str) -> FileFacts:
 
     bodies: list[tuple[Symbol, Node]] = []
     _definitions(facts, root, module_symbol, "", source_id, is_test, bodies)
-    module_symbol.header_end = _header_end(module_symbol, facts.symbols, root)
+    module_symbol.header_end = _header_end(module_symbol, facts.symbols)
 
     _imports(facts, root)
     _walk_body(facts, module_symbol, root, is_test)
@@ -143,8 +143,10 @@ def _definitions(
             kind="class" if is_class else ("method" if prefix else "function"),
             lang="python",
             path=facts.path,
-            line_start=line_of(node),
-            line_end=end_line_of(node),
+            # The *decorated* node, so `@app.route(...)` sits inside the symbol's passage
+            # and no line of the file belongs to nobody.
+            line_start=line_of(child),
+            line_end=end_line_of(child),
             signature=_signature(node, body),
             doc=_docstring(body) if body is not None else "",
             is_test=is_test,
@@ -155,6 +157,7 @@ def _definitions(
         )
         symbol.header_end = symbol.line_end
         facts.symbols.append(symbol)
+        _decorators(facts, symbol, child)
         if body is None:
             continue
         bodies.append((symbol, body))
@@ -162,7 +165,33 @@ def _definitions(
             for base in _base_names(node):
                 facts.bases.append(BaseFact(cls=qualname, base=base, line=line_of(node)))
             _definitions(facts, body, symbol, f"{qualname}.", source_id, is_test, bodies)
-            symbol.header_end = _header_end(symbol, facts.symbols, body)
+            symbol.header_end = _header_end(symbol, facts.symbols)
+
+
+def _decorators(facts: FileFacts, symbol: Symbol, node: Node) -> None:
+    """
+    `@app.route("/x")` is a call the decorated symbol makes (2.2b), so it is recorded
+    against that symbol. `@plain` is a call with no arguments; either resolves or, like any
+    other unresolvable call, produces no edge.
+    """
+    if node.type != "decorated_definition":
+        return
+    for child in node.children:
+        if child.type != "decorator":
+            continue
+        expression = next((c for c in child.children if c.is_named), None)
+        if expression is None:
+            continue
+        if expression.type == "call":
+            facts.calls.append(_call(symbol.qualname, expression))
+        elif expression.type in ("identifier", "attribute"):
+            receiver, name = "", text_of(expression)
+            if expression.type == "attribute":
+                receiver = _one_line(text_of(expression.child_by_field_name("object")))
+                name = text_of(expression.child_by_field_name("attribute"))
+            facts.calls.append(
+                CallFact(caller=symbol.qualname, receiver=receiver, name=name, line=line_of(child))
+            )
 
 
 def _base_names(node: Node) -> list[str]:
@@ -223,10 +252,11 @@ def _statement_lines(body: Node) -> list[int]:
     return [line_of(child) for child in body.children if child.is_named]
 
 
-def _header_end(symbol: Symbol, symbols: list[Symbol], body: Node) -> int:
+def _header_end(symbol: Symbol, symbols: list[Symbol]) -> int:
     """
     Last line of a module's or class's header passage: everything before its first member.
-    A decorated member's header stops before the decorator, not before the `def`.
+    A member's `line_start` is its decorated node, so a header always stops before the
+    decorators, never between them and the `def`.
 
     `header_end < line_start` means there is no header at all -- a file that opens with
     `class Base:` on line 1 -- and the chunker writes no header passage for it.
@@ -234,8 +264,7 @@ def _header_end(symbol: Symbol, symbols: list[Symbol], body: Node) -> int:
     members = [s for s in symbols if s is not symbol and _is_member(symbol, s)]
     if not members:
         return symbol.line_end
-    first = min(members, key=lambda s: s.line_start)
-    return _outermost(body, first.line_start) - 1
+    return min(m.line_start for m in members) - 1
 
 
 def _is_member(parent: Symbol, child: Symbol) -> bool:
@@ -244,16 +273,6 @@ def _is_member(parent: Symbol, child: Symbol) -> bool:
         return child.kind in ("class", "function") and "." not in child.qualname
     prefix = f"{parent.qualname}."
     return child.qualname.startswith(prefix) and "." not in child.qualname[len(prefix) :]
-
-
-def _outermost(body: Node, line: int) -> int:
-    """The line a definition really starts on: its first decorator, if it has any."""
-    for child in body.children:
-        if child.type == "decorated_definition":
-            inner = child.child_by_field_name("definition")
-            if inner is not None and line_of(inner) == line:
-                return line_of(child)
-    return line
 
 
 # ---------------------------------------------------------- what bodies do

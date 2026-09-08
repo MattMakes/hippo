@@ -309,6 +309,7 @@ class FileFacts:
     models: list[tuple[str, str, int]] = field(default_factory=list)  # mongoose (binding, collection, line)
     names: dict[str, list[int]] = field(default_factory=dict)  # bare identifier -> lines (TESTED_BY)
     reexports: list[ImportFact] = field(default_factory=list)  # TS `export ... from "./x"`
+    default_export: str = ""  # TS `export default class X` -> "X"
 
 
 @dataclass

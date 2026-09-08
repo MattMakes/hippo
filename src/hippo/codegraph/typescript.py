@@ -138,6 +138,8 @@ def _declarations(
             )
             symbol.header_end = symbol.line_end
             facts.symbols.append(symbol)
+            if not prefix and _is_default_export(outer):
+                facts.default_export = name
             bodies.append((symbol, body))
             if is_class:
                 for base in _base_names(definition):
@@ -152,6 +154,13 @@ def _unwrap(node: Node) -> Node | None:
         return node if node.is_named else None
     declaration = node.child_by_field_name("declaration")
     return declaration if declaration is not None else None
+
+
+def _is_default_export(node: Node) -> bool:
+    """`export default class X {}` -- the `default` keyword sits beside the declaration."""
+    return node.type == "export_statement" and any(
+        child.type == "default" for child in node.children if not child.is_named
+    )
 
 
 def _named_definitions(node: Node) -> list[tuple[str, Node, Node | None]]:

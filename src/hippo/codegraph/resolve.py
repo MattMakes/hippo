@@ -72,6 +72,9 @@ MAX_REEXPORT_DEPTH = 5
 
 SELF_NAMES = {"self", "cls", "this"}
 SUPER_NAMES = {"super", "super()"}
+# `super().m()` parses as two calls; the bare `super()` is syntax, not a reference, and
+# counting it as unresolved would put language machinery in a graph-health number.
+LANGUAGE_CALLS = {"super"}
 
 
 @dataclass
@@ -97,12 +100,25 @@ class SourceIndex:
     models: dict[str, dict[str, str]] = field(default_factory=dict)  # module -> binding -> collection
     bindings: dict[str, dict[str, Resolution]] = field(default_factory=dict)  # module -> alias
     bases: dict[tuple[str, str], list[Symbol]] = field(default_factory=dict)  # (path, class) -> bases
+    by_suffix: dict[str, list[FileFacts]] = field(default_factory=dict)  # dotted tail -> modules
 
     def module(self, name: str) -> FileFacts | None:
-        """A module by qualname; a package name also finds its `__init__` (2.2a keeps both)."""
+        """
+        A module by qualname; a package name also finds its `__init__` (2.2a keeps both).
+
+        The suffix fallback is for zips. `read_zip` titles members with the archive's own
+        root folder, so a downloaded repo's `pyapp/store.py` arrives as
+        `myrepo-main/pyapp/store.py` and every absolute `from pyapp.store import Base` would
+        otherwise miss. A suffix is accepted only when exactly one module matches it, so an
+        ambiguous name still resolves to nothing.
+        """
         if not name:
             return None
-        return self.modules.get(name) or self.modules.get(f"{name}.__init__")
+        found = self.modules.get(name) or self.modules.get(f"{name}.__init__")
+        if found is not None:
+            return found
+        candidates = self.by_suffix.get(name, [])
+        return candidates[0] if len(candidates) == 1 else None
 
     def module_symbol(self, facts: FileFacts) -> Symbol:
         return facts.symbols[0]
@@ -127,6 +143,9 @@ def build_index(files: list[FileFacts]) -> SourceIndex:
                 index.defines[facts.module][symbol.qualname] = symbol
         if facts.models:
             index.models[facts.module] = {binding: name for binding, name, _ in facts.models}
+        parts = (package_of(facts.module) or facts.module).split(".")
+        for start in range(1, len(parts)):  # every proper dotted tail; the whole name is exact
+            index.by_suffix.setdefault(".".join(parts[start:]), []).append(facts)
     return index
 
 
@@ -241,7 +260,14 @@ def _member(symbol: Symbol, reexport: bool, *, is_module: bool = False) -> Resol
 
 
 def _default_export(index: SourceIndex, facts: FileFacts) -> Symbol | None:
-    """TypeScript `export default class X {}` -- the module's single default-exported symbol."""
+    """
+    What `import x from "./b"` binds: the module's `export default`, or -- when the module
+    declares no default -- its only symbol, which is the shape a one-thing module has.
+    """
+    if facts.default_export:
+        found = index.defines.get(facts.module, {}).get(facts.default_export)
+        if found is not None:
+            return found
     exported = [s for s in facts.symbols if s.kind != "module"]
     return exported[0] if len(exported) == 1 else None
 
@@ -256,7 +282,9 @@ def resolve_imports(index: SourceIndex) -> list[CodeEdge]:
         bindings: dict[str, Resolution] = {}
         module_symbol = index.module_symbol(facts)
         ts = facts.lang == "typescript"
-        for spec in facts.imports:
+        # `export {x} from "./b"` is an import as far as the graph is concerned: this module
+        # depends on that one, and anybody importing this name goes through here.
+        for spec in [*facts.imports, *facts.reexports]:
             source = target_module(index, facts, spec, ts)
             if source is None:
                 continue  # a dependency, not part of this source: no edge (2.2b)
@@ -265,7 +293,14 @@ def resolve_imports(index: SourceIndex) -> list[CodeEdge]:
                 for name, symbol in index.defines.get(source.module, {}).items():
                     bindings.setdefault(name, Resolution(symbol, 0.60, "wildcard"))
                 continue
-            if not spec.name:
+            if spec.is_default:
+                exported = _default_export(index, source)
+                found = (
+                    Resolution(exported, 0.95, "import_path")
+                    if exported is not None
+                    else Resolution(index.module_symbol(source), 0.95, "import_path", is_module=True)
+                )
+            elif not spec.name:
                 found = Resolution(index.module_symbol(source), 0.95, "import_path", is_module=True)
             else:
                 found = resolve_member(index, source, spec.name)
@@ -291,9 +326,9 @@ def resolve_bases(index: SourceIndex) -> list[CodeEdge]:
             child = index.symbols.get((facts.path, base.cls))
             if child is None:
                 continue
-            found = _lookup_name(index, facts, base.base)
+            found = _lookup_dotted(index, facts, base.base)
             if found is None or found.symbol.kind != "class":
-                found = _fuzzy(index, facts.lang, base.base, kinds=("class",))
+                found = _fuzzy(index, facts.lang, base.base.rpartition(".")[2], kinds=("class",))
             if found is None:
                 continue
             omega = 0.90 if found.provenance != "fuzzy_name" else 0.50
@@ -357,6 +392,8 @@ def resolve_calls(index: SourceIndex, facts: FileFacts) -> tuple[list[CodeEdge],
             continue
         if (call.caller, call.line, call.name) in raised:
             continue  # `raise OrderError(...)` is a RAISES edge, not also a call to the class
+        if not call.receiver and call.name in LANGUAGE_CALLS:
+            continue  # `super()` is the language's own machinery, not a reference to resolve
         hit = _data_call(index, facts, call)
         if hit is not None:
             hits.append((call.caller, hit))
@@ -399,6 +436,10 @@ def _call_target(index: SourceIndex, facts: FileFacts, call) -> Resolution | Non
             found = resolve_member(index, index.modules[holder.symbol.qualname], name)
             return _through(facts, found) if found is not None else None
         return _on_class(index, facts, holder.symbol.qualname, name, holder.symbol.path)
+    # A guess is only allowed about one unknown thing. `x.y.z()` is 2.2b's "unresolvable
+    # chain -> no edge" row: we do not know what `x.y` is, so `z` is not ours to guess at.
+    if not receiver.isidentifier():
+        return None
     return _fuzzy(index, facts.lang, name, kinds=("function", "method"))
 
 
@@ -456,6 +497,28 @@ def _lookup_name(index: SourceIndex, facts: FileFacts, name: str) -> Resolution 
     return Resolution(found.symbol, 0.90, "via_import", found.is_module)
 
 
+def _lookup_dotted(index: SourceIndex, facts: FileFacts, text: str) -> Resolution | None:
+    """
+    `models.base.Model`: try the whole text first -- `import models.base` binds the alias
+    `models.base`, dots and all -- then resolve the head and ask it for the tail.
+    """
+    found = _lookup_name(index, facts, text)
+    if found is not None:
+        return found
+    if "." not in text:
+        return None
+    head, _, tail = text.rpartition(".")
+    holder = _lookup_dotted(index, facts, head)
+    if holder is None:
+        return None
+    if holder.is_module:
+        found = resolve_member(index, index.modules[holder.symbol.qualname], tail)
+        return _through(facts, found) if found is not None else None
+    if holder.symbol.kind == "class":
+        return _on_class(index, facts, holder.symbol.qualname, tail, holder.symbol.path)
+    return None
+
+
 def _fuzzy(index: SourceIndex, lang: str, name: str, kinds: tuple[str, ...]) -> Resolution | None:
     """
     2.2b's last resort: exactly one symbol of the right kind in this language carries the
@@ -497,7 +560,7 @@ def resolve_raises(index: SourceIndex, facts: FileFacts) -> list[CodeEdge]:
         if caller is None:
             continue
         name = exception.name.rpartition(".")[2]
-        found = _lookup_name(index, facts, name)
+        found = _lookup_dotted(index, facts, exception.name) or _lookup_name(index, facts, name)
         if found is not None and found.symbol.kind == "class":
             kind = "RAISES" if exception.kind == "raise" else "CATCHES"
             edges.append(_edge(caller, found.symbol, kind, 0.90, "resolved"))
@@ -523,11 +586,26 @@ def resolve_data(
     """
     objects: list[DataObject] = []
     edges: list[CodeEdge] = []
+    source_id = facts.symbols[0].source_id
     found = collect(facts.literals) + list(hits)
     for cls, name, line in facts.table_names:
         found.append((cls, Hit("table", name, "sql", "READS", "bare_identifier", line)))
+    # `mongoose.model("Order", ...)` declares the collection without touching it. No edge --
+    # but the node and this mention site must exist, or S2.5 would let the collection vanish
+    # the moment the file that reads it is hidden.
+    for _binding, collection, line in facts.models:
+        objects.append(
+            DataObject(
+                id=data_id(source_id, "collection", collection),
+                source_id=source_id,
+                name=collection,
+                qualname=collection,
+                kind="collection",
+                dialect="mongo",
+                mentions=[(facts.path, line)],
+            )
+        )
     for caller, hit in found:
-        source_id = facts.symbols[0].source_id
         target = DataObject(
             id=data_id(source_id, hit.kind, hit.qualname),
             source_id=source_id,

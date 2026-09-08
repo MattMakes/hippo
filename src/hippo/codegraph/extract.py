@@ -92,14 +92,24 @@ def extract_code(docs, source_id: str, *, should_stop: Callable[[], bool] | None
 
 
 def _walk(path: str, text: str, lang: str, source_id: str, parsers: dict) -> FileFacts | None:
-    """One file, in its own `try`. A parser is built once per grammar per call (not thread-safe)."""
+    """
+    One file, in its own `try`. A parser is built once per grammar per call (not thread-safe).
+
+    tree-sitter parses tolerantly and never raises, so "parse error" means the useful thing:
+    the file has syntax the grammar could not read *and* nothing came out of it but the
+    module itself. A file with a stray error node and twenty good symbols is still worth
+    chunking by symbol; a file that yielded nothing is better off as line windows.
+    """
     try:
         grammar = grammar_for(path, lang)
         parser = parsers.get(grammar)
         if parser is None:
             parser = parsers[grammar] = new_parser(grammar)
         tree = parser.parse(text.encode("utf-8", errors="replace"))
-        return WALKERS[lang](path, tree.root_node, source_id)
+        facts = WALKERS[lang](path, tree.root_node, source_id)
+        if tree.root_node.has_error and len(facts.symbols) <= 1:
+            return None
+        return facts
     except Exception:  # noqa: BLE001 - one unparsable file must not sink the source
         return None
 
