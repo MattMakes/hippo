@@ -32,6 +32,21 @@ SETTING_HELP = {
     "synonymy_threshold": "Embedding similarity above which two entity names get linked as synonyms (used while indexing).",
     "retrieval_top_k": "How many passages a search returns and keeps in the trace.",
     "qa_top_k": "How many passages the model reads before answering.",
+    # The code graph. Without a line here a setting renders a blank hint and nobody notices.
+    "code_seed_weight": "Anchor seed mass; 0 = ignore symbols named in the question.",
+    "code_structural_scale": (
+        "Multiplier on every code-touching weight term; 0 = no code vertex reaches the graph search. "
+        "Capped at 3.0 so a code edge can never outrank three facts."
+    ),
+    "code_theta": "Minimum confidence for the path tools and the answer block (never the graph search).",
+    "code_dense_seeds": "Code passages similar to the question that also seed their symbol.",
+    "code_triples_chars": "Size cap of the Code graph block.",
+    "code_community_boost": "Post-search score bonus for passages in a seed's community.",
+    "code_select": "The extra keep/drop/expand pass by the model, when code seeds fired.",
+    "code_expand_max": "Neighbours fetched per “expand”, confidence 0.75 and above.",
+    "code_history_depth": "First-parent commits read per repo source; 0 disables history.",
+    "code_git_timeout_s": "Per-commit `git show` budget; a timeout skips that commit.",
+    "code_history_total_s": "Whole-pass budget for reading history; stops early and keeps what it read.",
 }
 
 

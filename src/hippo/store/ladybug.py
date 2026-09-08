@@ -55,6 +55,29 @@ from ..access import (
 )
 from .base import DEFAULT_SETTINGS, new_id, now_iso, validate_settings
 from .changesets import _changeset_row
+from .code import (
+    BOOSTABLE_LABELS,
+    CODE_BATCH,
+    CODE_NODE_LABELS,
+    DEFINABLE_LABELS,
+    REFERABLE_LABELS,
+    SPECIFICITY_KINDS,
+    SYNONYM_LABELS,
+    TUNED_LABELS,
+    _commit_row,
+    _data_object_row,
+    _json_field,
+    _symbol_row,
+    code_edge_write_rows,
+    commit_write_row,
+    data_object_write_row,
+    grouped_by_labels,
+    modifies_write_rows,
+    node_label,
+    ordered_pairs,
+    refers_to_write_rows,
+    symbol_write_row,
+)
 from .evals import _result_row, _run_row, _set_row
 from .memory import _passage_row, _source_row
 from .users import _role_row, _user_row, clean_capabilities, clean_rank, clean_username, slug
@@ -87,6 +110,15 @@ NODE_TABLES: dict[str, str] = {
                      created_at STRING""",
     "Changeset": """id STRING PRIMARY KEY, name STRING, note STRING, status STRING, ops_json STRING,
                     created_at STRING, applied_at STRING, from_result_id STRING""",
+    "Symbol": """id STRING PRIMARY KEY, source_id STRING, name STRING, qualname STRING, kind STRING,
+                 lang STRING, path STRING, line_start INT64, line_end INT64, signature STRING,
+                 doc STRING, is_test BOOLEAN, raises STRING[], community INT64, name_tokens STRING[],
+                 boost DOUBLE, embedding FLOAT[], created_at STRING""",
+    "DataObject": """id STRING PRIMARY KEY, source_id STRING, name STRING, qualname STRING,
+                     kind STRING, dialect STRING, name_tokens STRING[], boost DOUBLE,
+                     embedding FLOAT[], created_at STRING""",
+    "Commit": """id STRING PRIMARY KEY, source_id STRING, sha STRING, author STRING, date STRING,
+                 message STRING, ordinal INT64, created_at STRING""",
     "Settings": "id STRING PRIMARY KEY, settings_json STRING, meta_json STRING, graph_version INT64",
     "Role": """id STRING PRIMARY KEY, name STRING, rank INT64, description STRING, capabilities STRING[],
                builtin BOOLEAN""",
@@ -94,30 +126,47 @@ NODE_TABLES: dict[str, str] = {
                role_id STRING, disabled BOOLEAN, created_at STRING""",
 }
 
-# Relationship tables: (name, "FROM A TO B[, FROM C TO D]", extra properties).
-REL_TABLES: list[tuple[str, str, str]] = [
-    ("FROM", "FROM Passage TO Source", ""),
-    ("MENTIONS", "FROM Passage TO Entity", ""),
-    ("STATES", "FROM Passage TO Fact", ""),
-    ("SUBJECT", "FROM Fact TO Entity", ""),
-    ("OBJECT", "FROM Fact TO Entity", ""),
-    ("SYNONYM", "FROM Entity TO Entity", ", score DOUBLE, manual BOOLEAN"),
+# Relationship tables: (name, [(from label, to label), ...], extra properties). A table with more
+# than one pair is grown in place on an existing file by `ensure_schema` (see the ALTER there), so
+# adding an endpoint pair here is all a migration needs.
+REL_TABLES: list[tuple[str, list[tuple[str, str]], str]] = [
+    ("FROM", [("Passage", "Source")], ""),
+    ("MENTIONS", [("Passage", "Entity")], ""),
+    ("STATES", [("Passage", "Fact")], ""),
+    ("SUBJECT", [("Fact", "Entity")], ""),
+    ("OBJECT", [("Fact", "Entity")], ""),
+    ("SYNONYM", ordered_pairs(SYNONYM_LABELS), ", score DOUBLE, manual BOOLEAN"),
+    ("TUNED", ordered_pairs(TUNED_LABELS), ", weight DOUBLE, updated_at STRING"),
     (
-        "TUNED",
-        "FROM Entity TO Entity, FROM Entity TO Passage, FROM Passage TO Entity, FROM Passage TO Passage",
-        ", weight DOUBLE, updated_at STRING",
+        "CODE_EDGE",
+        [("Symbol", "Symbol"), ("Symbol", "DataObject"), ("DataObject", "DataObject")],
+        ", kind STRING, omega DOUBLE, provenance STRING, extra STRING",
     ),
-    ("ABOUT", "FROM QuestionSet TO Source", ""),
-    ("HAS", "FROM QuestionSet TO Question", ""),
-    ("OF", "FROM EvalRun TO QuestionSet", ""),
-    ("RESULT", "FROM EvalRun TO EvalResult", ""),
-    ("FOR", "FROM EvalResult TO Question", ""),
+    ("DEFINED_IN", [(label, "Passage") for label in DEFINABLE_LABELS], ""),
+    ("REFERS_TO", [("Passage", label) for label in REFERABLE_LABELS], ", omega DOUBLE, token STRING"),
+    ("MODIFIES", [("Commit", "Symbol")], ", omega DOUBLE, hunk STRING"),
+    ("PRECEDES", [("Commit", "Commit")], ""),
+    ("ABOUT", [("QuestionSet", "Source")], ""),
+    ("HAS", [("QuestionSet", "Question")], ""),
+    ("OF", [("EvalRun", "QuestionSet")], ""),
+    ("RESULT", [("EvalRun", "EvalResult")], ""),
+    ("FOR", [("EvalResult", "Question")], ""),
 ]
 
 # Numeric fields, so a value arriving as the wrong Python type is coerced (LadybugDB will not
 # cast a parameter, and an `int` where a DOUBLE column expects a float is common).
-INT_FIELDS = {"progress_done", "progress_total", "ordinal", "gold_rank", "min_rank", "rank"}
-FLOAT_FIELDS = {"judge_score", "exact_match", "f1", "latency_ms", "boost", "score", "weight"}
+INT_FIELDS = {
+    "progress_done",
+    "progress_total",
+    "ordinal",
+    "gold_rank",
+    "min_rank",
+    "rank",
+    "line_start",
+    "line_end",
+    "community",
+}
+FLOAT_FIELDS = {"judge_score", "exact_match", "f1", "latency_ms", "boost", "score", "weight", "omega"}
 
 
 class StoreLockedError(RuntimeError):
@@ -161,6 +210,30 @@ def _in_asked_order(rows: list[dict[str, Any]], ids: list[str]) -> list[dict[str
 
 def _vector(values: Any) -> list[float]:
     return [float(x) for x in values]
+
+
+def _symbol_params(row: dict[str, Any]) -> dict[str, Any]:
+    """A shaped symbol row with its free text as bytes (see the module docstring, rule 1)."""
+    return {
+        **row,
+        **{k: text(row[k]) for k in ("name", "qualname", "kind", "lang", "path", "signature", "doc")},
+    }
+
+
+def _data_object_params(row: dict[str, Any]) -> dict[str, Any]:
+    return {**row, **{k: text(row[k]) for k in ("name", "qualname", "kind", "dialect")}}
+
+
+def _by_label_pairs(
+    pairs: list[tuple[str, str]], allowed: tuple[str, ...]
+) -> dict[str, list[tuple[str, str]]]:
+    """(node id, other id) pairs grouped by the concrete label of the first id (S2.2)."""
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for a, b in pairs:
+        label = node_label(a, allowed)
+        if label is not None:
+            grouped.setdefault(label, []).append((a, b))
+    return grouped
 
 
 class LadybugStore:
@@ -268,12 +341,24 @@ class LadybugStore:
     # ------------------------------------------------------------- schema
 
     def ensure_schema(self) -> None:
-        """Create the tables and the Settings row. Safe to call on every start."""
+        """
+        Create the tables and the Settings row. Safe to call on every start.
+
+        A relationship table that gained endpoint pairs since the file was written is grown in
+        place with `ALTER TABLE ... ADD IF NOT EXISTS FROM X TO Y`, which R4 T6 and WP1's own
+        test 1.5a prove survives a close/reopen on a populated, property-bearing table. Only the
+        missing pairs are altered, so a database that is already wide costs one `show_connection`
+        per multi-pair table and nothing else.
+        """
         with self._lock:
             for name, columns in NODE_TABLES.items():
                 self.run(f"CREATE NODE TABLE IF NOT EXISTS {name}({columns})")
             for name, pairs, extra in REL_TABLES:
-                self.run(f"CREATE REL TABLE IF NOT EXISTS {name}({pairs}{extra})")
+                declared = ", ".join(f"FROM {a} TO {b}" for a, b in pairs)
+                self.run(f"CREATE REL TABLE IF NOT EXISTS {name}({declared}{extra})")
+                if len(pairs) > 1:  # a one-pair table was just declared and cannot be missing it
+                    for a, b in sorted(set(pairs) - self.connection_pairs(name)):
+                        self.run(f"ALTER TABLE {name} ADD IF NOT EXISTS FROM {a} TO {b}")
             self.run(
                 """
                 MERGE (s:Settings {id: 'global'})
@@ -281,6 +366,13 @@ class LadybugStore:
                 """,
                 settings=text(json.dumps(DEFAULT_SETTINGS)),
             )
+
+    def connection_pairs(self, rel_table: str) -> set[tuple[str, str]]:
+        """The (from label, to label) pairs a relationship table currently accepts."""
+        return {
+            (row["source table name"], row["destination table name"])
+            for row in self.run(f"CALL show_connection('{rel_table}') RETURN *")
+        }
 
     # ----------------------------------------------------------- settings
 
@@ -344,6 +436,10 @@ class LadybugStore:
             "passages": count("(:Passage)"),
             "entities": count("(:Entity)"),
             "facts": count("(:Fact)"),
+            "symbols": count("(:Symbol)"),
+            "data_objects": count("(:DataObject)"),
+            "code_edges": count("()-[:CODE_EDGE]->()"),
+            "commits": count("(:Commit)"),
             "synonym_edges": count("()-[:SYNONYM]->()"),
             "mention_edges": count("()-[:MENTIONS]->()"),
             "question_sets": count("(:QuestionSet)"),
@@ -488,12 +584,14 @@ class LadybugStore:
 
     def delete_source(self, source_id: str) -> None:
         with self._lock:
+            self.delete_code_nodes_for_source(source_id)
             self.run("MATCH (s:Source {id: $id})<-[:FROM]-(p:Passage) DETACH DELETE p", id=source_id)
             self.run("MATCH (s:Source {id: $id}) DETACH DELETE s", id=source_id)
             self.remove_orphans()
 
     def delete_passages_for_source(self, source_id: str) -> None:
         with self._lock:
+            self.delete_code_nodes_for_source(source_id)
             self.run("MATCH (s:Source {id: $id})<-[:FROM]-(p:Passage) DETACH DELETE p", id=source_id)
             self.remove_orphans()
 
@@ -756,36 +854,435 @@ class LadybugStore:
         self._link("MENTIONS", "Passage", "Entity", list(pairs))
 
     def add_synonyms(self, rows: list[tuple[str, str, float]], manual: bool = False) -> None:
-        """rows: (entity_id_a, entity_id_b, score). Stored once per pair (a < b), keeping the best score."""
+        """
+        rows: (node_id_a, node_id_b, score). Stored once per pair (a < b), keeping the best score.
+
+        Either id may be an entity, a symbol or a data object; the label comes from the id prefix
+        (`label_of`, S2.2) and each write is bound to one concrete label pair, which is what
+        LadybugDB requires. A pair SYNONYM has no endpoint for is skipped, exactly as a `MATCH`
+        that finds nothing would be.
+        """
         best: dict[tuple[str, str], float] = {}
         for a, b, score in rows:
             if a != b:
                 key = (min(a, b), max(a, b))
                 best[key] = max(best.get(key, 0.0), float(score))
-        canonical = [{"a": a, "b": b, "score": score} for (a, b), score in best.items()]
-        for batch in _batches(canonical, 1000):
+        for (label_a, label_b), group in grouped_by_labels(best, SYNONYM_LABELS).items():
+            for batch in _batches(group, 1000):
+                with self._lock:
+                    # Existing edges: raise the score if the new one is better, and remember a manual link.
+                    self.run(
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (a:{label_a} {{id: row.a}})-[s:SYNONYM]->(b:{label_b} {{id: row.b}})
+                        SET s.score = CASE WHEN s.score IS NULL OR s.score < row.score
+                                           THEN row.score ELSE s.score END,
+                            s.manual = coalesce(s.manual, false) OR $manual
+                        """,
+                        rows=batch,
+                        manual=bool(manual),
+                    )
+                    self.run(
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (a:{label_a} {{id: row.a}}), (b:{label_b} {{id: row.b}})
+                        WHERE NOT EXISTS {{ MATCH (a)-[:SYNONYM]->(b) }}
+                        CREATE (a)-[:SYNONYM {{score: row.score, manual: $manual}}]->(b)
+                        """,
+                        rows=batch,
+                        manual=bool(manual),
+                    )
+
+    # =========================================================== code graph
+    # Same names and row shapes as store/code.py (Neo4j) and tests/fakes/fake_store.py.
+    # Every write is bound to one concrete label pair, because LadybugDB refuses to create a
+    # relationship whose endpoints are bound by several labels (R4 T7).
+
+    def add_symbols(self, rows: list[dict[str, Any]]) -> None:
+        """rows: {id, source_id, name, qualname, kind, lang, path, line_start, line_end, signature,
+        doc, is_test, raises, embedding}. Re-adding updates in place; an unknown source is skipped."""
+        shaped = [symbol_write_row(r) for r in rows]
+        for batch in _batches(shaped, CODE_BATCH):
             with self._lock:
-                # Existing edges: raise the score if the new one is better, and remember a manual link.
                 self.run(
                     """
                     UNWIND $rows AS row
-                    MATCH (a:Entity {id: row.a})-[s:SYNONYM]->(b:Entity {id: row.b})
-                    SET s.score = CASE WHEN s.score IS NULL OR s.score < row.score THEN row.score ELSE s.score END,
-                        s.manual = coalesce(s.manual, false) OR $manual
+                    MATCH (src:Source {id: row.source_id})
+                    MERGE (n:Symbol {id: row.id})
+                    ON CREATE SET n.created_at = $now
+                    SET n.source_id = row.source_id, n.name = decode(row.name),
+                        n.qualname = decode(row.qualname), n.kind = decode(row.kind),
+                        n.lang = decode(row.lang), n.path = decode(row.path),
+                        n.line_start = row.line_start, n.line_end = row.line_end,
+                        n.signature = decode(row.signature), n.doc = decode(row.doc),
+                        n.is_test = row.is_test, n.raises = row.raises, n.name_tokens = row.name_tokens
+                    """,
+                    rows=[_symbol_params(r) for r in batch],
+                    now=now_iso(),
+                )
+                self._set_embeddings("Symbol", batch)
+
+    def add_data_objects(self, rows: list[dict[str, Any]]) -> None:
+        """rows: {id, source_id, name, qualname, kind, dialect, embedding}."""
+        shaped = [data_object_write_row(r) for r in rows]
+        for batch in _batches(shaped, CODE_BATCH):
+            with self._lock:
+                self.run(
+                    """
+                    UNWIND $rows AS row
+                    MATCH (src:Source {id: row.source_id})
+                    MERGE (n:DataObject {id: row.id})
+                    ON CREATE SET n.created_at = $now
+                    SET n.source_id = row.source_id, n.name = decode(row.name),
+                        n.qualname = decode(row.qualname), n.kind = decode(row.kind),
+                        n.dialect = decode(row.dialect), n.name_tokens = row.name_tokens
+                    """,
+                    rows=[_data_object_params(r) for r in batch],
+                    now=now_iso(),
+                )
+                self._set_embeddings("DataObject", batch)
+
+    def _set_embeddings(self, label: str, rows: list[dict[str, Any]]) -> None:
+        """Vectors in their own pass: LadybugDB cannot type an empty FLOAT[] literal, and a symbol
+        may legitimately arrive without one (the indexer embeds names, tests often do not)."""
+        with_vectors = [{"id": r["id"], "embedding": _vector(r["embedding"])} for r in rows if r["embedding"]]
+        for batch in _batches(with_vectors, CODE_BATCH):
+            self.run(
+                f"UNWIND $rows AS row MATCH (n:{label} {{id: row.id}}) SET n.embedding = row.embedding",
+                rows=batch,
+            )
+
+    def add_commits(self, rows: list[dict[str, Any]]) -> None:
+        """rows: {id, source_id, sha, author, date, message, ordinal}."""
+        shaped = [commit_write_row(r) for r in rows]
+        for batch in _batches(shaped, CODE_BATCH):
+            self.run(
+                """
+                UNWIND $rows AS row
+                MATCH (src:Source {id: row.source_id})
+                MERGE (n:Commit {id: row.id})
+                ON CREATE SET n.created_at = $now
+                SET n.source_id = row.source_id, n.sha = decode(row.sha), n.author = decode(row.author),
+                    n.date = decode(row.date), n.message = decode(row.message), n.ordinal = row.ordinal
+                """,
+                rows=[
+                    {
+                        **r,
+                        "sha": text(r["sha"]),
+                        "author": text(r["author"]),
+                        "date": text(r["date"]),
+                        "message": text(r["message"]),
+                    }
+                    for r in batch
+                ],
+                now=now_iso(),
+            )
+
+    def add_code_edges(self, rows: list[dict[str, Any]]) -> None:
+        """rows: {a, b, kind, omega, provenance, extra}. Directed, one per (a, b, kind); re-adding
+        raises omega and never lowers it. Unknown kinds raise; self-loops and bad pairs are dropped."""
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in code_edge_write_rows(rows):
+            grouped.setdefault((row["label_a"], row["label_b"]), []).append(
+                {
+                    "a": row["a"],
+                    "b": row["b"],
+                    "kind": row["kind"],  # a fixed vocabulary word: safe as a plain string
+                    "omega": row["omega"],
+                    "provenance": text(row["provenance"]),
+                    "extra": text(row["extra"]),
+                }
+            )
+        for (label_a, label_b), group in grouped.items():
+            for batch in _batches(group, CODE_BATCH):
+                with self._lock:
+                    # LadybugDB 0.15 cannot MERGE a relationship under UNWIND (see _link), so this
+                    # is the same two-statement shape: raise omega on what is there, create the rest.
+                    self.run(
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (a:{label_a} {{id: row.a}})-[r:CODE_EDGE]->(b:{label_b} {{id: row.b}})
+                        WHERE r.kind = row.kind AND r.omega < row.omega
+                        SET r.omega = row.omega, r.provenance = decode(row.provenance),
+                            r.extra = decode(row.extra)
+                        """,
+                        rows=batch,
+                    )
+                    self.run(
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (a:{label_a} {{id: row.a}}), (b:{label_b} {{id: row.b}})
+                        WHERE NOT EXISTS {{ MATCH (a)-[r:CODE_EDGE]->(b) WHERE r.kind = row.kind }}
+                        CREATE (a)-[:CODE_EDGE {{kind: row.kind, omega: row.omega,
+                                                 provenance: decode(row.provenance),
+                                                 extra: decode(row.extra)}}]->(b)
+                        """,
+                        rows=batch,
+                    )
+
+    def link_definitions(self, pairs: list[tuple[str, str]]) -> None:
+        """(node_id, passage_id) -> DEFINED_IN. The node may be a symbol, data object or commit."""
+        for label, group in _by_label_pairs(pairs, DEFINABLE_LABELS).items():
+            self._link("DEFINED_IN", label, "Passage", group)
+
+    def add_modifies(self, rows: list[dict[str, Any]]) -> None:
+        """rows: {commit_id, symbol_id, omega, hunk}. One edge per (commit, symbol)."""
+        shaped = [{**r, "hunk": text(r["hunk"])} for r in modifies_write_rows(rows)]
+        for batch in _batches(shaped, CODE_BATCH):
+            with self._lock:
+                self.run(
+                    """
+                    UNWIND $rows AS row
+                    MATCH (c:Commit {id: row.commit_id})-[r:MODIFIES]->(s:Symbol {id: row.symbol_id})
+                    SET r.omega = row.omega, r.hunk = decode(row.hunk)
                     """,
                     rows=batch,
-                    manual=bool(manual),
                 )
                 self.run(
                     """
                     UNWIND $rows AS row
-                    MATCH (a:Entity {id: row.a}), (b:Entity {id: row.b})
-                    WHERE NOT EXISTS { MATCH (a)-[:SYNONYM]->(b) }
-                    CREATE (a)-[:SYNONYM {score: row.score, manual: $manual}]->(b)
+                    MATCH (c:Commit {id: row.commit_id}), (s:Symbol {id: row.symbol_id})
+                    WHERE NOT EXISTS { MATCH (c)-[:MODIFIES]->(s) }
+                    CREATE (c)-[:MODIFIES {omega: row.omega, hunk: decode(row.hunk)}]->(s)
                     """,
                     rows=batch,
-                    manual=bool(manual),
                 )
+
+    def add_precedes(self, pairs: list[tuple[str, str]]) -> None:
+        """(a, b) -> PRECEDES, the first-parent chain. Never reaches igraph; the history tool reads it."""
+        chain = [
+            (a, b) for a, b in pairs if a != b and node_label(a, ("Commit",)) and node_label(b, ("Commit",))
+        ]
+        self._link("PRECEDES", "Commit", "Commit", chain)
+
+    def add_refers_to(self, rows: list[dict[str, Any]]) -> None:
+        """rows: {passage_id, node_id, omega, token}. A prose or commit passage naming a code node."""
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in refers_to_write_rows(rows):
+            grouped.setdefault(row["label"], []).append({**row, "token": text(row["token"])})
+        for label, group in grouped.items():
+            for batch in _batches(group, CODE_BATCH):
+                with self._lock:
+                    self.run(
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (p:Passage {{id: row.passage_id}})-[r:REFERS_TO]->(n:{label} {{id: row.node_id}})
+                        WHERE r.omega < row.omega
+                        SET r.omega = row.omega, r.token = decode(row.token)
+                        """,
+                        rows=batch,
+                    )
+                    self.run(
+                        f"""
+                        UNWIND $rows AS row
+                        MATCH (p:Passage {{id: row.passage_id}}), (n:{label} {{id: row.node_id}})
+                        WHERE NOT EXISTS {{ MATCH (p)-[:REFERS_TO]->(n) }}
+                        CREATE (p)-[:REFERS_TO {{omega: row.omega, token: decode(row.token)}}]->(n)
+                        """,
+                        rows=batch,
+                    )
+
+    def set_symbol_communities(self, mapping: dict[str, int]) -> None:
+        """{symbol_id: community}. The Leiden label, shown as the subsystem name."""
+        rows = [{"id": sid, "community": int(value)} for sid, value in mapping.items()]
+        for batch in _batches(rows, CODE_BATCH):
+            self.run(
+                "UNWIND $rows AS row MATCH (n:Symbol {id: row.id}) SET n.community = row.community",
+                rows=batch,
+            )
+
+    # ------------------------------------------------------- reading code nodes
+
+    def _code_nodes(self, label: str, ids: list[str], access: Access | None) -> list[dict[str, Any]]:
+        """A code node is visible exactly when its source is: `source_id` is a property, so this is
+        the same one-hop property check every other access-aware read makes (R1.6)."""
+        if not ids:
+            return []
+        rows = self.run(
+            f"""
+            MATCH (n:{label}) WHERE n.id IN $ids
+            MATCH (s:Source {{id: n.source_id}}) WHERE {ACCESS_WHERE}
+            OPTIONAL MATCH (n)-[:DEFINED_IN]->(p:Passage)
+            WITH n, s, collect(p.id) AS passage_ids
+            RETURN n AS n, s.name AS source_name, passage_ids
+            """,
+            ids=list(ids),
+            **access_params(access),
+        )
+        return [
+            {
+                **_node(r["n"]),
+                "source_name": r["source_name"] or "",
+                "passage_ids": [pid for pid in (r["passage_ids"] or []) if pid is not None],
+            }
+            for r in rows
+        ]
+
+    def get_symbols(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        return _in_asked_order([_symbol_row(r) for r in self._code_nodes("Symbol", ids, access)], ids)
+
+    def get_data_objects(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        return _in_asked_order(
+            [_data_object_row(r) for r in self._code_nodes("DataObject", ids, access)], ids
+        )
+
+    def get_commits(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        return _in_asked_order([_commit_row(r) for r in self._code_nodes("Commit", ids, access)], ids)
+
+    # ------------------------------------------------- loading the code graph
+
+    def _code_in_degrees(self) -> dict[str, int]:
+        """Incoming CODE_EDGE of SPECIFICITY_KINDS per node id (S2.4: MODIFIES is excluded)."""
+        return {
+            r["id"]: int(r["n"])
+            for r in self.run(
+                """
+                MATCH (a)-[r:CODE_EDGE]->(b) WHERE r.kind IN $kinds
+                RETURN b.id AS id, count(r) AS n
+                """,
+                kinds=list(SPECIFICITY_KINDS),
+            )
+        }
+
+    def load_symbols(self) -> list[dict[str, Any]]:
+        rows = self.run(
+            """
+            MATCH (n:Symbol)
+            OPTIONAL MATCH (s:Source {id: n.source_id})
+            RETURN n AS n, s.name AS source_name
+            """
+        )
+        degrees = self._code_in_degrees()
+        return [
+            _symbol_row(
+                {
+                    **_node(r["n"]),
+                    "source_name": r["source_name"] or "",
+                    "in_degree": degrees.get(_node(r["n"])["id"], 0),
+                }
+            )
+            for r in rows
+        ]
+
+    def load_data_objects(self) -> list[dict[str, Any]]:
+        rows = self.run(
+            """
+            MATCH (n:DataObject)
+            OPTIONAL MATCH (s:Source {id: n.source_id})
+            RETURN n AS n, s.name AS source_name
+            """
+        )
+        degrees = self._code_in_degrees()
+        return [
+            _data_object_row(
+                {
+                    **_node(r["n"]),
+                    "source_name": r["source_name"] or "",
+                    "in_degree": degrees.get(_node(r["n"])["id"], 0),
+                }
+            )
+            for r in rows
+        ]
+
+    def load_commits(self) -> list[dict[str, Any]]:
+        rows = self.run(
+            """
+            MATCH (n:Commit)
+            OPTIONAL MATCH (s:Source {id: n.source_id})
+            RETURN n AS n, s.name AS source_name
+            """
+        )
+        return [_commit_row({**_node(r["n"]), "source_name": r["source_name"] or ""}) for r in rows]
+
+    def load_code_edges(self) -> list[dict[str, Any]]:
+        rows = self.run(
+            """
+            MATCH (a)-[r:CODE_EDGE]->(b)
+            RETURN a.id AS a, b.id AS b, r.kind AS kind, r.omega AS omega,
+                   r.provenance AS provenance, r.extra AS extra
+            """
+        )
+        return [
+            {
+                "a": r["a"],
+                "b": r["b"],
+                "kind": r["kind"],
+                "omega": float(r["omega"] or 0.0),
+                "provenance": r["provenance"] or "",
+                "extra": _json_field(r["extra"]),
+            }
+            for r in rows
+        ]
+
+    def load_definitions(self) -> list[dict[str, Any]]:
+        return self.run("MATCH (n)-[:DEFINED_IN]->(p:Passage) RETURN n.id AS node_id, p.id AS passage_id")
+
+    def load_modifies(self) -> list[dict[str, Any]]:
+        rows = self.run(
+            """
+            MATCH (c:Commit)-[r:MODIFIES]->(s:Symbol)
+            RETURN c.id AS commit_id, s.id AS symbol_id, r.omega AS omega, r.hunk AS hunk
+            """
+        )
+        return [
+            {
+                "commit_id": r["commit_id"],
+                "symbol_id": r["symbol_id"],
+                "omega": float(r["omega"] or 0.0),
+                "hunk": _json_field(r["hunk"]),
+            }
+            for r in rows
+        ]
+
+    def load_precedes(self) -> list[dict[str, Any]]:
+        rows = self.run(
+            """
+            MATCH (a:Commit)-[:PRECEDES]->(b:Commit)
+            RETURN a.id AS a, b.id AS b, a.ordinal AS a_ordinal, b.ordinal AS b_ordinal
+            """
+        )
+        rows.sort(key=lambda r: (int(r["a_ordinal"] or 0), int(r["b_ordinal"] or 0)))
+        return [{"a": r["a"], "b": r["b"]} for r in rows]
+
+    def load_refers_to(self) -> list[dict[str, Any]]:
+        rows = self.run(
+            """
+            MATCH (p:Passage)-[r:REFERS_TO]->(n)
+            RETURN p.id AS passage_id, n.id AS node_id, r.omega AS omega, r.token AS token
+            """
+        )
+        return [
+            {
+                "passage_id": r["passage_id"],
+                "node_id": r["node_id"],
+                "omega": float(r["omega"] or 0.0),
+                "token": r["token"] or "",
+            }
+            for r in rows
+        ]
+
+    def load_code_embeddings(self) -> tuple[list[str], list[list[float]]]:
+        """Every symbol's and data object's name vector (used to find cross-kind synonyms)."""
+        ids: list[str] = []
+        vectors: list[list[float]] = []
+        for label in ("Symbol", "DataObject"):
+            for row in self.run(f"MATCH (n:{label}) RETURN n.id AS id, n.embedding AS embedding"):
+                if row["embedding"]:
+                    ids.append(row["id"])
+                    vectors.append(list(row["embedding"]))
+        return ids, vectors
+
+    def delete_code_nodes_for_source(self, source_id: str) -> None:
+        """
+        Every code node of one source, as **three per-label statements**.
+
+        Do not collapse these into `MATCH (n:Symbol:DataObject:Commit)`: that is LadybugDB's
+        disjunction but Neo4j's *conjunction*, so the same chained query would match nothing on
+        Neo4j and silently leak every code node (R1 gotcha 2).
+        """
+        with self._lock:
+            for label in CODE_NODE_LABELS:
+                self.run(f"MATCH (n:{label}) WHERE n.source_id = $id DETACH DELETE n", id=source_id)
 
     # ====================================================== loading the graph
 
@@ -826,8 +1323,10 @@ class LadybugStore:
         )
 
     def load_synonyms(self) -> list[dict[str, Any]]:
+        # Unlabelled, like load_tuned_edges: SYNONYM now joins entities, symbols and data objects,
+        # and a labelled MATCH would silently drop every cross-kind row.
         return self.run(
-            "MATCH (a:Entity)-[s:SYNONYM]->(b:Entity) "
+            "MATCH (a)-[s:SYNONYM]->(b) "
             "RETURN a.id AS a, b.id AS b, s.score AS score, coalesce(s.manual, false) AS manual"
         )
 
@@ -1136,19 +1635,18 @@ class LadybugStore:
         )
 
     def set_node_boost(self, entity_id: str, boost: float) -> None:
-        self.run("MATCH (e:Entity {id: $id}) SET e.boost = $boost", id=entity_id, boost=float(boost))
-
-    def _node_label(self, node_id: str) -> str | None:
-        """Entity or Passage, whichever holds this id (TUNED edges may join either kind)."""
-        row = self.run_one("MATCH (n:Entity:Passage {id: $id}) RETURN label(n) AS label LIMIT 1", id=node_id)
-        return row["label"] if row else None
+        """A boost on an entity, symbol or data object. The label comes from the id prefix (S2.2)."""
+        label = node_label(entity_id, BOOSTABLE_LABELS)
+        if label is None:
+            return  # Neo4j's MATCH finds nothing and writes nothing; same here
+        self.run(f"MATCH (n:{label} {{id: $id}}) SET n.boost = $boost", id=entity_id, boost=float(boost))
 
     def set_edge_weight(self, a: str, b: str, weight: float) -> None:
         lo, hi = min(a, b), max(a, b)
+        label_a, label_b = node_label(lo, TUNED_LABELS), node_label(hi, TUNED_LABELS)
+        if label_a is None or label_b is None:
+            return
         with self._lock:
-            label_a, label_b = self._node_label(lo), self._node_label(hi)
-            if not label_a or not label_b:
-                return  # Neo4j's MATCH finds nothing and writes nothing; same here
             self.run(
                 f"""
                 MATCH (a:{label_a} {{id: $a}}), (b:{label_b} {{id: $b}})
@@ -1163,9 +1661,10 @@ class LadybugStore:
 
     def clear_edge_weight(self, a: str, b: str) -> None:
         lo, hi = min(a, b), max(a, b)
-        self.run(
-            "MATCH (a:Entity:Passage {id: $a})-[t:TUNED]->(b:Entity:Passage {id: $b}) DELETE t", a=lo, b=hi
-        )
+        label_a, label_b = node_label(lo, TUNED_LABELS), node_label(hi, TUNED_LABELS)
+        if label_a is None or label_b is None:
+            return
+        self.run(f"MATCH (a:{label_a} {{id: $a}})-[t:TUNED]->(b:{label_b} {{id: $b}}) DELETE t", a=lo, b=hi)
 
     # ================================================================ roles
     # Same behaviour as store/users.py (UserQueries); read that file for the rules.

@@ -27,6 +27,43 @@ from .explain import TOP_PASSAGES
 
 DIFF_TOP = TOP_PASSAGES  # the diff covers the same passages the Analyze page explains
 
+# Which settings a simulation may change. An explicit allow-list rather than "everything in
+# SETTING_RULES", because a few settings only take effect while *indexing*: as sliders on the
+# Analyze page they would render as knobs that cannot move any ranking, on the page whose whole
+# purpose is explaining one. A new setting is not simulatable until it is named here.
+SIMULATABLE_SETTINGS = frozenset(
+    {
+        "linking_top_k",
+        "passage_node_weight",
+        "damping",
+        "node_specificity",
+        "synonymy_threshold",
+        "retrieval_top_k",
+        "qa_top_k",
+        "code_seed_weight",
+        "code_structural_scale",
+        "code_theta",
+        "code_dense_seeds",
+        "code_triples_chars",
+        "code_community_boost",
+        "code_select",
+        "code_expand_max",
+    }
+)
+
+# The rest: read once, while indexing, and never looked at again by a search.
+INGEST_SETTINGS = frozenset({"code_history_depth", "code_git_timeout_s", "code_history_total_s"})
+
+
+def validate_simulation_settings(changes: dict[str, Any]) -> dict[str, Any]:
+    """`validate_settings`, but refusing the settings a simulation cannot act on."""
+    not_simulatable = sorted(set(changes) & INGEST_SETTINGS)
+    if not_simulatable:
+        raise ValueError(
+            f"{', '.join(not_simulatable)} only applies while indexing, so a simulation cannot change it"
+        )
+    return validate_settings(changes)
+
 
 @dataclass
 class Overrides:
@@ -44,7 +81,7 @@ class Overrides:
     def from_dict(cls, d: dict[str, Any] | None) -> Overrides:
         d = d or {}
         return cls(
-            settings=validate_settings(dict(d.get("settings") or {})),
+            settings=validate_simulation_settings(dict(d.get("settings") or {})),
             force_include=[str(x) for x in d.get("force_include") or []],
             force_exclude=[str(x) for x in d.get("force_exclude") or []],
             node_boosts={str(k): float(v) for k, v in (d.get("node_boosts") or {}).items()},
@@ -107,7 +144,11 @@ def simulate(
         baseline = retriever.retrieve(question, base_settings)
 
     fact_filter = None if overrides.rerun_filter or baseline is None else replay_filter(baseline)
-    graph = index.graph_with_edits(overrides.edge_edit_objects()) if overrides.edge_edits else None
+    # The scale composes with the edits inside one rebuild. Applying it anywhere else would be
+    # silently discarded the moment a simulation also edited an edge, because `retrieve(graph=)`
+    # then runs on *this* igraph.
+    scale = float(settings.get("code_structural_scale", 1.0))
+    graph = index.graph_with_edits(overrides.edge_edit_objects(), scale) if overrides.edge_edits else None
 
     trace = retriever.retrieve(
         question,

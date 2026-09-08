@@ -24,6 +24,7 @@ from hippo.access import (
 from hippo.context import AppContext
 from hippo.hipporag.graph_index import GraphIndex
 from hippo.hipporag.indexer import Chunk, index_source
+from hippo.hipporag.text import make_id
 
 # ------------------------------------------------------------------ helpers
 
@@ -315,6 +316,129 @@ def test_scoped_index_is_the_induced_subgraph_of_visible_sources(ctx: AppContext
     assert [scoped.node_ids[int(v)] for v in scoped.passage_vertices] == [p.id for p in scoped.passages]
     assert all(scoped.idx_of[nid] == i for i, nid in enumerate(scoped.node_ids))
     assert scoped.version == full.version
+
+
+# ------------------------------------------------------ scoped code graph
+
+
+def index_code(ctx: AppContext) -> tuple[str, str, dict[str, str]]:
+    """Two code sources, one open and one restricted, each with a symbol defined in its own passage
+    and a code edge between them. Returns (open_id, restricted_id, {name: node id})."""
+    ctx.store.ping()
+    open_id = ctx.store.create_source("repo", "Open repo")
+    hidden_id = ctx.store.create_source("repo", "Secret repo", owner_id="boss", access_role_id="local-admin")
+    ids = {
+        "open_symbol": make_id("symbol-", "open"),
+        "hidden_symbol": make_id("symbol-", "hidden"),
+        "open_data": make_id("data-", "orders"),
+        "hidden_commit": make_id("commit-", "abc"),
+    }
+    for source_id, passage_id, title in (
+        (open_id, "passage-open", "open.py :: run"),
+        (hidden_id, "passage-hidden", "secret.py :: leak"),
+    ):
+        ctx.store.add_passages(
+            [
+                {
+                    "id": passage_id,
+                    "source_id": source_id,
+                    "ordinal": 0,
+                    "title": title,
+                    "text": title,
+                    "embedding": [1.0, 0.0],
+                }
+            ]
+        )
+    ctx.store.add_symbols(
+        [
+            {"id": ids["open_symbol"], "source_id": open_id, "name": "run", "qualname": "open.run"},
+            {"id": ids["hidden_symbol"], "source_id": hidden_id, "name": "leak", "qualname": "secret.leak"},
+        ]
+    )
+    ctx.store.add_data_objects(
+        [{"id": ids["open_data"], "source_id": open_id, "name": "orders", "kind": "table"}]
+    )
+    ctx.store.add_commits(
+        [{"id": ids["hidden_commit"], "source_id": hidden_id, "sha": "abc1234", "ordinal": 0}]
+    )
+    ctx.store.link_definitions(
+        [
+            (ids["open_symbol"], "passage-open"),
+            (ids["open_data"], "passage-open"),
+            (ids["hidden_symbol"], "passage-hidden"),
+            (ids["hidden_commit"], "passage-hidden"),
+        ]
+    )
+    ctx.store.add_code_edges(
+        [
+            {"a": ids["open_symbol"], "b": ids["hidden_symbol"], "kind": "INVOKES", "omega": 0.9},
+            {"a": ids["open_symbol"], "b": ids["open_data"], "kind": "READS", "omega": 0.85},
+        ]
+    )
+    ctx.store.set_node_boost(ids["open_symbol"], 1.5)
+    ctx.store.bump_graph_version()
+    return open_id, hidden_id, ids
+
+
+def test_get_symbols_hides_a_restricted_sources_code(ctx: AppContext) -> None:
+    _open_id, _hidden_id, ids = index_code(ctx)
+    assert [r["id"] for r in ctx.store.get_symbols(list(ids.values()), INDIVIDUAL)] == [ids["open_symbol"]]
+    assert ctx.store.get_commits([ids["hidden_commit"]], INDIVIDUAL) == []
+    assert ctx.store.get_data_objects([ids["open_data"]], INDIVIDUAL)[0]["name"] == "orders"
+    # The owner and an unrestricted read still see everything.
+    assert len(ctx.store.get_symbols(list(ids.values()), OWNER)) == 2
+    assert len(ctx.store.get_symbols(list(ids.values()))) == 2
+
+
+def test_scoped_drops_a_hidden_symbol_and_every_edge_touching_it(ctx: AppContext) -> None:
+    open_id, _hidden_id, ids = index_code(ctx)
+    full = GraphIndex.load(ctx.store)
+    scoped = full.scoped({open_id})
+
+    assert {n.id for n in scoped.code_nodes} == {ids["open_symbol"], ids["open_data"]}
+    assert ids["hidden_symbol"] not in scoped.idx_of
+    assert ids["hidden_commit"] not in scoped.idx_of
+    # The INVOKES to the hidden symbol goes with it, in both directions.
+    open_v = scoped.idx_of[ids["open_symbol"]]
+    assert {e.kind for e in scoped.out_edges(open_v)} == {"DEFINED_IN", "READS"}
+    assert all(e.dst < scoped.num_nodes and e.src < scoped.num_nodes for e in scoped.out_edges(open_v))
+    assert scoped.graph.vcount() == scoped.num_nodes
+
+
+def test_scoped_keeps_omega_and_code_kinds_on_surviving_pairs(ctx: AppContext) -> None:
+    open_id, _hidden_id, ids = index_code(ctx)
+    scoped = GraphIndex.load(ctx.store).scoped({open_id})
+    edge = scoped.edge_between(scoped.idx_of[ids["open_symbol"]], scoped.idx_of[ids["open_data"]])
+    # Without the copy a restricted reader silently gets a differently *weighted* graph.
+    assert edge.omega == pytest.approx(0.85)
+    assert edge.code_kinds == ["reads"]
+    assert edge.weight == pytest.approx(0.85)
+
+
+def test_scoped_recomputes_code_specificity_from_what_survived(ctx: AppContext) -> None:
+    open_id, _hidden_id, ids = index_code(ctx)
+    full = GraphIndex.load(ctx.store)
+    scoped = full.scoped({open_id})
+    # The hidden symbol's only in-edge was the open symbol's INVOKES, so it is gone with the vertex;
+    # the data object keeps its READS and stays at in_degree 1 + 1.
+    assert full.specificity[full.idx_of[ids["hidden_symbol"]]] == 2
+    assert scoped.specificity[scoped.idx_of[ids["open_data"]]] == 2
+    assert scoped.specificity[scoped.idx_of[ids["open_symbol"]]] == 1
+
+
+def test_scoped_keeps_a_boost_set_on_a_symbol(ctx: AppContext) -> None:
+    open_id, _hidden_id, ids = index_code(ctx)
+    scoped = GraphIndex.load(ctx.store).scoped({open_id})
+    # A changeset that boosts a symbol must work for a restricted reader too, not only in simulation.
+    assert scoped.entity_boost[scoped.idx_of[ids["open_symbol"]]] == 1.5
+
+
+def test_a_scoped_index_gets_its_own_scale_memo(ctx: AppContext) -> None:
+    open_id, _hidden_id, _ids = index_code(ctx)
+    full = GraphIndex.load(ctx.store)
+    scoped = full.scoped({open_id})
+    assert scoped.graph_for_scale(0.5) is not full.graph_for_scale(0.5)
+    assert scoped.graph_for_scale(1.0) is scoped.graph
 
 
 def test_scoping_to_nothing_gives_an_empty_index(ctx: AppContext, sample_text: str) -> None:

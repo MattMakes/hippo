@@ -6,10 +6,19 @@ import json
 
 import pytest
 
-from hippo.analysis.simulate import Overrides, diff_traces, replay_filter, simulate, trace_from_dict
+from hippo.analysis.simulate import (
+    INGEST_SETTINGS,
+    SIMULATABLE_SETTINGS,
+    Overrides,
+    diff_traces,
+    replay_filter,
+    simulate,
+    trace_from_dict,
+)
 from hippo.ask import search
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.hipporag.retriever import Trace
+from hippo.store.base import SETTING_RULES
 
 QUESTION = "In which state is the company founded by Priya Natarajan headquartered?"
 
@@ -188,6 +197,39 @@ def test_replay_filter_only_returns_triples_that_are_candidates_again():
     trace.filter = {"kept_triples": [["a", "r", "b"], ["c", "r", "d"]]}
     kept, raw = replay_filter(trace)("q", [["c", "r", "d"], ["x", "r", "y"]])
     assert kept == [["c", "r", "d"]] and raw == "replayed"
+
+
+def test_every_setting_is_either_simulatable_or_named_as_ingest_only():
+    # An allow-list, so a new setting is not a knob until someone says it is - and the split is
+    # checked both ways, or a setting could quietly belong to neither list.
+    assert SIMULATABLE_SETTINGS | INGEST_SETTINGS == set(SETTING_RULES)
+    assert not SIMULATABLE_SETTINGS & INGEST_SETTINGS
+
+
+def test_an_ingest_only_setting_is_refused_as_a_simulation_override():
+    # It would render as a slider on the page whose whole purpose is explaining a ranking, and
+    # moving it could not change one: history depth is read while indexing, never while searching.
+    with pytest.raises(ValueError, match="only applies while indexing"):
+        Overrides.from_dict({"settings": {"code_history_depth": 10}})
+    assert Overrides.from_dict({"settings": {"code_structural_scale": 0.0}}).settings == {
+        "code_structural_scale": 0.0
+    }
+
+
+def test_a_structural_scale_override_is_passed_to_the_graph_the_search_runs_on(ctx, baseline, monkeypatch):
+    # The scale and an edge edit compose in one rebuild: applying the scale anywhere else would be
+    # discarded the moment a simulation also edited an edge, because retrieve(graph=) runs on this
+    # igraph and nothing else.
+    index = ctx.graph_for(None)
+    seen: list[float] = []
+    real = index.graph_with_edits
+    monkeypatch.setattr(
+        index, "graph_with_edits", lambda edits, scale=1.0: (seen.append(scale), real(edits, scale))[1]
+    )
+    edits = [{"a": index.node_ids[0], "b": index.node_ids[1], "weight": 3.0}]
+    overrides = Overrides.from_dict({"settings": {"code_structural_scale": 0.0}, "edge_edits": edits})
+    simulate(ctx, QUESTION, overrides, baseline=baseline)
+    assert seen == [0.0]
 
 
 def test_overrides_from_dict_and_to_ops():

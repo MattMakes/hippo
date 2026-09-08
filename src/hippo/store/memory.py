@@ -20,6 +20,7 @@ from typing import Any
 
 from ..access import ACCESS_WHERE, Access, access_params
 from .base import Neo4jBase, new_id, now_iso, with_defaults
+from .code import SYNONYM_LABELS, grouped_by_labels
 
 BATCH = 200  # rows per write query; keeps transactions small and progress visible
 
@@ -106,6 +107,7 @@ class MemoryQueries(Neo4jBase):
 
     def delete_source(self, source_id: str) -> None:
         """Delete a source and its passages, then any entities/facts that nothing mentions any more."""
+        self.delete_code_nodes_for_source(source_id)  # CodeQueries; both are mixins of Store
         while True:
             row = self.run_one(
                 """
@@ -123,6 +125,7 @@ class MemoryQueries(Neo4jBase):
 
     def delete_passages_for_source(self, source_id: str) -> None:
         """Forget a source's passages (and whatever only they supported) but keep the Source row, for re-indexing."""
+        self.delete_code_nodes_for_source(source_id)  # CodeQueries; both are mixins of Store
         while True:
             row = self.run_one(
                 """
@@ -377,22 +380,32 @@ class MemoryQueries(Neo4jBase):
             )
 
     def add_synonyms(self, rows: list[tuple[str, str, float]], manual: bool = False) -> None:
-        """rows: (entity_id_a, entity_id_b, score). Stored once per pair (a < b), keeping the best score."""
-        canonical = [
-            {"a": min(a, b), "b": max(a, b), "score": float(score)} for a, b, score in rows if a != b
-        ]
-        for batch in _batches(canonical, 1000):
-            self.run(
-                """
-                UNWIND $rows AS row
-                MATCH (a:Entity {id: row.a}), (b:Entity {id: row.b})
-                MERGE (a)-[s:SYNONYM]->(b)
-                SET s.score = CASE WHEN s.score IS NULL OR s.score < row.score THEN row.score ELSE s.score END,
-                    s.manual = coalesce(s.manual, false) OR $manual
-                """,
-                rows=batch,
-                manual=manual,
-            )
+        """
+        rows: (node_id_a, node_id_b, score). Stored once per pair (a < b), keeping the best score.
+
+        Either id may be an entity, a symbol or a data object. The label comes from the id prefix
+        (`label_of`, S2.2) so the write binds one concrete label pair here as it must on LadybugDB,
+        and the two backends stay one query apart rather than one dialect apart.
+        """
+        best: dict[tuple[str, str], float] = {}
+        for a, b, score in rows:
+            if a != b:
+                key = (min(a, b), max(a, b))
+                best[key] = max(best.get(key, 0.0), float(score))
+        for (label_a, label_b), group in grouped_by_labels(best, SYNONYM_LABELS).items():
+            for batch in _batches(group, 1000):
+                self.run(
+                    f"""
+                    UNWIND $rows AS row
+                    MATCH (a:{label_a} {{id: row.a}}), (b:{label_b} {{id: row.b}})
+                    MERGE (a)-[s:SYNONYM]->(b)
+                    SET s.score = CASE WHEN s.score IS NULL OR s.score < row.score
+                                       THEN row.score ELSE s.score END,
+                        s.manual = coalesce(s.manual, false) OR $manual
+                    """,
+                    rows=batch,
+                    manual=manual,
+                )
 
     # ====================================================== loading the graph
     # These feed hipporag/graph_index.py. Each returns plain lists so that file
@@ -442,8 +455,10 @@ class MemoryQueries(Neo4jBase):
         )
 
     def load_synonyms(self) -> list[dict[str, Any]]:
+        # Unlabelled, like load_tuned_edges: SYNONYM now joins entities, symbols and data
+        # objects, and a labelled MATCH would silently drop every cross-kind row.
         return self.run(
-            "MATCH (a:Entity)-[s:SYNONYM]->(b:Entity) RETURN a.id AS a, b.id AS b, s.score AS score, coalesce(s.manual, false) AS manual"
+            "MATCH (a)-[s:SYNONYM]->(b) RETURN a.id AS a, b.id AS b, s.score AS score, coalesce(s.manual, false) AS manual"
         )
 
     def load_tuned_edges(self) -> list[dict[str, Any]]:
