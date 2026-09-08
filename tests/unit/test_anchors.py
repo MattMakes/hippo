@@ -137,6 +137,17 @@ def test_a_frame_resolves_to_the_innermost_symbol_containing_the_line(index: Gra
     assert found[0].weight == 1.0
 
 
+def test_an_absolute_frame_path_still_finds_the_repo_relative_symbol(index: GraphIndex) -> None:
+    # A real traceback names the checkout's absolute path; the index holds the repo-relative one.
+    # `_same_path` matches a suffix either way round, which is why AR1 fix 5's `path_index` is
+    # keyed by the basename rather than by the whole path.
+    found = find_anchors('File "/Users/me/proj/pyapp/orders.py", line 18, in place', index)
+    assert names(index, found) == ["OrderService.place"]
+    assert found[0].how == "stack_trace" and found[0].weight == 1.0
+    # A file that shares a basename with nothing indexed still anchors on nothing.
+    assert find_anchors('File "/elsewhere/nothing_here.py", line 18, in nope', index) == []
+
+
 def test_a_drifted_line_falls_back_to_the_named_function(index: GraphIndex) -> None:
     found = find_anchors('File "pyapp/orders.py", line 999, in place', index)
     assert names(index, found) == ["OrderService.place"]

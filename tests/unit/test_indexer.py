@@ -7,6 +7,10 @@ tests run against FakeStore locally and a real Neo4j in CI.
 
 from __future__ import annotations
 
+import random
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -174,6 +178,26 @@ def test_find_synonyms_skips_tiny_phrases_and_itself(store) -> None:
     pairs = find_synonyms(store, ids, vectors, names, threshold=0.0)
     # "us" is too short to be linked; "usa" links to "us" (never to itself).
     assert [(a, b) for a, b, _ in pairs] == [(ids[1], ids[0])]
+
+
+def test_the_top_neighbours_of_a_row_are_the_ones_a_full_sort_would_pick() -> None:
+    """
+    AR1 fix 9. `find_synonyms` sorted the entire key row per new id to take 100 of it; D7 put code
+    ids on both sides, so a 20k-symbol repository sorted 20k rows of 20k. `argpartition` is linear
+    and only the partition is sorted - and it must pick exactly what the full sort picked.
+    """
+    from hippo.hipporag.indexer import SYNONYM_MAX_NEIGHBOURS, _top_neighbours
+
+    rng = np.random.default_rng(7)
+    row = (rng.permutation(SYNONYM_MAX_NEIGHBOURS * 3) / 100).astype(np.float32)  # all distinct
+    assert list(_top_neighbours(row)) == list(np.argsort(-row, kind="stable")[:SYNONYM_MAX_NEIGHBOURS])
+
+    short = np.asarray([0.1, 0.9, 0.5], dtype=np.float32)  # shorter than the cut: keep it all
+    assert list(_top_neighbours(short)) == [1, 2, 0]
+    assert list(_top_neighbours(np.zeros(0, dtype=np.float32))) == []
+    # Two symbols named `place` in two classes embed identically, so ties are real here. They
+    # break by key index, which the old full sort (numpy's unstable quicksort) did not promise.
+    assert list(_top_neighbours(np.asarray([0.5, 0.9, 0.5, 0.9], dtype=np.float32))) == [1, 3, 0, 2]
 
 
 def test_find_synonyms_with_nothing_new_or_nothing_stored(store) -> None:
@@ -588,6 +612,39 @@ def test_symbols_carry_a_community_from_the_module_projection(store, ollama, cod
     # `pyapp` and `tsapp` share no edge, so Leiden must not put them together.
     assert by_qualname["pyapp.orders"]["community"] != by_qualname["tsapp.index"]["community"]
     assert all(row["community"] is not None for row in store.load_symbols())
+
+
+def test_two_leiden_runs_in_two_threads_do_not_interleave(code_chunks, monkeypatch) -> None:
+    """
+    AR1 fix 3. igraph's RNG is process-global and `_leiden` seeds it, runs and restores it, while
+    `jobs.py` runs each index job in its own thread. Without a lock two jobs interleave as
+    seed(A) -> seed(B) -> run(A) -> restore(A) -> run(B) and job B partitions unseeded: community
+    integers a re-index would not reproduce, on a single-threaded CI gate that stays green.
+    """
+    import igraph as ig
+
+    from hippo.hipporag.indexer import module_communities
+
+    graph, _chunks = code_chunks
+    events: list[str] = []
+    real = ig.set_random_number_generator
+
+    def spy(generator):
+        events.append("seed" if isinstance(generator, random.Random) else "restore")
+        time.sleep(0.01)  # wide enough that an unlocked interleave is a certainty, not a race
+        return real(generator)
+
+    monkeypatch.setattr(ig, "set_random_number_generator", spy)
+
+    results: list[dict[str, int]] = []
+    threads = [threading.Thread(target=lambda: results.append(module_communities(graph))) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert events == ["seed", "restore"] * 4, "seed/run/restore is one atomic triple"
+    assert len(results) == 4 and all(r == results[0] for r in results)
 
 
 def test_stopping_before_the_code_graph_stage_writes_no_code(store, ollama, code_source, code_chunks):
