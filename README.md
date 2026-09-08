@@ -207,7 +207,7 @@ Subsystems: pyapp.orders.OrderService: pyapp.orders.OrderService.place, pyapp.or
 
 It is cut at `code_triples_chars` on a line boundary. It is not a real passage: it never appears in the answer's list of sources.
 
-**And one more pass by the model, when code was named.** `code_select` (on by default) shows the model the passages it is about to read and lets it keep, drop or expand them. A dropped passage is ranked below the kept ones, never removed, and a failed or unparsable reply keeps everything. It only runs when the question *named* code, and the rule for that is about how you wrote the word, not about what the memory holds: a question of ordinary English words costs nothing extra even on a repository.
+**And one more pass by the model, when code was named.** `code_select` (on by default) shows the model the passages around the ones it is about to read — a wider window on purpose, so that dropping one promotes a passage the model never saw into its place rather than just shuffling the same list. A dropped passage sinks below the rest but is never removed, and a failed or unparsable reply keeps everything. It only runs when the question *named* code, and the rule for that is about how you wrote the word, not about what the memory holds: a question of ordinary English words costs nothing extra even on a repository.
 
 Every one of these is off on a memory with no code in it, and can be switched off on one that has: see [the settings table](#settings-you-can-change-on-the-settings-page). `docs/FIDELITY.md` adaptation 15 states the guarantee precisely and says which test checks it.
 

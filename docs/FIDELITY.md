@@ -230,9 +230,13 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
     * **A second LLM pass, over passages.** The reference filters *facts* once and stops
       (adaptation 12). When a question named code, hippo runs one more pass over the passages the
       model is about to read, keeping, dropping or expanding them (`code_select`, on by default).
-      A dropped passage is ranked below the kept ones, never removed; an unparsable or failing
-      reply keeps everything, mirroring the fact filter's own fallback. Expanded neighbours are
-      appended at score 0.0 and excluded from the `qa_top_k` slice, so they are never cited.
+      It judges a window *wider* than the slice the answer is built from, so that dropping a
+      passage promotes one the model never saw into its place; judging exactly the slice would make
+      a drop inert, reordering the same list. A dropped passage sinks below the kept ones and the
+      unjudged ones alike, but is never removed — a wrong drop should cost a position, not erase
+      evidence — and an unparsable or failing reply keeps everything, mirroring the fact filter's
+      own fallback. Expanded neighbours are appended at score 0.0 and excluded from the `qa_top_k`
+      slice, so they are never cited.
     * **A pseudo-passage of typed relations.** `rag_qa` is byte-identical: it formats
       `(title, text)` pairs and assumes nothing about a passage, so the code block is prepended as
       one more pair titled `Code graph`, inside `answer_question`. It never enters
