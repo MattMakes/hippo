@@ -15,9 +15,21 @@ D19, D20, D21. Evidence: `research/R3-retrieval-analysis.md` — read all of it;
 of `retriever.py`, `ask.py`, `answerer.py`, `prompts.py`, `analysis/simulate.py` and the tests that pin
 them — and `research/R6-web-mcp-cli-docs.md` C5/C6 for the settings template.
 
-## What the previous workers built and what the spikes found (read the code, not just this)
+## What the spikes found — binding for this WP (`research/S0-spikes.md`, spike 1, read it)
 
-<!-- ORCHESTRATOR FILLS FROM THE WP1 / WP2 / WP2i LEDGER SUMMARIES AND research/S0-spikes.md -->
+**The plan's bare-word anchor rule fails as written**: bare word ≥ 3 chars + stoplist + exact `name` hit
+fired on 16% of 118 prose questions against Django's symbol set and 4% against hippo's own. **Ship the
+plan's fallback (b)**: a bare word anchors only when its *surface form* is code-shaped — qualified
+(`a.b`), backticked, PascalCase, snake_case, camelCase or ALL_CAPS. That measured 0/118 false anchors on
+all four repos tested, at the cost of 5 of 18 bare-identifier questions (acceptable; dense seeds still
+cover them). Two one-line corrections go with it: apply the ≥ 3-char test to the *matched name segment*,
+not the raw token (or `S.O.B.` anchors on Django's `DateFormat.b`), and require dot-separated parts to be
+≥ 2 chars each. Stack frames, exceptions, fenced code and diffs are unaffected. Write the spike's prose
+corpus into `test_anchors.py` as a "prose → []" table (the spike file lists the questions).
+
+## What the previous workers built (read the code, not just this)
+
+<!-- ORCHESTRATOR FILLS FROM THE WP1 / WP2 / WP2i LEDGER SUMMARIES -->
 
 ## Scope
 

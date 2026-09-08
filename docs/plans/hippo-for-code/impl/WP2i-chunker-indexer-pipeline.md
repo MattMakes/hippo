@@ -13,6 +13,24 @@ S2.7 (three-valued `extract_text`, gotcha 5), S2.10 (Leiden determinism), S2.17 
 regeneration hook), and D13/D15 for what `meta["code"]` records. Evidence: `research/R2-ingest-evals-tests.md`
 (pipeline flow, indexer step order, OpenIE call shape, `FakeOllama` call inspection, pinned counts).
 
+## What the spikes found — binding for this WP (`research/S0-spikes.md`, spikes 2 and 3, read them)
+
+**Cross-kind synonyms: do NOT raise the threshold.** Under the real embedder (`nomic-embed-text`) only
+20 of 26,400 symbol↔entity pairs reach 0.80, but 8 of those are nonsense (40%), and raising to 0.85 makes
+it *worse* (43%) because generic one-word names score highest (`library` ~ "the library" 0.94, `main` ~
+"main office" 0.86). **Ship the ≥ 2-split-token rule on the SYMBOL side instead**: a symbol enters the
+cross-kind synonym search only when `split_identifier(name)` has ≥ 2 tokens (27% nonsense, zero of the
+ten known-good pairs lost; `OrderService` ~ "order service" 0.9368 unaffected). Two scoping rules:
+**exempt `DataObject`** (table names are single nouns; the rule would break D9's `table orders` ~
+"orders"), and **gate BOTH the query list and the key matrix** — `find_synonyms` gates
+`is_meaningful_phrase` on the new ids only (`indexer.py:268`), so a one-token symbol must be absent from
+both sides or it still links as a key. Put the rule in one helper with a docstring citing the spike.
+
+**Write curve: no change to batching.** But note two facts for `meta["code"]`/docs: a repo the size of
+pandas (~34k symbols) exceeds `MAX_CHUNKS = 20_000` after WP2 where its ~15.8k line windows fit today — a
+behaviour change on existing corpora; record it in `Source.meta` as `truncated` per D15/2.2c and make the
+error message say why. The WP4 docs worker will state it in Known limitations.
+
 ## What the previous workers built (read their code, not just this summary)
 
 <!-- ORCHESTRATOR FILLS FROM THE WP1 / WP2 LEDGER SUMMARIES -->
