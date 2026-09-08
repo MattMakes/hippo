@@ -16,6 +16,8 @@ from __future__ import annotations
 from typing import Any
 
 from ..context import AppContext
+from ..hipporag.graph_index import COMMIT, DATA, SYMBOL, CodeNode
+from ..hipporag.paths import display_of
 from ..store.base import DEFAULT_SETTINGS
 
 VALID_OPS = {"set_setting", "set_edge_weight", "add_synonym", "set_node_boost"}
@@ -180,7 +182,13 @@ def describe(ctx: AppContext, ops: list[dict[str, Any]]) -> list[str]:
 
 
 def _node_names(ctx: AppContext, ops: list[dict[str, Any]]):
-    """A lookup from node id to display name (entity name or passage title), falling back to the id."""
+    """
+    A lookup from node id to display name, falling back to the id.
+
+    Synonyms, tuned edges and boosts reach symbols and data objects too (WP1 widened every writer),
+    so the four code readers are asked as well - otherwise the Changesets page, which is where an
+    edit is read before it is applied to everyone's graph, prints a raw `symbol-<hash>`.
+    """
     ids = []
     for op in ops:
         for key in ("a", "b", "entity_id"):
@@ -188,16 +196,42 @@ def _node_names(ctx: AppContext, ops: list[dict[str, Any]]):
             if isinstance(value, str) and value not in ids:
                 ids.append(value)
     found: dict[str, str] = {}
+
+    def missing() -> list[str]:
+        return [i for i in ids if i not in found]
+
     if ids:
         for row in ctx.store.get_entities(ids):
             found[row["id"]] = row["name"]
-        for row in ctx.store.get_passages([i for i in ids if i not in found]):
+        for row in ctx.store.get_passages(missing()):
             found[row["id"]] = row["title"] or row["id"]
+        for kind, read in (
+            (SYMBOL, ctx.store.get_symbols),
+            (DATA, ctx.store.get_data_objects),
+            (COMMIT, ctx.store.get_commits),
+        ):
+            for row in read(missing()):
+                found[row["id"]] = _code_display(kind, row) or row["id"]
 
     def lookup(node_id: Any) -> str:
         return found.get(node_id, str(node_id))
 
     return lookup
+
+
+def _code_display(kind: str, row: dict[str, Any]) -> str:
+    """A stored code row's display name, through the one function that owns the S2.6 grammar."""
+    return display_of(
+        CodeNode(
+            id=row["id"],
+            kind=kind,
+            name=row.get("name") or "",
+            qualname=row.get("qualname") or "",
+            code_kind=row.get("kind") or "",
+            path=row.get("path") or "",
+            sha=row.get("sha") or "",
+        )
+    )
 
 
 def _num(value: Any) -> str:

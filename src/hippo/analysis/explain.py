@@ -231,6 +231,14 @@ def _subgraph(
 
     for seed in trace.seed_entities:
         add(seed.entity_id, seed.name, ENTITY, is_seed=seed.kept, seed_weight=seed.weight)
+    # Symbol and data-object seeds are joined in explicitly: everything else here reads
+    # `seed_entities`, so on a code question the picture drew no seed at all unless PPR happened
+    # to rank the symbol into `top_nodes` - and then with a seed weight of 0 (R3.2/R3.5). An
+    # `ambiguous` row is a token that matched too much to seed; it has no node to draw.
+    for symbol in trace.seed_symbols:
+        if symbol.ambiguous or not symbol.node_id:
+            continue
+        add(symbol.node_id, symbol.name, symbol.kind, is_seed=symbol.kept, seed_weight=symbol.weight)
     for top in trace.top_nodes:
         add(top.node_id, top.name, top.kind, is_seed=top.is_seed, seed_weight=0.0)
     for p in passages:
