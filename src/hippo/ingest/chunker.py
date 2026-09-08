@@ -55,30 +55,46 @@ Row = tuple[int | None, str]
 # (title, text, defines, extract_text) - one passage before it is numbered.
 Piece = tuple[str, str, list[str], str | None]
 
+# (path, line) -> the data objects mentioned there, each with its (kind, qualname) rank.
+Mentions = dict[tuple[str, int], list[tuple[int, str]]]
+
 
 def chunk_documents(
     docs: list[Document], size_chars: int, overlap_chars: int, code: CodeGraph | None = None
 ) -> list[Chunk]:
     """Chunk every document, numbering the chunks continuously across the list."""
     chunks: list[Chunk] = []
+    mentions = _mention_index(code)  # once per source, not once per passage (AR1 fix 7)
     for doc in docs:
-        for chunk in chunk_document(doc, size_chars, overlap_chars, code=code):
+        for chunk in chunk_document(doc, size_chars, overlap_chars, code=code, mentions=mentions):
             chunk.ordinal = len(chunks)
             chunks.append(chunk)
     return chunks
 
 
 def chunk_document(
-    doc: Document, size_chars: int, overlap_chars: int, code: CodeGraph | None = None
+    doc: Document,
+    size_chars: int,
+    overlap_chars: int,
+    code: CodeGraph | None = None,
+    mentions: Mentions | None = None,
 ) -> list[Chunk]:
-    """Chunk one document; ordinals start at 0. Without `code` this is exactly today's chunker."""
+    """
+    Chunk one document; ordinals start at 0. Without `code` this is exactly today's chunker.
+
+    `mentions` is `_mention_index(code)`, which `chunk_documents` builds once for the whole
+    source; a caller with one document may leave it out and pay for it here.
+    """
     size = max(MIN_CHUNK_CHARS, size_chars)
     overlap = max(0, min(overlap_chars, size // 3))  # overlap must leave room for new text
     if code is not None and code.parsed(doc.title):
+        found = _mention_index(code) if mentions is None else mentions
         # A .sql file is parsed but has no symbols, so it branches on the language, not on
         # `parsed()`: its tables are data objects that no symbol owns.
         pieces = (
-            _chunk_sql(doc, code, size) if lang_of(doc.title) == "sql" else _chunk_symbols(doc, code, size)
+            _chunk_sql(doc, found, size)
+            if lang_of(doc.title) == "sql"
+            else _chunk_symbols(doc, code, found, size)
         )
     elif doc.is_code:
         pieces = [(title, text, [], None) for title, text in _chunk_code(doc, size)]
@@ -278,7 +294,7 @@ def _nice_break(lines: list[str], start: int, end: int) -> int:
 # ------------------------------------------------------------ code symbols
 
 
-def _chunk_symbols(doc: Document, code: CodeGraph, size: int) -> list[Piece]:
+def _chunk_symbols(doc: Document, code: CodeGraph, mentions: Mentions, size: int) -> list[Piece]:
     """
     One passage per symbol, in source order: the module header, then every top-level symbol;
     a class contributes its own header and then its methods. Every line of the file lands in
@@ -288,7 +304,7 @@ def _chunk_symbols(doc: Document, code: CodeGraph, size: int) -> list[Piece]:
     module = next((s for s in symbols if s.kind == "module"), None)
     if module is None:  # parsed, but nothing to cut by: fall back to today's windows
         return [(title, text, [], None) for title, text in _chunk_code(doc, size)]
-    pieces = _container_pieces(module, symbols, doc.text.splitlines(), doc, code, size)
+    pieces = _container_pieces(module, symbols, doc.text.splitlines(), doc, mentions, size)
     if pieces and not any(module.id in defines for _, _, defines, _ in pieces):
         # A file that opens with `class Base:` has no module header passage, so its module
         # symbol would have no DEFINED_IN at all -- and a code node reachable from no visible
@@ -299,7 +315,7 @@ def _chunk_symbols(doc: Document, code: CodeGraph, size: int) -> list[Piece]:
     return pieces
 
 
-def _chunk_sql(doc: Document, code: CodeGraph, size: int) -> list[Piece]:
+def _chunk_sql(doc: Document, mentions: Mentions, size: int) -> list[Piece]:
     """
     A `.sql` file keeps today's line windows -- it has no symbols to cut by -- but each window
     still defines the tables and columns declared in it, and OpenIE never sees DDL (S2.7).
@@ -311,25 +327,25 @@ def _chunk_sql(doc: Document, code: CodeGraph, size: int) -> list[Piece]:
         if text.strip():
             span = set(range(first + 1, last + 1))
             title = f"{doc.title} (lines {first + 1}-{last})"
-            pieces.append((title, text, _data_ids_in(code, doc.title, span), ""))
+            pieces.append((title, text, _data_ids_in(mentions, doc.title, span), ""))
     return pieces
 
 
 def _container_pieces(
-    symbol: Symbol, symbols: list[Symbol], lines: list[str], doc: Document, code: CodeGraph, size: int
+    symbol: Symbol, symbols: list[Symbol], lines: list[str], doc: Document, mentions: Mentions, size: int
 ) -> list[Piece]:
     """The header passage of a module or class, then a passage per member."""
     members = _members(symbol, symbols)
     rows = _header_rows(symbol, members, lines)
     pieces: list[Piece] = []
     if any(line is not None and text.strip() for line, text in rows):
-        pieces.extend(_pieces_from_rows(symbol, rows, doc, code, size, header=True))
+        pieces.extend(_pieces_from_rows(symbol, rows, doc, mentions, size, header=True))
     for member in members:
         if member.kind == "class":
-            pieces.extend(_container_pieces(member, symbols, lines, doc, code, size))
+            pieces.extend(_container_pieces(member, symbols, lines, doc, mentions, size))
         else:
             body = [(n, lines[n - 1]) for n in _line_numbers(member, lines)]
-            pieces.extend(_pieces_from_rows(member, body, doc, code, size, header=False))
+            pieces.extend(_pieces_from_rows(member, body, doc, mentions, size, header=False))
     return pieces
 
 
@@ -377,7 +393,7 @@ def _placeholder(symbol: Symbol, lines: list[str]) -> str:
 
 
 def _pieces_from_rows(
-    symbol: Symbol, rows: list[Row], doc: Document, code: CodeGraph, size: int, *, header: bool
+    symbol: Symbol, rows: list[Row], doc: Document, mentions: Mentions, size: int, *, header: bool
 ) -> list[Piece]:
     """
     Turn one symbol's lines into passages -- one, or several `(part N)` when the body is too
@@ -394,7 +410,7 @@ def _pieces_from_rows(
         part = f" (part {number})" if len(groups) > 1 else ""
         title = f"{doc.title} :: {symbol.display} (lines {first}-{last}){part}"
         span = {line for line, _ in group if line is not None}
-        defines = [symbol.id, *_data_ids_in(code, doc.title, span)]
+        defines = [symbol.id, *_data_ids_in(mentions, doc.title, span)]
         pieces.append((title, text, defines, doc_text if number == 1 else ""))
     return pieces
 
@@ -445,7 +461,26 @@ def _split_long_group(group: list[Row], size: int) -> list[list[Row]]:
     return [group[first:last] for first, last in code_windows([text for _, text in group], size)]
 
 
-def _data_ids_in(code: CodeGraph, path: str, lines: set[int]) -> list[str]:
+def _mention_index(code: CodeGraph | None) -> Mentions:
+    """
+    `(path, line) -> the data objects mentioned there`, ranked by `(kind, qualname)`.
+
+    Built once per call rather than per passage: `_data_ids_in` used to scan every data object,
+    and every mention of each, for every piece it produced -- O(pieces x objects x mentions) per
+    source, which on a SQL-heavy repository with one passage per symbol is real time (AR1 fix 7).
+    The rank travels with the id so a span's ids keep the global `(kind, qualname)` order rather
+    than the order its lines happen to be in.
+    """
+    index: Mentions = {}
+    if code is None:
+        return index
+    for rank, data in enumerate(sorted(code.data_objects, key=lambda d: (d.kind, d.qualname))):
+        for path, line in data.mentions:
+            index.setdefault((path, line), []).append((rank, data.id))
+    return index
+
+
+def _data_ids_in(mentions: Mentions, path: str, lines: set[int]) -> list[str]:
     """
     The data objects this passage's own lines name, in a stable `(kind, qualname)` order.
 
@@ -453,5 +488,5 @@ def _data_ids_in(code: CodeGraph, path: str, lines: set[int]) -> list[str]:
     `.sql` file, by `__tablename__` in the class header and by each query that reads it -- which
     is what keeps it visible when one of those files is hidden (S2.5).
     """
-    found = [d for d in code.data_objects if any(p == path and n in lines for p, n in d.mentions)]
-    return [d.id for d in sorted(found, key=lambda d: (d.kind, d.qualname))]
+    found = {pair for line in lines for pair in mentions.get((path, line), ())}
+    return [data_id for _rank, data_id in sorted(found)]

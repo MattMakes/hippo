@@ -306,6 +306,35 @@ def test_every_passage_defines_its_symbol_and_the_data_objects_it_names(code_gra
     ]
 
 
+def test_the_mention_index_dedupes_a_span_and_keeps_the_kind_qualname_order(code_graph) -> None:
+    """
+    AR1 fix 7. `_data_ids_in` used to rescan every data object, and every mention of each, for
+    every passage; it now looks a `(path, line)` index up. Same answer: one id per object however
+    many of the span's lines name it, still in the global `(kind, qualname)` order rather than the
+    order the span's lines happen to be in.
+    """
+    from hippo.codegraph.model import data_id
+    from hippo.ingest.chunker import _data_ids_in, _mention_index
+
+    mentions = _mention_index(code_graph)
+    orders = data_id(FIXTURE_SOURCE, "table", "orders")
+    named_on = sorted(
+        line for (path, line), ids in mentions.items() if path == ORDERS and orders in dict(ids).values()
+    )
+    assert len(named_on) > 1, "`orders` is named on several lines of pyapp/orders.py"
+    assert _data_ids_in(mentions, ORDERS, set(named_on)) == [orders]
+
+    # The graph method names one label on its first line and two more on its second; the ids come
+    # back sorted by (kind, qualname), not by the line that mentioned them.
+    assert _data_ids_in(mentions, ORDERS, set(range(37, 39))) == [
+        data_id(FIXTURE_SOURCE, "label", "Customer"),
+        data_id(FIXTURE_SOURCE, "label", "Order"),
+        data_id(FIXTURE_SOURCE, "rel_type", "PLACED_BY"),
+    ]
+    assert _data_ids_in(mentions, ORDERS, set()) == []
+    assert _data_ids_in(_mention_index(None), ORDERS, {1, 2, 3}) == []
+
+
 def test_extract_text_is_the_doc_when_it_is_long_enough_and_empty_otherwise(code_graph) -> None:
     """S2.7: OpenIE never sees a function body. A short doc is '' (skip), never None (extract)."""
     by_title = {c.title: c.extract_text for c in chunks_of(ORDERS, code_graph)}
