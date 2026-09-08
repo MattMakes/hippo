@@ -54,7 +54,26 @@ counts; `meta["code"]` = `symbols`, `data_objects`, `edges`, `edges_by_kind`, `f
 whose name splits into < 2 tokens carries NO embedding by design (`enters_synonym_search`); DataObject
 exempt. Full handoffs: `horch sessions` entries `backend-developer-1`, `opus-1`, `backend-developer-2`.
 
-<!-- ORCHESTRATOR FILLS FROM THE WP2b / WP3 LEDGER SUMMARIES -->
+**WP3 (retrieval, paths, answer block), c6e186e.** `src/hippo/hipporag/anchors.py`: `find_anchors(question,
+index)`, `split_question(text)`; a bare word anchors only when its surface form is code-shaped.
+`src/hippo/hipporag/paths.py`: `resolve_symbol` (`UnknownSymbol`, `AmbiguousSymbol.candidates`),
+`shortest_code_path`, `direct_edges`, `code_paths_for`, `expand_from`, `blast_radius`/`render_blast`,
+`exception_path`, `history`, `tests_for`, the `*_rows` helpers, **`community_labels(index)`** (the
+display-name subsystem label — use THIS, never `GraphIndex.community_name`, which labels two different
+subsystems "Base" on the real tree), and the block builder `block_lines`/`cut_to`/`render_block`.
+`retriever.py`: `SeedSymbol`, `SelectResult`, `SelectFn`; `Trace` += `seed_symbols`, `used_code_seeds`,
+`question_prose`, `question_code`, `paths`, `tests`, `history`, `select`, `expansions` (all defaulted);
+`RankedPassage` += `community_boosted`, `via_expand`; `retrieve(..., select_fn=None)`. `answerer.py`:
+`Answer.context_block`, `answer_question(..., context_block="")`. `prompts.py`: `CODE_GRAPH_HEADER`,
+`CODE_SELECT_SYSTEM`/`CODE_SELECT_SCHEMA`, `code_select_messages`. `ask.py` installs `retriever.llm_select`
+and `answer_from_trace` filters `via_expand` before `qa_top_k`. `analysis/simulate.py`: `replay_select`.
+Settings page reads `min/max/step` from `SETTING_RULES`. `tests/conftest.py`: `index_code_sample`,
+`index_prose_sample`, `sample_chunks`, `mixed_index` (prose + code in one memory); `tests/fakes/
+code_fixture.py`: `write_commit_history` (a store-built stand-in for git history), `many_symbols`.
+`test_ask.py`'s `CODE_BLOCK_BODY` pins the answer block byte-for-byte. Every path walk sorts edges by
+(kind, target name, source name). Full handoff: `horch sessions` entry `opus-2` ("WP3 FINAL SUMMARY").
+
+<!-- ORCHESTRATOR FILLS FROM THE WP2b LEDGER SUMMARY -->
 
 ## Files you own
 
