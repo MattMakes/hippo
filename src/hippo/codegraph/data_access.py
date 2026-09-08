@@ -134,7 +134,7 @@ def sql_tables(text: str) -> list[Hit]:
     Tables a SQL literal reads or writes. Returns [] for anything that does not open with a
     SQL statement keyword or does not parse -- both are ordinary, not errors.
     """
-    if not SQL_START.match(text):
+    if not SQL_START.match(text) or _reads_like_a_sentence(text):
         return []
     statements = _parse_sql(text)
     if not statements:
@@ -149,6 +149,17 @@ def sql_tables(text: str) -> list[Hit]:
             seen.add((name, access))
             hits.append(Hit("table", name, "sql", access, "sql_literal"))
     return hits
+
+
+def _reads_like_a_sentence(text: str) -> bool:
+    """
+    The second half of the SQL guard. "Select a source from the list." clears the statement
+    head *and* parses -- sqlglot reads `the list` as a table with an alias -- so the table
+    `the` would appear in a user's graph. A SQL literal ends with `;` or with nothing; it
+    does not end with a full stop.
+    """
+    stripped = text.rstrip()
+    return bool(stripped) and stripped[-1] in ".!?"
 
 
 def _parse_sql(text: str):

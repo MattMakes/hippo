@@ -27,6 +27,22 @@ from tests.fakes.fake_ollama import FakeOllama  # noqa: E402
 from tests.fakes.fake_store import FakeStore  # noqa: E402
 
 SAMPLE_PATH = ROOT / "samples" / "acme_robotics.md"
+CODE_SAMPLE_PATH = ROOT / "tests" / "fixtures" / "code_sample"
+
+
+def code_sample_docs(root: Path = CODE_SAMPLE_PATH) -> list:
+    """
+    The `code_sample` tree as `Document`s, read the way a repo source is read: one document
+    per file, titled by its repo-relative path. `expected.json` is the spec beside the tree,
+    not part of it.
+    """
+    from hippo.ingest import readers
+
+    docs = []
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and path.name != "expected.json":
+            docs.extend(readers.read_path(path, path.relative_to(root).as_posix()))
+    return docs
 
 
 def store_backend() -> str:

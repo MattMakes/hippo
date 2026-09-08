@@ -1,0 +1,1837 @@
+{
+  "commits": [],
+  "data_objects": [
+    {
+      "dialect": "mongo",
+      "kind": "collection",
+      "mentions": [
+        [
+          "tsapp/index.ts",
+          7
+        ],
+        [
+          "tsapp/models/order.ts",
+          17
+        ]
+      ],
+      "name": "Order",
+      "qualname": "Order"
+    },
+    {
+      "dialect": "mongo",
+      "kind": "collection",
+      "mentions": [
+        [
+          "pyapp/orders.py",
+          35
+        ]
+      ],
+      "name": "archive_orders",
+      "qualname": "archive_orders"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          2
+        ]
+      ],
+      "name": "id",
+      "qualname": "customers.id"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          2
+        ]
+      ],
+      "name": "name",
+      "qualname": "customers.name"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          1
+        ]
+      ],
+      "name": "id",
+      "qualname": "orders.id"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          1
+        ]
+      ],
+      "name": "status",
+      "qualname": "orders.status"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          1
+        ]
+      ],
+      "name": "total",
+      "qualname": "orders.total"
+    },
+    {
+      "dialect": "cypher",
+      "kind": "label",
+      "mentions": [
+        [
+          "pyapp/orders.py",
+          38
+        ]
+      ],
+      "name": "Customer",
+      "qualname": "Customer"
+    },
+    {
+      "dialect": "cypher",
+      "kind": "label",
+      "mentions": [
+        [
+          "pyapp/orders.py",
+          38
+        ]
+      ],
+      "name": "Order",
+      "qualname": "Order"
+    },
+    {
+      "dialect": "cypher",
+      "kind": "rel_type",
+      "mentions": [
+        [
+          "pyapp/orders.py",
+          38
+        ]
+      ],
+      "name": "PLACED_BY",
+      "qualname": "PLACED_BY"
+    },
+    {
+      "dialect": "sql",
+      "kind": "table",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          2
+        ]
+      ],
+      "name": "customers",
+      "qualname": "customers"
+    },
+    {
+      "dialect": "sql",
+      "kind": "table",
+      "mentions": [
+        [
+          "pyapp/orders.py",
+          14
+        ],
+        [
+          "pyapp/orders.py",
+          28
+        ],
+        [
+          "pyapp/orders.py",
+          31
+        ],
+        [
+          "schema/orders.sql",
+          1
+        ]
+      ],
+      "name": "orders",
+      "qualname": "orders"
+    }
+  ],
+  "definitions": [],
+  "edges": [
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "kind": "CATCHES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "customers"
+      ],
+      "b": [
+        "data",
+        "column",
+        "customers.id"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "customers"
+      ],
+      "b": [
+        "data",
+        "column",
+        "customers.name"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "b": [
+        "data",
+        "column",
+        "orders.id"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "b": [
+        "data",
+        "column",
+        "orders.status"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "b": [
+        "data",
+        "column",
+        "orders.total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/billing.py",
+        "pyapp.billing"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "send_invoice"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/billing.py",
+        "pyapp.billing"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/cli.py",
+        "pyapp.cli"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/cli.py",
+        "main"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.archive"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.list_open"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/store.py",
+        "pyapp.store"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/store.py",
+        "pyapp.store"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tests/test_orders.py",
+        "tests.test_orders"
+      ],
+      "b": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "tsapp.index"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "tsapp.models.base"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order.total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "tsapp.models.order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "tsapp.models.order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "compute"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/__init__.py",
+        "pyapp.__init__"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/cli.py",
+        "pyapp.cli"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.9,
+      "provenance": "reexport"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "pyapp.billing"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "send_invoice"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "tests/test_orders.py",
+        "tests.test_orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "tsapp.index"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "tsapp.models.order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/cli.py",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/cli.py",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "{\"id\": 1, \"lines\": [1]}"
+        },
+        "call_line": 6,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "extra": {
+        "arg_binding": {
+          "sql": "\"MATCH (o:Order)-[:PLACED_BY]->(c:Customer) RETURN c\""
+        },
+        "call_line": 38,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.5,
+      "provenance": "fuzzy_name"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.list_open"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "extra": {
+        "arg_binding": {
+          "sql": "\"SELECT id, total FROM orders WHERE status = 'open'\""
+        },
+        "call_line": 28,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "send_invoice"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 19,
+        "in_branch": true,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "total"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 18,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.log"
+      ],
+      "extra": {
+        "arg_binding": {
+          "msg": "os.path.join(\"a\", \"b\")"
+        },
+        "call_line": 21,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "extra": {
+        "arg_binding": {
+          "sql": "\"INSERT INTO orders (id, total) VALUES (?, ?)\""
+        },
+        "call_line": 31,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "{\"id\": 1, \"lines\": [1]}"
+        },
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 4,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order.total"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order.total"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "compute"
+      ],
+      "extra": {
+        "arg_binding": {
+          "o": "this"
+        },
+        "call_line": 9,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.log"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base.log"
+      ],
+      "kind": "OVERRIDES",
+      "omega": 0.9,
+      "provenance": "mro"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "kind": "RAISES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.6,
+      "provenance": "bare_identifier"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.list_open"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "mongoose_model"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "tests/test_orders.py",
+        "tests.test_orders"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.75,
+      "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.archive"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "mongo_chain"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    }
+  ],
+  "modifies": [],
+  "refers_to": [],
+  "symbols": [
+    {
+      "display": "pyapp.__init__",
+      "doc": "The pyapp package.",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/__init__.py",
+      "qualname": "pyapp.__init__",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        5
+      ]
+    },
+    {
+      "display": "pyapp.billing",
+      "doc": "Billing helpers.",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 9,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/billing.py",
+      "qualname": "pyapp.billing",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        4,
+        8
+      ]
+    },
+    {
+      "display": "pyapp.billing.send_invoice",
+      "doc": "",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "function",
+      "lang": "python",
+      "line_end": 9,
+      "line_start": 8,
+      "params": [
+        "order"
+      ],
+      "path": "pyapp/billing.py",
+      "qualname": "send_invoice",
+      "raises": [],
+      "signature": "def send_invoice(order)",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "pyapp.billing.total",
+      "doc": "",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "function",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 4,
+      "params": [
+        "order"
+      ],
+      "path": "pyapp/billing.py",
+      "qualname": "total",
+      "raises": [],
+      "signature": "def total(order)",
+      "statement_lines": [
+        5
+      ]
+    },
+    {
+      "display": "pyapp.cli.main",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "function",
+      "lang": "python",
+      "line_end": 6,
+      "line_start": 4,
+      "params": [],
+      "path": "pyapp/cli.py",
+      "qualname": "main",
+      "raises": [],
+      "signature": "def main()",
+      "statement_lines": [
+        5,
+        6
+      ]
+    },
+    {
+      "display": "pyapp.cli",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 6,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/cli.py",
+      "qualname": "pyapp.cli",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        4
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService",
+      "doc": "Keeps orders. Acme Robotics is headquartered in Boulder. Priya Natarajan lives in Boulder.\n\nSecond paragraph, not part of the first.",
+      "header_end": 15,
+      "is_test": false,
+      "kind": "class",
+      "lang": "python",
+      "line_end": 40,
+      "line_start": 9,
+      "params": [],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService",
+      "raises": [],
+      "signature": "class OrderService(Base)",
+      "statement_lines": [
+        10,
+        14,
+        16,
+        25,
+        27,
+        30,
+        34,
+        37,
+        40
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.archive",
+      "doc": "",
+      "header_end": 35,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 35,
+      "line_start": 34,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.archive",
+      "raises": [],
+      "signature": "def archive(self, order)",
+      "statement_lines": [
+        35
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.graph",
+      "doc": "",
+      "header_end": 38,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 38,
+      "line_start": 37,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.graph",
+      "raises": [],
+      "signature": "def graph(self, order)",
+      "statement_lines": [
+        38
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.list_open",
+      "doc": "",
+      "header_end": 28,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 28,
+      "line_start": 27,
+      "params": [
+        "self"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.list_open",
+      "raises": [],
+      "signature": "def list_open(self)",
+      "statement_lines": [
+        28
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.log",
+      "doc": "",
+      "header_end": 25,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 25,
+      "line_start": 25,
+      "params": [
+        "self",
+        "msg"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.log",
+      "raises": [],
+      "signature": "def log(self, msg)",
+      "statement_lines": [
+        25
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.place",
+      "doc": "Place an order: total it with billing, send the invoice and log the path. Acme Robotics ships from Boulder.",
+      "header_end": 23,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 23,
+      "line_start": 16,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.place",
+      "raises": [
+        "ValueError"
+      ],
+      "signature": "def place(self, order)",
+      "statement_lines": [
+        17,
+        18,
+        19,
+        21,
+        22,
+        23
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.run",
+      "doc": "",
+      "header_end": 40,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 40,
+      "line_start": 40,
+      "params": [
+        "self",
+        "sql"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.run",
+      "raises": [],
+      "signature": "def run(self, sql)",
+      "statement_lines": [
+        40
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.save",
+      "doc": "",
+      "header_end": 32,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 32,
+      "line_start": 30,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.save",
+      "raises": [],
+      "signature": "def save(self, order)",
+      "statement_lines": [
+        31,
+        32
+      ]
+    },
+    {
+      "display": "pyapp.orders",
+      "doc": "",
+      "header_end": 8,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 40,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/orders.py",
+      "qualname": "pyapp.orders",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        2,
+        3,
+        4,
+        6,
+        9
+      ]
+    },
+    {
+      "display": "pyapp.store.Base",
+      "doc": "A tiny base class.",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "class",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/store.py",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "class Base",
+      "statement_lines": [
+        2,
+        4
+      ]
+    },
+    {
+      "display": "pyapp.store.Base.log",
+      "doc": "",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 4,
+      "params": [
+        "self",
+        "msg"
+      ],
+      "path": "pyapp/store.py",
+      "qualname": "Base.log",
+      "raises": [],
+      "signature": "def log(self, msg)",
+      "statement_lines": [
+        5
+      ]
+    },
+    {
+      "display": "pyapp.store.OrderError",
+      "doc": "",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "class",
+      "lang": "python",
+      "line_end": 9,
+      "line_start": 8,
+      "params": [],
+      "path": "pyapp/store.py",
+      "qualname": "OrderError",
+      "raises": [],
+      "signature": "class OrderError(Exception)",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "pyapp.store",
+      "doc": "",
+      "header_end": 0,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 9,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/store.py",
+      "qualname": "pyapp.store",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        8
+      ]
+    },
+    {
+      "display": "tests.test_orders.test_place",
+      "doc": "",
+      "header_end": 5,
+      "is_test": true,
+      "kind": "function",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 4,
+      "params": [],
+      "path": "tests/test_orders.py",
+      "qualname": "test_place",
+      "raises": [],
+      "signature": "def test_place()",
+      "statement_lines": [
+        5
+      ]
+    },
+    {
+      "display": "tests.test_orders",
+      "doc": "",
+      "header_end": 3,
+      "is_test": true,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "tests/test_orders.py",
+      "qualname": "tests.test_orders",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        4
+      ]
+    },
+    {
+      "display": "tsapp.index.main",
+      "doc": "",
+      "header_end": 8,
+      "is_test": false,
+      "kind": "function",
+      "lang": "typescript",
+      "line_end": 8,
+      "line_start": 3,
+      "params": [],
+      "path": "tsapp/index.ts",
+      "qualname": "main",
+      "raises": [],
+      "signature": "function main()",
+      "statement_lines": [
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "display": "tsapp.index",
+      "doc": "",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "module",
+      "lang": "typescript",
+      "line_end": 8,
+      "line_start": 1,
+      "params": [],
+      "path": "tsapp/index.ts",
+      "qualname": "tsapp.index",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3
+      ]
+    },
+    {
+      "display": "tsapp.models.base.Base",
+      "doc": "",
+      "header_end": 1,
+      "is_test": false,
+      "kind": "class",
+      "lang": "typescript",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "tsapp/models/base.ts",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "class Base",
+      "statement_lines": [
+        2
+      ]
+    },
+    {
+      "display": "tsapp.models.base.Base.log",
+      "doc": "",
+      "header_end": 4,
+      "is_test": false,
+      "kind": "method",
+      "lang": "typescript",
+      "line_end": 4,
+      "line_start": 2,
+      "params": [
+        "msg"
+      ],
+      "path": "tsapp/models/base.ts",
+      "qualname": "Base.log",
+      "raises": [],
+      "signature": "log(msg: string): string",
+      "statement_lines": [
+        3
+      ]
+    },
+    {
+      "display": "tsapp.models.base",
+      "doc": "",
+      "header_end": 0,
+      "is_test": false,
+      "kind": "module",
+      "lang": "typescript",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "tsapp/models/base.ts",
+      "qualname": "tsapp.models.base",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1
+      ]
+    },
+    {
+      "display": "tsapp.models.order.Order",
+      "doc": "An order. This class is long enough to have a real doc comment, over eighty characters.",
+      "header_end": 7,
+      "is_test": false,
+      "kind": "class",
+      "lang": "typescript",
+      "line_end": 11,
+      "line_start": 7,
+      "params": [],
+      "path": "tsapp/models/order.ts",
+      "qualname": "Order",
+      "raises": [],
+      "signature": "class Order extends Base",
+      "statement_lines": [
+        8
+      ]
+    },
+    {
+      "display": "tsapp.models.order.Order.total",
+      "doc": "",
+      "header_end": 10,
+      "is_test": false,
+      "kind": "method",
+      "lang": "typescript",
+      "line_end": 10,
+      "line_start": 8,
+      "params": [],
+      "path": "tsapp/models/order.ts",
+      "qualname": "Order.total",
+      "raises": [],
+      "signature": "total(): number",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "tsapp.models.order.compute",
+      "doc": "",
+      "header_end": 15,
+      "is_test": false,
+      "kind": "function",
+      "lang": "typescript",
+      "line_end": 15,
+      "line_start": 13,
+      "params": [
+        "o"
+      ],
+      "path": "tsapp/models/order.ts",
+      "qualname": "compute",
+      "raises": [],
+      "signature": "compute = (o: Order): number",
+      "statement_lines": [
+        14
+      ]
+    },
+    {
+      "display": "tsapp.models.order",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "module",
+      "lang": "typescript",
+      "line_end": 17,
+      "line_start": 1,
+      "params": [],
+      "path": "tsapp/models/order.ts",
+      "qualname": "tsapp.models.order",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        2,
+        7,
+        13,
+        17
+      ]
+    }
+  ]
+}
