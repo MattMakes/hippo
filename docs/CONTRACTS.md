@@ -36,6 +36,7 @@ src/hippo/ask.py                  search(ctx, question, settings=None, access=No
                                   answer_from_trace(ctx, trace, access=None)      # access=None means unrestricted (CLI, open mode, tests)
 src/hippo/store/                  Store (Neo4j) and LadybugStore (embedded LadybugDB file), same methods; open_store(config) picks one.
                                   Read store/__init__.py for the graph shape; read each file for the methods.
+                                  code.py adds symbols, data objects, commits and their edges; see "the code graph" below
                                   Reads that return sources/passages/entities/facts take `access: Access | None` (memory.py); users.py holds
                                   roles/users: ensure_roles, list_roles, get_role, create_role, update_role (a rank change rewrites min_rank on
                                   its sources), delete_role (refused while in use), count_users, list_users, get_user, get_user_by_username,
@@ -43,6 +44,8 @@ src/hippo/store/                  Store (Neo4j) and LadybugStore (embedded Ladyb
 src/hippo/remote.py               RemoteHippo: the CLI's client for a running server (the embedded file is single-process).
 justfile                          `just ladybug` / `just neo4j` (docker), `just dev` / `just dev-neo4j` (local), `just test*`; each says its backend.
 src/hippo/hipporag/text.py        clean_phrase, entity_id, fact_id, fact_text, make_id, min_max_normalize, is_meaningful_phrase
+                                  label_of(node_id) -> "Entity"|"Passage"|"Symbol"|"DataObject"|"Commit", from the id prefix alone
+                                  split_identifier("OrderService") -> ["order", "service"]  (camelCase, snake_case, dots, digits)
 src/hippo/hipporag/openie.py      extract(ollama, passage_id, text) -> Extraction; extract_many(...)
 src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text, defines=[], extract_text=None); index_source(store, ollama, source_id, chunks, *, code=None,
                                   synonymy_threshold, workers, on_progress, should_stop) -> the nine COUNT_KEYS
@@ -51,6 +54,7 @@ src/hippo/hipporag/indexer.py     Chunk(ordinal, title, text, defines=[], extrac
                                   GRAPH_WRITE_LOCK: held while entities/facts are written and linked, and by anything that ends in remove_orphans
 src/hippo/hipporag/graph_index.py GraphIndex.load(store); .scoped(visible_source_ids) -> induced subgraph (recomputed fact counts and passage
                                   counts); .ppr(); .neighbors(); .edge_between(); .graph_with_edits(); Passage; Fact; Edge; EdgeEdit
+                                  the code half (CodeNode, DirectedEdge, name_index, out_edges, graph_for_scale, ...) is under "the code graph" below
 src/hippo/hipporag/retriever.py   Retriever(index, ollama).retrieve(question, settings, *, fact_filter, force_include, force_exclude, node_boosts, graph) -> Trace
 src/hippo/hipporag/answerer.py    answer_question(ollama, question, [(id,title,text)]) -> Answer(answer, thought, raw, passage_ids)
 tests/fakes/fake_store.py         FakeStore: in-memory Store with identical methods/row shapes
@@ -123,6 +127,123 @@ pipeline.py  add_text(ctx, name, text, *, owner_id=None, access_role_id=None) ->
                                                                     # runs (their remove_orphans would eat the running job's unlinked nodes);
                                                                     # the routes answer 409 with the message
              every add_* also calls start_indexing.
+```
+
+### code graph — `codegraph/`, `store/code.py`, and the code half of `graph_index.py`
+
+Source code only. `extract_code` turns a source's `Document`s into a `CodeGraph`; the chunker makes
+one passage per symbol out of it, the indexer writes it, and `GraphIndex` loads it back as extra
+vertices beside the entities. Every edge carries an `omega` (0-1: how sure the resolver is) and a
+`provenance` (the rule that produced it). A prose source never reaches any of this: without a
+`CodeGraph` the chunker, the indexer and the index behave exactly as they always have.
+
+```
+src/hippo/codegraph/   pure: stdlib, tree-sitter, sqlglot and hipporag.text only. No store, no LLM, no ingest, no
+                       import of the chunker, so there is no cycle. Deterministic: the same files give the same graph.
+model.py         Symbol, DataObject, CodeEdge(a, b, kind, omega, provenance, extra), FileFacts, FileGraph, CodeGraph
+                 symbol_id(source_id, path, qualname); data_id(source_id, kind, qualname); commit_id(source_id, sha)
+                     -- prefixed md5s through make_id, so they cannot collide with entity-/fact-/passage- ids
+                 name_text(name) -> the text we embed for a symbol or data object (split tokens, then the name)
+                 lang_of(name) -> 'python'|'typescript'|'sql'|None. ingest/readers.py holds the same table on the
+                     ingest side of the dependency line; codegraph may not import ingest, so the two are kept in step
+                     by a test, not by an import.
+                 merge_edges(edges) -> one row per (a, b, kind): the best omega wins, the first call_line is kept and
+                     extra.call_lines lists the rest
+                 CODE_EDGE_KINDS, SYMBOL_KINDS ('module'|'class'|'function'|'method'), DATA_KINDS ('table'|'column'|
+                     'collection'|'label'|'rel_type'), SKIP_REASONS, LANG_BY_SUFFIX, ARG_BINDING_MAX_CHARS
+                 CODE_MAX_FILES = 5,000; CODE_MAX_FILE_BYTES = 512 KiB (above it a file keeps its line windows);
+                     CODE_MAX_SYMBOLS_PER_SOURCE = 50,000 (past it extraction stops and stats()["truncated"] is True)
+                     -- safety rails, module constants like MAX_CHUNKS, NOT settings. The history budgets are
+                     settings: code_history_depth, code_git_timeout_s, code_history_total_s.
+                 CodeGraph.by_path(path) / .parsed(path) / .symbol_by_id(id) / .stats() -> Source.meta["code"]
+treesitter.py    get_language(grammar), grammar_for(path, lang), new_parser(grammar) -- one Parser per extract_code
+                 call (parsers are not thread-safe and two index jobs can run at once); node helpers text_of,
+                 line_of, end_line_of, named_children, field_child, walk_tree.
+                 .js/.jsx/.mjs/.cjs all parse with the tsx grammar, so there is no third wheel.
+python.py        walk(path, root, source_id) -> FileFacts   # the symbols of one file plus its raw imports, calls,
+typescript.py    bases, raises/throws, assignments and string literals, all still unresolved
+                 python.py also: module_qualname(path) (repo path, / -> ., extension stripped, __init__ kept),
+                 is_test_path(path)
+resolve.py       the second pass over every file at once: build_index(files) -> SourceIndex, then resolve_imports,
+                 resolve_bases, resolve_overrides (breadth-first MRO, <= 5), resolve_calls, resolve_raises,
+                 resolve_data, resolve_tested_by, sql_file_objects. Resolution carries the omega and provenance the
+                 matching rule earns. A call it cannot bind emits NO EDGE; it is counted per file into
+                 CodeGraph.unresolved_calls instead.
+data_access.py   READS/WRITES against the tables, collections and graph labels the repo's own files name:
+                 classify_literal(text), sql_tables (sqlglot, errors ignored), cypher_objects, mongo_hit,
+                 mongoose_hit, read_sql_file, collect(literals). Cypher is tried BEFORE SQL, because
+                 `MERGE (s:Settings ...)` starts with a SQL keyword.
+extract.py       extract_code(docs, source_id, *, should_stop=None) -> CodeGraph
+                 Each file parses in its own try/except, so one parse failure falls back to today's line windows for
+                 that file alone. should_stop() is checked between files, so a big repo stays cancellable.
+
+src/hippo/store/code.py   SYMBOL_KINDS, DATA_KINDS, CODE_EDGE_KINDS, SPECIFICITY_KINDS ('INVOKES','READS','WRITES'),
+                 CODE_EDGE_PAIRS, CODE_BATCH = 5000 (rows per UNWIND write), and the label tuples a writer groups its
+                 rows by: SYNONYM_LABELS, TUNED_LABELS, BOOSTABLE_LABELS, CODE_NODE_LABELS, DEFINABLE_LABELS,
+                 REFERABLE_LABELS
+                 node_label(id, allowed) (via text.label_of), check_edge_kind(kind), ordered_pairs(labels),
+                 grouped_by_labels(...) -- LadybugDB refuses a CREATE bound by multiple node labels, so every write
+                 is issued once per concrete label pair
+                 row shapers: symbol_write_row, data_object_write_row, commit_write_row, code_edge_write_rows,
+                 modifies_write_rows, refers_to_write_rows, and the read shapers _symbol_row/_data_object_row/_commit_row
+                 CodeQueries (the Neo4j mixin; LadybugStore and FakeStore carry the same names and row shapes,
+                 and a parity test asserts they do):
+                     writers  add_symbols, add_data_objects, add_commits, add_code_edges, link_definitions,
+                              add_modifies, add_precedes, add_refers_to, set_symbol_communities
+                     readers  get_symbols, get_data_objects, get_commits(ids, access=None) -> rows in the asked
+                              order, with source_name and passage_ids, visible only when the source is
+                     loaders  load_symbols, load_data_objects, load_commits, load_code_edges, load_definitions,
+                              load_modifies, load_precedes, load_refers_to, load_code_embeddings -- unrestricted,
+                              they feed GraphIndex.load
+                     delete   delete_code_nodes_for_source(source_id): THREE per-label statements, one each for
+                              Symbol, DataObject and Commit. Never chain them: `:Symbol:DataObject:Commit` is
+                              LadybugDB's OR but Neo4j's AND, so a chained match silently leaks every code node.
+                 store.stats() gains symbols, data_objects, code_edges, commits (fifteen keys in all).
+
+src/hippo/hipporag/graph_index.py   the code half of the in-memory index
+                 NodeKind is five-valued: ENTITY, PASSAGE, SYMBOL, DATA, COMMIT (CODE_KINDS = the last three)
+                 Vertex order is entities, symbols, data objects, commits, PASSAGES LAST, and that is load-bearing:
+                 passage_position(v) = v - first_passage_vertex, so a code vertex after the passages would give a
+                 negative index and silently serve the wrong passage. num_entities is len(entity_names);
+                 first_code_vertex and first_passage_vertex are where each block starts.
+                 CodeNode      one vertex -- a symbol, data object or commit -- with whatever its kind carries
+                 DirectedEdge(src, dst, kind, omega, provenance, extra)   one relation with its direction kept
+                               (named apart from codegraph.model.CodeEdge, which is the same relation before storage)
+                 Edge gains omega and code_kinds. Edge.weight_at(scale) is
+                     tuned if set else max(fact_count, 1.0 if mention, entity-entity synonym score, omega * scale)
+                     and Edge.weight is weight_at(1.0), which is what explain.py and the Graph page read.
+                 build_igraph(num_nodes, edges, scale=1.0); graph_for_scale(scale) rebuilds once and memoises per
+                     scale on the index; graph_with_edits(edits, scale=1.0) composes a simulation's edge edits with
+                     the scale in ONE rebuild, so moving the slider and editing an edge still applies both.
+                 code_nodes / code_vertices; code_out and code_in: vertex -> [DirectedEdge]. These are in LOAD ORDER
+                     and Neo4j promises none, so sort before you render or pin anything on them.
+                 name_index: lowercase name, lowercase qualname and each split token -> node ids. Built once and
+                     shared by scoped(), which is safe because every consumer filters its hits through idx_of.
+                 specificity: the DIVISOR per vertex, not its reciprocal -- entity: the passages that mention it;
+                     symbol and data: in_degree + 1 over INVOKES/READS/WRITES only (MODIFIES excluded, or a function
+                     touched by 150 of 200 commits would be crushed); commit: 1; passage: 0, never seeded.
+                     entity_passage_count is kept as an alias of it.
+                 code_node_by_id, code_node_at, out_edges(v), in_edges(v), defining_passages(v),
+                     symbols_defined_in(passage_v), community_of(v), community_name(c), communities
+                 scoped() keeps a symbol or data object iff one of its DEFINED_IN passages is visible, and a commit
+                     iff its commit passage is; omega and code_kinds are copied onto every surviving edge.
+
+What gets written (the shape the three stores agree on):
+    (Symbol|DataObject)-[:CODE_EDGE {kind, omega, provenance, extra}]->(Symbol|DataObject)   directed, one per (a,b,kind)
+    (Symbol|DataObject|Commit)-[:DEFINED_IN]->(Passage)         omega 1.0. A data object gets one from EVERY passage
+                                                                whose literal names it, not only its declaration site
+    (Passage)-[:REFERS_TO {omega, token}]->(Symbol|DataObject)  a prose or commit passage naming a symbol
+    (Commit)-[:MODIFIES {omega, hunk}]->(Symbol)    (Commit)-[:PRECEDES]->(Commit)   first-parent, newest to oldest
+    SYNONYM widens to (Entity|Symbol|DataObject)^2 and TUNED to (Entity|Passage|Symbol|DataObject)^2
+CODE_EDGE kinds: CONTAINS, IMPORTS, INHERITS, OVERRIDES, INVOKES, RAISES, CATCHES, TESTED_BY, READS, WRITES.
+PRECEDES is the one relation that does NOT enter igraph -- 200 commits would chain every symbol they touched into
+one neighbourhood -- so it exists only as a DirectedEdge, for the history tool.
+
+The rest of the code path is documented in its own block above:
+    ingest/readers.py    lang_of(name), beside is_code_name / is_supported_name on the same suffix sets
+    ingest/chunker.py    chunk_documents(docs, size, overlap, code=None): one passage per symbol
+    hipporag/indexer.py  Chunk.defines and Chunk.extract_text; index_source(..., code=None) and its three code stages
+    ingest/pipeline.py   the one insertion point: read_source -> "parsing code" -> chunk_documents -> index_source
 ```
 
 ### `src/hippo/evals/` — asking questions and grading
