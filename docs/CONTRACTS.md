@@ -446,17 +446,31 @@ routes/users.py   Users & roles (the access ladder)
     api: GET/POST /api/users, PATCH/DELETE /api/users/{id}, POST /api/users/{id}/token, GET/POST /api/roles, PATCH/DELETE /api/roles/{id}
 routes/graph.py   the Graph page (3D, vendor/3d-force-graph.min.js, static/graph.js)
     GET  /graph?as_role=&q=&source=    the whole visible graph in 3D; "View as" a role (manage_users/manage_roles, tiers at or below yours)
-    GET  /api/graph/full               nodes [{id,label,kind,degree,tier,tier_rank,source_id?,passage_count?}] + edges [{source,target,weight,kinds}]
+    GET  /api/graph/full               nodes [{id,label,kind,degree,tier,tier_rank,source_id?,passage_count?,community_label?}]
+                                       + edges [{source,target,weight,kinds}]. kind is five-valued now; a code node carries
+                                       community_label (paths.community_labels, NOT GraphIndex.community_name) for the
+                                       "subsystem" colour mode, which is the Leiden label's third and most visible surface.
                                        after filters q (name substring + one hop of context), source, kind, min_weight; capped by degree
                                        (limit, default 2500); plus totals, tiers and the viewer
     POST /api/graph/light-up {question, settings?, as_role?, top_passages?}   runs ask.search on the viewer's slice and returns seeds,
+                                       # `seeds` is trace.seed_entities ONLY, so a symbol the question named is heat-coloured
+                                       # like any activated node but carries no seed badge. Known gap, stated in the README.
                                        kept_facts, top_nodes (PPR scores), ranked passages with "why", paths (seed -> passage node ids)
                                        and the lit subgraph, so the page can animate the spread
-    GET  /api/graph/node/{id}          side-panel details: passage text/source/facts, or entity facts/passages/boost; neighbours
+    GET  /api/graph/node/{id}          side-panel details, BRANCHED PER KIND -- passage text/source/facts; entity
+                                       facts/passages/boost; symbol signature/path/lines/doc/callers/callees/tests/commits/
+                                       community; data object code_kind/dialect/readers/writers; commit sha/author/date/
+                                       message/modifies; plus neighbours. The old else-branch assumed "not passage" meant
+                                       "entity" and returned a wrong-shaped 200 for a symbol id rather than failing.
+                                       tiers_of reads a code node's tier from its source_id directly: a symbol has no
+                                       MENTIONS edge (D1), so the mention loop would leave it badged "Everyone".
 routes/pages.py   the pages that fit nowhere else
     GET  /partials/status              header partial: Neo4j/Ollama/model-pull status, polled by every page
     GET  /ask, POST /ask               Ask: a question box; the POST runs the search + answer (on the caller's slice) and renders the
-                                       same page with the answer, thought, top passages with scores, kept facts, seeds; link "Analyze
+                                       same page with the answer, thought, top passages with scores, kept facts, seeds, and -- when the
+                                       question named code -- a collapsible "Code graph" card holding answer.context_block, with the
+                                       seed chips split into "the question named" and "also reached by similarity" (the lexical/dense
+                                       distinction that decides the gate); link "Analyze
                                        this question"; the page says "searching N of M sources visible to you as <role>"
     GET  /settings, POST /settings     Ollama status (url, models installed vs required, pull progress, "Pull now"), Neo4j status +
                                        stats, retrieval settings form (the DEFAULT_SETTINGS keys with one-line explanations),
@@ -468,7 +482,10 @@ routes/sources.py  the Library (everything scoped to the caller; adding needs ad
                                        text, git URL, "Load the sample"), each with a "Visible to" picker defaulting to the caller's tier
     POST /sources/{id}/access          the tier pickers post here (visibility=<role id>|everyone, back=<path>)
     GET  /partials/sources             the sources table, polled while something is indexing (HTMX)
-    GET  /sources/{id}                 Source detail: meta, progress, passages (paged) with the entities/triples the LLM extracted,
+    GET  /sources/{id}                 Source detail: meta (for a repository, a code card: symbols, data objects, edges by kind,
+                                       languages, files parsed/skipped, unresolved calls, commits, history_skipped), progress,
+                                       passages (paged) with the entities/triples the LLM extracted, an "In the code graph"
+                                       <details> under each symbol passage (signature, relations, tests, commits),
                                        "Make sample questions" button (-> generation job), question sets about this source, "Reindex", "Delete"
     GET  /partials/sources/{id}/status the progress block of the source page, polled while it is busy (HTMX)
     POST /sources/upload | /sources/text | /sources/repo | /sources/sample     the Library forms; redirect back to / (with ?error=)
@@ -535,7 +552,13 @@ The Analyze page shows, top to bottom:
     3. the graph picture (Cytoscape): seeds highlighted, passages as squares, gold passage(s) outlined, node size ~ PPR score; click a node
        to see its neighbours/edges (weights, kinds)
     4. ranked passages with the explanation sentence ("why") and rank/score/DPR rank; gold ones marked
-    5. "Tweak & simulate" panel: sliders/inputs for linking_top_k, passage_node_weight, damping, node_specificity; checkboxes on each
+    4b. for a code question only (trace.used_code_seeds): the seed-symbols table -- name, how (identifier / stack_trace /
+       exception / fenced_code / diff / dense), the token that matched, weight, specificity, and the ambiguous rows that
+       seeded nothing -- and a Paths section rendered by paths.render_triples. explain() reads trace.seed_entities and
+       nothing else, so symbol seeds are joined in explicitly rather than found there.
+    5. "Tweak & simulate" panel: sliders/inputs for linking_top_k, passage_node_weight, damping, node_specificity,
+       and code_seed_weight / code_structural_scale / code_theta (a setting is simulatable only once it is in
+       SETTING_RULES and outside INGEST_SETTINGS); checkboxes on each
        candidate fact (force in/out); entity boost inputs on seeds (+ entity search to boost any entity); edge edits (pick two nodes,
        set weight; a new entity-entity edge behaves like a synonym link, and Overrides.to_ops emits set_edge_weight for it: the
        add_synonym op is only reachable by hand-writing ops to POST /api/changesets); toggles "re-run the LLM filter" and

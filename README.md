@@ -67,15 +67,15 @@ Everything listens on this machine only: port 8000 (the UI, API and MCP) and, un
 | Page | URL | What it is for |
 | --- | --- | --- |
 | Library | `/` | Everything hippo remembers. Add a file, a zip, pasted text or a git URL; watch indexing progress; delete sources. |
-| Source | `/sources/{id}` | One source: its passages and the entities and facts the model pulled out of each. "Make sample questions" writes an evaluation set about it. |
-| Ask | `/ask` | Type a question, get the answer, the model's reasoning, the top passages, the facts it kept and the seed entities. "Analyze this question" goes deeper. |
-| Graph | `/graph` | The whole memory you can see as a 3D picture. Search names, filter by source or kind, then type a question and watch activation spread from the seed entities along the graph to the passages it picks. Admins can view it as any tier below them. |
+| Source | `/sources/{id}` | One source: its passages and the entities and facts the model pulled out of each. For a repository, what the parser found, and an "In the code graph" panel under each symbol passage: its signature, relations, tests and commits. "Make sample questions" writes an evaluation set about it. |
+| Ask | `/ask` | Type a question, get the answer, the model's reasoning, the top passages, the facts it kept and the seed entities. Paste a stack trace or an identifier and a **Code graph** card shows the relations behind the answer, separating what the question named from what similarity also reached. "Analyze this question" goes deeper. |
+| Graph | `/graph` | The whole memory you can see as a 3D picture. Search names, filter by source or kind — symbols, data objects and commits included — colour by tier, kind, source or **subsystem**, then type a question and watch activation spread to the passages it picks. Click a symbol for its signature, callers, callees, tests and commits. Admins can view it as any tier below them. |
 | Users | `/users` | The access ladder: roles top to bottom with what each tier sees, the users, and the role editor. See [Users and roles](#users-and-roles). |
 | Account | `/account` | Who you are, what your role may do, your API/MCP token, change password. |
 | Evals | `/evals` | Question sets (yours or generated) and the history of every run: accuracy, exact match, F1, recall. |
 | Set | `/evals/sets/{id}` | The questions of one set (add, delete), run it, see past runs. |
 | Run | `/evals/runs/{id}` | One run: summary cards and a per-question table (answer, verdict, metrics, latency). Every row links to its analysis. |
-| Analyze | `/analyze/{result_id}`, or the "Analyze this question" link on any answer | The deep dive: candidate facts, the filter's reply, seeds, a picture of the graph, ranked passages with a one-sentence "why", and a panel to tweak settings and re-run the search without touching anything. |
+| Analyze | `/analyze/{result_id}`, or the "Analyze this question" link on any answer | The deep dive: candidate facts, the filter's reply, seeds, a picture of the graph, ranked passages with a one-sentence "why", and a panel to tweak settings and re-run the search without touching anything. For a code question it also shows which symbols were seeded and why, and the relations it walked. |
 | Changesets | `/changesets` | Edits you saved from the analyze page (setting changes, entity boosts, edge weights, synonyms). Apply or delete them. |
 | Settings | `/settings` | Ollama and graph store status, model downloads, the retrieval knobs with one-line explanations. |
 
@@ -262,6 +262,7 @@ One thing to plan for: the depth is fixed when the repository is **cloned**, not
 * **Cypher and SQL are read as literals only.** Indexing hippo itself finds `Settings`, `Passage` and `Source` in `MATCH` and `MERGE` string literals; it does not find tables declared by an f-string-interpolated `CREATE NODE TABLE {name}(...)`. "The databases our code talks to" means the literals in the code, not schema introspection.
 * **Writing a very large graph is slow.** Inserting 200,000 relationships was measured at 537 s on one machine, against 13.6 s for 100,000 — the cost of looking up both endpoints is sharply scale-sensitive. Writes go in batches of 5,000. A repository big enough to feel this hits the 20,000-passage wall first.
 * **History stops at renames.** A commit is attributed to a symbol by intersecting its diff with the symbol's line ranges *at that commit*, so line drift is not a source of error. But rename detection is off, so a symbol's history before it was renamed or moved to another file is not attributed to it. Commits that exceed `code_git_timeout_s`, or that fall outside the whole-pass `code_history_total_s`, are skipped and counted in `history_skipped`.
+* **Symbol seeds are not badged on the Graph page.** Type a question there and the light-up animation heats the symbols it seeded like any other activated node, but only *entity* seeds get the seed badge — the endpoint behind it reports entity seeds alone. The symbols are all in the Analyze page's seed table; the badge is phase 2.
 * **You can see how many calls did not resolve, not which.** `unresolved_calls` is a count per file. The leaderboard that would name them — so you could write a binding rule for the ones that matter — is phase 2.
 * **The tests cannot show the noise improvement.** The fake model the test suite uses barely produces triples from code at all, so the tests prove the *number* of model calls fell, not that the facts got cleaner. That one you have to see on a real model.
 

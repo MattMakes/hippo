@@ -225,8 +225,9 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
       never opens the gate above and never reaches anything below it.
     * **A community prior, off by default.** Symbols are grouped into subsystems by Leiden over the
       file projection, and `code_community_boost` lifts a passage whose symbol shares a subsystem
-      with a seed. It ships at 0.0, so today the grouping only labels: a `Subsystems:` line in the
-      answer block and in a blast radius.
+      with a seed. It ships at 0.0, so today the grouping only labels rather than ranks: a
+      `Subsystems:` line in the answer block and in a blast radius, and a `subsystem` colour mode on
+      the Graph page. Whether the prior is worth turning on is a question for an eval set.
     * **A second LLM pass, over passages.** The reference filters *facts* once and stops
       (adaptation 12). When a question named code, hippo runs one more pass over the passages the
       model is about to read, keeping, dropping or expanding them (`code_select`, on by default).
