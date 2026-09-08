@@ -26,10 +26,17 @@ and branch; set up exactly like this (first thing, before reading code):
 ```bash
 cd /Users/mascott/projects/hippo
 git worktree add .worktrees/<name> -b wp/<name> code-graph     # from the CURRENT tip of code-graph
-cd /Users/mascott/projects/hippo/.worktrees/<name>
-uv venv .venv --python 3.12 && uv pip install -e '.[dev,neo4j]'
+cd /Users/mascott/projects/hippo/.worktrees/<name>              # run this cd ALONE, then `pwd` to confirm
+uv venv .venv --python 3.12
+uv pip install --python .venv/bin/python -e '.[dev,neo4j]'      # --python is REQUIRED (see below)
+.venv/bin/python -c "import hippo; print(hippo.__file__)"       # must print YOUR worktree's src path
 .venv/bin/python -m pytest tests/unit -p no:cacheprovider -W ignore -q -x 2>&1 | tail -3   # must be green before you start
 ```
+
+Two harness gotchas found by the first worker: (1) a bare `uv pip install` ignores the local `.venv` when
+the shell has an ambient conda/VIRTUAL_ENV active and installs into THAT — always pass
+`--python .venv/bin/python`; (2) `cd <dir> && cmd` in one Bash call does not reliably persist the cwd to
+later calls — run `cd` on its own, confirm with `pwd`, and prefer absolute paths.
 
 Why the venv: the root `.venv` is an editable install pinned to the root tree's `src/`, so running it from
 your worktree would test the root tree's code, not yours. The justfile uses a relative `.venv/bin`, so
