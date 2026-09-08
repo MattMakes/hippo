@@ -672,3 +672,120 @@ def comparable(store, source_id: str):
         if r["node_id"] in keys and r["passage_id"] in passages
     )
     return nodes, sorted(data.values()), edges, defined, refers
+
+
+# ---------------------------------------------------- the checked-in spec (S2.17)
+
+
+def test_the_indexed_fixture_matches_the_checked_in_spec(code_index, request) -> None:
+    """
+    `tests/fixtures/code_sample/expected.json` is the spec for the code graph, not a snapshot of
+    it: a diff there is a change to what hippo promises about a repository, and is read like a
+    source change. Compared order-independently; `community` is excluded because S2.10 seeds and
+    relabels Leiden rather than pinning its integers, and the `commits`/`modifies` sections are
+    ignored while WP2b has not filled them in.
+
+    `--update-expected` rewrites the file instead of comparing against it. Read the diff.
+    """
+    if request.config.getoption("--update-expected"):
+        pytest.skip(rewrite_expected())
+    ctx, source_id = code_index
+    assert indexed_spec(ctx.store, source_id) == checked_in_spec()
+
+
+def rewrite_expected() -> str:
+    """Regenerate the spec by running the script that owns it, so there is one generator."""
+    import subprocess
+    import sys
+
+    from tests.conftest import ROOT
+
+    script = ROOT / "scripts" / "update_expected.py"
+    done = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=True)
+    return done.stdout.strip()
+
+
+def checked_in_spec() -> dict[str, list]:
+    """The file, projected onto what a store round-trip can see."""
+    import json
+
+    from tests.conftest import CODE_SAMPLE_PATH
+
+    document = json.loads((CODE_SAMPLE_PATH / "expected.json").read_text())
+    return {
+        "symbols": sorted(
+            (
+                s["path"],
+                s["qualname"],
+                s["kind"],
+                s["lang"],
+                s["line_start"],
+                s["line_end"],
+                s["signature"],
+                s["doc"],
+                s["is_test"],
+                tuple(s["raises"]),
+            )
+            for s in document["symbols"]
+        ),  # fmt: skip
+        "data_objects": sorted(
+            (d["kind"], d["qualname"], d["name"], d["dialect"]) for d in document["data_objects"]
+        ),
+        "edges": sorted(
+            (e["kind"], e["omega"], e["provenance"], tuple(e["a"]), tuple(e["b"]), _json(e.get("extra")))
+            for e in document["edges"]
+        ),
+        "definitions": sorted((tuple(d["node"]), d["passage"]) for d in document["definitions"]),
+        "refers_to": sorted(
+            (r["passage"], tuple(r["node"]), r["omega"], r["token"]) for r in document["refers_to"]
+        ),
+    }
+
+
+def indexed_spec(store, source_id: str) -> dict[str, list]:
+    """The same shape, read back out of whichever store this run used."""
+    symbols = [r for r in store.load_symbols() if r["source_id"] == source_id]
+    data = [r for r in store.load_data_objects() if r["source_id"] == source_id]
+    keys = {r["id"]: ("symbol", r["path"], r["qualname"]) for r in symbols}
+    keys.update({r["id"]: ("data", r["kind"], r["qualname"]) for r in data})
+    titles = {p["id"]: p["title"] for p in store.passages_for_source(source_id)}
+    return {
+        "symbols": sorted(
+            (
+                s["path"],
+                s["qualname"],
+                s["kind"],
+                s["lang"],
+                s["line_start"],
+                s["line_end"],
+                s["signature"],
+                s["doc"],
+                s["is_test"],
+                tuple(s["raises"]),
+            )
+            for s in symbols
+        ),  # fmt: skip
+        "data_objects": sorted((d["kind"], d["qualname"], d["name"], d["dialect"]) for d in data),
+        "edges": sorted(
+            (e["kind"], e["omega"], e["provenance"], keys[e["a"]], keys[e["b"]], _json(e.get("extra")))
+            for e in store.load_code_edges()
+            if e["a"] in keys and e["b"] in keys
+        ),
+        "definitions": sorted(
+            (keys[d["node_id"]], titles[d["passage_id"]])
+            for d in store.load_definitions()
+            if d["node_id"] in keys and d["passage_id"] in titles
+        ),
+        "refers_to": sorted(
+            (titles[r["passage_id"]], keys[r["node_id"]], r["omega"], r["token"])
+            for r in store.load_refers_to()
+            if r["node_id"] in keys and r["passage_id"] in titles
+        ),
+    }
+
+
+def _json(value) -> str:
+    """`extra` is free-form JSON; compare it as text so dict order never decides a test."""
+    import json
+
+    return json.dumps(value or {}, sort_keys=True)

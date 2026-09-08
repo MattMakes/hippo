@@ -288,7 +288,15 @@ def _chunk_symbols(doc: Document, code: CodeGraph, size: int) -> list[Piece]:
     module = next((s for s in symbols if s.kind == "module"), None)
     if module is None:  # parsed, but nothing to cut by: fall back to today's windows
         return [(title, text, [], None) for title, text in _chunk_code(doc, size)]
-    return _container_pieces(module, symbols, doc.text.splitlines(), doc, code, size)
+    pieces = _container_pieces(module, symbols, doc.text.splitlines(), doc, code, size)
+    if pieces and not any(module.id in defines for _, _, defines, _ in pieces):
+        # A file that opens with `class Base:` has no module header passage, so its module
+        # symbol would have no DEFINED_IN at all -- and a code node reachable from no visible
+        # passage is invisible to a scoped graph (S2.5). Its first passage is the top of the
+        # file, so that is where the module is defined.
+        title, text, defines, extract = pieces[0]
+        pieces[0] = (title, text, [module.id, *defines], extract)
+    return pieces
 
 
 def _chunk_sql(doc: Document, code: CodeGraph, size: int) -> list[Piece]:

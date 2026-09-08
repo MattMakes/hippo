@@ -325,11 +325,19 @@ def test_a_short_doc_comment_is_dropped_rather_than_shrunk(code_graph) -> None:
 
 
 def test_a_file_that_opens_with_a_class_has_no_header_passage(code_graph) -> None:
-    titles = [c.title for c in chunks_of("pyapp/store.py", code_graph)]
-    assert titles == [
+    from hippo.codegraph.model import symbol_id
+
+    chunks = chunks_of("pyapp/store.py", code_graph)
+    assert [c.title for c in chunks] == [
         "pyapp/store.py :: pyapp.store.Base (lines 1-3)",
         "pyapp/store.py :: pyapp.store.Base.log (lines 4-5)",
         "pyapp/store.py :: pyapp.store.OrderError (lines 8-9)",
+    ]
+    # The module symbol still needs a passage of its own: a code node no visible passage
+    # reaches is invisible to a scoped graph (S2.5). The top of the file is that passage.
+    assert chunks[0].defines == [
+        symbol_id(FIXTURE_SOURCE, "pyapp/store.py", "pyapp.store"),
+        symbol_id(FIXTURE_SOURCE, "pyapp/store.py", "Base"),
     ]
 
 
