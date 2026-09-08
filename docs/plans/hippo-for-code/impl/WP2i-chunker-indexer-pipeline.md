@@ -25,6 +25,10 @@ ten known-good pairs lost; `OrderService` ~ "order service" 0.9368 unaffected). 
 "orders"), and **gate BOTH the query list and the key matrix** — `find_synonyms` gates
 `is_meaningful_phrase` on the new ids only (`indexer.py:268`), so a one-token symbol must be absent from
 both sides or it still links as a key. Put the rule in one helper with a docstring citing the spike.
+The fixture cannot prove the guard: no acme_robotics entity comes within 0.8 of any code name even
+under the real embedder, so the regression test must CONSTRUCT the case (a one-token symbol and an
+entity whose `FakeOllama` feature-hashed vectors collide — e.g. identical name text — and assert no
+synonym is written, while a two-token symbol with the same collision does link).
 
 **Write curve: no change to batching.** But note two facts for `meta["code"]`/docs: a repo the size of
 pandas (~34k symbols) exceeds `MAX_CHUNKS = 20_000` after WP2 where its ~15.8k line windows fit today — a
