@@ -14,6 +14,13 @@ Two kinds come out:
   specific links, so we try those first; entities mentioned by more than
   5 passages are too generic and skipped.
 
+A source with a code graph gets two more kinds, and unlike the first two they
+cost **no model call at all**: `code_questions` and `commit_questions` are pure
+functions of the graph, so their questions and their expected answers are short
+deterministic strings assembled from symbols, calls and commits (D17). That is
+the point - an eval question about code must be reproducible run to run, and an
+LLM asked to invent one would drift.
+
 Every question row stores its gold passage id(s), so a run can later check
 whether retrieval found the right passage(s).
 
@@ -30,7 +37,8 @@ from typing import Any
 from .. import prompts
 from ..access import Access
 from ..context import AppContext
-from ..hipporag.graph_index import ENTITY, GraphIndex, Passage
+from ..hipporag.graph_index import COMMIT, ENTITY, SYMBOL, GraphIndex, Passage
+from ..hipporag.paths import display_at, display_of
 from ..ollama import OllamaError
 
 log = logging.getLogger(__name__)
@@ -42,6 +50,11 @@ MIN_SHARED = 2  # an entity must appear in at least two passages to make a link
 PREFERRED_SHARED = 3  # 2-3 passages: a specific link; tried first
 MAX_SHARED = 5  # more than this and the entity is too generic ("Colorado" in every passage)
 GEN_MAX_TOKENS = 512
+
+CALLABLE_KINDS = frozenset({"function", "method"})  # "what does a class call" is not a question
+MIN_CALL_OMEGA = 0.5  # a guessed call is not something to grade retrieval against
+MIN_DOC_CHARS = 80  # the same bar OpenIE uses for a docstring: enough to be worth asking about
+MIN_COMMIT_SYMBOLS = 2  # one symbol is a rename, not a localization question
 
 
 # ------------------------------------------------------------------ entry points
@@ -61,6 +74,8 @@ def generate_questions(
     per_passage: int = 1,
     max_single: int = 10,
     max_multihop: int = 5,
+    max_code: int = 5,
+    max_commits: int = 5,
     name: str | None = None,
     set_id: str | None = None,
     access: Access | None = None,
@@ -68,6 +83,9 @@ def generate_questions(
     """
     Fill a question set about `source_id` (creating it unless `set_id` is given). Returns the set id.
     `access` keeps the passages (and the entity pairs for multi-hop questions) inside the caller's slice.
+
+    `max_code` and `max_commits` bound the two graph-built kinds; a source with no code graph
+    simply produces none of them.
     """
     set_id = set_id or _create_set(ctx, source_id, name)
     store = ctx.store
@@ -79,8 +97,13 @@ def generate_questions(
 
         singles = _spread(passages, max_single)
         pairs = shared_entity_pairs(index, passages)
+        # Built up front because they are pure: no model call, so they cannot fail halfway and they
+        # only need counting into `total`. Without them a set of nothing but code questions would
+        # report progress 0 of 0.
+        graph_rows = code_questions(index, source_id, max_code)
+        graph_rows += commit_questions(index, source_id, max_commits)
         # Every pair may cost up to two LLM calls (both orders), but we stop at max_multihop questions.
-        total = len(singles) + min(max_multihop, len(pairs))
+        total = len(singles) + min(max_multihop, len(pairs)) + len(graph_rows)
         store.update_question_set(
             set_id, stage="writing single-hop questions", progress_done=0, progress_total=total
         )
@@ -91,6 +114,9 @@ def generate_questions(
         store.update_question_set(set_id, stage="writing multi-hop questions", progress_done=len(singles))
         rows = _multihop_questions(ctx, set_id, pairs, max_multihop, done=len(singles), total=total)
         store.add_questions(set_id, rows)
+
+        store.update_question_set(set_id, stage="writing code questions")
+        store.add_questions(set_id, graph_rows)
 
         store.update_question_set(
             set_id, status="ready", stage="done", progress_done=total, progress_total=total
@@ -219,6 +245,122 @@ def shared_entity_pairs(index: GraphIndex, passages: list[Passage]) -> list[tupl
             seen_pairs.add(key)
             candidates.append((index.name_of(vertex), a, b))
     return candidates
+
+
+# ---------------------------------------------------------- code and commits
+# Both generators are pure functions of the loaded graph: no store, no model, no clock. Given the
+# same index they write the same questions, the same expected answers and the same gold ids, which
+# is what makes an eval run comparable to the one before it.
+
+
+def code_questions(index: GraphIndex, source_id: str, limit: int = 5) -> list[QuestionRow]:
+    """
+    "What does <qualname> call?", for the functions worth asking about.
+
+    A function qualifies when it has a doc of at least `MIN_DOC_CHARS` (so there is something to
+    answer with) and at least one INVOKES out-edge at omega >= `MIN_CALL_OMEGA` (so the call is
+    resolved, not guessed). The gold passages are the function's own and those of the **strongest**
+    call it makes - highest omega, ties broken by display name - and `notes` lists every callee, so
+    a person reading the set can see what the one gold call was chosen out of.
+
+    The question names the fully-qualified display name on purpose: a dotted name is code-shaped,
+    so `find_anchors` seeds from it and the run's `recall["code_seeded"]` reads 1.0. Written any
+    other way the question would measure dense retrieval instead of the code graph.
+    """
+    candidates: list[tuple[str, QuestionRow]] = []
+    for node in index.code_nodes:
+        if node.kind != SYMBOL or node.source_id != source_id:
+            continue
+        if node.code_kind not in CALLABLE_KINDS or len(node.doc) < MIN_DOC_CHARS:
+            continue
+        vertex = index.idx_of[node.id]
+        calls = [e for e in index.out_edges(vertex) if e.kind == "INVOKES" and e.omega >= MIN_CALL_OMEGA]
+        gold = _defining_passage_ids(index, vertex)
+        if not calls or not gold:
+            continue
+        best = min(calls, key=lambda e: (-e.omega, display_at(index, e.dst)))
+        callee_gold = _defining_passage_ids(index, best.dst)
+        if not callee_gold:
+            continue  # a callee we cannot point at is not a gold passage
+        caller, callee = display_of(node), display_at(index, best.dst)
+        callees = ", ".join(sorted(display_at(index, e.dst) for e in calls))
+        candidates.append(
+            (
+                caller,
+                {
+                    "text": f"What does {caller} call?",
+                    "expected_answer": f"{caller} calls {callee}.",
+                    "gold_passage_ids": gold + callee_gold,
+                    "kind": "code",
+                    "notes": (
+                        f"INVOKES {callee} ({best.provenance}, omega {best.omega:.2f}); callees: {callees}"
+                    ),
+                },
+            )
+        )
+    candidates.sort(key=lambda item: item[0])
+    return [row for _display, row in candidates[: max(limit, 0)]]
+
+
+def commit_questions(index: GraphIndex, source_id: str, limit: int = 5) -> list[QuestionRow]:
+    """
+    "What changed in the commit <subject>?", newest commit first.
+
+    A commit qualifies when it MODIFIES at least `MIN_COMMIT_SYMBOLS` symbols: one symbol makes the
+    answer a restatement of the subject line, two or more make it a localization question, which is
+    the eval the user asked for (D8).
+
+    **The gold order is a contract with `runner.run_question`:** the commit's own message passage
+    first, then one entry per modified symbol in display-name order. `recall["path_fidelity"]`
+    scores that tail alone - "of the functions this commit touched, how many did we retrieve" -
+    which the plain `recall@k` cannot separate out from the message passage.
+    """
+    candidates: list[tuple[int, str, QuestionRow]] = []
+    for node in index.code_nodes:
+        if node.kind != COMMIT or node.source_id != source_id:
+            continue
+        vertex = index.idx_of[node.id]
+        touched = sorted(
+            {
+                (display_at(index, e.dst), e.dst)
+                for e in index.out_edges(vertex)
+                if e.kind == "MODIFIES" and index.node_kind[e.dst] == SYMBOL
+            }
+        )
+        # Only the first: the tail of `gold_passage_ids` must be symbols and nothing else, or
+        # `path_fidelity` would silently score a message passage as a touched function.
+        commit_gold = _defining_passage_ids(index, vertex)[:1]
+        if len(touched) < MIN_COMMIT_SYMBOLS or not commit_gold:
+            continue
+        symbol_gold: list[str] = []
+        for _name, symbol_vertex in touched:
+            symbol_gold.extend(_defining_passage_ids(index, symbol_vertex))
+        if not symbol_gold:
+            continue
+        subject = (node.message or "").splitlines()[0].strip() or display_of(node)
+        names = ", ".join(name for name, _vertex in touched)
+        candidates.append(
+            (
+                node.ordinal,
+                node.sha,
+                {
+                    "text": f'What changed in the commit "{subject}"?',
+                    "expected_answer": f'The commit "{subject}" changed {names}.',
+                    "gold_passage_ids": commit_gold + symbol_gold,
+                    "kind": "commit",
+                    "notes": f"touched: {names}",
+                },
+            )
+        )
+    # `Commit.ordinal` is 0 for the newest, so ascending order is newest first; the sha only ever
+    # breaks a tie, and never reaches a question (a sha is not reproducible across machines, S2.17).
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return [row for _ordinal, _sha, row in candidates[: max(limit, 0)]]
+
+
+def _defining_passage_ids(index: GraphIndex, vertex: int) -> list[str]:
+    """The passage ids a code node is written down in, in vertex order (so: passage ordinal order)."""
+    return [index.node_ids[p] for p in sorted(index.defining_passages(vertex))]
 
 
 def _mentions_by_entity(index: GraphIndex, passages: list[Passage]) -> dict[int, list[Passage]]:
