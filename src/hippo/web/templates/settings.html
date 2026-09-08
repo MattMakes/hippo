@@ -65,15 +65,19 @@
   <p class="muted">These are HippoRAG's knobs. The defaults are the paper's. Change one, then use the Analyze page to see what it did.</p>
   {% if not can_edit %}<div class="callout">These knobs change everyone's answers, so only roles with <code>edit_graph</code> may save them. Yours ({{ me.role_name if me else '' }}) can read them.</div>{% endif %}
   <form method="post" action="/settings" class="settings-form">
+    {# min/max come from SETTING_RULES, the same bounds validate_settings enforces. Hard-coding
+       max="1" here made every setting whose real ceiling is higher unsaveable from the browser. #}
     {% for key, value in settings.items() %}
+    {% set bounds = rules.get(key) %}
     <div class="field">
       <label for="s-{{ key }}"><code>{{ key }}</code></label>
       {% if value is sameas true or value is sameas false %}
         <input type="checkbox" id="s-{{ key }}" name="{{ key }}" {{ 'checked' if value }}>
-      {% elif value is integer %}
-        <input type="number" id="s-{{ key }}" name="{{ key }}" value="{{ value }}" min="0" step="1">
       {% else %}
-        <input type="number" id="s-{{ key }}" name="{{ key }}" value="{{ value }}" min="0" max="1" step="0.01">
+        <input type="number" id="s-{{ key }}" name="{{ key }}" value="{{ value }}"
+               {% if bounds and bounds[1] is not none %}min="{{ bounds[1] }}"{% endif %}
+               {% if bounds and bounds[2] is not none %}max="{{ bounds[2] }}"{% endif %}
+               step="{{ 1 if value is integer else 0.01 }}">
       {% endif %}
       <span class="help muted">{{ help[key] }}</span>
     </div>

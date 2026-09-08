@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from hippo.hipporag.indexer import Chunk, index_source, passage_id
-from hippo.hipporag.text import make_id
+from hippo.hipporag.text import entity_id, make_id
 
 # --------------------------------------------------------------------- ids
 
@@ -498,21 +498,35 @@ def _by_display(source_id: str) -> dict[str, str]:
     return ids
 
 
-def build_code_source(store, ollama, *, name: str = "pyapp", with_history: bool = True) -> str:
+def build_code_source(
+    store, ollama, *, name: str = "pyapp", with_history: bool = True, with_graph: bool = True
+) -> str:
     """
     Index the fixture tree as one source and write its whole code graph through the store.
 
     The passages go in through the real `index_source`, so they get real embeddings and whatever
     OpenIE the fake model finds in them; everything else is written with the WP1 store methods.
+
+    `with_graph=False` indexes exactly the same passages and writes **no** code graph at all. That
+    is the control the FIDELITY inertness claim needs: comparing it against the full build under
+    `code_structural_scale = 0` separates "the code graph contributes nothing" (which must be true)
+    from "the corpus now contains code passages" (which is just more passages).
     """
     source_id = store.create_source("repo", name)
     body = chunks()
     history = commit_chunks() if with_history else []
     index_source(store, ollama, source_id, body + history)
+    if with_graph:
+        write_code_graph(store, ollama, source_id, with_history=with_history)
+    return source_id
 
-    ids = _by_display(source_id)
+
+def write_code_graph(store, ollama, source_id: str, *, with_history: bool = True) -> None:
+    """The code graph on its own, for a source whose passages are already indexed."""
+    body = chunks()
+    history = commit_chunks() if with_history else []
     passage_of_title = {c.title: passage_id(source_id, c) for c in body + history}
-
+    ids = _by_display(source_id)
     vectors = ollama.embed([_name_text(display) for display in ids], kind="document")
     embedding_of = dict(zip(ids, [v.tolist() for v in vectors], strict=True))
 
@@ -578,10 +592,12 @@ def build_code_source(store, ollama, *, name: str = "pyapp", with_history: bool 
         ]
     )
     store.set_symbol_communities({ids[s.display]: s.community for s in SYMBOLS if s.community is not None})
+    # The cross-kind synonym WP2i's `find_synonyms` writes when prose and code are indexed
+    # together. It is a code-only weight term, so `code_structural_scale = 0` must drop it too.
+    store.add_synonyms([(entity_id("order service"), ids["pyapp.orders.OrderService"], 0.87)])
 
     if with_history:
         _write_history(store, source_id, ids, passage_of_title)
-    return source_id
 
 
 def _write_history(store, source_id: str, ids: dict[str, str], passage_of_title: dict[str, str]) -> None:

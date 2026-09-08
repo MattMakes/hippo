@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 from ... import ask as ask_service
 from ...ollama import OllamaError
 from ...status import system_status
-from ...store.base import DEFAULT_SETTINGS, validate_settings
+from ...store.base import DEFAULT_SETTINGS, SETTING_RULES, validate_settings
 from ..adhoc import remember_adhoc
 from ..auth import principal_of, require
 from ..render import ctx_of, render
@@ -129,6 +129,7 @@ def settings_page(request: Request, saved: int = 0):
         nav="settings",
         settings=ctx.store.get_settings() if ctx.store.ping() else DEFAULT_SETTINGS,
         help=SETTING_HELP,
+        rules=SETTING_RULES,
         saved=bool(saved),
         status=system_status(ctx, fresh=True),
         can_edit=principal_of(request).can("edit_graph"),
@@ -149,6 +150,7 @@ async def settings_submit(request: Request):
             nav="settings",
             settings=ctx.store.get_settings(),
             help=SETTING_HELP,
+        rules=SETTING_RULES,
             saved=False,
             error=str(exc),
             status=system_status(ctx, fresh=True),
