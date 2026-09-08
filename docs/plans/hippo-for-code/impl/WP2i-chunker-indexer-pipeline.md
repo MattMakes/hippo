@@ -37,7 +37,32 @@ error message say why. The WP4 docs worker will state it in Known limitations.
 
 ## What the previous workers built (read their code, not just this summary)
 
-<!-- ORCHESTRATOR FILLS FROM THE WP1 / WP2 LEDGER SUMMARIES -->
+**WP1 (store + GraphIndex), merged as 240d348.** `src/hippo/store/code.py` holds the vocabulary
+(`CODE_BATCH=5000`, `SYMBOL_KINDS`, `DATA_KINDS`, `CODE_EDGE_KINDS`, `SPECIFICITY_KINDS`, `CODE_EDGE_PAIRS`,
+the `*_LABELS` tuples), the pure row shapers (`symbol_write_row`, `data_object_write_row`,
+`commit_write_row`, `code_edge_write_rows`, `modifies_write_rows`, `refers_to_write_rows`, `node_label`,
+`check_edge_kind`, `ordered_pairs`, `grouped_by_labels`) and the Neo4j `CodeQueries` mixin, twinned in
+`store/ladybug.py` and `tests/fakes/fake_store.py`. 22 methods on every store: writers `add_symbols`,
+`add_data_objects`, `add_commits`, `add_code_edges`, `link_definitions`, `add_modifies`, `add_precedes`,
+`add_refers_to`, `set_symbol_communities`; readers `get_symbols`, `get_data_objects`, `get_commits`;
+loaders `load_symbols`, `load_data_objects`, `load_commits`, `load_code_edges`, `load_definitions`,
+`load_modifies`, `load_precedes`, `load_refers_to`, `load_code_embeddings`; and
+`delete_code_nodes_for_source`. Row shapes are the WP1.3 table's, field by field — read the shapers.
+Semantics: a node's label comes from `label_of(id)`; an unrecognised prefix is node-not-found (write
+nothing, no raise); `add_code_edges` is two statements (MATCH+SET that only RAISES ω, then a
+WHERE-NOT-EXISTS create), so re-adding never lowers a weight; edge `kind` is a plain string; writes go in
+`CODE_BATCH` batches. `GraphIndex`: vertex order entities → symbols → data → commits → passages LAST,
+`passage_position = v - first_passage_vertex`; `Edge.omega`/`code_kinds`, `Edge.weight_at(scale)`;
+`specificity` holds the denominator (entity = mentions, symbol/data = in_degree+1 over
+`SPECIFICITY_KINDS`, commit = 1, passage = 0); `graph_for_scale(scale)` memoised; `scoped()` carries
+omega/code_kinds/boost. All eleven `code_*` settings are declared with help text.
+**Landmine:** `analysis/simulate.py` has `SIMULATABLE_SETTINGS` and `INGEST_SETTINGS`, and
+`test_analysis_simulate.py` asserts they partition `SETTING_RULES` exactly — any new setting must join one
+list. The `Tiny` (`test_graph_index.py`) and `small_graph` (`test_store_graph.py`) fixtures now use
+`make_id`-shaped ids. The parity test in `test_store_code.py` goes red if a store method lands on one
+backend only. Full handoff in the `backend-developer-1` ledger entry (`horch sessions`).
+
+<!-- ORCHESTRATOR FILLS FROM THE WP2 LEDGER SUMMARY -->
 
 ## Scope
 
