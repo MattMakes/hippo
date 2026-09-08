@@ -384,13 +384,12 @@ def _pieces_from_rows(
     long. Every part defines the symbol (so DEFINED_IN reaches all of them) but only the first
     carries `extract_text`: the docstring must not be extracted once per part.
     """
-    groups = _split_rows(rows, symbol.statement_lines, size)
+    # Blank groups are dropped before the parts are numbered, so "(part 2)" always exists.
+    groups = [g for g in _split_rows(rows, symbol.statement_lines, size) if _text_of(g).strip()]
     doc_text = symbol.doc if len(symbol.doc.strip()) >= MIN_OPENIE_DOC_CHARS else ""
     pieces: list[Piece] = []
     for number, group in enumerate(groups, start=1):
-        text = "\n".join(text for _, text in group).strip("\n")
-        if not text.strip():
-            continue
+        text = _text_of(group)
         first, last = _title_range(symbol, group, header=header, split=len(groups) > 1)
         part = f" (part {number})" if len(groups) > 1 else ""
         title = f"{doc.title} :: {symbol.display} (lines {first}-{last}){part}"
@@ -398,6 +397,10 @@ def _pieces_from_rows(
         defines = [symbol.id, *_data_ids_in(code, doc.title, span)]
         pieces.append((title, text, defines, doc_text if number == 1 else ""))
     return pieces
+
+
+def _text_of(rows: list[Row]) -> str:
+    return "\n".join(text for _, text in rows).strip("\n")
 
 
 def _title_range(symbol: Symbol, group: list[Row], *, header: bool, split: bool) -> tuple[int, int]:
