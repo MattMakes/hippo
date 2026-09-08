@@ -7,7 +7,8 @@ Reading a source produces `Document`s; running `extract_code` over them produces
 collections and graph labels the code talks to) and typed, weighted edges between them
 (CONTAINS, IMPORTS, INVOKES, INHERITS, OVERRIDES, RAISES, CATCHES, TESTED_BY, READS,
 WRITES). Every edge carries an omega -- how sure the resolver is -- and a provenance
-naming the rule that produced it.
+naming the rule that produced it. `read_history` is the same idea over a repository's git
+log: commits, and a MODIFIES edge to every symbol a commit's diff landed inside.
 
 This package is deliberately *pure*: it imports stdlib, tree-sitter, sqlglot and
 `hippo.hipporag.text`, and nothing else. No store, no LLM, no ingest. The chunker
@@ -19,6 +20,7 @@ what lets `tests/fixtures/code_sample/expected.json` be a checked-in spec.
 from __future__ import annotations
 
 from .extract import extract_code
+from .git_history import History, HistoryError, read_history
 from .model import (
     CODE_MAX_FILE_BYTES,
     CODE_MAX_FILES,
@@ -44,10 +46,13 @@ __all__ = [
     "DataObject",
     "FileFacts",
     "FileGraph",
+    "History",
+    "HistoryError",
     "Symbol",
     "commit_id",
     "data_id",
     "extract_code",
     "name_text",
+    "read_history",
     "symbol_id",
 ]

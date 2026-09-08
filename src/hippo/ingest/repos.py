@@ -4,9 +4,10 @@ Getting a git repository onto disk and reading its files.
 Security first: the URL a user types is handed to `git` as one argument in an
 argument list (never through a shell), it must look like a real remote URL
 (no local paths, no file://), and it may not start with "-" so it can never be
-mistaken for a git option. Cloning is shallow (`--depth 1`) because we only
-want the current files, not the history, and it has a timeout so a dead host
-cannot hang a background job forever.
+mistaken for a git option. Cloning is shallow -- `--depth 1` by default, because
+usually we only want the current files -- and it has a timeout so a dead host
+cannot hang a background job forever. A repo source that reads its git history
+asks for a deeper clone: only the commits on disk can be read.
 """
 
 from __future__ import annotations
@@ -55,9 +56,18 @@ def repo_name(url: str) -> str:
     return "/".join(parts[-2:]) if parts else url
 
 
-def clone_repo(url: str, dest: Path, timeout: int = 300) -> Path:
-    """Shallow-clone `url` into `dest`. Raises RepoError with a message a user can act on."""
+def clone_repo(url: str, dest: Path, timeout: int = 300, depth: int = 1) -> Path:
+    """
+    Shallow-clone `url` into `dest`. Raises RepoError with a message a user can act on.
+
+    `depth` is how many commits to fetch. The default of 1 is "the current files only",
+    which is what every source wanted until the code graph started reading history: with
+    `code_history_depth` set, only the commits that were cloned can be read, so the pipeline
+    passes that setting through. A depth below 1 is clamped to 1 -- `--depth 0` is a *full*
+    clone, which is the opposite of what "no history" should cost.
+    """
     url = url.strip()
+    depth = max(1, depth)
     if not is_git_url(url):
         raise RepoError(
             f"'{url}' does not look like a git URL. Use https://host/owner/repo, "
@@ -66,7 +76,7 @@ def clone_repo(url: str, dest: Path, timeout: int = 300) -> Path:
     if dest.exists() and any(dest.iterdir()):
         raise RepoError(f"the folder {dest} already exists and is not empty")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    command = ["git", "clone", "--depth", "1", "--single-branch", "--", url, str(dest)]
+    command = ["git", "clone", "--depth", str(depth), "--single-branch", "--", url, str(dest)]
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")  # never wait for a username/password prompt
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=env)

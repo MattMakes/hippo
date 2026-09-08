@@ -88,11 +88,30 @@ def test_clone_passes_the_url_as_one_argument_after_a_double_dash(
     assert isinstance(command, list)  # never a shell string
     assert command[:2] == ["git", "clone"]
     assert "--depth" in command and "--single-branch" in command
+    assert command[command.index("--depth") + 1] == "1"  # shallow unless history is asked for
     assert command[command.index("--") + 1] == url  # "--" stops git from reading the URL as an option
     assert command[-1] == str(dest)
     assert seen["kwargs"].get("shell") is not True
     assert seen["kwargs"]["timeout"] == 7
     assert seen["kwargs"]["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_clone_deepens_when_history_is_wanted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `code_history_depth` commits of history need `code_history_depth` commits on disk. Depth is
+    # clamped up to 1, never to 0: a depth-0 clone is a full clone, which is not what "no history"
+    # should cost.
+    seen: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        seen.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    url = "https://github.com/acme/robots.git"
+    clone_repo(url, tmp_path / "a", depth=200)
+    clone_repo(url, tmp_path / "b", depth=0)
+    clone_repo(url, tmp_path / "c", depth=-5)
+    assert [c[c.index("--depth") + 1] for c in seen] == ["200", "1", "1"]
 
 
 def test_clone_explains_timeouts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
