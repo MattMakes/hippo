@@ -709,7 +709,11 @@ class GraphIndex:
         returns straight to `retrieve(graph=)`: applying the scale anywhere else would be silently
         thrown away the moment a simulation also edited an edge. Simulation edits change the igraph
         PPR runs on, not the directed code relations the path tools walk.
+
+        The scale is quantized here as `graph_for_scale` quantizes it, so one slider position
+        means the same graph whether or not the simulation also edited an edge.
         """
+        scale = round(scale, 2)
         if not edits:
             return self.graph_for_scale(scale)
         changed = {k: Edge(**vars(v)) for k, v in self.edges.items()}

@@ -708,6 +708,11 @@ def test_graph_with_edits_composes_with_the_scale(index: GraphIndex, tiny: Tiny)
     assert edited.degree(index.idx_of[tiny.sym_f]) == 0
     assert dict(index.neighbors(index.idx_of[tiny.a], edited))[index.idx_of[tiny.b]] == 0.5
     assert index.graph_with_edits([], 0.0) is index.graph_for_scale(0.0)
+    # And the scale is quantized on both paths, so one slider position is one graph whether or
+    # not the simulation also edited an edge (AR1 fix 2).
+    assert index.graph_with_edits([], 0.501) is index.graph_for_scale(0.5)
+    with_edit = index.graph_with_edits([EdgeEdit(tiny.a, tiny.b, 0.5)], 0.501)
+    assert with_edit.es["weight"] == index.graph_with_edits([EdgeEdit(tiny.a, tiny.b, 0.5)], 0.5).es["weight"]
 
 
 def test_community_labels_come_from_the_smallest_member_qualname(store, tiny: Tiny) -> None:
