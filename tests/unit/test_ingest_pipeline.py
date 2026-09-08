@@ -427,3 +427,59 @@ def test_history_depth_clones_one_commit_deeper_than_it_reads(git_index) -> None
     # extra commit puts that boundary outside the walk instead.
     _, _, depths = git_index
     assert depths == [DEFAULT_SETTINGS["code_history_depth"] + 1]
+
+
+def test_a_repo_source_still_links_its_prose_to_its_code(git_index) -> None:
+    # The README names `OrderService.place` in backticks and "the order service" in words. Both
+    # become REFERS_TO, at the two omegas the table gives -- a repo source is a code source and a
+    # prose source at once, and reading its history must not have cost it the prose half.
+    ctx, source_id, _ = git_index
+    symbols = {s["id"]: s["qualname"] for s in ctx.store.load_symbols()}
+    titles = {p["id"]: p["title"] for p in ctx.store.passages_for_source(source_id)}
+    found = {
+        (titles[r["passage_id"]], symbols[r["node_id"]], r["omega"], r["token"])
+        for r in ctx.store.load_refers_to()
+        if r["node_id"] in symbols and r["passage_id"] in titles
+    }
+    assert ("Code sample", "OrderService.place", 0.85, "OrderService.place") in found
+    assert ("Code sample", "OrderService", 0.6, "order service") in found
+
+
+def test_a_commit_passage_is_scanned_for_the_symbols_its_message_names(git_index) -> None:
+    # `_is_prose` counts a commit passage as prose, so "Total, invoice and log in place" is
+    # scanned like a README is. This is the one thing a commit passage buys over a bare node.
+    ctx, source_id, _ = git_index
+    commit_ids = {c["id"] for c in ctx.store.load_commits()}
+    commit_passages = {
+        p["id"] for p in ctx.store.passages_for_source(source_id) if p["title"].startswith("commit ")
+    }
+    assert len(commit_passages) == 3
+    assert commit_ids and all(
+        set(c["passage_ids"]) <= commit_passages for c in ctx.store.get_commits(sorted(commit_ids))
+    )
+
+
+def test_a_symbol_carries_the_commits_that_touched_it_all_the_way_to_an_answer(git_index) -> None:
+    """The whole chain on a real repository: git -> store -> GraphIndex -> the answer block.
+
+    WP3's three tests use `tests/fakes/code_fixture.write_commit_history`, a store-built stand-in
+    with seven-character shas. That is the cleaner test for the block's grammar, and it stays --
+    but nothing there would notice if a real 40-character sha reached the page whole, or if an
+    ISO date did. This is the test that would.
+    """
+    from hippo import ask
+
+    ctx, source_id, _ = git_index
+    trace = ask.search(ctx, "What does OrderService.place do?")
+    assert trace.used_code_seeds
+    assert trace.history, "a seeded symbol with MODIFIES edges must carry its commits"
+    row = trace.history[0]
+    # The trace keeps the real, whole sha -- it is what a reader would paste into `git show`.
+    assert len(row["sha"]) == 40
+    assert row["date"] == "2024-01-02"  # the day, not the full ISO timestamp
+    assert row["subject"] == "Total, invoice and log in place"
+
+    answer = ask.answer_from_trace(ctx, trace)
+    line = next(ln for ln in answer.context_block.splitlines() if ln.startswith("Commits: "))
+    assert line == f"Commits: {row['sha'][:7]} 2024-01-02 Total, invoice and log in place"
+    assert row["sha"] not in answer.context_block  # shortened for the page, whole in the trace

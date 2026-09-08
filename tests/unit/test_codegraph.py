@@ -515,12 +515,21 @@ def test_expected_json_matches_the_extractor(fixture_graph):
     }
 
 
-def test_expected_json_reserves_the_later_sections():
-    """WP2b fills these in; `update_expected.py` must not erase them. WP2i filled the other
-    two -- `definitions` and `refers_to` -- and `test_indexer.py` is what compares against them."""
-    for section in ("commits", "modifies"):
-        assert EXPECTED[section] == []
-    assert EXPECTED["definitions"] and EXPECTED["refers_to"]
+def test_expected_json_has_all_seven_sections_filled_in():
+    """
+    Every section of the spec now has content -- WP2b filled the last two.
+
+    `commits` and `modifies` are keyed by `(ordinal, subject)` and `(ordinal, path, qualname)`
+    and carry no sha of their own (S2.17): a sha hashes the author, the committer and both of
+    their timestamps, so a file keyed on one could not match on another machine. The `hunk` is
+    kept because it is what pins S2.9 -- the ranges are the file as it was at that commit.
+    """
+    for section in ("symbols", "data_objects", "edges", "definitions", "refers_to", "commits", "modifies"):
+        assert EXPECTED[section], f"{section} is empty"
+    assert {c["ordinal"] for c in EXPECTED["commits"]} == {0, 1, 2}
+    assert set(EXPECTED["commits"][0]) == {"ordinal", "subject", "message", "author", "date"}
+    assert set(EXPECTED["modifies"][0]) == {"ordinal", "path", "qualname", "hunk"}
+    assert set(EXPECTED["modifies"][0]["hunk"]) == {"file", "old_range", "new_range", "churn"}
 
 
 def test_expected_json_never_stores_node_ids():
