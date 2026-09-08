@@ -118,7 +118,11 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
    everything in a graph database (LadybugDB by default, or Neo4j; see `store/__init__.py` for the shape) and rebuilds the
    in-memory igraph plus the numpy embedding matrices (`GraphIndex.load`) whenever a
    `graph_version` counter changes. Edge weights are recomputed at load time with the
-   same `max(fact count, 1.0 if mention, synonym score)` rule. Two things the
+   same `max(fact count, 1.0 if mention, synonym score)` rule, plus a fourth term for
+   the code graph: `max(fact count, 1.0 if mention, entity–entity synonym score,
+   best code ω × code_structural_scale)` (`Edge.weight_at`, adaptation 15). On a memory
+   with no code source that fourth term is 0.0, which cannot raise a max, so the rule is
+   the reference's exactly. Two things the
    reference does not have: a `TUNED` edge weight that replaces that number, and a
    per-entity `boost` multiplier on seed weights. Both are 1:1 / absent unless you
    apply a changeset, so a fresh memory behaves like the reference. Every graph version bump (each index job, including every `hippo_remember` call, and every
