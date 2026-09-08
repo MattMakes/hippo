@@ -19,6 +19,7 @@ import json
 from typing import Any
 
 from .base import Neo4jBase, new_id, now_iso, with_defaults
+from .code import BOOSTABLE_LABELS, TUNED_LABELS, node_label
 
 
 class ChangesetQueries(Neo4jBase):
@@ -61,14 +62,28 @@ class ChangesetQueries(Neo4jBase):
     # ---------------------------------------------- the individual edits
 
     def set_node_boost(self, entity_id: str, boost: float) -> None:
-        self.run("MATCH (e:Entity {id: $id}) SET e.boost = $boost", id=entity_id, boost=float(boost))
+        """A boost on an entity, symbol or data object. The label comes from the id prefix (S2.2)."""
+        label = node_label(entity_id, BOOSTABLE_LABELS)
+        if label is None:
+            return  # the same nothing a MATCH that finds no node writes
+        self.run(f"MATCH (n:{label} {{id: $id}}) SET n.boost = $boost", id=entity_id, boost=float(boost))
 
     def set_edge_weight(self, a: str, b: str, weight: float) -> None:
-        """Pin the weight of the edge between two nodes (entities or passages). 0 removes the edge."""
+        """
+        Pin the weight of the edge between two nodes. 0 removes the edge.
+
+        Either end may be an entity, passage, symbol or data object; `label_of` (S2.2) turns the id
+        prefix into the concrete label, which replaces the `:Entity|Passage` disjunction this query
+        used to carry. That mattered because the same list is spelled `:Entity:Passage` on
+        LadybugDB, so the two backends drifted apart every time a kind was added (R1 gotcha 2).
+        """
         lo, hi = min(a, b), max(a, b)
+        label_a, label_b = node_label(lo, TUNED_LABELS), node_label(hi, TUNED_LABELS)
+        if label_a is None or label_b is None:
+            return
         self.run(
-            """
-            MATCH (a:Entity|Passage {id: $a}), (b:Entity|Passage {id: $b})
+            f"""
+            MATCH (a:{label_a} {{id: $a}}), (b:{label_b} {{id: $b}})
             MERGE (a)-[t:TUNED]->(b)
             SET t.weight = $weight, t.updated_at = $now
             """,

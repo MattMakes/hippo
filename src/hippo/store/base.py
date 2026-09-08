@@ -18,6 +18,19 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "synonymy_threshold": 0.8,  # cosine similarity above which two entity names are linked as synonyms
     "retrieval_top_k": 200,  # how many passages a retrieval returns (and we keep in traces)
     "qa_top_k": 5,  # how many passages the LLM reads when answering
+    # The code graph. Every one of these is inert on a memory with no code source indexed, and
+    # `code_structural_scale = 0` (plus zero seed weights) turns code back off on one that has.
+    "code_seed_weight": 1.0,  # anchor seed mass; 0 = ignore symbols named in the question
+    "code_structural_scale": 1.0,  # multiplier on every code-touching weight term
+    "code_theta": 0.5,  # minimum omega for the path tools and the answer block (never PPR)
+    "code_dense_seeds": 5,  # code passages similar to the question that also seed their symbol
+    "code_triples_chars": 1500,  # size cap of the Code graph block
+    "code_community_boost": 0.0,  # post-PPR bonus for passages in a seed's community
+    "code_select": True,  # the LLM keep/drop/expand pass, when code seeds fired
+    "code_expand_max": 10,  # neighbours fetched per "expand"
+    "code_history_depth": 200,  # first-parent commits read per repo source; 0 disables history
+    "code_git_timeout_s": 10,  # per-commit `git show` budget
+    "code_history_total_s": 120,  # whole-pass budget for reading history
 }
 
 # Type and allowed range of every setting: (type, lowest, highest). None means "no bound".
@@ -29,6 +42,19 @@ SETTING_RULES: dict[str, tuple[type, float | None, float | None]] = {
     "synonymy_threshold": (float, 0.0, 1.0),
     "retrieval_top_k": (int, 1, 5000),
     "qa_top_k": (int, 1, 50),
+    "code_seed_weight": (float, 0.0, 10.0),
+    # Capped at 3.0 so a code edge can at most *tie* three facts, never outrank them: that is what
+    # keeps "prose behaves as it does today" literally true rather than true-below-some-value.
+    "code_structural_scale": (float, 0.0, 3.0),
+    "code_theta": (float, 0.0, 1.0),
+    "code_dense_seeds": (int, 0, 20),
+    "code_triples_chars": (int, 0, 8000),
+    "code_community_boost": (float, 0.0, 1.0),
+    "code_select": (bool, None, None),
+    "code_expand_max": (int, 0, 20),
+    "code_history_depth": (int, 0, 2000),
+    "code_git_timeout_s": (int, 1, 120),
+    "code_history_total_s": (int, 10, 3600),
 }
 
 
@@ -73,6 +99,12 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT question_id IF NOT EXISTS FOR (n:Question) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT eval_run_id IF NOT EXISTS FOR (n:EvalRun) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT eval_result_id IF NOT EXISTS FOR (n:EvalResult) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT symbol_id IF NOT EXISTS FOR (n:Symbol) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT data_object_id IF NOT EXISTS FOR (n:DataObject) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT commit_id IF NOT EXISTS FOR (n:Commit) REQUIRE n.id IS UNIQUE",
+    "CREATE INDEX symbol_source IF NOT EXISTS FOR (n:Symbol) ON (n.source_id)",
+    "CREATE INDEX data_object_source IF NOT EXISTS FOR (n:DataObject) ON (n.source_id)",
+    "CREATE INDEX commit_source IF NOT EXISTS FOR (n:Commit) ON (n.source_id)",
     "CREATE CONSTRAINT changeset_id IF NOT EXISTS FOR (n:Changeset) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT settings_id IF NOT EXISTS FOR (n:Settings) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT role_id IF NOT EXISTS FOR (n:Role) REQUIRE n.id IS UNIQUE",
@@ -235,6 +267,10 @@ class Neo4jBase:
                    count { (:Passage) } AS passages,
                    count { (:Entity) } AS entities,
                    count { (:Fact) } AS facts,
+                   count { (:Symbol) } AS symbols,
+                   count { (:DataObject) } AS data_objects,
+                   count { ()-[:CODE_EDGE]->() } AS code_edges,
+                   count { (:Commit) } AS commits,
                    count { ()-[:SYNONYM]->() } AS synonym_edges,
                    count { ()-[:MENTIONS]->() } AS mention_edges,
                    count { (:QuestionSet) } AS question_sets,

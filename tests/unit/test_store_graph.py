@@ -19,7 +19,7 @@ def small_graph(store) -> str:
     store.add_passages(
         [
             {
-                "id": "p1",
+                "id": "passage-1",
                 "source_id": source_id,
                 "ordinal": 0,
                 "title": "One",
@@ -27,7 +27,7 @@ def small_graph(store) -> str:
                 "embedding": VEC,
             },
             {
-                "id": "p2",
+                "id": "passage-2",
                 "source_id": source_id,
                 "ordinal": 1,
                 "title": "Two",
@@ -38,35 +38,35 @@ def small_graph(store) -> str:
     )
     store.add_entities(
         [
-            {"id": "a", "name": "alpha", "embedding": VEC},
-            {"id": "b", "name": "beta", "embedding": VEC2},
-            {"id": "c", "name": "gamma", "embedding": VEC},
+            {"id": "entity-a", "name": "alpha", "embedding": VEC},
+            {"id": "entity-b", "name": "beta", "embedding": VEC2},
+            {"id": "entity-c", "name": "gamma", "embedding": VEC},
         ]
     )
     store.add_facts(
         [
             {
-                "id": "f1",
-                "subject": "a",
+                "id": "fact-1",
+                "subject": "entity-a",
                 "predicate": "rel",
-                "object": "b",
-                "subject_id": "a",
-                "object_id": "b",
+                "object": "entity-b",
+                "subject_id": "entity-a",
+                "object_id": "entity-b",
                 "embedding": VEC,
             },
             {
-                "id": "f-self",
-                "subject": "c",
+                "id": "fact-self",
+                "subject": "entity-c",
                 "predicate": "is",
-                "object": "c",
-                "subject_id": "c",
-                "object_id": "c",
+                "object": "entity-c",
+                "subject_id": "entity-c",
+                "object_id": "entity-c",
                 "embedding": VEC,
             },
         ]
     )
-    store.link_passage_entities([("p1", "a"), ("p1", "b"), ("p2", "a"), ("p2", "b"), ("p2", "c")])
-    store.link_passage_facts([("p1", "f1"), ("p2", "f1"), ("p2", "f-self")])
+    store.link_passage_entities([("passage-1", "entity-a"), ("passage-1", "entity-b"), ("passage-2", "entity-a"), ("passage-2", "entity-b"), ("passage-2", "entity-c")])
+    store.link_passage_facts([("passage-1", "fact-1"), ("passage-2", "fact-1"), ("passage-2", "fact-self")])
     return source_id
 
 
@@ -75,35 +75,35 @@ def small_graph(store) -> str:
 
 def test_load_entities_rows(store, small_graph: str) -> None:
     rows = {r["id"]: r for r in store.load_entities()}
-    created_at = rows["a"].pop("created_at")  # set on creation; the graph loader sorts by it
+    created_at = rows["entity-a"].pop("created_at")  # set on creation; the graph loader sorts by it
     assert created_at
-    assert rows["a"] == {"id": "a", "name": "alpha", "boost": 1.0, "passage_count": 2}
-    assert rows["c"]["passage_count"] == 1
+    assert rows["entity-a"] == {"id": "entity-a", "name": "alpha", "boost": 1.0, "passage_count": 2}
+    assert rows["entity-c"]["passage_count"] == 1
 
 
 def test_load_passages_rows(store, small_graph: str) -> None:
     rows = {r["id"]: r for r in store.load_passages()}
-    assert set(rows) == {"p1", "p2"}
-    assert rows["p1"]["title"] == "One" and rows["p1"]["ordinal"] == 0
-    assert list(rows["p1"]["embedding"]) == VEC
-    assert (rows["p1"]["source_id"], rows["p1"]["source_name"]) == (small_graph, "Src")
+    assert set(rows) == {"passage-1", "passage-2"}
+    assert rows["passage-1"]["title"] == "One" and rows["passage-1"]["ordinal"] == 0
+    assert list(rows["passage-1"]["embedding"]) == VEC
+    assert (rows["passage-1"]["source_id"], rows["passage-1"]["source_name"]) == (small_graph, "Src")
 
 
 def test_load_facts_rows(store, small_graph: str) -> None:
     rows = {r["id"]: r for r in store.load_facts()}
-    assert set(rows) == {"f1", "f-self"}
-    assert sorted(rows["f1"]["passage_ids"]) == ["p1", "p2"]
-    assert list(rows["f1"]["embedding"]) == VEC
-    assert (rows["f1"]["subject_id"], rows["f1"]["object_id"]) == ("a", "b")
+    assert set(rows) == {"fact-1", "fact-self"}
+    assert sorted(rows["fact-1"]["passage_ids"]) == ["passage-1", "passage-2"]
+    assert list(rows["fact-1"]["embedding"]) == VEC
+    assert (rows["fact-1"]["subject_id"], rows["fact-1"]["object_id"]) == ("entity-a", "entity-b")
 
 
 def test_a_fact_in_two_passages_counts_twice_and_self_loops_are_excluded(store, small_graph: str) -> None:
-    assert store.load_fact_edges() == [{"a": "a", "b": "b", "weight": 2}]
+    assert store.load_fact_edges() == [{"a": "entity-a", "b": "entity-b", "weight": 2}]
 
 
 def test_load_mentions_rows(store, small_graph: str) -> None:
     mentions = {(m["passage_id"], m["entity_id"]) for m in store.load_mentions()}
-    assert mentions == {("p1", "a"), ("p1", "b"), ("p2", "a"), ("p2", "b"), ("p2", "c")}
+    assert mentions == {("passage-1", "entity-a"), ("passage-1", "entity-b"), ("passage-2", "entity-a"), ("passage-2", "entity-b"), ("passage-2", "entity-c")}
 
 
 def test_load_synonyms_and_tuned_edges_start_empty(store, small_graph: str) -> None:
@@ -115,28 +115,28 @@ def test_load_synonyms_and_tuned_edges_start_empty(store, small_graph: str) -> N
 
 
 def test_set_node_boost_shows_up_in_load_entities(store, small_graph: str) -> None:
-    store.set_node_boost("a", 1.5)
+    store.set_node_boost("entity-a", 1.5)
     rows = {r["id"]: r for r in store.load_entities()}
-    assert rows["a"]["boost"] == 1.5
-    assert rows["b"]["boost"] == 1.0
-    assert store.get_entities(["a"])[0]["boost"] == 1.5
+    assert rows["entity-a"]["boost"] == 1.5
+    assert rows["entity-b"]["boost"] == 1.0
+    assert store.get_entities(["entity-a"])[0]["boost"] == 1.5
 
 
 def test_set_and_clear_edge_weight(store, small_graph: str) -> None:
-    store.set_edge_weight("b", "a", 3.0)
-    assert store.load_tuned_edges() == [{"a": "a", "b": "b", "weight": 3.0}]
-    store.set_edge_weight("a", "b", 0.0)  # same pair, either order: updated, not duplicated
-    assert store.load_tuned_edges() == [{"a": "a", "b": "b", "weight": 0.0}]
-    store.clear_edge_weight("b", "a")
+    store.set_edge_weight("entity-b", "entity-a", 3.0)
+    assert store.load_tuned_edges() == [{"a": "entity-a", "b": "entity-b", "weight": 3.0}]
+    store.set_edge_weight("entity-a", "entity-b", 0.0)  # same pair, either order: updated, not duplicated
+    assert store.load_tuned_edges() == [{"a": "entity-a", "b": "entity-b", "weight": 0.0}]
+    store.clear_edge_weight("entity-b", "entity-a")
     assert store.load_tuned_edges() == []
 
 
 def test_edge_weights_work_between_an_entity_and_a_passage(store, small_graph: str) -> None:
-    store.set_edge_weight("p1", "a", 0.5)
-    assert store.load_tuned_edges() == [{"a": "a", "b": "p1", "weight": 0.5}]
+    store.set_edge_weight("passage-1", "entity-a", 0.5)
+    assert store.load_tuned_edges() == [{"a": "entity-a", "b": "passage-1", "weight": 0.5}]
 
 
 def test_edge_weights_for_unknown_nodes_are_ignored(store, small_graph: str) -> None:
-    store.set_edge_weight("a", "nope", 2.0)
+    store.set_edge_weight("entity-a", "nope", 2.0)
     assert store.load_tuned_edges() == []
-    store.clear_edge_weight("a", "nope")  # must not raise
+    store.clear_edge_weight("entity-a", "nope")  # must not raise

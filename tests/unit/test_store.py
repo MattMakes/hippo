@@ -96,6 +96,10 @@ def test_stats_has_every_key_and_counts_what_we_create(store) -> None:
         "passages",
         "entities",
         "facts",
+        "symbols",
+        "data_objects",
+        "code_edges",
+        "commits",
         "synonym_edges",
         "mention_edges",
         "question_sets",
@@ -106,11 +110,11 @@ def test_stats_has_every_key_and_counts_what_we_create(store) -> None:
     }
     assert set(store.stats()) == keys
     source_id = store.create_source("text", "S")
-    add_passage(store, source_id, "p1")
-    add_entity(store, "e1")
-    add_entity(store, "e2")
-    store.link_passage_entities([("p1", "e1")])
-    store.add_synonyms([("e1", "e2", 0.9)])
+    add_passage(store, source_id, "passage-1")
+    add_entity(store, "entity-1")
+    add_entity(store, "entity-2")
+    store.link_passage_entities([("passage-1", "entity-1")])
+    store.add_synonyms([("entity-1", "entity-2", 0.9)])
     stats = store.stats()
     assert (stats["sources"], stats["passages"], stats["entities"]) == (1, 1, 2)
     assert (stats["mention_edges"], stats["synonym_edges"]) == (1, 1)
@@ -183,20 +187,20 @@ def test_delete_source_removes_its_passages_and_orphaned_entities_and_facts(stor
     keep, drop = store.create_source("text", "Keep"), store.create_source("text", "Drop")
     add_passage(store, keep, "p-keep")
     add_passage(store, drop, "p-drop")
-    add_entity(store, "shared")
-    add_entity(store, "only-drop")
-    add_fact(store, "f-shared", "shared", "shared", "self")
-    add_fact(store, "f-drop", "shared", "only-drop")
-    store.link_passage_entities([("p-keep", "shared"), ("p-drop", "shared"), ("p-drop", "only-drop")])
+    add_entity(store, "entity-shared")
+    add_entity(store, "entity-only-drop")
+    add_fact(store, "f-shared", "entity-shared", "entity-shared", "self")
+    add_fact(store, "f-drop", "entity-shared", "entity-only-drop")
+    store.link_passage_entities([("p-keep", "entity-shared"), ("p-drop", "entity-shared"), ("p-drop", "entity-only-drop")])
     store.link_passage_facts([("p-keep", "f-shared"), ("p-drop", "f-drop")])
-    store.add_synonyms([("shared", "only-drop", 0.9)])
-    store.set_edge_weight("shared", "only-drop", 2.0)
+    store.add_synonyms([("entity-shared", "entity-only-drop", 0.9)])
+    store.set_edge_weight("entity-shared", "entity-only-drop", 2.0)
 
     store.delete_source(drop)
 
     assert store.get_source(drop) is None
     assert store.get_passages(["p-drop"]) == []
-    assert store.existing_entity_ids(["shared", "only-drop"]) == {"shared"}
+    assert store.existing_entity_ids(["entity-shared", "entity-only-drop"]) == {"entity-shared"}
     assert store.existing_fact_ids(["f-shared", "f-drop"]) == {"f-shared"}
     assert store.load_synonyms() == []
     assert store.load_tuned_edges() == []
@@ -333,24 +337,24 @@ def test_links_connect_passages_to_entities_and_facts(store) -> None:
 
 
 def test_synonyms_are_stored_once_per_pair_with_the_best_score(store) -> None:
-    add_entity(store, "e-b")
-    add_entity(store, "e-a")
-    store.add_synonyms([("e-b", "e-a", 0.8)])
-    store.add_synonyms([("e-a", "e-b", 0.95)])
-    store.add_synonyms([("e-b", "e-a", 0.5)])
-    store.add_synonyms([("e-a", "e-a", 1.0)])  # self pairs are ignored
+    add_entity(store, "entity-b")
+    add_entity(store, "entity-a")
+    store.add_synonyms([("entity-b", "entity-a", 0.8)])
+    store.add_synonyms([("entity-a", "entity-b", 0.95)])
+    store.add_synonyms([("entity-b", "entity-a", 0.5)])
+    store.add_synonyms([("entity-a", "entity-a", 1.0)])  # self pairs are ignored
 
     (row,) = store.load_synonyms()
-    assert (row["a"], row["b"]) == ("e-a", "e-b")  # canonical: smaller id first
+    assert (row["a"], row["b"]) == ("entity-a", "entity-b")  # canonical: smaller id first
     assert row["score"] == pytest.approx(0.95)
     assert row["manual"] is False
 
 
 def test_manual_synonyms_keep_their_flag(store) -> None:
-    add_entity(store, "e1")
-    add_entity(store, "e2")
-    store.add_synonyms([("e1", "e2", 0.6)], manual=True)
-    store.add_synonyms([("e1", "e2", 0.7)])
+    add_entity(store, "entity-1")
+    add_entity(store, "entity-2")
+    store.add_synonyms([("entity-1", "entity-2", 0.6)], manual=True)
+    store.add_synonyms([("entity-1", "entity-2", 0.7)])
     (row,) = store.load_synonyms()
     assert row["manual"] is True
     assert row["score"] == pytest.approx(0.7)
