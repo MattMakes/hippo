@@ -244,7 +244,7 @@ error: 'log' could mean any of: pyapp.orders.OrderService.log, pyapp.store.Base.
 
 Over HTTP the same four live under `/api/code` (plus `/api/code/symbols?q=` to search names), where an unknown name is a 404, an ambiguous one a 409 carrying `candidates`, and a blank argument a 400. Every answer also carries `lines`: the same thing already rendered for a person to read. `docs/MCP.md` has a request and response for each.
 
-**And the answer itself says more now.** `hippo_search` and `hippo_ask` gained `seed_symbols`, `paths`, `tests`, `history` and `code_graph` — always present, empty on a prose question, so a client never has to ask whether the memory holds code.
+**And the answer itself says more now.** `hippo_search`, `hippo_ask` and the JSON `/api/search` and `/api/ask` all gained the same five keys — `seed_symbols`, `paths`, `tests`, `history` and `code_graph` — from one shared helper, so a client moving between them sees the same shape. They are always present, so nothing has to branch on whether the memory holds code, and empty unless the question named some.
 
 ### Git history
 
@@ -271,10 +271,11 @@ One thing to plan for: the depth is fixed when the repository is **cloned**, not
 
 ## Evaluate and dig in
 
-* **Question sets.** On a source page click *Make sample questions*: hippo writes single-passage questions and two-passage ("multi-hop") questions whose answers need facts from both. Or write your own on the Evals page, one `question | answer` per line.
+* **Question sets.** On a source page click *Make sample questions*: hippo writes single-passage questions and two-passage ("multi-hop") questions whose answers need facts from both. For a repository it also writes **code** questions ("What does X call?") and **commit** questions ("What changed in the commit ...?"), both derived from the graph rather than from the model, so their expected answers are facts and not guesses. Or write your own on the Evals page, one `question | answer` per line.
 * **Runs.** *Run this set* asks every question, has the LLM judge the answer against the expected one (correct / partially correct / incorrect), and computes exact match, F1 and recall of the gold passages. Runs are history: they are never modified, so you can compare before and after a change.
 * **Analyze.** Open any result. You see what the search did, the graph around the question, and why each passage ranked where it did.
 * **Simulate.** In the *Tweak & simulate* panel change a setting, force a fact in or out, boost an entity, or change an edge weight, and re-run the search on the spot. A diff table shows how passage ranks moved. Nothing is saved.
+* **Was the code graph worth it?** A run can be repeated with code retrieval switched off — the four settings from [the table above](#settings-you-can-change-on-the-settings-page) at zero — and the two summaries compared. Two extra numbers come back on a code run: how often the question actually seeded a symbol, and, for commit questions, how much of what a commit really changed the search found.
 * **Changesets.** If a simulation helped, save it as a changeset and apply it from the Changesets page. Setting changes, entity boosts and edge weights are applied to the real graph; fact in/out toggles are per-question and are not saved.
 
 ## Use it from Claude / Cursor (MCP)

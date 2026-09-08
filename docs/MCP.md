@@ -162,8 +162,11 @@ the client wants the raw material and will reason over it itself.
 ```
 
 The last five keys are the code graph's, and they are **always present** so a client never has to
-branch on whether the memory holds code. On a prose question they are all empty, as above. When the
-question names something in indexed code they fill in:
+branch on whether the memory holds code. On a memory with no code in it they are all empty, as
+above. One caveat if your memory mixes prose and code: `paths`, `tests`, `history` and `code_graph`
+stay empty unless the question actually *named* code, but `seed_symbols` can still carry entries —
+a code passage that merely scored well on similarity is recorded there even though it changes
+nothing else. Check `how` to tell them apart. When the question does name code, all five fill in:
 
 ```json
 {
@@ -186,8 +189,9 @@ question names something in indexed code they fill in:
 
 Two things to know about those rows. `how` says *why* a symbol was seeded — `identifier`,
 `stack_trace`, `exception`, `fenced_code` or `diff` when the question said so, or `dense` when the
-symbol came from a passage that merely scored well; only the first five mean the question actually
-named code. And `seed_symbols[].name` is the **module-relative** qualname (`OrderService.place`),
+symbol came from a passage that merely scored well. **Only the first five mean the question named
+code**, and only they cause the other four keys to fill in; a `dense` row on its own is a note in
+the trace and nothing more. And `seed_symbols[].name` is the **module-relative** qualname (`OrderService.place`),
 while `paths[].a_name` and everything in `code_graph` use the fully-qualified display name
 (`pyapp.orders.OrderService.place`). The path tools below accept either form.
 
@@ -209,7 +213,8 @@ Search, then let the local LLM read the top passages and answer.
 ```
 
 It carries the same five code-graph keys as `hippo_search`, in the same shapes and under the same
-rule: always present, empty unless the question named something in indexed code. Here `code_graph`
+rule, `seed_symbols` included: always present, and empty unless the question named something in
+indexed code — except for the dense-seed rows noted above. Here `code_graph`
 is exactly the block the model was shown before it answered, so it is the evidence behind the
 answer rather than a separate lookup. `sources` lists only the passages the model actually read;
 the code block is never one of them.

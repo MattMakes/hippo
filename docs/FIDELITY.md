@@ -243,7 +243,8 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
       one more pair titled `Code graph`, inside `answer_question`. It never enters
       `Answer.passage_ids`. Its body is a fixed grammar — `a -[KIND ω provenance]-> b`, then
       `Tests:`, `Commits:`, `Subsystems:` — under a one-sentence legend, cut at
-      `code_triples_chars` on a line boundary.
+      `code_triples_chars` on a line boundary, with the most confident relations first so the cut
+      drops the weakest evidence rather than an arbitrary tail.
     * **OpenIE never reads code.** The model sees a symbol's docstring or doc-comment when it is at
       least 80 characters, README and markdown, and commit messages. Never a function body, never
       DDL. Structure comes from tree-sitter and sqlglot.

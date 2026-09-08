@@ -310,7 +310,14 @@ src/hippo/hipporag/paths.py     deterministic walks over the code graph. No mode
                  shortest_code_path(index, a, b, *, theta, max_hops=MAX_HOPS) -- over code_out, skipping
                      NOT_A_STEP ("DEFINED_IN", "PRECEDES", "REFERS_TO", "MODIFIES") and any edge below theta,
                      with an undirected second pass when the directed one finds nothing
-                 direct_edges, code_paths_for, expand_from (EXPAND_KINDS at EXPAND_OMEGA), tests_for, history,
+                 direct_edges(index, v, *, theta) -- one hop BOTH ways, STRONGEST FIRST: omega descending, and at
+                     equal omega incoming before outgoing. The order is load-bearing, not cosmetic: `code_triples_chars`
+                     cuts this list, so the old "out first, then in" meant a symbol with more outgoing calls than the
+                     budget fits never showed a single caller, and "where is X called" got a block that could not
+                     answer it however confident the calling edge was (QA1 defect 1).
+                 code_paths_for -- pairwise paths between seeds first, then each seed's direct edges round-robin, so
+                     one hub seed cannot spend the whole budget; deduped on display names
+                 expand_from (EXPAND_KINDS at EXPAND_OMEGA), tests_for, history,
                      blast_radius -> BlastRadius(vertex, levels, truncated) (walks code_in: who depends on this),
                      exception_path
                  triple_rows / test_rows / history_rows -> the JSON-safe dicts that live on the Trace
@@ -339,6 +346,12 @@ src/hippo/hipporag/retriever.py   the code half of a search
                      entity cut. A dense seed is worth code_seed_weight x passage_node_weight x its similarity.
 src/hippo/ask.py                 code_block(graph, trace) renders the block; answer_from_trace passes it as
                                  context_block=, gated on trace.used_code_seeds
+                                 code_fields(trace, block) -> the five keys {seed_symbols, paths, tests, history,
+                                 code_graph}. ONE helper, spread by the MCP search_tool/ask_tool AND by HTTP
+                                 /api/search and /api/ask, so the surfaces cannot drift. Always present. On a prose
+                                 question `paths`/`tests`/`history`/`code_graph` are empty (the `used_code_seeds`
+                                 gate), but `seed_symbols` MAY NOT BE: a dense seed is recorded there though it
+                                 never opens the gate. Read `how` to tell a lexical anchor from a dense one.
 src/hippo/hipporag/answerer.py   Answer.context_block (defaulted, so Answer(**old_row) still loads);
                                  answer_question(..., context_block="") prepends it INSIDE as the pair
                                  (CODE_GRAPH_TITLE, block), so it never enters Answer.passage_ids and rag_qa is
@@ -359,7 +372,8 @@ metrics.py         normalize_answer(text) -> str (lowercase, strip punctuation/a
                    gold_rank(gold_ids, ranked_ids) -> int | None   # best rank of any gold passage, 1-based
 judge.py           Verdict(verdict: 'correct'|'partially_correct'|'incorrect', score: 1.0|0.5|0.0, reason: str)
                    judge(ollama, question, expected, actual) -> Verdict   # prompts.judge_messages; on OllamaError -> incorrect with reason
-question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_single=10, max_multihop=5, name=None, set_id=None, access=None) -> set_id
+question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_single=10, max_multihop=5, max_code=5,
+                     max_commits=5, name=None, set_id=None, access=None) -> set_id
                    - access: the caller's slice; passages and entity pairs come from ctx.graph_for(access)
                    - creates the QuestionSet first (origin 'generated', status 'generating'), fills it, sets status 'ready'
                      (update_question_set for stage/progress; on failure status 'failed' + error)
@@ -368,6 +382,14 @@ question_maker.py  generate_questions(ctx, source_id, *, per_passage=1, max_sing
                      edges/neighbors, Edge.mention) preferring entities mentioned by exactly 2-3 passages; prompts.multihop_gen_messages;
                      skip empty questions; kind 'multihop'; gold_passage_ids = both passages
                    - each question row: {text, expected_answer, gold_passage_ids, kind, notes}
+                   - code_questions(index, source_id, limit=5): "What does <display> call?", expected
+                     "<display> calls <callee>."; kind 'code'. Qualifies: a function or method with a doc >= 80 chars
+                     and an INVOKES out-edge at omega >= 0.5. Gold = its own passage plus the strongest callee's.
+                     The question names the symbol, so find_anchors seeds from it and recall["code_seeded"] reads 1.0.
+                   - commit_questions(index, source_id, limit=5): 'What changed in the commit "<subject>"?', expected
+                     'The commit "<subject>" changed <names>.'; kind 'commit'. A commit MODIFYING >= 2 symbols,
+                     newest first. Gold = the commit passage FIRST, then one entry per modified symbol.
+                   - both are pure and deterministic: they read the GraphIndex and never call the model.
                    start_generation_job(ctx, source_id, **kw) -> set_id   # creates the set, then Jobs key "generate:<set_id>"
 runner.py          start_run(ctx, set_id, name=None, settings=None, access=None) -> run_id   # Jobs key "run:<run_id>"; the run searches and
                                                                              # answers on the starter's slice of the memory (hippo/access.py)
@@ -375,6 +397,14 @@ runner.py          start_run(ctx, set_id, name=None, settings=None, access=None)
                                                                              # dict that store.add_result wants (answer, thought, verdict,
                                                                              # judge_score, judge_reason, exact_match, f1, recall, gold_rank, used_dpr_fallback,
                                                                              # latency_ms, trace(dict), error)
+                   BASELINE_SETTINGS  # the four that switch code retrieval off: code_seed_weight 0, code_dense_seeds 0,
+                                      # code_structural_scale 0, code_select False -- what the fidelity claim rests on
+                   compare_with_baseline(ctx, set_id) -> (with_code, baseline)   # runs the set twice, returns both
+                                      # summaries; STORES NOTHING, so it is a measurement, not history
+                   recall["code_seeded"]  # on EVERY question: 1.0 when a *lexical* anchor seeded a symbol. It describes
+                                      # the trace, not the ranking -- not a quality metric
+                   recall["path_fidelity"]  # commit questions only, k=5: the share of the modified symbols' passages
+                                      # that came back
                    summarize(results: list[dict]) -> dict   # accuracy (mean judge_score), correct/partial/incorrect counts, exact_match,
                                                             # f1, recall@k means, mean_gold_rank, gold_in_top5 rate, dpr_fallbacks, mean_latency_ms
                    the run node: progress_done per question; status running -> done | failed; summary_json at the end; settings_json = the
