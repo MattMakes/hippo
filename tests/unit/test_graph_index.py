@@ -29,6 +29,7 @@ from hippo.hipporag.graph_index import (
     COMMIT,
     DATA,
     ENTITY,
+    MAX_SCALED_GRAPHS,
     PASSAGE,
     SYMBOL,
     Edge,
@@ -580,6 +581,21 @@ def test_graph_for_scale_returns_the_default_graph_and_memoises_the_rest(index: 
     assert index.graph_for_scale(0.5) is scaled  # memoised per scale
 
 
+def test_the_per_scale_memo_is_quantized_and_bounded(index: GraphIndex) -> None:
+    # AR1 fix 2: `code_structural_scale` is a user-supplied float and the settings form steps it
+    # by 0.01, so an unbounded memo keyed by the raw float is one full igraph per slider position.
+    assert index.graph_for_scale(0.5) is index.graph_for_scale(0.501)
+    assert index.graph_for_scale(0.999) is index.graph  # rounds to the default, no rebuild
+
+    for step in range(0, 90):
+        index.graph_for_scale(step / 100)
+    assert len(index._scaled) <= MAX_SCALED_GRAPHS
+
+    kept = index.graph_for_scale(0.89)  # the most recent survives, the oldest was evicted
+    assert index.graph_for_scale(0.89) is kept
+    assert 0.0 not in index._scaled
+
+
 def test_specificity_is_mention_count_for_entities_and_in_degree_plus_one_for_code(
     index: GraphIndex, tiny: Tiny
 ) -> None:
@@ -653,6 +669,30 @@ def test_name_index_maps_names_qualnames_and_split_tokens(index: GraphIndex, tin
     assert "nothing" not in index.name_index
 
 
+def test_path_index_maps_a_basename_to_the_symbols_defined_in_that_file(
+    index: GraphIndex, tiny: Tiny
+) -> None:
+    # AR1 fix 5: keyed by the *basename*, because a stack frame names an absolute path and the
+    # index holds a repo-relative one - `anchors._same_path` matches either way round on a suffix,
+    # so this is the superset that scan produced and `_same_path` still decides.
+    assert index.path_index["orders.py"] == [tiny.sym_f, tiny.sym_g]
+    assert "pyapp/orders.py" not in index.path_index  # the whole path is not a key
+    assert "nothing.py" not in index.path_index
+    # Data objects and commits have no file of their own, so only symbols are in it.
+    assert all(
+        index.node_kind[index.idx_of[nid]] == SYMBOL for ids in index.path_index.values() for nid in ids
+    )
+
+
+def test_a_scoped_index_shares_the_path_index_and_filters_it_through_idx_of(
+    index: GraphIndex, tiny: Tiny
+) -> None:
+    scoped = index.scoped(frozenset())  # nothing visible at all
+    assert scoped.path_index is index.path_index  # shared, exactly like name_index
+    assert scoped.code_nodes == []
+    assert all(nid not in scoped.idx_of for nid in scoped.path_index["orders.py"])
+
+
 def test_graph_with_edits_copies_the_code_fields(index: GraphIndex, tiny: Tiny) -> None:
     # It rebuilds every Edge with `Edge(**vars(v))`, so this is free - but only while omega and
     # code_kinds are real fields; the test is what pins that.
@@ -668,6 +708,11 @@ def test_graph_with_edits_composes_with_the_scale(index: GraphIndex, tiny: Tiny)
     assert edited.degree(index.idx_of[tiny.sym_f]) == 0
     assert dict(index.neighbors(index.idx_of[tiny.a], edited))[index.idx_of[tiny.b]] == 0.5
     assert index.graph_with_edits([], 0.0) is index.graph_for_scale(0.0)
+    # And the scale is quantized on both paths, so one slider position is one graph whether or
+    # not the simulation also edited an edge (AR1 fix 2).
+    assert index.graph_with_edits([], 0.501) is index.graph_for_scale(0.5)
+    with_edit = index.graph_with_edits([EdgeEdit(tiny.a, tiny.b, 0.5)], 0.501)
+    assert with_edit.es["weight"] == index.graph_with_edits([EdgeEdit(tiny.a, tiny.b, 0.5)], 0.5).es["weight"]
 
 
 def test_community_labels_come_from_the_smallest_member_qualname(store, tiny: Tiny) -> None:

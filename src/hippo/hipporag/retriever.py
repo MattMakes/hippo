@@ -643,14 +643,20 @@ class Retriever:
 
     def _select(self, trace: Trace, select_fn: SelectFn, question: str, settings: dict[str, Any]) -> None:
         """
-        Keep / drop / expand over the passages the model is about to read (S2.14).
+        Keep / drop / expand over the passages around the ones the model is about to read (S2.14).
+
+        The window is deliberately *wider* than the `qa_top_k` slice `ask.py` answers from. Judging
+        exactly that slice would make a "drop" inert: there would be nothing outside the window to
+        take the dropped passage's place, so the prompt and the citation list would be the same
+        list in a different order (AR1 fix 1).
 
         Dropped passages are ranked *below* the kept ones, never removed - a wrong "drop" should
         cost a position, not erase evidence. Expanded neighbours are appended at score 0.0 with
         `via_expand=True` and are excluded from the `qa_top_k` slice outright: the slice *is* the
         citation list, so "counted only if cited" would be circular.
         """
-        window_size = int(settings.get("qa_top_k", 5))
+        qa_top_k = int(settings.get("qa_top_k", 5))
+        window_size = max(qa_top_k * 2, qa_top_k + 5)
         window, rest = trace.passages[:window_size], trace.passages[window_size:]
         known = {p.passage_id for p in window}
         decided: dict[str, Any] = {"keep": [], "drop": [], "expand": [], "raw": "", "error": ""}
@@ -668,7 +674,9 @@ class Retriever:
         kept = [p for p in window if p.passage_id not in dropped]
         demoted = [p for p in window if p.passage_id in dropped]
         expanded = self._expand(trace, decided["expand"], limit=int(settings.get("code_expand_max", 10)))
-        trace.passages = kept + demoted + rest + expanded
+        # `rest` before `demoted`: a passage the model judged irrelevant sinks below the passages
+        # it never saw, which is what lets one of them into the `qa_top_k` slice in its place.
+        trace.passages = kept + rest + demoted + expanded
         for rank, passage in enumerate(trace.passages, start=1):
             passage.rank = rank
         trace.select = decided
