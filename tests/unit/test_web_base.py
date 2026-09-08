@@ -88,6 +88,34 @@ def test_settings_page_lists_every_setting_with_help(client):
         assert key in response.text
 
 
+def test_number_inputs_take_their_bounds_from_setting_rules(client):
+    # The template used to hard-code min="0" max="1" on every non-integer input, which made every
+    # setting with a wider range unsaveable from the browser - passage_node_weight included.
+    page = client.get("/settings").text
+    for key, low, high, step in [
+        ("code_seed_weight", 0.0, 10.0, 0.01),
+        ("passage_node_weight", 0.0, 10.0, 0.01),
+        ("code_structural_scale", 0.0, 3.0, 0.01),
+        ("linking_top_k", 0, 100, 1),
+        ("code_history_depth", 0, 2000, 1),
+    ]:
+        field = page.split(f'id="s-{key}"', 1)[1].split(">", 1)[0]
+        assert f'min="{low}"' in field and f'max="{high}"' in field, (key, field)
+        assert f'step="{step}"' in field, (key, field)
+
+
+def test_a_float_above_one_saves_from_the_browser(client, ctx):
+    response = client.post("/settings", data={"code_seed_weight": "2"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert ctx.store.get_settings()["code_seed_weight"] == 2.0
+
+
+def test_an_out_of_range_setting_is_still_refused(client):
+    response = client.post("/settings", data={"code_structural_scale": "9"}, follow_redirects=False)
+    assert response.status_code == 400
+    assert "between 0.0 and 3.0" in response.text
+
+
 def test_saving_settings_changes_what_search_uses(client, ctx):
     response = client.post(
         "/settings",

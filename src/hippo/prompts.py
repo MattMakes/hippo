@@ -383,7 +383,7 @@ CODE_GRAPH_HEADER = (
 CODE_SELECT_SYSTEM = (
     "You are helping a code search tool decide what an engineer should read. You are given a "
     "question and a numbered list of passages, each with an id, a title and the first lines of its "
-    "text. Return JSON with three lists of passage ids: \"keep\" for the passages that help answer "
+    'text. Return JSON with three lists of passage ids: "keep" for the passages that help answer '
     'the question, "drop" for the ones that do not, and "expand" for a passage whose immediate '
     "callees or subclasses would probably help too. Use only ids from the list. When in doubt, keep."
 )

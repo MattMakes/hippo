@@ -18,6 +18,17 @@ The reference calls this `HippoRAG.retrieve()`. In plain words:
 If the LLM keeps no facts at all, we fall back to plain embedding search
 ("dense passage retrieval"), exactly like the reference.
 
+**One addition the reference has no counterpart for: code.** When the question
+*names* something in the code graph - an identifier, a stack frame, a pasted
+snippet, a diff - those symbols seed PPR too, between step 2 and the fallback
+decision, so a bare traceback still retrieves even though no fact survived the
+filter. Symbol seeds have their own budget rather than competing for
+`linking_top_k`'s entity slots, and only a *lexical* anchor counts as "the
+question named code": that flag (`Trace.used_code_seeds`) is the single gate on
+everything else code adds - the optional keep/drop/expand pass, the path block
+the answerer reads, and the `paths` timing key. On a memory with no code
+indexed, and on a prose question over one that has, none of it runs.
+
 Every step is recorded in a `Trace`, which is what the Analyze page shows
 and what simulations replay.
 """
@@ -646,9 +657,7 @@ class Retriever:
         try:
             result = select_fn(question, list(window))
             picked = lambda key: [pid for pid in getattr(result, key, []) or [] if pid in known]  # noqa: E731
-            decided.update(
-                keep=picked("keep"), drop=picked("drop"), expand=picked("expand"), raw=result.raw
-            )
+            decided.update(keep=picked("keep"), drop=picked("drop"), expand=picked("expand"), raw=result.raw)
         except Exception as exc:  # a bad reply must cost a rerank, not an answer
             log.warning("The code select pass failed; keeping every passage: %s", exc)
             decided["error"] = str(exc)
@@ -658,9 +667,7 @@ class Retriever:
         dropped = set(decided["drop"])
         kept = [p for p in window if p.passage_id not in dropped]
         demoted = [p for p in window if p.passage_id in dropped]
-        expanded = self._expand(
-            trace, decided["expand"], limit=int(settings.get("code_expand_max", 10))
-        )
+        expanded = self._expand(trace, decided["expand"], limit=int(settings.get("code_expand_max", 10)))
         trace.passages = kept + demoted + rest + expanded
         for rank, passage in enumerate(trace.passages, start=1):
             passage.rank = rank

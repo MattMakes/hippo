@@ -150,7 +150,7 @@ async def settings_submit(request: Request):
             nav="settings",
             settings=ctx.store.get_settings(),
             help=SETTING_HELP,
-        rules=SETTING_RULES,
+            rules=SETTING_RULES,
             saved=False,
             error=str(exc),
             status=system_status(ctx, fresh=True),
