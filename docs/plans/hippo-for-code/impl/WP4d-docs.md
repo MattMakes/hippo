@@ -21,6 +21,20 @@ Also `research/S0-spikes.md` spike 3 for two limitations to state: a pandas-size
 exceeds `MAX_CHUNKS = 20_000` where its line windows fit before, and vector reload cost at the ceiling
 (~117 MiB) on every graph-version bump.
 
+## Corrections to the plan's own wording that the implementers found (write the TRUE sentence)
+
+- **Dense-seed consequence (Retrieval rule, line 118).** The plan says a prose question over a mixed
+  corpus "behaves exactly as today unless a code passage out-ranks every prose passage on dense
+  similarity". That is only true at `code_dense_seeds = 1`. The shipped mechanism is Ruling 1b as written
+  (a dense seed is admitted when its passage is in the OVERALL top `code_dense_seeds` by `dpr_scores`),
+  so the true sentence is: at defaults a prose question over a mixed corpus is unchanged unless a code
+  passage is among the overall top `code_dense_seeds` dense hits; `code_dense_seeds = 1` gives the
+  original condition; code passages remain ordinary passages and can rank on DPR merit alone. The real
+  fidelity guarantee is the inert-settings one (the four settings at 0/0/False/0 rank a mixed corpus
+  identically to the same corpus indexed with no code graph at all — WP3 tests this literally).
+- **FIDELITY.md `:120-121`** (the `max(fact count, mention, synonym score)` rule) needs its fourth term
+  `ω × code_structural_scale`; WP1 left it for you.
+
 ## What the previous workers built (read their code — the code is the truth, the plan is the intent)
 
 <!-- ORCHESTRATOR FILLS FROM THE WP1-WP3 LEDGER SUMMARIES; WP4a/b/c arrive as they land -->
