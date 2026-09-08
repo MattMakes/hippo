@@ -180,6 +180,26 @@ def test_find_synonyms_skips_tiny_phrases_and_itself(store) -> None:
     assert [(a, b) for a, b, _ in pairs] == [(ids[1], ids[0])]
 
 
+def test_the_top_neighbours_of_a_row_are_the_ones_a_full_sort_would_pick() -> None:
+    """
+    AR1 fix 9. `find_synonyms` sorted the entire key row per new id to take 100 of it; D7 put code
+    ids on both sides, so a 20k-symbol repository sorted 20k rows of 20k. `argpartition` is linear
+    and only the partition is sorted - and it must pick exactly what the full sort picked.
+    """
+    from hippo.hipporag.indexer import SYNONYM_MAX_NEIGHBOURS, _top_neighbours
+
+    rng = np.random.default_rng(7)
+    row = (rng.permutation(SYNONYM_MAX_NEIGHBOURS * 3) / 100).astype(np.float32)  # all distinct
+    assert list(_top_neighbours(row)) == list(np.argsort(-row, kind="stable")[:SYNONYM_MAX_NEIGHBOURS])
+
+    short = np.asarray([0.1, 0.9, 0.5], dtype=np.float32)  # shorter than the cut: keep it all
+    assert list(_top_neighbours(short)) == [1, 2, 0]
+    assert list(_top_neighbours(np.zeros(0, dtype=np.float32))) == []
+    # Two symbols named `place` in two classes embed identically, so ties are real here. They
+    # break by key index, which the old full sort (numpy's unstable quicksort) did not promise.
+    assert list(_top_neighbours(np.asarray([0.5, 0.9, 0.5, 0.9], dtype=np.float32))) == [1, 3, 0, 2]
+
+
 def test_find_synonyms_with_nothing_new_or_nothing_stored(store) -> None:
     assert find_synonyms(store, [], np.zeros((0, DIM), dtype=np.float32), {}, threshold=0.5) == []
     vectors = np.asarray([embed_text("boulder")], dtype=np.float32)

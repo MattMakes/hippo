@@ -435,13 +435,27 @@ def find_synonyms(
             self_index = key_index.get(eid)
             if self_index is not None:
                 row[self_index] = -1.0  # never link an entity to itself
-            top = np.argsort(-row)[:SYNONYM_MAX_NEIGHBOURS]
-            for j in top:
+            for j in _top_neighbours(row):
                 score = float(row[j])
                 if score < threshold:
                     break
                 pairs.append((eid, all_ids[j], score))
     return pairs
+
+
+def _top_neighbours(row: np.ndarray) -> np.ndarray:
+    """
+    The `SYNONYM_MAX_NEIGHBOURS` highest scores of one similarity row, best first.
+
+    `np.argsort(-row)` sorted the *whole* key row to take 100 of it, once per new id. D7 put code
+    ids on both sides of this search, so a repository contributing 20k symbols against a key matrix
+    of the same order sorted 20k rows of 20k (AR1 fix 9). `argpartition` is linear; only the
+    partition is sorted. Ties are broken by key index, so the order is fully determined - which
+    the full sort, at numpy's default unstable `quicksort`, was not.
+    """
+    count = min(SYNONYM_MAX_NEIGHBOURS, row.size)
+    part = np.argpartition(-row, count - 1)[:count] if row.size > count else np.arange(row.size)
+    return part[np.lexsort((part, -row[part]))]
 
 
 # ------------------------------------------------------------- the code graph
