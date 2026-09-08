@@ -4,10 +4,37 @@ Read `impl/00-impl-context.md` first. Worktree `.worktrees/wp3`, branch `wp/wp3`
 Neo4j test container: name `hippo-neo4j-wp3`, port **17695**.
 
 This is the WP with the most judgment in it: it is where the plan's fidelity guarantees are either kept
-or silently broken, and gotchas 3 and 4 in the rulebook both live here. `code-graph` contains WP1
-(store + `GraphIndex` with code vertices, `graph_for_scale(scale)`, all eleven `code_*` settings declared),
-WP2 (extractors, fixture) and WP2i (indexing writes the graph; the `code_index` fixture yields an indexed
-fixture on all three stores). WP2b (git history) is being built in parallel — see "History" below.
+or silently broken, and gotchas 3 and 4 in the rulebook both live here.
+
+## Two phases — read this first
+
+You start EARLY, to shorten the critical path. `code-graph` contains WP1 (store + `GraphIndex` with code
+vertices, `graph_for_scale(scale)`, all eleven `code_*` settings declared) but NOT yet WP2 (extractors,
+the fixture tree) or WP2i (indexing writes the graph; the `code_index` fixture). Those are being built in
+parallel and will merge while you work.
+
+**Phase 1 (now):** everything in Scope below that does not need an indexed fixture — `anchors.py`,
+`paths.py`, the retriever, answer serialisation, `simulate.py`, the settings template — tested against
+indexes you build in the tests through the store's own methods (`add_symbols`, `add_code_edges`,
+`link_definitions`, `add_commits`, ... — the row shapes are in the WP1 handoff below) plus the existing
+prose `indexed` fixture. Write those store-built tests so they mirror the fixture the plan draws
+(`pyapp.orders.OrderService.place`, `pyapp.billing.total`, `table orders`, ...), using the qualnames from
+PLAN §2.2a and the ids from `hipporag.text.make_id` conventions (`symbol-`, `data-`, `commit-` prefixes via
+the `codegraph.model` id functions once they exist; until then compute them with `make_id` the same way:
+`make_id("symbol-", f"{source_id}:{path}:{qualname}")`). Do NOT add tree-sitter or sqlglot as a dependency
+yourself and do not import `codegraph` (it may not exist on your branch yet): `split_question`'s
+"lines that parse as code" is a regex heuristic (indent + brackets/operators/`def`/`return`/`;`/`=>` etc.),
+which is also the cheaper choice per question. Commit phase 1 green on all three stores, write the ledger
+note, then `horch tell orchestrator "[<role>] PHASE 1 DONE: wp/wp3 ..."` and **keep your pane open**.
+
+**Phase 2 (when the orchestrator tells you WP2i has merged):** `git merge code-graph` into `wp/wp3`
+(the one time you may merge), resolve `tests/conftest.py` if both sides added fixtures, then add the
+`mixed_index` fixture and every fixture-based test in 3.5 (the mixed-memory test FIRST, `place` in the
+top 3, `test_ask.py`'s exact block string, `test_paths.py` over `code_index`, S2.12/S2.13/S2.14 over the
+real fixture). Replace any store-built test that the fixture now covers better; keep the ones that
+construct a case the fixture cannot (the synonym-guard style). Then the normal DONE.
+
+WP2b (git history) may also merge during phase 2 — see "History" below.
 
 Your spec is PLAN.md **WP3 (lines 368-388)** in full, the **Retrieval rule (lines 100-125)**, the
 Settings paragraph (line 143: the `settings.html` `min/max/step` fix), and Decision Log D5, D10, D18,
@@ -29,7 +56,28 @@ corpus into `test_anchors.py` as a "prose → []" table (the spike file lists th
 
 ## What the previous workers built (read the code, not just this)
 
-<!-- ORCHESTRATOR FILLS FROM THE WP1 / WP2 / WP2i LEDGER SUMMARIES -->
+**WP1 (store + GraphIndex), merged as 240d348.** `src/hippo/store/code.py` holds the vocabulary
+(`CODE_BATCH=5000`, `SYMBOL_KINDS`, `DATA_KINDS`, `CODE_EDGE_KINDS`, `SPECIFICITY_KINDS=(INVOKES,READS,
+WRITES)`, `CODE_EDGE_PAIRS`), the row shapers (`symbol_write_row`, `data_object_write_row`,
+`commit_write_row`, `code_edge_write_rows`, `modifies_write_rows`, `refers_to_write_rows`) and the Neo4j
+`CodeQueries` mixin, twinned in `store/ladybug.py` and `tests/fakes/fake_store.py`. 22 methods on every
+store: writers `add_symbols`, `add_data_objects`, `add_commits`, `add_code_edges`, `link_definitions`,
+`add_modifies`, `add_precedes`, `add_refers_to`, `set_symbol_communities`; readers `get_symbols`,
+`get_data_objects`, `get_commits`; nine `load_*` loaders incl. `load_code_embeddings`; and
+`delete_code_nodes_for_source`. Row shapes are the WP1.3 table's — read the shapers. `GraphIndex`:
+vertex order entities → symbols → data → commits → passages LAST, `passage_position = v -
+first_passage_vertex`; `NodeKind` five-valued with `SYMBOL`/`DATA`/`COMMIT`; `CodeNode`, `DirectedEdge`;
+`code_out`/`code_in`, `name_index`, `Edge.omega`/`code_kinds`, `Edge.weight_at(scale)`; `specificity`
+holds the DENOMINATOR (entity = mentions, symbol/data = in_degree+1, commit = 1, passage = 0) with
+`entity_passage_count` kept as an alias; **`graph_for_scale(scale)`** memoised — your retriever calls it
+when no explicit `graph=` is passed; `scoped()` carries omega/code_kinds/boost. All eleven `code_*`
+settings are in `DEFAULT_SETTINGS`/`SETTING_RULES` with `SETTING_HELP` text.
+**Landmine:** `analysis/simulate.py` has `SIMULATABLE_SETTINGS` and `INGEST_SETTINGS` and
+`test_analysis_simulate.py` asserts they partition `SETTING_RULES` exactly. `Tiny` (`test_graph_index.py`)
+and `small_graph` (`test_store_graph.py`) fixtures now use `make_id`-shaped ids. Full handoff in the
+`backend-developer-1` ledger entry (`horch sessions`).
+
+<!-- ORCHESTRATOR FILLS FROM THE WP2 / WP2i LEDGER SUMMARIES AT PHASE 2 -->
 
 ## Scope
 
