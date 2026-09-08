@@ -346,3 +346,60 @@ def test_a_merge_commit_reports_what_it_brought_in(tmp_path: Path) -> None:
     history, symbols = history_of(checkout)
     assert history.commits[0]["message"].startswith("Merge side")
     assert modified(history, symbols)[0] == {"pyapp.shipping", "ship"}
+
+
+@pytest.mark.parametrize(
+    ("header", "touched"),
+    [
+        ((0, 0, 1, 8), (1, 8)),  # @@ -0,0 +1,8 @@   a new file
+        ((18, 0, 19, 4), (19, 22)),  # @@ -18,0 +19,4 @@ four lines inserted
+        ((31, 0, 32, 1), (32, 32)),  # @@ -31,0 +32 @@   one line inserted
+        ((22, 1, 21, 0), (21, 21)),  # @@ -22 +21,0 @@   a line deleted, after new line 21
+        ((1, 6, 0, 0), (1, 1)),  # @@ -1,6 +0,0 @@   a whole file emptied
+    ],
+)
+def test_the_lines_a_hunk_is_about(header: tuple, touched: tuple) -> None:
+    # A deletion has no new-side lines of its own, so git reports the line it happened
+    # *after*. Reading that literally gives the empty range (21, 20) and the deletion is
+    # attributed to nothing -- so a deleted line inside a function would look like a commit
+    # that touched no symbol at all.
+    assert git_history._Hunk("x.py", *header).touched == touched
+
+
+def test_a_deletion_is_attributed_to_the_symbol_it_was_deleted_from(tmp_path: Path) -> None:
+    # A pure deletion has no new-side lines of its own: git prints `@@ -22 +21,0 @@`, meaning
+    # "after new line 21". Reading that range literally gives an empty one (21..20) and the
+    # edge disappears -- deleting the middle of a function would look like touching nothing.
+    # The same commit deletes a whole file, whose hunk has `+++ /dev/null` and no new side
+    # at all: that one really is nothing to point at.
+    checkout = make_code_checkout(tmp_path)
+    orders = checkout / "pyapp" / "orders.py"
+    orders.write_text(orders.read_text().replace("        print(amount)\n", ""))
+    (checkout / "pyapp" / "cli.py").unlink()
+    add_commit(checkout, "Drop a print and the cli")
+
+    history, symbols = history_of(checkout)
+    assert ("pyapp/cli.py", "main") not in {(s.path, s.qualname) for s in symbols}  # gone at HEAD
+    assert modified(history, symbols)[0] == {"OrderService.place"}
+
+
+def test_a_shallow_clones_oldest_commit_does_not_claim_the_whole_tree(tmp_path: Path) -> None:
+    # Every repo source is a shallow clone, and the oldest commit in one reports *no parent*
+    # even though it has one. `git show` then diffs it against the empty tree and it looks
+    # like the commit that added all eleven files. `.git/shallow` is what says the parent was
+    # merely not fetched, and a commit whose diff we cannot know gets no edges rather than
+    # every edge.
+    checkout = make_code_checkout(tmp_path)
+    clone = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "2", "--single-branch", "--", f"file://{checkout}", str(clone)],
+        check=True,
+        env=git_env(),
+    )
+    assert (clone / ".git" / "shallow").exists()
+
+    history, symbols = history_of(clone)
+    assert [c["ordinal"] for c in history.commits] == [0, 1]  # both commits are still commits
+    touched = modified(history, symbols)
+    assert touched[0] == {"OrderService.save", "tsapp.index", "main"}  # the real tip diff
+    assert 1 not in touched  # the boundary claims nothing, rather than claiming everything
