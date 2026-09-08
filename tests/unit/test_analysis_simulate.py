@@ -12,13 +12,15 @@ from hippo.analysis.simulate import (
     Overrides,
     diff_traces,
     replay_filter,
+    replay_select,
     simulate,
     trace_from_dict,
 )
 from hippo.ask import search
 from hippo.hipporag.indexer import Chunk, index_source
-from hippo.hipporag.retriever import Trace
+from hippo.hipporag.retriever import RankedPassage, Trace
 from hippo.store.base import SETTING_RULES
+from tests.conftest import index_code_sample
 
 QUESTION = "In which state is the company founded by Priya Natarajan headquartered?"
 
@@ -262,3 +264,63 @@ def test_diff_traces_handles_a_missing_baseline():
     diff = diff_traces(None, after)
     assert diff["passages"] == [] and diff["fallback_before"] is None
     assert diff["seeds_before"] == [] and diff["kept_facts_before"] == []
+
+
+# ==================================================================== the code graph
+# The whole reason D10 put the select pass in the retriever rather than in ask.py is that
+# `simulate()` re-runs the *entire* retrieval on every slider move. Without a replay, a code
+# question would cost one LLM call per move, on the page whose job is explaining a ranking.
+
+CODE_QUESTION = "What does pyapp.orders.OrderService.place do?"
+
+
+@pytest.fixture
+def code_baseline(ctx) -> Trace:
+    index_code_sample(ctx)
+    return search(ctx, CODE_QUESTION)
+
+
+def test_the_baseline_of_a_code_question_records_its_select_decisions(code_baseline: Trace) -> None:
+    assert code_baseline.used_code_seeds is True
+    assert set(code_baseline.select) == {"keep", "drop", "expand", "raw", "error"}
+    assert code_baseline.paths and code_baseline.select["error"] == ""
+
+
+def test_a_slider_move_on_a_code_question_costs_no_llm_call(ctx, fake_ollama, code_baseline) -> None:
+    calls_before = chat_calls(fake_ollama)
+    sim = simulate(ctx, CODE_QUESTION, Overrides(settings={"code_structural_scale": 0.0}), code_baseline)
+    assert chat_calls(fake_ollama) == calls_before, "the filter *and* the select pass are replayed"
+    assert sim.trace.filter["replayed"] is True
+    assert sim.trace.select["raw"] == "replayed"
+
+
+def test_replay_select_only_repeats_decisions_about_passages_still_on_the_table() -> None:
+    baseline = Trace(question="q", settings={}, graph_version=1)
+    baseline.select = {"keep": ["passage-a", "passage-gone"], "drop": ["passage-b"], "expand": []}
+    ranked = [
+        RankedPassage("passage-a", 1, 1.0, 1, 1.0, "A", "s", "S", ""),
+        RankedPassage("passage-b", 2, 0.5, 2, 0.5, "B", "s", "S", ""),
+    ]
+    result = replay_select(baseline)("q", ranked)
+    assert result.keep == ["passage-a"] and result.drop == ["passage-b"]
+    assert result.expand == [] and result.raw == "replayed"
+
+
+def test_the_structural_scale_moves_a_code_ranking_in_a_simulation(ctx, code_baseline) -> None:
+    sim = simulate(ctx, CODE_QUESTION, Overrides(settings={"code_structural_scale": 0.0}), code_baseline)
+    assert [p.passage_id for p in sim.trace.passages] != [p.passage_id for p in code_baseline.passages]
+    assert any(row["change"] != "same" for row in sim.diff["passages"])
+
+
+def test_the_scale_and_an_edge_edit_compose_in_one_rebuild(ctx, code_baseline) -> None:
+    # `simulate()` hands its own igraph to `retrieve(graph=)`, so a scale applied anywhere else
+    # would be silently discarded the moment a simulation also edited an edge.
+    index = ctx.graph()
+    a, b = code_baseline.passages[0].passage_id, code_baseline.passages[1].passage_id
+    overrides = Overrides(
+        settings={"code_structural_scale": 0.0}, edge_edits=[{"a": a, "b": b, "weight": 5.0}]
+    )
+    sim = simulate(ctx, CODE_QUESTION, overrides, code_baseline)
+    assert sim.trace.settings["code_structural_scale"] == 0.0
+    scaled = index.graph_with_edits(overrides.edge_edit_objects(), 0.0)
+    assert {scaled.degree(int(v)) for v in index.code_vertices} == {0}

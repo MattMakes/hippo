@@ -21,7 +21,15 @@ from ..ask import answer_from_trace
 from ..context import AppContext
 from ..hipporag.answerer import Answer
 from ..hipporag.graph_index import EdgeEdit
-from ..hipporag.retriever import FactFilter, Retriever, Trace, trace_from_dict
+from ..hipporag.retriever import (
+    FactFilter,
+    RankedPassage,
+    Retriever,
+    SelectFn,
+    SelectResult,
+    Trace,
+    trace_from_dict,
+)
 from ..store.base import validate_settings
 from .explain import TOP_PASSAGES
 
@@ -141,9 +149,14 @@ def simulate(
     # No baseline (ad-hoc question)? Run the real filter once so we have something to replay and diff.
     # With rerun_filter the simulated search runs the LLM itself, so we skip the extra call.
     if baseline is None and not overrides.rerun_filter:
-        baseline = retriever.retrieve(question, base_settings)
+        baseline = retriever.retrieve(question, base_settings, select_fn=retriever.llm_select)
 
-    fact_filter = None if overrides.rerun_filter or baseline is None else replay_filter(baseline)
+    replaying = not overrides.rerun_filter and baseline is not None
+    fact_filter = replay_filter(baseline) if replaying else None
+    # The select pass is replayed exactly as the fact filter is. `simulate()` re-runs the whole
+    # retrieval on every slider move, so without this a code question would cost one LLM call per
+    # move - which is what putting the pass in the retriever was supposed to make replayable.
+    select_fn = replay_select(baseline) if replaying else retriever.llm_select
     # The scale composes with the edits inside one rebuild. Applying it anywhere else would be
     # silently discarded the moment a simulation also edited an edge, because `retrieve(graph=)`
     # then runs on *this* igraph.
@@ -154,6 +167,7 @@ def simulate(
         question,
         settings,
         fact_filter=fact_filter,
+        select_fn=select_fn,
         force_include=set(overrides.force_include),
         force_exclude=set(overrides.force_exclude),
         node_boosts=dict(overrides.node_boosts) or None,
@@ -171,6 +185,20 @@ def replay_filter(baseline: Trace) -> FactFilter:
         # Only triples that are candidates again. The retriever fuzzy-matches unknown triples to the
         # closest candidate (meant for sloppy LLM output), which would keep a random fact here.
         return [t for t in kept if t in candidates], "replayed"
+
+    return replay
+
+
+def replay_select(baseline: Trace) -> SelectFn:
+    """The keep/drop/expand the baseline's LLM chose, replayed without calling it again."""
+    decided = dict(baseline.select or {})
+
+    def replay(question: str, ranked: list[RankedPassage]) -> SelectResult:
+        # Only ids that are candidates again: a slider move can push a passage out of the window,
+        # and re-applying a decision about a passage nobody is reading would be a silent edit.
+        known = {p.passage_id for p in ranked}
+        pick = lambda key: [pid for pid in decided.get(key) or [] if pid in known]  # noqa: E731
+        return SelectResult(keep=pick("keep"), drop=pick("drop"), expand=pick("expand"), raw="replayed")
 
     return replay
 
@@ -242,4 +270,12 @@ def _kept_rows(trace: Trace | None) -> list[dict[str, Any]]:
     return [{"fact_id": c.fact_id, "triple": list(c.triple)} for c in trace.fact_candidates if c.kept]
 
 
-__all__ = ["Overrides", "Simulation", "simulate", "diff_traces", "replay_filter", "trace_from_dict"]
+__all__ = [
+    "Overrides",
+    "Simulation",
+    "diff_traces",
+    "replay_filter",
+    "replay_select",
+    "simulate",
+    "trace_from_dict",
+]

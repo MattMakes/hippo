@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from hippo import prompts
 from hippo.ask import answer_from_trace, ask, search
 from hippo.context import AppContext
 from hippo.hipporag.answerer import Answer
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.hipporag.retriever import Trace
+from tests.fakes.code_fixture import write_commit_history
 
 DIRECT = "Where is Acme Robotics headquartered?"
 
@@ -92,3 +94,81 @@ def test_the_graph_reloads_after_new_text_is_indexed(indexed: AppContext) -> Non
     )
     assert indexed.graph() is not first
     assert search(indexed, DIRECT).graph_version == indexed.store.graph_version()
+
+
+# ==================================================================== the code graph
+# WP3, over `tests/fixtures/code_sample/` indexed through the real pipeline. The block is a fixed
+# grammar, not free text (S2.15): the point of pinning it exactly is that a rendering change has to
+# be argued for rather than absorbed.
+
+PLACE = "What does pyapp.orders.OrderService.place do?"
+
+CODE_BLOCK_BODY = [
+    "pyapp.orders.OrderService.place -[TESTED_BY 0.85 test_import]-> tests.test_orders.test_place",
+    "tests.test_orders -[CONTAINS 1.00 syntax]-> tests.test_orders.test_place",
+    "pyapp.orders.OrderService -[CONTAINS 1.00 syntax]-> pyapp.orders.OrderService.place",
+    "pyapp.__init__ -[IMPORTS 0.95 import_path]-> pyapp.orders.OrderService",
+    "pyapp.cli -[IMPORTS 0.90 reexport]-> pyapp.orders.OrderService",
+    "tests.test_orders -[IMPORTS 0.95 import_path]-> pyapp.orders.OrderService",
+    "pyapp.orders.OrderService.place -[CATCHES 0.90 resolved]-> pyapp.store.OrderError",
+    "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import in_branch]-> pyapp.billing.send_invoice",
+    "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total",
+    "pyapp.orders.OrderService.place -[INVOKES 1.00 same_file]-> pyapp.orders.OrderService.log",
+    "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
+    "tests.test_orders.test_place -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
+    "pyapp.orders -[TESTED_BY 0.75 test_filename]-> tests.test_orders",
+    "pyapp.cli -[CONTAINS 1.00 syntax]-> pyapp.cli.main",
+    "Tests: tests.test_orders.test_place",
+    "Commits: b2b2b2b 2026-01-02 Total the order in place",
+    "Subsystems: pyapp.__init__: pyapp.__init__, pyapp.billing.send_invoice, pyapp.billing.total, "
+    "pyapp.cli, pyapp.cli.main, pyapp.orders, pyapp.orders.OrderService, "
+    "pyapp.orders.OrderService.log, pyapp.orders.OrderService.place, pyapp.store.OrderError, "
+    "tests.test_orders, tests.test_orders.test_place",
+]
+
+
+@pytest.fixture
+def coded(code_index) -> AppContext:
+    """The fixture tree, plus the three commits WP2b will build from a real checkout."""
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
+    return ctx
+
+
+def test_a_code_question_carries_the_block_exactly(coded: AppContext) -> None:
+    _, answer = ask(coded, PLACE)
+    assert answer.context_block == "\n".join([prompts.CODE_GRAPH_HEADER, *CODE_BLOCK_BODY])
+
+
+def test_the_block_rides_in_as_a_pseudo_passage_and_is_never_cited(coded: AppContext, fake_ollama) -> None:
+    trace, answer = ask(coded, PLACE)
+    last = fake_ollama.calls[-1]["messages"][-1]["content"]
+    assert last.startswith("Title: Code graph\n" + prompts.CODE_GRAPH_HEADER)
+    # The block is not a passage: it has no id, so it cannot end up in the citation list.
+    assert answer.passage_ids == [p.passage_id for p in trace.passages][:5]
+    assert all(pid.startswith("passage-") for pid in answer.passage_ids)
+
+
+def test_there_is_no_block_when_the_question_named_no_code(coded: AppContext) -> None:
+    trace, answer = ask(coded, "Where is Acme Robotics headquartered?")
+    assert trace.used_code_seeds is False
+    assert answer.context_block == ""
+    assert "Title: Code graph" not in answer.raw
+
+
+def test_code_triples_chars_cuts_on_a_line_boundary(coded: AppContext) -> None:
+    _, answer = ask(coded, PLACE, {"code_triples_chars": 60})
+    body = answer.context_block.splitlines()
+    assert body[0] == prompts.CODE_GRAPH_HEADER  # the legend is outside the budget
+    assert body[-1] == f"… (+{len(CODE_BLOCK_BODY)} more)"
+
+    _, wider = ask(coded, PLACE, {"code_triples_chars": 300})
+    kept = wider.context_block.splitlines()[1:-1]
+    assert kept == CODE_BLOCK_BODY[: len(kept)], "whole lines only, in order"
+    assert sum(len(line) for line in kept) + len(kept) - 1 <= 300
+    assert wider.context_block.splitlines()[-1] == f"… (+{len(CODE_BLOCK_BODY) - len(kept)} more)"
+
+
+def test_an_answer_stored_before_the_block_existed_still_loads() -> None:
+    old = {"answer": "Boulder", "thought": "", "raw": "Answer: Boulder", "passage_ids": ["passage-1"]}
+    assert Answer(**old).context_block == ""
