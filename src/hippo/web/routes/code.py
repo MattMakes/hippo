@@ -13,11 +13,12 @@ saying twice for `/symbols`: `name_index` is built once on the full index and `s
 *same dict* on, so a hit must be resolved through the scoped `code_node_by_id` (which goes through
 the scoped `idx_of`) before it is returned. Filtering on the dict alone would list hidden names.
 
-The three payload builders' errors are the path tools' own (`UnknownSymbol`, `AmbiguousSymbol`) and
-are mapped here the way `analyze.py` maps its own: unknown -> 404, ambiguous -> 409 carrying the
-candidates so a client can offer them, anything malformed -> 400. The builders themselves are plain
-functions over a `GraphIndex`, because `mcp_server.py` serves the same five answers over MCP and the
-two surfaces must not drift.
+The payload builders raise the path tools' own errors (`UnknownSymbol`, `AmbiguousSymbol`), mapped
+here the way `analyze.py` maps its own: unknown -> 404, ambiguous -> 409 carrying the candidates so
+a client can offer them, anything malformed -> 400. The builders themselves are plain functions over
+a `GraphIndex`, because `mcp_server.py` serves the last four of these answers as MCP tools and calls
+the same builders to do it - the HTTP and MCP shapes are the same objects, not two descriptions of
+one shape that could drift apart.
 """
 
 from __future__ import annotations
