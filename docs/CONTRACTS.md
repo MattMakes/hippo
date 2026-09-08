@@ -59,8 +59,17 @@ src/hippo/hipporag/retriever.py   Retriever(index, ollama).retrieve(question, se
 src/hippo/hipporag/answerer.py    answer_question(ollama, question, [(id,title,text)]) -> Answer(answer, thought, raw, passage_ids)
 tests/fakes/fake_store.py         FakeStore: in-memory Store with identical methods/row shapes
 tests/fakes/fake_ollama.py        FakeOllama: rule-based model behind httpx.MockTransport
-tests/conftest.py                 fixtures: store, ollama, fake_ollama, ctx, sample_text
+tests/conftest.py                 fixtures: store, ollama, fake_ollama, ctx, sample_text, code_index (the code fixture
+                                  indexed through the real pipeline -> (ctx, source_id)), mixed_index (prose AND code in
+                                  ONE memory -- the fidelity claims are only checkable there); helpers
+                                  code_sample_zip(), index_code_sample(ctx), index_prose_sample(ctx), sample_chunks(text),
+                                  CODE_SAMPLE_PATH, SAMPLE_PATH; and the --update-expected option (refused in CI)
 samples/acme_robotics.md          a tiny corpus whose sentences are "X <relation> Y." (the fake extractor understands it)
+tests/fixtures/code_sample/       a checked-in source tree (Python, TypeScript, SQL, one unparsed .go) that the code
+                                  graph is measured against; expected.json beside it IS the spec -- every symbol, edge
+                                  with its omega and provenance, data object, DEFINED_IN and REFERS_TO pair. A diff to
+                                  it is a reviewable change to the spec, never a green-the-build reflex.
+scripts/update_expected.py        regenerates expected.json; `--check` exits 1 when it would change
 ```
 
 Key data shapes (see the dataclasses in retriever.py): `Trace` has
@@ -68,6 +77,13 @@ Key data shapes (see the dataclasses in retriever.py): `Trace` has
 `filter` (raw_response, kept_triples, replayed), `seed_entities`, `seed_passages`, `top_nodes`,
 `passages` (RankedPassage: passage_id, rank, score, dpr_rank, dpr_score, title, source_id, source_name, preview),
 `used_dpr_fallback`, `fallback_reason`, `timing_ms`, `settings`, `graph_version`. `Trace.to_dict()` is JSON-safe.
+From the code graph it also has `seed_symbols` (SeedSymbol: node_id, name, vertex, weight, kind, how, token,
+matched_by, n_matches, ambiguous, kept, specificity, boost), `used_code_seeds` (the gate: a lexical anchor was kept),
+`question_prose` / `question_code` (the split; only the prose half is embedded and filtered), `paths`, `tests`,
+`history` (rendered rows for the answer block), `select` (keep/drop/expand/raw/error) and `expansions`;
+`RankedPassage` gains `community_boosted` and `via_expand`, and `TopNode.kind` may be `symbol`/`data`/`commit`.
+**Every one of those is defaulted and none may ever be removed**: evals store traces permanently and
+`trace_from_dict` rebuilds each row with `Cls(**row)`.
 
 Source rows (`store.get_source`/`list_sources`): id, kind ('text'|'file'|'archive'|'repo'|'sample'), name, status
 ('queued'|'reading'|'indexing'|'ready'|'failed'), stage (free text), progress_done, progress_total, error, meta (dict),
@@ -244,6 +260,64 @@ The rest of the code path is documented in its own block above:
     ingest/chunker.py    chunk_documents(docs, size, overlap, code=None): one passage per symbol
     hipporag/indexer.py  Chunk.defines and Chunk.extract_text; index_source(..., code=None) and its three code stages
     ingest/pipeline.py   the one insertion point: read_source -> "parsing code" -> chunk_documents -> index_source
+
+src/hippo/hipporag/anchors.py   what a question says about code. Pure: no store, no model.
+                 split_question(text) -> (prose, code)   the prose half is what gets EMBEDDED and what the fact
+                     filter reads; the QA prompt still gets the whole question. A one-line question with no fence
+                     returns (text, "") and takes exactly today's path -- this module's inert condition, and a test.
+                 find_anchors(question, index) -> [Anchor(node_id, vertex, token, how, weight, n_matches, ambiguous)]
+                     how is identifier | stack_trace | exception | fenced_code | diff. Reads BOTH halves.
+                     Every hit goes through this index's idx_of and must be a symbol or data object, so a scoped
+                     index can never surface a node the caller may not see.
+                 MAX_ANCHORS = 20; MAX_MATCHES_PER_TOKEN = 8; AMBIGUOUS_ABOVE = 10 (more matches than this and the
+                     token seeds NOTHING -- counted before the per-token cap, or the rule would be unreachable);
+                     MIN_NAME_CHARS = 3; MIN_QUALIFIED_PART = 2; FRAME_DECAY = 0.8; EXCEPTION_WEIGHT = 0.8; STOPLIST
+                 A bare word anchors only when it is code-shaped -- PascalCase, camelCase, snake_case or ALL_CAPS.
+                     Backticked and dotted spans skip that rule and are never split: the dots already say which one.
+
+src/hippo/hipporag/paths.py     deterministic walks over the code graph. No model anywhere in this file.
+                 resolve_symbol(index, name) -> node id, raising UnknownSymbol or AmbiguousSymbol(candidates)
+                 shortest_code_path(index, a, b, *, theta, max_hops=MAX_HOPS) -- over code_out, skipping
+                     NOT_A_STEP ("DEFINED_IN", "PRECEDES", "REFERS_TO", "MODIFIES") and any edge below theta,
+                     with an undirected second pass when the directed one finds nothing
+                 direct_edges, code_paths_for, expand_from (EXPAND_KINDS at EXPAND_OMEGA), tests_for, history,
+                     blast_radius -> BlastRadius(vertex, levels, truncated) (walks code_in: who depends on this),
+                     exception_path
+                 triple_rows / test_rows / history_rows -> the JSON-safe dicts that live on the Trace
+                 render_triples(rows) -> "a -[KIND 0.90 provenance in_branch await]-> b", the fixed grammar
+                     test_ask.py pins exactly; render_blast; block_lines; cut_to; render_block(index, trace, *,
+                     header, max_chars) cuts on a LINE boundary and appends MORE_LINE
+                 display_of / display_at -> the fully-qualified display name (pyapp.orders.OrderService.place)
+                 community_labels(index) -> the label a person reads: the smallest DISPLAY name in each community.
+                     Not GraphIndex.community_name, which uses module-relative qualnames and would label two
+                     different subsystems "Base".
+                 MAX_HOPS = 6; PATH_HOPS = 4; BLAST_DEPTH = 2; BLAST_CAP = 200; MAX_BLOCK_EDGES = 60
+                 A simulation's edge edits change the igraph PPR runs on, not these tools.
+
+src/hippo/hipporag/retriever.py   the code half of a search
+                 Trace gains nine fields, ALL DEFAULTED and none ever to be removed (stored traces are rebuilt with
+                     Cls(**row) forever): seed_symbols, used_code_seeds, question_prose, question_code, paths,
+                     tests, history, select, expansions. SeedSymbol is new; TopNode.kind may be symbol/data/commit;
+                     RankedPassage gains community_boosted and via_expand.
+                 used_code_seeds is the ONE gate: a *lexical* anchor was kept. A dense seed adds reset mass and
+                     nothing else -- it never opens the gate, so it never fires the select pass, writes
+                     timing["paths"], or adds the answer block.
+                 retrieve(..., select_fn: SelectFn | None = None). SelectFn is injected exactly as fact_filter is,
+                     so a unit test passes a plain function and the pass needs no Ollama. SelectResult carries
+                     keep / drop / expand / raw; unknown ids are ignored and any failure is keep-all.
+                 MAX_CODE_SEEDS = 20 -- symbol seeds have their own budget and are NOT subject to linking_top_k's
+                     entity cut. A dense seed is worth code_seed_weight x passage_node_weight x its similarity.
+src/hippo/ask.py                 code_block(graph, trace) renders the block; answer_from_trace passes it as
+                                 context_block=, gated on trace.used_code_seeds
+src/hippo/hipporag/answerer.py   Answer.context_block (defaulted, so Answer(**old_row) still loads);
+                                 answer_question(..., context_block="") prepends it INSIDE as the pair
+                                 (CODE_GRAPH_TITLE, block), so it never enters Answer.passage_ids and rag_qa is
+                                 byte-identical
+src/hippo/prompts.py             CODE_GRAPH_HEADER (the block's one-sentence legend); CODE_SELECT_SYSTEM and
+                                 code_select_messages(question, [(id, title, text)])
+src/hippo/analysis/simulate.py   SIMULATABLE_SETTINGS / INGEST_SETTINGS partition SETTING_RULES;
+                                 validate_simulation_settings refuses an ingest-only setting;
+                                 replay_select(baseline) beside replay_filter, so a slider move costs no LLM call
 ```
 
 ### `src/hippo/evals/` — asking questions and grading
