@@ -74,10 +74,13 @@ and the chunker fix for members-outside-their-type / inline modules (L3) are mer
 - **All — the 'naming a symbol lifts its passage' test** (`test_retriever.py::
   test_naming_a_symbol_lifts_its_passage_into_what_the_model_reads`): under FakeOllama the prose half
   of "What does X do?" is noise, so every extra tree adds dense-seed twins to the window and the
-  named passage's rank at defaults drifts. Ruling: the 'inside `qa_top_k`' assertion is pinned with
-  `code_dense_seeds=0` (the lexical anchor alone must do it); at defaults only 'rank strictly better
-  than with the anchor off' and 'top node by 2x' are asserted. Do not relax further — if the
-  anchor-only case leaves `qa_top_k`, stop and report the rank and seed table.
+  named passage's rank at defaults drifts, and even anchor-only every tree's four-line entry point
+  is a dense twin of the named passage (Go phase B measured rank 6 with three trees). FINAL RULING:
+  the 'inside `qa_top_k`' assertion is pinned with `code_dense_seeds=0` AND `passage_node_weight=0`,
+  so the lexical anchor is the only seed that can reach a passage (expect rank 1-2 via DEFINED_IN);
+  at defaults only 'rank strictly better than with the anchor off' and 'top node by 2x' are asserted,
+  with the measured ranks in the docstring. Never widen the slice. If the isolated case leaves
+  `qa_top_k`, stop and report the top-5 with scores.
 - **All**: `extract.WALKERS` is an import-time snapshot (tests swapping a walker patch both); the
   `make_code_checkout` three commits gain no files, so history tests do not move.
 
