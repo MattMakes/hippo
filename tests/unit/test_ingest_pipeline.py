@@ -295,28 +295,28 @@ def test_a_code_archive_is_parsed_chunked_by_symbol_and_recorded_in_meta(code_in
     source = ctx.store.get_source(source_id)
     code = source["meta"]["code"]
 
-    assert (code["symbols"], code["data_objects"], code["edges"]) == (73, 12, 143)
+    assert (code["symbols"], code["data_objects"], code["edges"]) == (93, 12, 182)
     assert code["edges_by_kind"] == {
-        "CATCHES": 1,
-        "CONTAINS": 57,
-        "IMPORTS": 21,
-        "INHERITS": 4,
-        "INVOKES": 24,
-        "OVERRIDES": 3,
-        "RAISES": 3,
-        "READS": 14,
-        "TESTED_BY": 10,
-        "WRITES": 6,
+        "CATCHES": 2,
+        "CONTAINS": 72,
+        "IMPORTS": 25,
+        "INHERITS": 5,
+        "INVOKES": 31,
+        "OVERRIDES": 4,
+        "RAISES": 4,
+        "READS": 18,
+        "TESTED_BY": 13,
+        "WRITES": 8,
     }
-    # six Python, three TypeScript, six Rust, six Go, one .sql
-    assert code["files_parsed"] == 22
+    # six Python, three TypeScript, six Rust, six Go, five C#, one .sql
+    assert code["files_parsed"] == 27
     assert code["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # build.rb
     assert code["truncated"] is False
     # Calls that resolve to nothing in the repo -- builtins included -- are counted per file, so
     # phase 2 has a baseline to work from (D15). Only parsed files can have any.
     assert set(code["unresolved_calls"]) <= set(code_sample_paths())
     assert code["unresolved_calls_total"] == sum(code["unresolved_calls"].values())
-    assert source["meta"]["counts"]["symbols"] == 73
+    assert source["meta"]["counts"]["symbols"] == 93
 
 
 def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
@@ -338,7 +338,7 @@ def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
 
 def test_deleting_a_code_source_removes_its_symbols_and_data_objects(code_index) -> None:
     ctx, source_id = code_index
-    assert len(ctx.store.load_symbols()) == 73
+    assert len(ctx.store.load_symbols()) == 93
 
     pipeline.delete_source(ctx, source_id)
 

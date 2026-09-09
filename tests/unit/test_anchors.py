@@ -143,10 +143,12 @@ def test_a_dotted_qualname_names_exactly_one_symbol(index: GraphIndex) -> None:
 
 
 def test_a_module_relative_qualname_resolves_too(index: GraphIndex) -> None:
-    # The fixture tells one story in two languages, so `OrderService.place` is a qualname in
-    # `pyapp/orders.py` and in `rsapp/src/orders.rs`. A dotted name is never split (S2.13): the
-    # dots already say "this is code", so both keep the whole share.
+    # The fixture tells one story in four languages, so `OrderService.place` is a qualname in
+    # `pyapp/orders.py`, in `rsapp/src/orders.rs` and -- the lookup lower-cases -- in
+    # `csapp/Orders/OrderService.cs`. A dotted name is never split (S2.13): the dots already say
+    # "this is code", so all three keep the whole share.
     assert seeds(index, find_anchors("Explain OrderService.place", index)) == {
+        "csapp.Orders.OrderService.OrderService.Place": 1.0,
         "pyapp.orders.OrderService.place": 1.0,
         "rsapp.src.orders.OrderService.place": 1.0,
     }
@@ -159,9 +161,13 @@ def test_snake_case_pascal_case_and_all_caps_anchor_bare(index: GraphIndex) -> N
         "pyapp.orders.OrderService.list_open": 0.5,
         "rsapp.src.orders.OrderService.list_open": 0.5,
     }
+    # `csapp` names a *file* `OrderService.cs`, so C# spends two of the four shares: the module
+    # and the class inside it.
     assert seeds(index, find_anchors("what is OrderService for?", index)) == {
-        "pyapp.orders.OrderService": 0.5,
-        "rsapp.src.orders.OrderService": 0.5,
+        "csapp.Orders.OrderService": 0.25,
+        "csapp.Orders.OrderService.OrderService": 0.25,
+        "pyapp.orders.OrderService": 0.25,
+        "rsapp.src.orders.OrderService": 0.25,
     }
     assert seeds(index, find_anchors("where is send_invoice called?", index)) == {
         "pyapp.billing.send_invoice": 0.5,
@@ -173,11 +179,13 @@ def test_backticks_rescue_a_single_token_lowercase_name(index: GraphIndex) -> No
     # The cost spike 1 asks us to accept and document: bare `place` in prose does not anchor,
     # because a lowercase single token is indistinguishable from English. Backticks say "code".
     assert find_anchors("what does place do?", index) == []
-    # `goapp` spells it `Place`, and the bare-name lookup is case-blind, so three symbols share it.
+    # `goapp` and `csapp` spell it `Place`, and the bare-name lookup is case-blind, so four
+    # symbols share it.
     assert seeds(index, find_anchors("what does `place` do?", index)) == {
-        "goapp.orders.service.Service.Place": pytest.approx(1 / 3),
-        "pyapp.orders.OrderService.place": pytest.approx(1 / 3),
-        "rsapp.src.orders.OrderService.place": pytest.approx(1 / 3),
+        "csapp.Orders.OrderService.OrderService.Place": 0.25,
+        "goapp.orders.service.Service.Place": 0.25,
+        "pyapp.orders.OrderService.place": 0.25,
+        "rsapp.src.orders.OrderService.place": 0.25,
     }
 
 
@@ -323,12 +331,15 @@ def test_a_dotnet_trace_seeds_its_frames_and_its_exception_header(poly_index: Gr
         "csapp.Orders.OrderService.OrderService.Place": pytest.approx(1.0),
         "csapp.Orders.OrderService.OrderService.Save": pytest.approx(0.8),
         "csapp.Store.Base.InvalidOrderException": pytest.approx(0.8),
+        # `csapp/Program.cs` is a real file now, so `Program.<Main>$` resolves to its module --
+        # three frames out from the panic, hence 0.8 cubed.
+        "csapp.Program": pytest.approx(0.8**3),
     }
     how = {display_of(poly_index.code_node_at(a.vertex)): a.how for a in found}
     assert how["csapp.Store.Base.InvalidOrderException"] == "exception"
     assert how["csapp.Orders.OrderService.OrderService.Place"] == "stack_trace"
     # ``System.Collections.Generic.List`1.ForEach`` has no ` in file:line`, so it resolves by name
-    # alone -- and `List`1.ForEach` names nothing. `Program.<Main>$` has a file the index does not.
+    # alone -- and `List`1.ForEach` names nothing, which is why the fourth frame is the third seed.
     assert "OrderService.ForEach" not in names(poly_index, found)
 
 
@@ -453,20 +464,43 @@ def test_an_ambiguous_name_splits_its_weight_and_is_capped(code_index) -> None:
 
 
 def test_a_split_over_every_match_sums_to_one_share_of_the_seed_weight(index: GraphIndex) -> None:
-    # `log` is a method on every service and on every `Base`: seven real symbols, and the two Go
-    # ones are `Log` -- the lookup lower-cases, so a language's capitalisation costs nothing.
+    # Every tree has an entry point, and Go and Rust name the *file* `main` as well as the
+    # function in it: seven real symbols, under the cap, so the shares still sum to one.
+    found = find_anchors("what does `main` do?", index)
+    assert sorted(seeds(index, found)) == [
+        "goapp.cmd.main",
+        "goapp.cmd.main.main",
+        "pyapp.cli.main",
+        "rsapp.src.main",
+        "rsapp.src.main.main",
+        "tools.build.main",
+        "tsapp.index.main",
+    ]
+    assert sum(a.weight for a in found) == pytest.approx(1.0)
+    assert {a.n_matches for a in found} == {7}
+
+
+def test_the_fifth_tree_takes_log_past_the_cap_and_the_share_stays_one_ninth(index: GraphIndex) -> None:
+    # `log` is a method on every service and on every `Base`, and the lookup lower-cases, so a
+    # language's capitalisation costs nothing: nine real symbols across five trees. That is the
+    # first name in the fixture to cross `MAX_MATCHES_PER_TOKEN` without `many_symbols`' help --
+    # eight anchors survive, each still worth one *ninth*, so the seed weight is deliberately
+    # under-spent rather than redistributed.
     found = find_anchors("what does `log` do?", index)
     assert sorted(seeds(index, found)) == [
+        "csapp.Orders.OrderService.OrderService.Log",
+        "csapp.Store.Base.Base.Log",
         "goapp.orders.service.Service.Log",
         "goapp.store.base.Base.Log",
         "pyapp.orders.OrderService.log",
         "pyapp.store.Base.log",
         "rsapp.src.orders.OrderService.log",
         "rsapp.src.store.Base.log",
-        "tsapp.models.base.Base.log",
     ]
-    assert sum(a.weight for a in found) == pytest.approx(1.0)
-    assert {a.n_matches for a in found} == {7}
+    assert len(found) == MAX_MATCHES_PER_TOKEN
+    assert {a.n_matches for a in found} == {9}
+    assert all(a.weight == pytest.approx(1 / 9) for a in found)
+    assert sum(a.weight for a in found) == pytest.approx(8 / 9)
 
 
 def test_a_name_matching_more_than_ten_symbols_seeds_nothing_and_says_so(code_index) -> None:

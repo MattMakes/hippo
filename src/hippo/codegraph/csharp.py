@@ -662,14 +662,21 @@ def resolve_module(index, facts: FileFacts, spec: ImportFact):
 
 def _scope_symbol(index, namespace: str) -> Symbol | None:
     """
-    The symbol an IMPORTS edge to a whole namespace points at: the module of the first file
-    that declares it. A namespace is not a node, and the first declaration is the same choice
-    `build_index` already makes when it merges a scope's names.
+    The symbol an IMPORTS edge to a whole namespace points at: the module of the file with the
+    lexicographically smallest path among those declaring it. A namespace is not a node, and
+    on a real repository it is declared by many files, so "the first one seen" would make the
+    edge a function of the order the documents arrived in -- and the archive reader and
+    `code_sample_docs()` do not agree on that. The path is the same tiebreak `build_index`
+    uses when it merges a scope's names.
     """
-    for facts in index.files.values():
-        if facts.lang == LANG and facts.scope == namespace and facts.symbols:
-            return facts.symbols[0]
-    return None
+    declaring = [
+        facts
+        for facts in index.files.values()
+        if facts.lang == LANG and facts.scope == namespace and facts.symbols
+    ]
+    if not declaring:
+        return None
+    return min(declaring, key=lambda facts: facts.path).symbols[0]
 
 
 def scope_defines(index, facts: FileFacts) -> dict[str, Symbol]:

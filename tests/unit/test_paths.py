@@ -97,6 +97,8 @@ def test_an_ambiguous_name_lists_its_candidates(index: GraphIndex) -> None:
     with pytest.raises(AmbiguousSymbol) as raised:
         resolve_symbol(index, "log")
     assert raised.value.candidates == [
+        "csapp.Orders.OrderService.OrderService.Log",
+        "csapp.Store.Base.Base.Log",
         "goapp.orders.service.Service.Log",
         "goapp.store.base.Base.Log",
         "pyapp.orders.OrderService.log",
@@ -107,10 +109,12 @@ def test_an_ambiguous_name_lists_its_candidates(index: GraphIndex) -> None:
     ]
     assert "could mean any of" in str(raised.value)
     # A second tree telling the same story makes the *qualname* ambiguous too, not just the bare
-    # name: `OrderService.place` is a symbol in `pyapp/orders.py` and one in `rsapp/src/orders.rs`.
+    # name: `OrderService.place` is a symbol in `pyapp/orders.py`, one in `rsapp/src/orders.rs`
+    # and -- the lookup lower-cases -- one in `csapp/Orders/OrderService.cs`.
     with pytest.raises(AmbiguousSymbol) as both:
         resolve_symbol(index, "OrderService.place")
     assert both.value.candidates == [
+        "csapp.Orders.OrderService.OrderService.Place",
         "pyapp.orders.OrderService.place",
         "rsapp.src.orders.OrderService.place",
     ]

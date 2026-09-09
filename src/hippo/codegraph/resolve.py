@@ -154,11 +154,14 @@ def build_index(files: list[FileFacts], lang_state: dict[str, Any] | None = None
             else:
                 index.defines[facts.module][symbol.qualname] = symbol
         if facts.scope:
-            # A Go package / C# namespace is the union of its files' top-level names; the
-            # first file to declare a name keeps it, so a partial class resolves to one place.
+            # A Go package / C# namespace is the union of its files' top-level names; the file
+            # with the smallest path keeps a name two of them declare, so a partial class
+            # resolves to one place whatever order the documents arrived in.
             scope = index.scopes.setdefault((facts.lang, facts.scope), {})
             for name, symbol in index.defines[facts.module].items():
-                scope.setdefault(name, symbol)
+                held = scope.get(name)
+                if held is None or facts.path < held.path:
+                    scope[name] = symbol
         if facts.models:
             index.models[facts.module] = {binding: name for binding, name, _ in facts.models}
         parts = (package_of(facts.module) or facts.module).split(".")

@@ -335,8 +335,8 @@ def test_a_namespace_is_the_scope_and_a_sibling_needs_no_using(graph):
 def test_a_files_own_name_still_wins_over_its_namespaces():
     """
     The scope is seeded *after* the file's own defines. Two files of one namespace declare a
-    `Helper`; `build_index` keeps the first for the scope, but inside the second file its own
-    declaration is what `Helper.Go()` means -- `same_file` 1.00, and no edge to the other.
+    `Helper`; `build_index` keeps the smaller path for the scope, but inside the other file its
+    own declaration is what `Helper.Go()` means -- `same_file` 1.00, and no edge to the first.
     """
     graph = graph_of(
         {
@@ -1064,6 +1064,49 @@ def test_extraction_is_deterministic():
         (e.a, e.b, e.kind, e.omega, e.provenance) for e in second.edges
     ]
     assert first.stats() == second.stats()
+
+
+def test_a_using_of_a_namespace_two_files_declare_ignores_the_document_order():
+    """
+    On any real repository a namespace is declared by many files, and the IMPORTS edge for
+    `using` it has to land on exactly one of them. The choice is the smallest path, never the
+    first document: the archive reader and `code_sample_docs()` walk the same tree in
+    different orders, and an edge that flipped between them would make `expected.json` a
+    function of who asked. (Found building `csapp/`, where the test file first shared
+    `namespace CsApp.Orders;` with `OrderService.cs`.)
+    """
+    files = {
+        "a/Beta.cs": "namespace App;\n\npublic class Beta { public static int Go() => 2; }\n",
+        "a/Alpha.cs": "namespace App;\n\npublic class Alpha { public static int Go() => 1; }\n",
+        "b/Main.cs": "using App;\n\npublic class Caller { public int R() => Alpha.Go(); }\n",
+    }
+    forward = graph_of(files)
+    backward = graph_of(dict(reversed(list(files.items()))))
+    assert edges_of(forward) == edges_of(backward)
+    assert edge(forward, "IMPORTS", "b/Main.cs::b.Main", "a/Alpha.cs::a.Alpha")[1:3] == (
+        0.95,
+        "import_path",
+    )
+
+
+def test_a_name_two_files_of_one_namespace_declare_resolves_by_path_not_by_order():
+    """
+    The other half of the same tiebreak: `build_index` merges a scope's names, and a partial
+    class or a duplicated helper puts two symbols under one name. The smaller path keeps it,
+    so a sibling's `same_scope` call lands on the same node whichever way the tree was walked.
+    """
+    files = {
+        "a/Two.cs": "namespace App;\n\npublic class Helper { public static int Go() => 2; }\n",
+        "a/One.cs": "namespace App;\n\npublic class Helper { public static int Go() => 1; }\n",
+        "a/Three.cs": "namespace App;\n\npublic class C { public int R() => Helper.Go(); }\n",
+    }
+    forward = graph_of(files)
+    backward = graph_of(dict(reversed(list(files.items()))))
+    assert edges_of(forward) == edges_of(backward)
+    assert edge(forward, "INVOKES", "a/Three.cs::C.R", "a/One.cs::Helper.Go")[1:3] == (
+        1.00,
+        "same_scope",
+    )
 
 
 def test_a_file_that_is_not_c_sharp_is_untouched():

@@ -28,6 +28,7 @@ from tests.fakes.code_fixture import write_commit_history
 PLACE_QUESTION = "What does pyapp.orders.OrderService.place call?"
 GO_PLACE_QUESTION = "What does goapp.orders.service.Service.Place call?"
 RS_PLACE_QUESTION = "What does rsapp.src.orders.OrderService.place call?"
+CS_PLACE_QUESTION = "What does csapp.Orders.OrderService.OrderService.Place call?"
 
 PLACE_TITLE = "pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)"
 LOG_TITLE = "pyapp/orders.py :: pyapp.orders.OrderService.log (lines 25-25)"
@@ -161,10 +162,15 @@ def test_code_questions_are_the_documented_functions_that_call(code_index):
     questions = code_questions(index, source_id, 5)
 
     # `place` is the only function with both a doc >= 80 chars and an INVOKES out-edge -- once per
-    # tree, since `rsapp` and `goapp` tell the same story: `cli.main`, `test_place`, `save`,
-    # `list_open`, `graph` and `Order.total` all call but carry no doc, and `OrderService`,
-    # `Service` and `Order` carry a doc but call nothing. Display order, so `goapp` leads.
-    assert [q["text"] for q in questions] == [GO_PLACE_QUESTION, PLACE_QUESTION, RS_PLACE_QUESTION]
+    # tree, since `rsapp`, `goapp` and `csapp` tell the same story: `cli.main`, `test_place`,
+    # `save`, `list_open`, `graph` and `Order.total` all call but carry no doc, and `OrderService`,
+    # `Service` and `Order` carry a doc but call nothing. Display order, so `csapp` leads.
+    assert [q["text"] for q in questions] == [
+        CS_PLACE_QUESTION,
+        GO_PLACE_QUESTION,
+        PLACE_QUESTION,
+        RS_PLACE_QUESTION,
+    ]
     question = next(q for q in questions if q["text"] == PLACE_QUESTION)
     assert question["kind"] == "code"
     assert question["expected_answer"] == (
@@ -247,7 +253,12 @@ def test_generate_questions_stores_the_code_and_commit_questions(code_history):
     questions = ctx.store.list_questions(set_id)
     code = [q for q in questions if q["kind"] == "code"]
     commits = [q for q in questions if q["kind"] == "commit"]
-    assert [q["text"] for q in code] == [GO_PLACE_QUESTION, PLACE_QUESTION, RS_PLACE_QUESTION]
+    assert [q["text"] for q in code] == [
+        CS_PLACE_QUESTION,
+        GO_PLACE_QUESTION,
+        PLACE_QUESTION,
+        RS_PLACE_QUESTION,
+    ]
     assert [q["text"] for q in commits] == ['What changed in the commit "Raise OrderError from save"?']
     passage_ids = set(ctx.store.passage_ids_for_source(source_id))
     for q in code + commits:
@@ -298,7 +309,7 @@ def test_the_baseline_run_turns_code_seeding_off(code_index):
         "code_select": False,
         "code_structural_scale": 0.0,
     }
-    assert with_code["questions"] == baseline["questions"] == 3  # one `place` per tree
+    assert with_code["questions"] == baseline["questions"] == 4  # one `place` per tree
     assert with_code["errors"] == baseline["errors"] == 0
     assert with_code["code_seeded"] == 1.0
     assert baseline["code_seeded"] == 0.0
