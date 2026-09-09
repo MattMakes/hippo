@@ -17,12 +17,18 @@ What is left here is the three cases a fixed tree of ten files genuinely cannot 
 * **a symbol busy enough to crowd the answer block** - the tree's busiest function makes three
   calls, and QA1 defect 1 needs ten of them plus one caller before `code_triples_chars` bites.
   `call_hub` writes that shape, plus a second unrelated seed to watch the round-robin with.
+* **symbols in a language the tree has no walker for yet** - `find_anchors` resolves a stack frame
+  by path and line and never asks what language wrote it, so the Go / .NET / Rust frame shapes can
+  be tested before those walkers land. `polyglot_symbols` writes the `.go`/`.cs`/`.rs` half of the
+  order-service story `ai_docs/add_langs.md` describes, at the paths and line ranges its fixture
+  trees will have.
 """
 
 from __future__ import annotations
 
 from hippo.codegraph.model import commit_id, symbol_id
 from hippo.hipporag.indexer import Chunk, index_source, passage_id
+from hippo.hipporag.paths import module_of
 
 # Ordinals well past the tree's own passages, so the two sets never interleave in `load_passages`.
 FIRST_COMMIT_ORDINAL = 900
@@ -134,6 +140,73 @@ def many_symbols(ctx, source_id: str, name: str, how_many: int) -> list[str]:
     )
     ctx.invalidate_graph()
     return [row["id"] for row in rows]
+
+
+# (lang, path, qualname, kind, line_start, line_end) - the shape `add_symbols` rows take. The paths
+# and the story are `ai_docs/add_langs.md`'s; the line ranges are a plausible layout of those files,
+# chosen so a class spans its methods and a frame has an unambiguous innermost symbol.
+POLYGLOT: list[tuple[str, str, str, str, int, int]] = [
+    ("go", "goapp/orders/service.go", "Service", "class", 12, 40),
+    ("go", "goapp/orders/service.go", "Service.Place", "method", 16, 24),
+    ("go", "goapp/orders/service.go", "Service.ListOpen", "method", 26, 30),
+    ("go", "goapp/cmd/main.go", "main", "function", 5, 9),
+    ("csharp", "csapp/Orders/OrderService.cs", "OrderService", "class", 10, 60),
+    ("csharp", "csapp/Orders/OrderService.cs", "OrderService.Place", "method", 14, 24),
+    ("csharp", "csapp/Orders/OrderService.cs", "OrderService.Save", "method", 26, 34),
+    ("csharp", "csapp/Orders/OrderService.cs", "OrderService.ListOpen", "method", 36, 40),
+    ("csharp", "csapp/Store/Base.cs", "InvalidOrderException", "class", 12, 14),
+    ("rust", "rsapp/src/orders.rs", "OrderService", "class", 6, 10),
+    ("rust", "rsapp/src/orders.rs", "OrderService.log", "method", 14, 16),
+    ("rust", "rsapp/src/orders.rs", "OrderService.place", "method", 18, 26),
+    ("rust", "rsapp/src/main.rs", "main", "function", 3, 8),
+]
+
+# Ordinals of their own, between `call_hub`'s 700s and `many_symbols`' 800s.
+FIRST_POLYGLOT_ORDINAL = 600
+
+
+def polyglot_symbols(ctx, source_id: str) -> dict[str, str]:
+    """
+    The Go, C# and Rust half of the order-service story, written straight through the store.
+
+    The walkers for those three languages are being built in parallel (`ai_docs/add_langs.md`);
+    `find_anchors` needs none of them, because a stack frame resolves by `path_index` and a line
+    range and a qualified name, none of which knows what language the symbol came from. Symbols get
+    a passage and a `DEFINED_IN` like `many_symbols`, so the shape is one the real indexer could
+    have written. Returns the display names, keyed `<lang>:<qualname>`.
+    """
+    rows, chunks = [], []
+    for ordinal, (lang, path, qualname, kind, start, end) in enumerate(POLYGLOT):
+        rows.append(
+            {
+                "id": symbol_id(source_id, path, qualname),
+                "source_id": source_id,
+                "name": qualname.rsplit(".", 1)[-1],
+                "qualname": qualname,
+                "kind": kind,
+                "lang": lang,
+                "path": path,
+                "line_start": start,
+                "line_end": end,
+            }
+        )
+        chunks.append(
+            Chunk(
+                FIRST_POLYGLOT_ORDINAL + ordinal,
+                f"{path} :: {qualname} (lines {start}-{end})",
+                f"{qualname} keeps orders in {path}.",
+            )
+        )
+    ctx.store.add_symbols(rows)
+    index_source(ctx.store, ctx.ollama, source_id, chunks)
+    ctx.store.link_definitions(
+        [(row["id"], passage_id(source_id, chunk)) for row, chunk in zip(rows, chunks, strict=True)]
+    )
+    ctx.invalidate_graph()
+    return {
+        f"{lang}:{qualname}": f"{module_of(path)}.{qualname}"
+        for lang, path, qualname, _kind, _start, _end in POLYGLOT
+    }
 
 
 # The hub the real-model smoke tripped over (QA1 defect 1): `find_anchors` had sixteen outgoing
