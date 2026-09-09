@@ -21,6 +21,7 @@ Three groups:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from hippo.codegraph import extract_code
+from hippo.codegraph import extract_code, resolve
 from hippo.codegraph.data_access import (
     classify_literal,
     cypher_objects,
@@ -43,11 +44,14 @@ from hippo.codegraph.model import (
     LANG_BY_SUFFIX,
     PARSED_LANGS,
     CodeEdge,
+    FileFacts,
+    Symbol,
     merge_edges,
     name_text,
     symbol_id,
 )
 from hippo.codegraph.python import is_test_path, module_qualname
+from hippo.codegraph.resolve import Resolution
 from hippo.codegraph.treesitter import GRAMMARS, get_language, grammar_for
 from hippo.ingest import readers
 from tests.conftest import CODE_SAMPLE_PATH, code_sample_docs
@@ -193,6 +197,134 @@ def test_parsed_langs_is_exactly_the_languages_with_a_walker():
     lands: register the walker, add the language here.
     """
     assert sorted(PARSED_LANGS) == sorted(name for name, r in RULES.items() if r.walk is not None)
+
+
+def as_python(**overrides):
+    """Python's rules with one hook swapped, to exercise a rule no shipped language uses yet."""
+    return dataclasses.replace(RULES["python"], **overrides)
+
+
+def test_a_same_scope_name_needs_no_import_and_is_worth_1_00(monkeypatch):
+    """
+    Go's package and C#'s namespace make a sibling file's name visible with no import. The
+    resolver seeds those after the file's own `defines`, so an own name still wins as
+    `same_file`, and a sibling's is `same_scope` at 1.00 -- the language resolves it as
+    unambiguously as a local name, and 0.90 `via_import` would understate it.
+    """
+
+    def scope_defines(index, facts):
+        return {
+            name: symbol
+            for module, names in index.defines.items()
+            if module != facts.module
+            for name, symbol in names.items()
+        }
+
+    monkeypatch.setitem(RULES, "python", as_python(scope_defines=scope_defines))
+    graph = graph_of(
+        {
+            "billing.py": "def total(o):\n    return 1\n",
+            "orders.py": "def place(o):\n    return total(o)\n",
+        }
+    )
+    assert edge(graph, "INVOKES", "orders.py::place", "billing.py::total")[1:3] == (1.00, "same_scope")
+
+
+def test_a_scope_resolution_answers_for_the_names_it_holds(monkeypatch):
+    """
+    `ledger.Post` where `ledger` is a package or a namespace, not a file: `resolve_module`
+    hands back a `Resolution` carrying the scope, and `_on_class`'s sibling `_in_scope`
+    reads the member out of it. The tier is the holder's distance, as for any other import.
+    """
+
+    def resolve_module(index, facts, spec):
+        target = index.modules.get(spec.module)
+        if target is None:
+            return None
+        return Resolution(
+            index.module_symbol(target),
+            0.95,
+            "import_path",
+            is_module=True,
+            scope=dict(index.defines.get(target.module, {})),
+        )
+
+    monkeypatch.setitem(RULES, "python", as_python(resolve_module=resolve_module))
+    graph = graph_of(
+        {
+            "ledger.py": "def post(entry):\n    return 1\n",
+            "orders.py": "import ledger\n\ndef place(o):\n    return ledger.post(o)\n",
+        }
+    )
+    assert edge(graph, "INVOKES", "orders.py::place", "ledger.py::post")[1:3] == (0.90, "via_import")
+    assert ("IMPORTS", "orders.py::orders", "ledger.py::ledger") in links(graph, "IMPORTS")
+
+
+def test_a_class_can_hold_members_in_another_file(monkeypatch):
+    """
+    Rust puts `impl S` in any file, so which files may hold a member of `S` is the
+    language's call. Every other language answers "the one the class is in".
+    """
+    monkeypatch.setitem(
+        RULES, "python", as_python(member_paths=lambda index, qualname, path: sorted(index.files))
+    )
+    graph = graph_of(
+        {
+            "impl.py": "class Service:\n    def log(self, m):\n        return m\n",
+            "app.py": "class Service:\n    pass\n\ndef go(s=Service()):\n    return Service().log(1)\n",
+        }
+    )
+    assert edge(graph, "INVOKES", "app.py::go", "impl.py::Service.log")[1:3] == (0.90, "via_import")
+
+
+def test_build_index_merges_a_scope_and_owns_an_inline_module():
+    """
+    `FileFacts.scope` is what a Go package or a C# namespace is called; `build_index` merges
+    every file of one, first declaration winning. And a symbol of kind `module` that is not
+    the file's own -- Rust's inline `mod tests { }` -- is an ordinary container.
+    """
+    facts = []
+    for path, scope in (("a.py", "pkg"), ("b.py", "pkg"), ("c.py", "other")):
+        module = module_qualname(path)
+        symbols = [Symbol(id=f"m-{path}", name=module, qualname=module, kind="module", path=path)]
+        symbols.append(Symbol(id=f"f-{path}", name=path[0], qualname=path[0], kind="function", path=path))
+        facts.append(FileFacts(path=path, lang="python", module=module, scope=scope, symbols=symbols))
+    index = resolve.build_index(facts, {"python": "state"})
+    assert sorted(index.scopes[("python", "pkg")]) == ["a", "b"]
+    assert sorted(index.scopes[("python", "other")]) == ["c"]
+    assert index.lang_state == {"python": "state"}
+
+    inline = FileFacts(
+        path="lib.rs",
+        lang="rust",
+        module="lib",
+        symbols=[
+            Symbol(id="m", name="lib", qualname="lib", kind="module", path="lib.rs"),
+            Symbol(id="t", name="tests", qualname="tests", kind="module", path="lib.rs"),
+            Symbol(id="f", name="works", qualname="tests.works", kind="function", path="lib.rs"),
+        ],
+    )
+    index = resolve.build_index([inline])
+    assert sorted(index.defines["lib"]) == ["tests"]  # the inline mod is a top-level name...
+    assert index.members[("lib.rs", "tests")]["works"].id == "f"  # ...and owns what is in it
+
+
+def test_source_setup_runs_once_over_the_raw_documents(monkeypatch):
+    """
+    Go reads `go.mod` and Rust finds its crate root once per source, not per file, and from
+    the *documents* -- `go.mod` is not a file any walker parses. A language that produced no
+    files is not asked at all.
+    """
+    seen = []
+
+    def source_setup(docs):
+        seen.append([d.title for d in docs])
+        return "once"
+
+    monkeypatch.setitem(RULES, "python", as_python(source_setup=source_setup))
+    monkeypatch.setitem(RULES, "go", dataclasses.replace(RULES["go"], source_setup=source_setup))
+    graph_of({"a.py": "def f():\n    return 1\n", "notes.md": "# hi\n", "tool.go": "package main\n"})
+    assert seen == [["a.py", "notes.md", "tool.go"]]  # once, for Python only: Go has no walker
 
 
 def test_a_registered_language_with_no_walker_is_skipped_as_unsupported():

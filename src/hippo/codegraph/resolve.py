@@ -439,8 +439,7 @@ def _call_target(index: SourceIndex, facts: FileFacts, call) -> Resolution | Non
     holder = _receiver_type(index, facts, call, receiver)
     if holder is not None:
         if holder.scope is not None:
-            found = _in_scope(facts, holder, name)
-            return found if found is not None else None
+            return _in_scope(facts, holder, name)
         if holder.is_module:
             found = resolve_member(index, index.modules[holder.symbol.qualname], name)
             return _through(facts, found) if found is not None else None
