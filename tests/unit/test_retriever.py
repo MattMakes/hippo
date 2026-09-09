@@ -523,20 +523,20 @@ def test_naming_a_symbol_lifts_its_passage_into_what_the_model_reads(
     **The lexical anchor on its own** puts the passage first. `code_dense_seeds=0` takes the dense
     seeds away and `passage_node_weight=0` stops a passage seeding itself, so the anchored symbol
     is the only thing in the graph that can reach a passage at all -- and what it reaches, through
-    DEFINED_IN, is the passage that defines it: rank 1 of 75, from rank 35 with the anchor off.
+    DEFINED_IN, is the passage that defines it: rank 1 of 95, from rank 40 with the anchor off.
     That is the sentence the docs make, and it is a property of the anchor rather than of any
     embedder.
 
     **At the defaults the exact position is not.** `split_question` leaves "What does do?" as the
-    prose half, so `FakeOllama`'s feature-hashed vectors order 75 passages on noise, and every tree
+    prose half, so `FakeOllama`'s feature-hashed vectors order 95 passages on noise, and every tree
     the fixture adds puts another twin of this passage above it: each tells the same story, so each
     contributes a four-line entry point calling `place`, and under feature hashing those are the
-    passage's nearest neighbours (`goapp/cmd/main.go` ranks 4th here, `rsapp/src/main.rs` 9th,
-    `pyapp/cli.py` 7th). Measured with three trees: rank 35 with the anchor off, 6 with the anchor
-    and the default passage weight, 7 at the defaults. What holds at the defaults is the lift
-    itself and the activation: the passage ranks better than it does with the anchor off, and the
-    symbol is the most activated node in the graph by a factor of three. A real embedder is what
-    would make the literal top 3 hold.
+    passage's nearest neighbours (`goapp/cmd/main.go` ranks 3rd here and `csapp/Program.cs` 6th).
+    Measured with four trees: rank 40 with the anchor off, 6 with the anchor and the default
+    passage weight, 7 at the defaults. What holds at the defaults is the lift itself and the
+    activation: the passage ranks better than it does with the anchor off, and the symbol is the
+    most activated node in the graph by a factor of four. A real embedder is what would make the
+    literal top 3 hold.
     """
     index = code_retriever.index
     passage_id = index.node_ids[index.defining_passages(index.idx_of[place_id(index, code_source)])[0]]
@@ -563,10 +563,11 @@ def test_naming_the_rust_symbol_seeds_the_rust_one_and_lifts_its_passage(
     `rsapp.src.orders.OrderService.place` in full seeds *that* symbol, alone and whole, and makes
     it the most activated node in the graph.
 
-    The passage goes from dense rank 26 to rank 9, not into `qa_top_k`: the eight above it are the
-    short `rsapp` module headers `FakeOllama`'s feature-hashed vectors happen to like on a question
-    whose prose half is "What does do?". The lift is the anchor's doing; the exact position is the
-    embedder's, as the test above says at length.
+    The passage goes from dense rank 42 to rank 14, not into `qa_top_k`: above it are the short
+    module headers and entry points `FakeOllama`'s feature-hashed vectors happen to like on a
+    question whose prose half is "What does do?", and there is one more tree's worth of them with
+    every language added. The lift is the anchor's doing; the exact position is the embedder's, as
+    the test above says at length.
     """
     index = code_retriever.index
     rust_place = symbol_id(code_source, "rsapp/src/orders.rs", "OrderService.place")
@@ -597,8 +598,8 @@ def test_naming_the_go_symbol_seeds_the_go_one_and_lifts_its_passage(
     and leaves the Python `place` unseeded.
 
     Split by mechanism exactly as the test above is. Isolated (`passage_node_weight=0`), the anchor
-    puts the passage first, of 75. With passages seeding themselves it is rank 2, from dense rank
-    20 -- and what sits above it is `goapp/cmd/main.go`, the four-line entry point that calls it.
+    puts the passage first, of 95. With passages seeding themselves it is rank 2, from dense rank
+    26 -- and what sits above it is `goapp/cmd/main.go`, the four-line entry point that calls it.
     Only the lift is pinned there: another tree's entry point is another twin, and the exact
     position is the embedder's.
     """
@@ -616,6 +617,41 @@ def test_naming_the_go_symbol_seeds_the_go_one_and_lifts_its_passage(
     assert [(s.node_id, s.n_matches) for s in named] == [(go_place, 1)]
     assert place_id(index, code_source) not in {s.node_id for s in trace.seed_symbols}
     assert index.node_ids[trace.top_nodes[0].vertex] == go_place
+    assert trace.top_nodes[0].score > 4 * trace.top_nodes[1].score
+    assert {p.passage_id: p.rank for p in isolated.passages}[passage_id] <= settings()["qa_top_k"]
+    ranks = {p.passage_id: p.rank for p in trace.passages}
+    assert ranks[passage_id] < {p.passage_id: p.rank for p in without.passages}[passage_id] - 10
+
+
+def test_naming_the_csharp_symbol_seeds_the_csharp_one_and_lifts_its_passage(
+    code_retriever: Retriever, code_source: str
+) -> None:
+    """
+    The fourth tree, and the case the display name is load-bearing for: C# spells the method
+    `OrderService.Place`, and `resolve_symbol` and the bare-name anchor both lower-case, so the
+    *qualname* collides outright with the Python and the Rust `OrderService.place`. Only the
+    module path tells them apart -- and here the module is a file called `OrderService.cs` inside
+    a namespace directory called `Orders`, so the display name says `OrderService` twice.
+
+    Split by mechanism exactly as the two tests above are. Isolated (`passage_node_weight=0`), the
+    anchor puts the passage first, of 95. With passages seeding themselves it is rank 5, from dense
+    rank 43 -- and three of the four above it are entry-point-shaped twins, `csapp/Program.cs` and
+    the `csapp` test module among them. Only the lift is pinned there.
+    """
+    index = code_retriever.index
+    cs_place = symbol_id(code_source, "csapp/Orders/OrderService.cs", "OrderService.Place")
+    passage_id = index.node_ids[index.defining_passages(index.idx_of[cs_place])[0]]
+    question = "What does csapp.Orders.OrderService.OrderService.Place do?"
+
+    without = code_retriever.retrieve(question, settings(code_seed_weight=0.0, code_dense_seeds=0))
+    isolated = code_retriever.retrieve(question, settings(code_dense_seeds=0, passage_node_weight=0.0))
+    trace = code_retriever.retrieve(question, settings(code_dense_seeds=0))
+
+    assert trace.used_code_seeds is True
+    named = [s for s in trace.seed_symbols if s.kept and s.how == "identifier"]
+    assert [(s.node_id, s.n_matches) for s in named] == [(cs_place, 1)]
+    assert place_id(index, code_source) not in {s.node_id for s in trace.seed_symbols}
+    assert index.node_ids[trace.top_nodes[0].vertex] == cs_place
     assert trace.top_nodes[0].score > 4 * trace.top_nodes[1].score
     assert {p.passage_id: p.rank for p in isolated.passages}[passage_id] <= settings()["qa_top_k"]
     ranks = {p.passage_id: p.rank for p in trace.passages}

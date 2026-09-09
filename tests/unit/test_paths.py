@@ -202,6 +202,44 @@ def test_a_go_test_in_the_same_package_calls_at_the_same_scope_tier(index: Graph
     ]
 
 
+def test_the_same_call_in_the_csharp_tree_renders_the_same_way(index: GraphIndex) -> None:
+    """
+    `hippo path csapp.…OrderService.Place csapp.Billing.Billing.Billing.Total`: the fourth telling,
+    and the same 0.90 `via_import` tier -- the call goes through `using CsApp.Billing;`. C# reaches
+    1.00 `same_scope` for a *sibling of its namespace* (the walker's own tests pin that), which the
+    fixture tree deliberately has no site for: two files declaring one namespace would make the
+    IMPORTS edge for a `using` of it a choice between them.
+    """
+    walk = shortest_code_path(
+        index,
+        vertex(index, "csapp.Orders.OrderService.OrderService.Place"),
+        vertex(index, "csapp.Billing.Billing.Billing.Total"),
+        theta=THETA,
+    )
+    assert lines(index, walk) == [
+        "csapp.Orders.OrderService.OrderService.Place "
+        "-[INVOKES 0.90 via_import]-> csapp.Billing.Billing.Billing.Total"
+    ]
+    assert not any(e.provenance == "same_scope" for e in direct_edges(index, walk[0].src, theta=THETA))
+
+
+def test_a_csharp_entry_point_reaches_place_through_its_using(index: GraphIndex) -> None:
+    """
+    `csapp/Program.cs` is top-level statements, so the *module* is the caller. The `using` is what
+    makes this an edge at all: phase A measured the same file without one at 0.50 `fuzzy_name`,
+    pointing at the method with no edge to the class that holds it.
+    """
+    walk = shortest_code_path(
+        index,
+        vertex(index, "csapp.Program"),
+        vertex(index, "csapp.Orders.OrderService.OrderService.Place"),
+        theta=THETA,
+    )
+    assert lines(index, walk) == [
+        "csapp.Program -[INVOKES 0.90 via_import]-> csapp.Orders.OrderService.OrderService.Place"
+    ]
+
+
 def test_a_data_access_edge_renders_with_its_kind_and_confidence(index: GraphIndex) -> None:
     walk = shortest_code_path(
         index, vertex(index, "pyapp.orders.OrderService.save"), vertex(index, "table orders"), theta=THETA
