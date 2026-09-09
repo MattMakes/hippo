@@ -12,20 +12,42 @@ codes to a file). Your language, worktree, branch and Neo4j port are in the spaw
 `code-graph` now contains L0: `src/hippo/codegraph/languages.py` with the `LanguageRules` registry,
 the grammar for your language already loading (`treesitter.get_language("<lang>")`), your suffixes
 in `LANG_BY_SUFFIX` / `readers.lang_of`, `LINE_COMMENT` `//`, the PascalCase Mongo names and
-collection markers in `data_access.py`, `same_scope` at ω 1.00, `Self`/`base` in `SELF_NAMES`/
-`SUPER_NAMES`, `FileFacts.scope` + `SourceIndex.scopes`, `LanguageRules.source_setup` +
-`SourceIndex.lang_state`, `member_paths`, `Resolution.scope`. **Read the L0 ledger summary
-(`horch sessions`, the `opus-7` entry) and `languages.py` before writing a line** — the hooks are how
-you plug in without editing shared files. Two other language workers run in parallel.
+collection markers in `data_access.py`, `same_scope` at ω 1.00, **per-language** `self_names` /
+`super_names` on `LanguageRules` (C#'s already holds `base`, Rust's `Self`; `model.SELF_NAMES` /
+`SUPER_NAMES` are only the defaults), `FileFacts.scope` + `SourceIndex.scopes`,
+`LanguageRules.source_setup` + `SourceIndex.lang_state`, `member_paths`, `Resolution.scope`, and
+`languages.PARSED_LANGS` DERIVED from the walker keys (so registering your walker is what turns on
+MODIFIES for your language — nothing in `model.py`). The walker signature is
+`walk(path: str, root_node: Node, source_id: str) -> FileFacts`. **The shared defaults do not cover
+your test files**: C# must register its own `is_test_path` and `test_stem` (`Orders.Tests/
+OrderServiceTests.cs` is a test file, stem `OrderService`), Rust its own `test_stem`
+(`tests/orders.rs` → `orders`); Go's defaults already work. A registered-but-unwalked language is
+counted as `unsupported` in `files_skipped` (no new reason string). **Read the two L0 ledger handoff
+notes (`horch sessions`, the `opus-7` entry) and `languages.py` before writing a line** — the hooks are
+how you plug in without editing shared files. Two other language workers run in parallel.
+
+## Two spawns per language (sizing rule: finish inside your first ~400k tokens)
+
+**Phase A — walker + pure tests.** `src/hippo/codegraph/<lang>.py`, its `RULES_ENTRY`, the ONE
+registration line in `languages.py`, and `tests/unit/test_codegraph_<lang>.py` written against INLINE
+`Document` lists (the way `test_codegraph.py` covers the resolver rows the shared fixture lacks). Do not
+touch the shared fixture tree, `expected.json` or any count literal. Three stores green (nothing you
+touch should change an existing test except `tools/build.go` moving to `files_parsed` for Go — Go's
+phase A DOES move the `test_indexer.py` OpenIE-policy assertion to a new `tools/build.rb`). Ledger
+summary + `PHASE A DONE` via `horch tell`, close pane.
+
+**Phase B — fixture + golden file** (a fresh worker, briefed from phase A's ledger): the
+`<lang>app/` tree, `expected.json` regeneration reviewed row by row, the count literals, the chunker
+placeholder cases, and one `test_retriever.py` case via `code_index` naming a symbol of your language.
 
 ## What you own
 
-- `src/hippo/codegraph/<lang>.py` (new): the walker (`walk(path, root, text) -> FileFacts` or whatever
-  `LanguageRules.walk` is typed as), the language's `resolve_module`, `scope_defines`,
-  `module_qualname`, `is_test_path`, `test_stem`, `source_setup`, `member_paths` as your Step needs,
-  and the module-level `RULES_ENTRY` that registers it. Register it wherever L0 said walkers register
-  (one line in `languages.py` if that is the mechanism — that single line is the only shared-file edit
-  you may make without asking).
+- `src/hippo/codegraph/<lang>.py` (new): the walker (`walk(path, root_node, source_id) -> FileFacts`),
+  the language's `resolve_module`, `scope_defines`, `module_qualname`, `is_test_path`, `test_stem`,
+  `source_setup`, `member_paths`, `self_names`/`super_names` as your Step needs, and the module-level
+  `RULES_ENTRY`. Register it with the ONE line in `languages.py` (import the module, swap the
+  placeholder `register(LanguageRules(name="<lang>", ...))` for `register(<lang>_walker.RULES_ENTRY)`) —
+  that single line is the only shared-file edit you may make without asking.
 - `tests/fixtures/code_sample/<lang>app/**` exactly as the plan's "Fixture additions" block draws it,
   mirroring the `pyapp`/`tsapp` "order service" story so the same `orders` table, `archive_orders`
   collection and `Order`/`Customer`/`PLACED_BY` Cypher objects dedupe across trees. Recompute line
@@ -56,7 +78,7 @@ you plug in without editing shared files. Two other language workers run in para
 ## Rules
 
 - Do not edit `resolve.py`, `extract.py`, `model.py`, `data_access.py`, `chunker.py`, `python.py`,
-  `typescript.py`, `anchors.py`. If a hook you need is missing or wrong, `horch tell orchestrator` with
+  `typescript.py`, `anchors.py`, `git_history.py`. If a hook you need is missing or wrong, `horch tell orchestrator` with
   the exact change you need and WAIT; do not work around it in your walker.
 - Decisions the plan already took (its "Decisions taken here" list) are settled. Where your Step is
   silent, choose the reading that mirrors `python.py`/`typescript.py`, and write it in the ledger.
