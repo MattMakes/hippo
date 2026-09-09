@@ -42,6 +42,7 @@ from hippo.codegraph.languages import PARSED_LANGS, RULES
 from hippo.codegraph.model import (
     CODE_MAX_FILE_BYTES,
     LANG_BY_SUFFIX,
+    BaseFact,
     CodeEdge,
     FileFacts,
     LanguageRules,
@@ -296,6 +297,55 @@ def test_a_member_of_a_sibling_file_in_the_same_scope_is_worth_1_00(monkeypatch)
     monkeypatch.setitem(RULES, "python", as_python(walk=scoped_walk, scope_defines=package_names))
     monkeypatch.setitem(extract.WALKERS, "python", scoped_walk)
     assert edge(graph_of(files), "INVOKES", *call)[1:3] == (1.00, "same_scope")
+
+
+def test_a_type_declared_in_another_file_still_inherits_contains_and_overrides(monkeypatch):
+    """
+    Rust writes `impl Base for OrderService` in whatever file it likes, so the class a
+    `BaseFact` is about, and the owner a method hangs off, are not always in the file that
+    wrote them. Both lookups go through `member_paths` -- the same hook `_on_class` uses --
+    so a language that spreads a type over files gets INHERITS, CONTAINS and OVERRIDES, and
+    every other language, whose answer is "this file", is untouched.
+
+    Written against Python with the hook swapped rather than against a real Rust tree: this
+    is a resolver rule, and it must hold for whoever needs it next.
+    """
+    facts = []
+    for path, symbols, bases in (
+        ("base.py", [("Base", "class"), ("Base.log", "method")], []),
+        ("model.py", [("Service", "class")], []),
+        ("impl.py", [("Service.log", "method")], [("Service", "Base")]),
+    ):
+        module = module_qualname(path)
+        rows = [Symbol(id=f"m-{path}", name=module, qualname=module, kind="module", path=path)]
+        rows += [
+            Symbol(id=f"{path}:{q}", name=q.rpartition(".")[2], qualname=q, kind=k, path=path)
+            for q, k in symbols
+        ]
+        facts.append(
+            FileFacts(
+                path=path,
+                lang="python",
+                module=module,
+                symbols=rows,
+                bases=[BaseFact(cls=cls, base=base) for cls, base in bases],
+            )
+        )
+    everywhere = dataclasses.replace(
+        RULES["python"], member_paths=lambda index, qualname, path: sorted(index.files)
+    )
+    monkeypatch.setitem(RULES, "python", everywhere)
+    index = resolve.build_index(facts)
+    index.bindings["impl"] = {"Base": Resolution(index.symbols[("base.py", "Base")], 1.00, "same_file")}
+
+    inherits = resolve.resolve_bases(index)
+    assert [(e.a, e.b, e.omega, e.provenance) for e in inherits] == [
+        ("model.py:Service", "base.py:Base", 0.90, "resolved")
+    ]
+    overrides = resolve.resolve_overrides(index)
+    assert [(e.a, e.b) for e in overrides] == [("impl.py:Service.log", "base.py:Base.log")]
+    contains = extract._contains(index, index.files["impl.py"])
+    assert [(e.a, e.b) for e in contains] == [("model.py:Service", "impl.py:Service.log")]
 
 
 def test_the_fuzzy_stoplist_is_matched_in_any_case():
@@ -1354,6 +1404,173 @@ def test_a_collection_call_names_the_collection():
         assert (hit.kind, hit.qualname, hit.access) == ("collection", "archive_orders", "WRITES"), chain
     assert mongo_hit("service.repository()", "InsertOne") is None
     assert mongo_hit("client.Collection(name)", "InsertOne") is None  # not a literal: no name
+
+
+def test_node_driver_collection_call_direct_chain():
+    """
+    `db.collection("x").method(...)` -- the official Node MongoDB driver's own idiom
+    (E1-territory-updater Defect 2): a call chain, not PyMongo's attribute chain, but the
+    string argument still names the collection.
+    """
+    graph = graph_of(
+        {
+            "src/territoryService.ts": (
+                "async function readOne(db) {\n"
+                '  return db.collection("territory").findOne({});\n'
+                "}\n"
+                "async function writeOne(db) {\n"
+                '  return db.collection("territory").updateOne({}, {});\n'
+                "}\n"
+            ),
+        }
+    )
+    reads_writes = edges_of(graph, "READS") | edges_of(graph, "WRITES")
+    assert (
+        "READS",
+        0.85,
+        "mongo_chain",
+        "src/territoryService.ts::readOne",
+        "collection:territory",
+    ) in reads_writes
+    assert (
+        "WRITES",
+        0.85,
+        "mongo_chain",
+        "src/territoryService.ts::writeOne",
+        "collection:territory",
+    ) in reads_writes
+
+
+def test_node_driver_collection_call_bound_to_a_variable():
+    """
+    `const col = db.collection("x"); col.method(...)` -- the `AssignFact` path: the
+    collection name has to survive being stashed on a binding, then be read back off a bare
+    `col.updateOne(...)` with no chain left in sight.
+    """
+    graph = graph_of(
+        {
+            "src/territoryService.ts": (
+                "async function writeOne(db) {\n"
+                '  const col = db.collection("territory");\n'
+                "  return col.updateOne({}, {});\n"
+                "}\n"
+            ),
+        }
+    )
+    assert (
+        "WRITES",
+        0.85,
+        "mongo_chain",
+        "src/territoryService.ts::writeOne",
+        "collection:territory",
+    ) in edges_of(graph, "WRITES")
+
+
+def test_node_driver_collection_call_non_literal_argument_names_nothing():
+    """
+    A dynamic collection name -- a plain variable or a template literal -- can't be read
+    statically, so it invents no data object, direct or bound.
+    """
+    graph = graph_of(
+        {
+            "src/territoryService.ts": (
+                "async function dynamicName(db, name) {\n"
+                "  return db.collection(name).findOne({});\n"
+                "}\n"
+                "async function templated(db, suffix) {\n"
+                "  return db.collection(`territory_${suffix}`).findOne({});\n"
+                "}\n"
+                "async function boundDynamic(db, name) {\n"
+                "  const col = db.collection(name);\n"
+                "  return col.findOne({});\n"
+                "}\n"
+            ),
+        }
+    )
+    assert graph.data_objects == []
+    assert links(graph, "READS") == set()
+    assert links(graph, "WRITES") == set()
+
+
+def test_pymongo_attribute_chain_is_unchanged():
+    """The PyMongo-style attribute chain still classifies -- the Node driver's call-based
+    idiom is additive, not a replacement."""
+    graph = graph_of(
+        {
+            "src/legacy.ts": ("async function readOne(db) {\n  return db.archive_orders.find_one({});\n}\n"),
+        }
+    )
+    assert (
+        "READS",
+        0.85,
+        "mongo_chain",
+        "src/legacy.ts::readOne",
+        "collection:archive_orders",
+    ) in edges_of(graph, "READS")
+
+
+def test_typescript_destructured_require_resolves_like_a_named_import():
+    """
+    `const {a, b: c} = require("./x")` -- one `ImportFact` per destructured name, with its
+    alias, the same shape `import {a, b as c} from "./x"` already gets (E1-territory-updater
+    Q2: `_tickLoop`'s destructured `runWorkerLoop` never produced an INVOKES edge before this).
+    """
+    graph = graph_of(
+        {
+            "src/workerLoop.ts": (
+                "export async function runWorkerLoop() { return 1; }\n"
+                "export function claimNextJob() { return 2; }\n"
+            ),
+            "src/exportQueueService.ts": (
+                'const { runWorkerLoop, claimNextJob: claim } = require("./workerLoop");\n'
+                "function tick() {\n"
+                "  runWorkerLoop();\n"
+                "  claim();\n"
+                "}\n"
+            ),
+        }
+    )
+    invokes = edges_of(graph, "INVOKES")
+    assert (
+        "INVOKES",
+        0.90,
+        "via_import",
+        "src/exportQueueService.ts::tick",
+        "src/workerLoop.ts::runWorkerLoop",
+    ) in invokes
+    assert (
+        "INVOKES",
+        0.90,
+        "via_import",
+        "src/exportQueueService.ts::tick",
+        "src/workerLoop.ts::claimNextJob",
+    ) in invokes
+
+
+def test_typescript_plain_require_binds_the_whole_module():
+    """`const x = require("./y")` already produces the module-level IMPORTS edge -- CommonJS's
+    whole-module export has no per-name shape to bind, so `x` itself stays unresolved."""
+    graph = graph_of(
+        {
+            "src/workerLoop.ts": "export function claimNextJob() { return 1; }\n",
+            "src/app.ts": 'const wl = require("./workerLoop");\nwl();\n',
+        }
+    )
+    assert (
+        "IMPORTS",
+        0.95,
+        "import_path",
+        "src/app.ts::src.app",
+        "src/workerLoop.ts::src.workerLoop",
+    ) in edges_of(graph, "IMPORTS")
+    assert links(graph, "INVOKES") == set()
+
+
+def test_typescript_bare_specifier_require_has_no_edge():
+    """`require("express")` names a dependency, not part of this source: no edge (2.2b)."""
+    graph = graph_of({"src/app.ts": 'const express = require("express");\nexpress();\n'})
+    assert links(graph, "IMPORTS") == set()
+    assert links(graph, "INVOKES") == set()
 
 
 # ---------------------------------------------------- properties and budgets

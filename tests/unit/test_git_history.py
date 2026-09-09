@@ -283,19 +283,22 @@ def test_a_symbol_deleted_after_the_commit_that_touched_it_gets_no_edge(tmp_path
 
 
 def test_a_commit_whose_diff_times_out_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `_hunks` reads its diff through `_git_capped` (a Popen, not `subprocess.run`), so the
+    # timeout is simulated at that seam instead of at `subprocess.run` -- test plumbing only,
+    # the assertions below are unchanged.
     checkout = make_code_checkout(tmp_path)
     symbols = head_symbols(checkout)
     slow = git_out(checkout, "rev-parse", "HEAD~1").strip()  # the middle commit
-    real_run = git_history.subprocess.run
+    real_capped = git_history._git_capped
 
-    def sometimes_slow(command, **kwargs):
+    def sometimes_slow(checkout, args, timeout_s, max_bytes):
         # Only that commit's own diff. Its sha also appears as the *parent* of HEAD's diff,
         # which is a perfectly healthy command and must still run.
-        if command[-1] == slow and command[3] != "log":
-            raise subprocess.TimeoutExpired(command, kwargs.get("timeout", 0))
-        return real_run(command, **kwargs)
+        if args[-1] == slow:
+            raise subprocess.TimeoutExpired(["git", *args], timeout_s)
+        return real_capped(checkout, args, timeout_s, max_bytes)
 
-    monkeypatch.setattr(git_history.subprocess, "run", sometimes_slow)
+    monkeypatch.setattr(git_history, "_git_capped", sometimes_slow)
     history, _ = history_of(checkout, symbols)
 
     assert history.skipped == 1
@@ -410,6 +413,54 @@ def test_a_shallow_clones_oldest_commit_does_not_claim_the_whole_tree(tmp_path: 
     touched = modified(history, symbols)
     assert touched[0] == {"OrderService.save", "tsapp.index", "main"}  # the real tip diff
     assert 1 not in touched  # the boundary claims nothing, rather than claiming everything
+
+
+# ------------------------------------------------------------------ E1F-a
+
+
+def diff_bytes(checkout: Path, *args: str) -> bytes:
+    """The raw stdout of one git command, unlike `git_out` which decodes as text."""
+    return subprocess.run(["git", "-C", str(checkout), *args], capture_output=True, env=git_env()).stdout
+
+
+def test_a_commit_with_invalid_utf8_in_its_diff_is_read_with_replacement(tmp_path: Path) -> None:
+    # A byte outside valid UTF-8 inside a diff -- seen for real inside a vendored binary tree
+    # (Defect 1) -- must not crash `subprocess.run`'s strict decode and take the whole index
+    # job down with it. `.h` has no grammar, so this file itself never produces a MODIFIES
+    # edge either way; what matters is that the commit still lands (not skipped) and the
+    # *other* file this same commit touches is still read correctly past the bad byte.
+    checkout = make_code_checkout(tmp_path)
+    (checkout / "tools" / "native.h").write_bytes(b"#define X 1 /* \xe4 not valid utf-8 */\n")
+    orders = checkout / "pyapp" / "orders.py"
+    orders.write_text(orders.read_text() + "\n\ndef audit(order):\n    return order\n")
+    add_commit(checkout, "Add a native header with a bad byte")
+
+    history, symbols = history_of(checkout)
+    assert history.skipped == 0  # read with replacement, not skipped
+    assert [c["ordinal"] for c in history.commits] == [0, 1, 2, 3]
+    assert modified(history, symbols)[0] == {"audit", "pyapp.orders"}  # the new function and its module
+
+
+def test_a_commit_whose_diff_exceeds_max_diff_bytes_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The root commit's diff (the whole initial tree, `git show` against the empty tree) is
+    # the largest of the fixture's three; capping MAX_DIFF_BYTES one byte under its real size
+    # skips only that one commit and leaves the other two -- much smaller, single-symbol
+    # edits -- intact.
+    checkout = make_code_checkout(tmp_path)
+    symbols = head_symbols(checkout)
+    root = git_out(checkout, "rev-parse", "HEAD~2").strip()
+    size = len(diff_bytes(checkout, "show", *git_history.DIFF_OPTIONS, "--format=", root))
+    monkeypatch.setattr(git_history, "MAX_DIFF_BYTES", size - 1)
+
+    history, _ = history_of(checkout, symbols)
+
+    assert history.skipped == 1
+    assert [c["ordinal"] for c in history.commits] == [0, 1]
+    ids = [c["id"] for c in history.commits]
+    assert history.precedes == [(ids[0], ids[1])]
+    assert set(modified(history, symbols)) == {0, 1}
 
 
 def test_a_symbol_with_no_lines_of_its_own_is_never_modified(tmp_path: Path) -> None:

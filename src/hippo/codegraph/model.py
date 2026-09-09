@@ -454,6 +454,7 @@ class AssignFact:
     target: str = ""
     value: str = ""  # the constructed name, `OrderService`
     line: int = 0
+    chain: str = ""  # the call's own text with arguments, e.g. `db.collection("orders")`
 
 
 @dataclass
