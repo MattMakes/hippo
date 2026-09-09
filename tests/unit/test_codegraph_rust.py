@@ -842,6 +842,36 @@ def test_a_type_may_hold_its_methods_in_another_file():
     assert not any(b == "x/src/behaviour.rs::Widget.spin" for _, _, b in links(graph, "CONTAINS"))
 
 
+def test_the_impl_table_is_never_shared_between_two_sources():
+    """
+    `member_paths` inverts `index.members` once per source rather than scanning it per call
+    site. The cache is keyed on the index it was built from, so a second extraction with the
+    same type name in different files must not see the first one's paths.
+    """
+    first = graph_of(
+        {
+            "one/src/lib.rs": "pub mod a;\n",
+            "one/src/a.rs": "pub struct W;\n\nimpl W {\n    pub fn only_here(&self) {}\n}\n",
+        }
+    )
+    second = graph_of(
+        {
+            "two/src/lib.rs": "pub mod b;\npub mod c;\n",
+            "two/src/b.rs": "pub struct W;\n",
+            "two/src/c.rs": (
+                "use crate::b::W;\n\nimpl W {\n    pub fn elsewhere(&self) {}\n}\n\n"
+                "pub fn go() {\n    let w = W::default();\n    w.elsewhere();\n}\n"
+            ),
+        }
+    )
+    assert edge(first, "CONTAINS", "one/src/a.rs::W", "one/src/a.rs::W.only_here")
+    assert edge(second, "INVOKES", "two/src/c.rs::go", "two/src/c.rs::W.elsewhere")[1:3] == (
+        1.00,
+        "same_file",
+    )
+    assert not any("only_here" in b for _, _, b in links(second))
+
+
 def test_contains_is_the_syntax_of_one_file(crate):
     """Module -> item, type -> the methods its impls declare, inline mod -> its own items."""
     contains = {(a, b) for _, a, b in links(crate, "CONTAINS")}

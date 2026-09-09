@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import inspect
 import posixpath
+import weakref
 from typing import TYPE_CHECKING
 
 from tree_sitter import Node
@@ -807,8 +808,30 @@ def member_paths(index: SourceIndex, qualname: str, path: str) -> list[str]:
     Where a type's methods may be: any file with an `impl` for it, this one first so a
     method written beside the call still counts as `same_file`.
     """
-    found = sorted({p for (p, owner) in index.members if owner == qualname and p != path})
-    return [path, *found]
+    return [path, *(p for p in _impls_by_type(index).get(qualname, ()) if p != path)]
+
+
+def _impls_by_type(index: SourceIndex) -> dict[str, list[str]]:
+    """
+    `type -> the files that hold its members`, inverted once per source rather than scanned
+    once per call site: this is asked on every resolved method call, and `index.members` has
+    a row per container per file, so scanning it each time is quadratic in the repo.
+
+    Cached against the index it was built from -- `build_index` fills `members` before any
+    resolution starts and nothing adds to it afterwards. The reference is weak so a finished
+    source is not held alive, and two extractions at once simply rebuild rather than share.
+    """
+    global _IMPLS
+    if _IMPLS is not None and _IMPLS[0]() is index:
+        return _IMPLS[1]
+    found: dict[str, list[str]] = {}
+    for owner_path, owner in sorted(index.members):
+        found.setdefault(owner, []).append(owner_path)
+    _IMPLS = (weakref.ref(index), found)
+    return found
+
+
+_IMPLS: tuple[weakref.ReferenceType, dict[str, list[str]]] | None = None
 
 
 def is_test_path(path: str) -> bool:
