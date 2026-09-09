@@ -72,6 +72,9 @@ CODE_EXTENSIONS = {
 # The subsets of CODE_EXTENSIONS the code graph has a grammar (or a parser) for; see `lang_of`.
 PYTHON_EXTENSIONS = {".py", ".pyi"}
 TYPESCRIPT_EXTENSIONS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+GO_EXTENSIONS = {".go"}
+CSHARP_EXTENSIONS = {".cs"}
+RUST_EXTENSIONS = {".rs"}
 SQL_EXTENSIONS = {".sql"}
 # Extensionless files that we know are text.
 KNOWN_TEXT_NAMES = {"makefile", "dockerfile", "license", "readme", "notice", "authors", "changelog"}
@@ -140,14 +143,16 @@ def is_code_name(name: str) -> bool:
 
 def lang_of(name: str) -> str | None:
     """
-    Which language the code graph can read this file as: "python", "typescript", "sql", or
-    None for every other file (including code we have no grammar for, like Go).
+    Which language the code graph knows this file as -- one of the five, or "sql" -- and
+    None for every other file (Ruby, C, prose, anything with no suffix).
 
-    Keyed on the same suffixes `is_code_name` uses, so a file can never be code for the
-    chunker and unknown to the extractor. `.js/.jsx/.mjs/.cjs` are "typescript": the TSX
-    grammar parses plain JavaScript cleanly (R4 T9), so there is no third grammar.
-    `codegraph.model.lang_of` is the same table on the other side of the dependency line;
-    `test_ingest_readers.py` pins the two together.
+    Naming a language here is not the same as parsing it: a language may be registered
+    (suffix, grammar, comment style) before its walker exists, and `codegraph.extract` then
+    keeps today's line windows for its files. Keyed on the same suffixes `is_code_name` uses,
+    so a file can never be code for the chunker and unknown to the extractor.
+    `.js/.jsx/.mjs/.cjs` are "typescript": the TSX grammar parses plain JavaScript cleanly
+    (R4 T9), so there is no third grammar. `codegraph.model.lang_of` is the same table on the
+    other side of the dependency line; `test_ingest_readers.py` pins the two together.
     """
     suffix = _suffix(name)
     if suffix not in CODE_EXTENSIONS:
@@ -156,6 +161,12 @@ def lang_of(name: str) -> str | None:
         return "python"
     if suffix in TYPESCRIPT_EXTENSIONS:
         return "typescript"
+    if suffix in GO_EXTENSIONS:
+        return "go"
+    if suffix in CSHARP_EXTENSIONS:
+        return "csharp"
+    if suffix in RUST_EXTENSIONS:
+        return "rust"
     return "sql" if suffix in SQL_EXTENSIONS else None
 
 

@@ -348,20 +348,34 @@ def test_walk_repo_does_not_swallow_too_large(tmp_path: Path) -> None:
 
 
 def test_lang_of() -> None:
-    """Which grammar the code graph reads a file with; None for everything else."""
+    """Which language the code graph knows a file as; None for everything else."""
     for name in ("a.py", "pkg/mod.pyi", "src/hippo/store/ladybug.py"):
         assert readers.lang_of(name) == "python"
     for name in ("a.ts", "a.tsx", "a.js", "a.jsx", "a.mjs", "a.cjs"):
         assert readers.lang_of(name) == "typescript"
     assert readers.lang_of("schema/orders.sql") == "sql"
-    # Code we have no grammar for, prose, and files with no extension are all None.
-    for name in ("tool.go", "main.rs", "app.css", "README.md", "notes.txt", "Makefile"):
+    # The three languages registered by L0. Naming one is not the same as parsing it: until
+    # its walker lands, `extract_code` skips its files as `unsupported` and they keep line
+    # windows -- which is why `tools/build.go` is still the unparsed-code fixture.
+    assert readers.lang_of("tool.go") == "go"
+    assert readers.lang_of("App/Orders/OrderService.cs") == "csharp"
+    assert readers.lang_of("main.rs") == "rust"
+    # Code with no grammar at all, prose, and files with no extension are None.
+    for name in ("tool.rb", "app.css", "README.md", "notes.txt", "Makefile"):
         assert readers.lang_of(name) is None, name
 
 
 def test_lang_of_only_claims_files_is_code_name_claims() -> None:
     """A file can never be code for the chunker and unknown to the extractor, or vice versa."""
-    for suffix in readers.PYTHON_EXTENSIONS | readers.TYPESCRIPT_EXTENSIONS | readers.SQL_EXTENSIONS:
+    known = (
+        readers.PYTHON_EXTENSIONS
+        | readers.TYPESCRIPT_EXTENSIONS
+        | readers.GO_EXTENSIONS
+        | readers.CSHARP_EXTENSIONS
+        | readers.RUST_EXTENSIONS
+        | readers.SQL_EXTENSIONS
+    )
+    for suffix in known:
         assert suffix in readers.CODE_EXTENSIONS, suffix
         assert readers.is_code_name(f"file{suffix}")
         assert readers.lang_of(f"file{suffix}") is not None

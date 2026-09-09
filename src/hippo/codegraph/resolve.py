@@ -21,17 +21,20 @@ The two rules worth stating out loud:
 
 from __future__ import annotations
 
-import posixpath
 from dataclasses import dataclass, field
+from typing import Any
 
 from .data_access import Hit, collect, mongo_hit, mongoose_hit, read_sql_file
+from .languages import RULES
 from .model import (
     ARG_BINDING_MAX_CHARS,
     CodeEdge,
     DataObject,
     FileFacts,
+    ImportFact,
     Symbol,
     data_id,
+    package_of,
 )
 
 # Method names too common to guess from. A `fuzzy_name` edge on any of these would be
@@ -63,15 +66,9 @@ BUILTIN_EXCEPTIONS = frozenset(
     }
 )  # fmt: skip
 
-# Where a TypeScript relative import may land, in the order the resolver tries them.
-TS_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
-JS_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs")
-
 MAX_MRO_DEPTH = 5  # breadth-first, so this is five *levels* of bases, not five classes
 MAX_REEXPORT_DEPTH = 5
 
-SELF_NAMES = {"self", "cls", "this"}
-SUPER_NAMES = {"super", "super()"}
 # `super().m()` parses as two calls; the bare `super()` is syntax, not a reference, and
 # counting it as unresolved would put language machinery in a graph-health number.
 LANGUAGE_CALLS = {"super"}
@@ -85,6 +82,10 @@ class Resolution:
     omega: float
     provenance: str
     is_module: bool = False
+    # The names a *scope* holds, when this resolution is a Go package or a C# namespace
+    # rather than a file or a class. `Ns.Member` goes through here; a language whose
+    # imports only ever name files (Python, TypeScript) never sets it.
+    scope: dict[str, Symbol] | None = None
 
 
 @dataclass
@@ -101,6 +102,12 @@ class SourceIndex:
     bindings: dict[str, dict[str, Resolution]] = field(default_factory=dict)  # module -> alias
     bases: dict[tuple[str, str], list[Symbol]] = field(default_factory=dict)  # (path, class) -> bases
     by_suffix: dict[str, list[FileFacts]] = field(default_factory=dict)  # dotted tail -> modules
+    # A Go package or a C# namespace: every top-level name its files declare, merged. Keyed
+    # by (lang, scope) because two languages may spell the same scope name.
+    scopes: dict[tuple[str, str], dict[str, Symbol]] = field(default_factory=dict)
+    # Whatever `LanguageRules.source_setup` returned for a language, once per source: Go's
+    # `go.mod` module path, Rust's crate root directory.
+    lang_state: dict[str, Any] = field(default_factory=dict)
 
     def module(self, name: str) -> FileFacts | None:
         """
@@ -124,23 +131,33 @@ class SourceIndex:
         return facts.symbols[0]
 
 
-def build_index(files: list[FileFacts]) -> SourceIndex:
+def build_index(files: list[FileFacts], lang_state: dict[str, Any] | None = None) -> SourceIndex:
     """One pass over every parsed file, so the second pass can look anything up by name."""
-    index = SourceIndex()
+    index = SourceIndex(lang_state=dict(lang_state or {}))
     for facts in files:
         index.files[facts.path] = facts
         index.modules[facts.module] = facts
         index.defines.setdefault(facts.module, {})
+        module_symbol = facts.symbols[0] if facts.symbols else None
         for symbol in facts.symbols:
             index.symbols[(facts.path, symbol.qualname)] = symbol
             index.by_name.setdefault((symbol.lang, symbol.name), []).append(symbol)
-            if symbol.kind == "module":
+            # The file's *own* module symbol owns nothing above it, and its dotted qualname
+            # is a path, not an owner. An inline module -- Rust's `mod tests { }` -- is an
+            # ordinary container and takes the same route as a class.
+            if symbol is module_symbol:
                 continue
             owner, _, leaf = symbol.qualname.rpartition(".")
             if owner:
                 index.members.setdefault((facts.path, owner), {})[leaf] = symbol
             else:
                 index.defines[facts.module][symbol.qualname] = symbol
+        if facts.scope:
+            # A Go package / C# namespace is the union of its files' top-level names; the
+            # first file to declare a name keeps it, so a partial class resolves to one place.
+            scope = index.scopes.setdefault((facts.lang, facts.scope), {})
+            for name, symbol in index.defines[facts.module].items():
+                scope.setdefault(name, symbol)
         if facts.models:
             index.models[facts.module] = {binding: name for binding, name, _ in facts.models}
         parts = (package_of(facts.module) or facts.module).split(".")
@@ -152,58 +169,21 @@ def build_index(files: list[FileFacts]) -> SourceIndex:
 # ---------------------------------------------------------------- modules
 
 
-def package_of(module: str) -> str:
-    """`pyapp.__init__` names the package `pyapp`; every other module names only itself."""
-    if module == "__init__":
-        return ""
-    return module.removesuffix(".__init__") if module.endswith(".__init__") else module
-
-
-def resolve_module_python(index: SourceIndex, origin: str, text: str, level: int) -> FileFacts | None:
+def import_target(index: SourceIndex, facts: FileFacts, spec: ImportFact) -> FileFacts | Resolution | None:
     """
-    `from ..b import c` in `a/x/y.py`: walk `level` packages up, then down `text`.
+    What an import spec names, by the rule of the file's own language.
 
-    One dot means "the package this module is in", and for `pyapp/__init__.py` that package
-    is `pyapp` itself, not its parent -- `from .orders import X` inside `pyapp/__init__.py`
-    must reach `pyapp.orders`, which dropping a component would miss.
+    Usually a file. For a language whose imports name a *scope* rather than a file -- a C#
+    `using`, a Rust `use` of a module path -- it is a `Resolution` carrying that scope's
+    names in `Resolution.scope`; only `resolve_imports` needs to tell the two apart.
     """
-    if not level:
-        return index.module(text)
-    base = package_of(origin) if origin.endswith(".__init__") else origin.rpartition(".")[0]
-    for _ in range(level - 1):
-        base = base.rpartition(".")[0]
-    target = f"{base}.{text}" if base and text else (base or text)
-    return index.module(target)
+    return RULES[facts.lang].resolve_module(index, facts, spec)
 
 
-def resolve_module_ts(index: SourceIndex, origin_path: str, spec: str) -> FileFacts | None:
-    """
-    `./base` from `tsapp/models/order.ts`. A bare specifier (`react`, `mongoose`) is a
-    dependency, not part of this source, and resolves to nothing (2.2b: no edge).
-    """
-    if not spec.startswith("."):
-        return None
-    base = posixpath.normpath(posixpath.join(posixpath.dirname(origin_path), spec))
-    candidates: list[str] = []
-    if base.endswith(JS_EXTENSIONS):  # `./b.js` is written for the runtime; `./b.ts` is the source
-        stem = base.rsplit(".", 1)[0]
-        candidates += [f"{stem}.ts", f"{stem}.tsx", base]
-    elif base.endswith((".ts", ".tsx")):
-        candidates.append(base)
-    else:
-        candidates += [f"{base}{ext}" for ext in TS_EXTENSIONS]
-        candidates += [f"{base}/index{ext}" for ext in TS_EXTENSIONS]
-    for candidate in candidates:
-        facts = index.files.get(candidate)
-        if facts is not None:
-            return facts
-    return None
-
-
-def target_module(index: SourceIndex, facts: FileFacts, spec, ts: bool) -> FileFacts | None:
-    if ts:
-        return resolve_module_ts(index, facts.path, spec.module)
-    return resolve_module_python(index, facts.module, spec.module, spec.level)
+def target_module(index: SourceIndex, facts: FileFacts, spec) -> FileFacts | None:
+    """The *file* an import spec names, or None -- including when it names a scope."""
+    found = import_target(index, facts, spec)
+    return found if isinstance(found, FileFacts) else None
 
 
 # ---------------------------------------------------------------- members
@@ -226,11 +206,10 @@ def resolve_member(index: SourceIndex, facts: FileFacts, name: str, depth: int =
     submodule = index.module(f"{package_of(facts.module)}.{name}")
     if submodule is not None:
         return _member(index.module_symbol(submodule), reexport, is_module=True)
-    ts = facts.lang == "typescript"
     for spec in [*facts.imports, *facts.reexports]:
         if spec.is_wildcard or spec.alias != name:
             continue
-        source = target_module(index, facts, spec, ts)
+        source = target_module(index, facts, spec)
         if source is None:
             continue
         if not spec.name or spec.name == "default":
@@ -244,7 +223,7 @@ def resolve_member(index: SourceIndex, facts: FileFacts, name: str, depth: int =
     for spec in [*facts.imports, *facts.reexports]:
         if not spec.is_wildcard:
             continue
-        source = target_module(index, facts, spec, ts)
+        source = target_module(index, facts, spec)
         if source is None:
             continue
         deeper = resolve_member(index, source, name, depth + 1)
@@ -280,12 +259,31 @@ def resolve_imports(index: SourceIndex) -> list[CodeEdge]:
     edges: list[CodeEdge] = []
     for facts in index.files.values():
         bindings: dict[str, Resolution] = {}
+        rules = RULES[facts.lang]
         module_symbol = index.module_symbol(facts)
-        ts = facts.lang == "typescript"
         # `export {x} from "./b"` is an import as far as the graph is concerned: this module
         # depends on that one, and anybody importing this name goes through here.
         for spec in [*facts.imports, *facts.reexports]:
-            source = target_module(index, facts, spec, ts)
+            found_scope = import_target(index, facts, spec)
+            if isinstance(found_scope, Resolution):
+                # The spec names a scope, not a file: a C# `using`, a Rust `use` of a module
+                # path. Every name the scope holds becomes visible, and the IMPORTS edge goes
+                # to whatever symbol the language chose to stand for it.
+                for name, symbol in (found_scope.scope or {}).items():
+                    bindings.setdefault(name, Resolution(symbol, found_scope.omega, found_scope.provenance))
+                if spec.alias:
+                    bindings.setdefault(spec.alias, found_scope)
+                edges.append(
+                    _edge(
+                        module_symbol,
+                        found_scope.symbol,
+                        "IMPORTS",
+                        found_scope.omega,
+                        found_scope.provenance,
+                    )
+                )
+                continue
+            source = found_scope
             if source is None:
                 continue  # a dependency, not part of this source: no edge (2.2b)
             if spec.is_wildcard:
@@ -311,6 +309,13 @@ def resolve_imports(index: SourceIndex) -> list[CodeEdge]:
             edges.append(_edge(module_symbol, found.symbol, "IMPORTS", found.omega, found.provenance))
         for name, symbol in index.defines.get(facts.module, {}).items():
             bindings.setdefault(name, Resolution(symbol, 1.00, "same_file"))
+        # ...then the names this file sees without importing anything: the rest of its Go
+        # package, its C# namespace. Its own definitions win, so a name declared here is
+        # `same_file` 1.00; a sibling's is `same_scope`, also 1.00 -- the language resolves
+        # it as unambiguously as a local name, and 0.90 `via_import` would understate it.
+        # Python and TypeScript have no such scope and return `{}`, so nothing moves.
+        for name, symbol in rules.scope_defines(index, facts).items():
+            bindings.setdefault(name, Resolution(symbol, 1.00, "same_scope"))
         index.bindings[facts.module] = bindings
     return edges
 
@@ -422,16 +427,20 @@ def resolve_calls(index: SourceIndex, facts: FileFacts) -> tuple[list[CodeEdge],
 
 def _call_target(index: SourceIndex, facts: FileFacts, call) -> Resolution | None:
     receiver, name = call.receiver, call.name
+    rules = RULES[facts.lang]
     owner = call.caller.rpartition(".")[0]
     if not receiver:
         return _lookup_name(index, facts, name)
-    if receiver in SELF_NAMES:
+    if receiver in rules.self_names:
         return _on_class(index, facts, owner, name)
-    if receiver in SUPER_NAMES or receiver.rstrip("()") == "super":
+    if receiver in rules.super_names or receiver.rstrip("()") == "super":
         inherited = _mro_lookup(index, facts.path, owner, name)
         return Resolution(inherited, 0.90, "via_inheritance") if inherited is not None else None
     holder = _receiver_type(index, facts, call, receiver)
     if holder is not None:
+        if holder.scope is not None:
+            found = _in_scope(facts, holder, name)
+            return found if found is not None else None
         if holder.is_module:
             found = resolve_member(index, index.modules[holder.symbol.qualname], name)
             return _through(facts, found) if found is not None else None
@@ -448,7 +457,7 @@ def _receiver_type(index: SourceIndex, facts: FileFacts, call, receiver: str) ->
     if receiver.endswith(")") and "(" in receiver:  # `OrderService().place(...)`
         receiver = receiver[: receiver.index("(")]
     found = _lookup_name(index, facts, receiver)
-    if found is not None and (found.is_module or found.symbol.kind == "class"):
+    if found is not None and (found.is_module or found.scope is not None or found.symbol.kind == "class"):
         return found
     for assignment in facts.assignments:
         if assignment.scope != call.caller or assignment.target != receiver:
@@ -464,14 +473,20 @@ def _receiver_type(index: SourceIndex, facts: FileFacts, call, receiver: str) ->
 def _on_class(
     index: SourceIndex, facts: FileFacts, qualname: str, name: str, path: str | None = None
 ) -> Resolution | None:
-    """`name` on a class: its own member first (1.00), then its bases (0.90)."""
+    """
+    `name` on a class: its own member first (1.00), then its bases (0.90).
+
+    A class's members usually all live in the file that declares it; Rust spreads them over
+    every file with an `impl` for the type, so which files to try is the language's call.
+    """
     if not qualname:
         return None
     path = path or facts.path
-    found = index.members.get((path, qualname), {}).get(name)
-    if found is not None:
-        omega, provenance = (1.00, "same_file") if path == facts.path else (0.90, "via_import")
-        return Resolution(found, omega, provenance)
+    for candidate in RULES[facts.lang].member_paths(index, qualname, path):
+        found = index.members.get((candidate, qualname), {}).get(name)
+        if found is not None:
+            omega, provenance = (1.00, "same_file") if candidate == facts.path else (0.90, "via_import")
+            return Resolution(found, omega, provenance)
     inherited = _mro_lookup(index, path, qualname, name)
     return Resolution(inherited, 0.90, "via_inheritance") if inherited is not None else None
 
@@ -483,6 +498,17 @@ def _through(facts: FileFacts, found: Resolution) -> Resolution:
     return Resolution(found.symbol, 0.90, "via_import", found.is_module)
 
 
+def _in_scope(facts: FileFacts, holder: Resolution, name: str) -> Resolution | None:
+    """
+    `ledger.Post` where `ledger` is a Go package or a C# namespace, not a file: the name
+    comes out of the scope, and `_through` puts it in the INVOKES tier its distance earns.
+    """
+    found = (holder.scope or {}).get(name)
+    if found is None:
+        return None
+    return _through(facts, Resolution(found, holder.omega, holder.provenance))
+
+
 def _lookup_name(index: SourceIndex, facts: FileFacts, name: str) -> Resolution | None:
     """A bare name in one file: its import bindings, then its own top-level definitions."""
     if not name:
@@ -490,11 +516,12 @@ def _lookup_name(index: SourceIndex, facts: FileFacts, name: str) -> Resolution 
     found = index.bindings.get(facts.module, {}).get(name)
     if found is None:
         return None
-    if found.provenance == "same_file":
+    if found.provenance in ("same_file", "same_scope"):
         return found
-    # Any import-resolved call is 0.90 `via_import`: the ω table gives INVOKES exactly three
-    # tiers, and a wildcard import's own uncertainty is already on its 0.60 IMPORTS edge.
-    return Resolution(found.symbol, 0.90, "via_import", found.is_module)
+    # Any import-resolved call is 0.90 `via_import`: the ω table gives INVOKES three import
+    # tiers (plus `same_scope`, which is not one -- the name needed no import), and a
+    # wildcard import's own uncertainty is already on its 0.60 IMPORTS edge.
+    return Resolution(found.symbol, 0.90, "via_import", found.is_module, found.scope)
 
 
 def _lookup_dotted(index: SourceIndex, facts: FileFacts, text: str) -> Resolution | None:
@@ -511,6 +538,8 @@ def _lookup_dotted(index: SourceIndex, facts: FileFacts, text: str) -> Resolutio
     holder = _lookup_dotted(index, facts, head)
     if holder is None:
         return None
+    if holder.scope is not None:
+        return _in_scope(facts, holder, tail)
     if holder.is_module:
         found = resolve_member(index, index.modules[holder.symbol.qualname], tail)
         return _through(facts, found) if found is not None else None
@@ -535,7 +564,7 @@ def _fuzzy(index: SourceIndex, lang: str, name: str, kinds: tuple[str, ...]) -> 
 def _arg_binding(callee: Symbol, call) -> dict[str, str]:
     """Callee parameter names bound to the caller's argument expressions, cut at 60 chars."""
     params = list(callee.params)
-    if call.receiver and params and params[0] in SELF_NAMES:
+    if call.receiver and params and params[0] in RULES[callee.lang].self_names:
         params = params[1:]
     # strict=False on purpose: a call may pass fewer arguments than the callee declares
     # (defaults) or more (*args), and either way we bind the pairs we are sure of.
@@ -664,11 +693,10 @@ def _model_binding(index: SourceIndex, facts: FileFacts, receiver: str) -> str:
     local = index.models.get(facts.module, {}).get(receiver)
     if local:
         return local
-    ts = facts.lang == "typescript"
     for spec in facts.imports:
         if spec.alias != receiver or spec.is_wildcard:
             continue
-        source = target_module(index, facts, spec, ts)
+        source = target_module(index, facts, spec)
         if source is None:
             continue
         found = index.models.get(source.module, {}).get(spec.name or receiver)
@@ -717,9 +745,8 @@ def _tested_by_filename(index: SourceIndex) -> list[CodeEdge]:
         module_symbol = index.module_symbol(facts)
         if not module_symbol.is_test:
             continue
-        stem = facts.module.rpartition(".")[2]
-        subject = stem.removeprefix("test_").removesuffix("_test").removesuffix(".test").removesuffix(".spec")
-        if subject == stem:
+        subject = RULES[facts.lang].test_stem(facts.path)
+        if subject is None:
             continue
         candidates = by_stem.get((facts.lang, subject), [])
         if len(candidates) != 1:

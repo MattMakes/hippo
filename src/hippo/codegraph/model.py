@@ -16,9 +16,16 @@ This module imports stdlib and `hipporag.text` only -- `ingest.chunker` imports 
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from ..hipporag.text import make_id, split_identifier
+
+if TYPE_CHECKING:  # types the language rules mention; none of them is needed at run time
+    from tree_sitter import Node
+
+    from .resolve import Resolution, SourceIndex
 
 # --------------------------------------------------------------- budgets
 #
@@ -61,8 +68,19 @@ LANG_BY_SUFFIX = {
     ".jsx": "typescript",
     ".mjs": "typescript",
     ".cjs": "typescript",
+    ".go": "go",
+    ".cs": "csharp",
+    ".rs": "rust",
     ".sql": "sql",
 }
+
+# The languages a walker turns into symbols. A language may be *registered* (suffix, grammar
+# and comment style, in `languages.RULES`) before its walker exists: its files then keep
+# today's line windows and OpenIE, exactly as a language we have no grammar for does.
+# `git_history.py` filters hunks by this, and `test_codegraph.py` pins it to the walker keys
+# -- it is a literal here because `model.py` is the leaf every walker imports and so may not
+# import `languages.py` back.
+PARSED_LANGS = ("python", "typescript")
 
 ARG_BINDING_MAX_CHARS = 60  # an argument expression longer than this is truncated in `extra`
 
@@ -104,6 +122,120 @@ def name_text(name: str) -> str:
     """
     tokens = " ".join(split_identifier(name))
     return name if tokens == name else f"{tokens} {name}".strip()
+
+
+# ------------------------------------------------------- name shapes
+#
+# The defaults every language starts from. They live here, on the leaf module, because
+# `languages.py` builds a `LanguageRules` out of them and every walker imports them -- put
+# them in a walker and the registry could not be imported before that walker was.
+
+
+def module_qualname(path: str) -> str:
+    """
+    A module's qualname: the repo-relative path, `/` to `.`, extension stripped, `__init__`
+    kept (2.2a). `pyapp/__init__.py` -> `pyapp.__init__`, so a package and its `__init__`
+    module are never the same node.
+    """
+    posix = path.replace("\\", "/")
+    head, _, tail = posix.rpartition("/")
+    stem = tail.rsplit(".", 1)[0] if "." in tail else tail
+    return (f"{head}/{stem}" if head else stem).replace("/", ".")
+
+
+def package_of(module: str) -> str:
+    """`pyapp.__init__` names the package `pyapp`; every other module names only itself."""
+    if module == "__init__":
+        return ""
+    return module.removesuffix(".__init__") if module.endswith(".__init__") else module
+
+
+def is_test_path(path: str) -> bool:
+    """
+    A file counts as test code by directory or by name; every symbol in it gets `is_test`.
+    One rule for Python and TypeScript, so `tests/test_orders.py` and `src/order.spec.ts`
+    agree; a language whose convention differs registers its own.
+    """
+    parts = path.replace("\\", "/").split("/")
+    if any(part in ("test", "tests", "__tests__") for part in parts[:-1]):
+        return True
+    stem = parts[-1].rsplit(".", 1)[0] if "." in parts[-1] else parts[-1]
+    return stem.startswith("test_") or stem.endswith(("_test", ".test", ".spec"))
+
+
+def test_stem(path: str) -> str | None:
+    """
+    The module a test file is named after, or `None` when the name is not a test file's:
+    `tests/test_orders.py` -> `orders`, `orders_test.go` -> `orders`.
+
+    Keyed on the *module qualname's last component*, not on the file name, because that is
+    what `_tested_by_filename` matches non-test modules by -- `src/order.spec.ts` is the
+    module `src.order.spec`, whose last component is `spec`, and reading the file name
+    instead would silently invent TESTED_BY edges the ω table never promised.
+    """
+    stem = module_qualname(path).rpartition(".")[2]
+    subject = stem.removeprefix("test_").removesuffix("_test").removesuffix(".test").removesuffix(".spec")
+    return subject if subject != stem else None
+
+
+def no_scope(index: SourceIndex, facts: FileFacts) -> dict[str, Symbol]:
+    """A language whose names are only ever visible through an import: Python, TypeScript."""
+    return {}
+
+
+def no_module(index: SourceIndex, facts: FileFacts, spec: ImportFact) -> FileFacts | None:
+    """A language with no walker yet resolves no import, because it has no files."""
+    return None
+
+
+def one_path(index: SourceIndex, qualname: str, path: str) -> list[str]:
+    """Where a class's members live: the file the class is in, for every language but Rust."""
+    return [path]
+
+
+# The receivers that mean "this object" and "the thing above it". Per language, because
+# `base` is C#'s `super` but an ordinary Python module name -- `from . import base` then
+# `base.helper()` is a real INVOKES edge, and routing it to the MRO would silently drop it.
+SELF_NAMES = frozenset({"self", "cls", "this"})
+SUPER_NAMES = frozenset({"super", "super()"})
+
+
+@dataclass(frozen=True)
+class LanguageRules:
+    """
+    Everything the extractor needs to know about one language that is not its grammar.
+
+    A language is a *registration*: `languages.RULES[name]` is one of these, and adding a
+    language means adding a walker module with a `RULES_ENTRY` and one line in
+    `languages.py`. Nothing in `extract.py`, `resolve.py` or the chunker branches on a
+    language name.
+
+    `walk` is optional. A language registered without one is known by suffix, grammar and
+    comment style, and its files are skipped as `unsupported` -- line windows and OpenIE,
+    exactly as a language we have no grammar for at all.
+    """
+
+    name: str
+    line_comment: str
+    walk: Callable[[str, Node, str], FileFacts] | None = None
+    # An import spec -> the file it names, or -- for a language whose imports name a *scope*
+    # (a C# `using`, a Rust `use` of a module path) -- a `Resolution` carrying that scope's
+    # names in `Resolution.scope`.
+    resolve_module: Callable[[SourceIndex, FileFacts, ImportFact], FileFacts | Resolution | None] = no_module
+    # Names visible in this file without an import: its Go package, its C# namespace.
+    scope_defines: Callable[[SourceIndex, FileFacts], dict[str, Symbol]] = no_scope
+    module_qualname: Callable[[str], str] = module_qualname
+    is_test_path: Callable[[str], bool] = is_test_path
+    test_stem: Callable[[str], str | None] = test_stem
+    # Which files may hold a member of `qualname`. Rust puts `impl S` in any file; every
+    # other language keeps a class's members in the file the class is declared in.
+    member_paths: Callable[[SourceIndex, str, str], list[str]] = one_path
+    self_names: frozenset[str] = SELF_NAMES
+    super_names: frozenset[str] = SUPER_NAMES
+    # Run once per `extract_code` over the source's raw documents, before resolution; the
+    # result lands on `SourceIndex.lang_state[name]`. Go reads `go.mod`'s `module` line here,
+    # Rust finds the directory holding `lib.rs`/`main.rs`.
+    source_setup: Callable[[list], Any] | None = None
 
 
 # ----------------------------------------------------------------- nodes
@@ -333,6 +465,11 @@ class FileFacts:
     path: str = ""
     lang: str = "python"
     module: str = ""  # the module symbol's qualname
+    # The scope this file's top-level names live in, when the language has one above the
+    # file: a Go package, a C# namespace. `build_index` merges every file of a scope into
+    # `SourceIndex.scopes[(lang, scope)]`, which is what `scope_defines` reads. Python and
+    # TypeScript have no such thing and leave it None.
+    scope: str | None = None
     symbols: list[Symbol] = field(default_factory=list)
     imports: list[ImportFact] = field(default_factory=list)
     calls: list[CallFact] = field(default_factory=list)

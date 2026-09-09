@@ -19,11 +19,16 @@ dependencies = [
     "pypdf>=4.0",
     "python-docx>=1.1",
     "mcp>=2.0",
-    # The code graph: tree-sitter parses Python/TypeScript into symbols and calls,
+    # The code graph: tree-sitter parses the five languages into symbols and calls,
     # sqlglot reads the SQL literals we turn into READS/WRITES edges (codegraph/).
+    # Every grammar ships cp311/cp312 wheels for manylinux and macOS arm64, so the
+    # Dockerfile needs nothing; the pins are the ABI ranges tree-sitter 0.26 accepts.
     "tree-sitter>=0.25,<0.27",
     "tree-sitter-python>=0.23,<0.26",
     "tree-sitter-typescript>=0.23,<0.24",
+    "tree-sitter-go>=0.23,<0.26",
+    "tree-sitter-c-sharp>=0.23,<0.24",
+    "tree-sitter-rust>=0.23,<0.25",
     "sqlglot>=27,<31",
 ]
 
