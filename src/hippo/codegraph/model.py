@@ -74,14 +74,6 @@ LANG_BY_SUFFIX = {
     ".sql": "sql",
 }
 
-# The languages a walker turns into symbols. A language may be *registered* (suffix, grammar
-# and comment style, in `languages.RULES`) before its walker exists: its files then keep
-# today's line windows and OpenIE, exactly as a language we have no grammar for does.
-# `git_history.py` filters hunks by this, and `test_codegraph.py` pins it to the walker keys
-# -- it is a literal here because `model.py` is the leaf every walker imports and so may not
-# import `languages.py` back.
-PARSED_LANGS = ("python", "typescript")
-
 ARG_BINDING_MAX_CHARS = 60  # an argument expression longer than this is truncated in `extra`
 
 

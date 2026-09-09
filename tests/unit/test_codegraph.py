@@ -38,11 +38,10 @@ from hippo.codegraph.data_access import (
     read_sql_file,
     sql_tables,
 )
-from hippo.codegraph.languages import RULES
+from hippo.codegraph.languages import PARSED_LANGS, RULES
 from hippo.codegraph.model import (
     CODE_MAX_FILE_BYTES,
     LANG_BY_SUFFIX,
-    PARSED_LANGS,
     CodeEdge,
     FileFacts,
     Symbol,
@@ -192,11 +191,12 @@ def test_every_known_suffix_has_a_grammar_and_a_registration():
 
 def test_parsed_langs_is_exactly_the_languages_with_a_walker():
     """
-    `git_history` filters hunks by `PARSED_LANGS`; it is a literal in `model.py` because
-    `model` is the leaf every walker imports. This is what keeps it honest when a walker
-    lands: register the walker, add the language here.
+    `git_history` reads hunks only in files it can parse. `PARSED_LANGS` is derived from the
+    registry rather than listed, so registering a walker is the whole job -- there is no
+    second place to remember.
     """
     assert sorted(PARSED_LANGS) == sorted(name for name, r in RULES.items() if r.walk is not None)
+    assert sorted(PARSED_LANGS) == ["python", "typescript"]
 
 
 def as_python(**overrides):

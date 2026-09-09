@@ -52,7 +52,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .extract import _walk
-from .model import PARSED_LANGS, Symbol, commit_id, lang_of
+from .languages import PARSED_LANGS
+from .model import Symbol, commit_id, lang_of
 
 # Field separators inside one `git log` record, and between records. A commit message is
 # multi-line and may contain anything a user typed, so the separators have to be bytes no

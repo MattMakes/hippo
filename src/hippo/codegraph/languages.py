@@ -23,7 +23,7 @@ from . import python as python_walker
 from . import typescript as typescript_walker
 from .model import SELF_NAMES, SUPER_NAMES, LanguageRules
 
-__all__ = ["RULES", "LanguageRules"]
+__all__ = ["PARSED_LANGS", "RULES", "LanguageRules"]
 
 RULES: dict[str, LanguageRules] = {}
 
@@ -39,8 +39,8 @@ register(typescript_walker.RULES_ENTRY)
 
 # Registered without a walker yet: the grammar loads and the suffix is known, but nothing
 # turns these files into symbols, so they keep line windows. Landing `go.py` means importing
-# it above and replacing its line here with `register(go_walker.RULES_ENTRY)` -- and adding
-# the language to `model.PARSED_LANGS`, which `test_codegraph.py` pins to the walker keys.
+# it above and replacing its line here with `register(go_walker.RULES_ENTRY)` -- one line,
+# and the only shared file a walker has to touch.
 #
 # `self_names` / `super_names` are per language on purpose: `base` is C#'s `super`, but an
 # ordinary Python module name -- `from . import base` then `base.helper()` is a real INVOKES
@@ -48,3 +48,8 @@ register(typescript_walker.RULES_ENTRY)
 register(LanguageRules(name="go", line_comment="//"))
 register(LanguageRules(name="csharp", line_comment="//", super_names=SUPER_NAMES | {"base"}))
 register(LanguageRules(name="rust", line_comment="//", self_names=SELF_NAMES | {"Self"}))
+
+# The languages a walker turns into symbols, derived rather than listed: `git_history.py`
+# only reads hunks in files it can parse, and a hand-kept literal would be one more thing a
+# new walker has to remember (and one more shared file it has to edit).
+PARSED_LANGS = tuple(name for name, rules in RULES.items() if rules.walk is not None)
