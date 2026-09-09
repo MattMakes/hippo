@@ -417,14 +417,18 @@ def test_a_call_through_an_alias_and_on_a_composite_literal(goapp):
     `bill "example.com/goapp/billing"` binds `bill`, and `(&Service{}).Place(...)` /
     `orders.Service{}` are calls on the type they construct -- Go's way of writing what
     another language spells `new Service().place()`.
+
+    The tier is the distance, for a method as much as for a bare name: the `_test.go` file
+    is in `Service`'s own package and reaches its method at `same_scope` 1.00, while
+    `cmd/main.go` is another package and pays the 0.90 an import costs.
     """
     assert edge(goapp, "INVOKES", f"{SERVICE}::Service.Place", f"{BILLING}::SendInvoice")[1:3] == (
         0.90,
         "via_import",
     )
     assert edge(goapp, "INVOKES", f"{TEST}::TestPlace", f"{SERVICE}::Service.Place")[1:3] == (
-        0.90,
-        "via_import",
+        1.00,
+        "same_scope",
     )
     assert edge(goapp, "INVOKES", f"{MAIN}::main", f"{SERVICE}::Service.Place")[1:3] == (0.90, "via_import")
 

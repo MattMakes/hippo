@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from hippo.codegraph import extract_code, resolve
+from hippo.codegraph import extract, extract_code, resolve
 from hippo.codegraph.data_access import (
     classify_literal,
     cypher_objects,
@@ -51,6 +51,7 @@ from hippo.codegraph.model import (
     symbol_id,
 )
 from hippo.codegraph.python import is_test_path, module_qualname
+from hippo.codegraph.python import walk as python_walk
 from hippo.codegraph.resolve import Resolution
 from hippo.codegraph.treesitter import GRAMMARS, get_language, grammar_for
 from hippo.ingest import readers
@@ -259,6 +260,66 @@ def test_a_scope_resolution_answers_for_the_names_it_holds(monkeypatch):
     )
     assert edge(graph, "INVOKES", "orders.py::place", "ledger.py::post")[1:3] == (0.90, "via_import")
     assert ("IMPORTS", "orders.py::orders", "ledger.py::ledger") in links(graph, "IMPORTS")
+
+
+def scoped_walk(path: str, root, source_id: str):
+    """Python's walk with a scope on top: every directory is its own package."""
+    facts = python_walk(path, root, source_id)  # the real one: `RULES` holds this wrapper
+    facts.scope = path.rpartition("/")[0] or "."
+    return facts
+
+
+def package_names(index, facts):
+    """What `scope_defines` returns for a language whose directory is its package."""
+    return dict(index.scopes.get(("python", facts.scope or ""), {}))
+
+
+def test_a_member_of_a_sibling_file_in_the_same_scope_is_worth_1_00(monkeypatch):
+    """
+    Go's package and C#'s namespace put a *method* within reach without an import, exactly
+    as they do a bare name -- so `Service().log()` where `Service` lives in a sibling file
+    of the same package is `same_scope` 1.00, not the 0.90 an import would have earned.
+
+    Python and TypeScript have no scope above the file (`FileFacts.scope` is None), so they
+    never reach that row: the same tree resolves at 0.90 `via_import` with the rules as
+    shipped, which is the first half of this test.
+    """
+    files = {
+        "pkg/impl.py": "class Service:\n    def log(self, m):\n        return m\n",
+        "pkg/app.py": "from .impl import Service\n\ndef go():\n    return Service().log(1)\n",
+    }
+    call = ("pkg/app.py::go", "pkg/impl.py::Service.log")
+    assert edge(graph_of(files), "INVOKES", *call)[1:3] == (0.90, "via_import")
+
+    # `extract.WALKERS` is built from `RULES` once, at import, so a walker swapped at run
+    # time has to be put in both places -- registration is an import-time act.
+    monkeypatch.setitem(RULES, "python", as_python(walk=scoped_walk, scope_defines=package_names))
+    monkeypatch.setitem(extract.WALKERS, "python", scoped_walk)
+    assert edge(graph_of(files), "INVOKES", *call)[1:3] == (1.00, "same_scope")
+
+
+def test_the_fuzzy_stoplist_is_matched_in_any_case():
+    """
+    `x.Close()` in Go is the name `close` in a language that capitalises its methods, and a
+    stoplist written in one case only would refuse Python's guess and wave Go's through --
+    the opposite of what the list is for. `Frobnicate` is not on it, so that one still
+    resolves and this is a test about the stoplist rather than about fuzzy matching.
+    """
+    common = graph_of(
+        {
+            "app/a.go": "package app\n\ntype T struct{}\n\nfunc (t *T) Close() {}\n",
+            "app/b.go": "package other\n\nfunc Run(x Thing) { x.Close() }\n",
+        }
+    )
+    assert edges_of(common, "INVOKES") == set()
+
+    rare = graph_of(
+        {
+            "app/a.go": "package app\n\ntype T struct{}\n\nfunc (t *T) Frobnicate() {}\n",
+            "app/b.go": "package other\n\nfunc Run(x Thing) { x.Frobnicate() }\n",
+        }
+    )
+    assert edge(rare, "INVOKES", "app/b.go::Run", "app/a.go::T.Frobnicate")[1:3] == (0.50, "fuzzy_name")
 
 
 def test_a_class_can_hold_members_in_another_file(monkeypatch):
