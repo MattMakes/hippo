@@ -164,7 +164,7 @@ def test_the_code_card_counts_an_indexed_repository(code_index):
     ctx, _source_id = code_index
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         card = client.get("/api/status").json()["code"]
-    assert card["symbols"] == 54 and card["data_objects"] == 12
+    assert card["symbols"] == 73 and card["data_objects"] == 12
     assert card["code_edges"] > 0
     # Both come from Source.meta["code"], which the indexer wrote; nothing here loads the graph.
     assert card["languages"] == ["go", "python", "rust", "typescript"]
@@ -313,7 +313,7 @@ def test_status_partial_shows_the_code_card_when_code_is_indexed(code_index, mon
     ctx, _source_id = code_index
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         text = client.get("/partials/status").text
-    assert "Code 54 symbols" in text
+    assert "Code 73 symbols" in text
     assert "python, rust, typescript" in text
 
 

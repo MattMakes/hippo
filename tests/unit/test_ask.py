@@ -104,36 +104,41 @@ def test_the_graph_reloads_after_new_text_is_indexed(indexed: AppContext) -> Non
 PLACE = "What does pyapp.orders.OrderService.place do?"
 
 # The six kept seeds, in weight order, are `OrderService.place` (the identifier anchor, 0.33) and
-# the dense `tests.test_orders`, `pyapp.__init__`, `rsapp.tests.orders`, `tests.place_totals`,
-# `pyapp.cli` (0.05 down to 0.037). Lines 1-9 are the pairwise paths between them (each new edge
-# once); the rest is `code_paths_for`'s round-robin over the six seeds' own relations, each seed's
-# strongest first (QA1F). Two of the seeds are `rsapp`'s: the fixture tells the same story in Rust,
-# and under `FakeOllama`'s feature-hashed vectors its passages are as dense-similar as the Python
-# ones. That is why the whole block no longer fits the default `code_triples_chars` of 1500 -- the
-# cut is the next test's subject, so this one asks for a budget wide enough to see all of it.
+# the dense `tests.test_orders`, `pyapp.__init__`, `goapp.cmd.main.main`, `rsapp.tests.orders`,
+# `tests.place_totals` (0.05 down to 0.038); `pyapp.cli` fell off the end when the Go tree arrived.
+# Lines 1-5 are the pairwise paths between the strongest five (each new edge once) and they are all
+# the Python tree's: the only route from `goapp`/`rsapp` to it is the shared `orders` table, whose
+# `bare_identifier` READS is 0.60 and below theta. The rest is `code_paths_for`'s round-robin over
+# the six seeds' own relations, each seed's strongest first (QA1F) -- a seed whose turn lands on an
+# edge already printed above spends the turn, which is why the first round shows only the three
+# seeds the paths did not already cover. Four of the six seeds belong to the other two trees: the
+# fixture tells the same story in Go and in Rust, and under `FakeOllama`'s feature-hashed vectors
+# their passages are as dense-similar as the Python ones. That is why the whole block no longer fits
+# the default `code_triples_chars` of 1500 -- the cut is the next test's subject, so this one asks
+# for a budget wide enough to see all of it.
 CODE_BLOCK_BODY = [
-    # place <-> tests.test_orders, then place <-> pyapp.__init__ and the rsapp pair's own paths.
+    # place <-> tests.test_orders, then place <-> pyapp.__init__: the Python tree's own routes.
     "pyapp.orders.OrderService.place -[TESTED_BY 0.85 test_import]-> tests.test_orders.test_place",
     "tests.test_orders -[CONTAINS 1.00 syntax]-> tests.test_orders.test_place",
     "pyapp.orders.OrderService -[CONTAINS 1.00 syntax]-> pyapp.orders.OrderService.place",
     "pyapp.__init__ -[IMPORTS 0.95 import_path]-> pyapp.orders.OrderService",
     "tests.test_orders -[IMPORTS 0.95 import_path]-> pyapp.orders.OrderService",
+    # Turn 1: the seeds' strongest edges that are not above yet -- one per tree that the paths missed.
+    "goapp.cmd.main -[CONTAINS 1.00 syntax]-> goapp.cmd.main.main",
     "rsapp.tests.orders -[CONTAINS 1.00 syntax]-> rsapp.tests.orders.test_place",
-    "rsapp.tests.orders.test_place -[INVOKES 0.90 via_import]-> rsapp.src.orders.OrderService.place",
-    "rsapp.src.orders.OrderService.place -[TESTED_BY 0.85 test_import]-> rsapp.src.orders.tests.place_totals",
     "rsapp.src.orders.tests -[CONTAINS 1.00 syntax]-> rsapp.src.orders.tests.place_totals",
-    # Turn 1: the seeds' strongest edges that are not above yet.
-    "pyapp.cli -[CONTAINS 1.00 syntax]-> pyapp.cli.main",
-    # Turn 2: place's second-strongest (the other omega=1.00 relation, this one outgoing).
+    # Turn 2: place's second-strongest (the other omega=1.00 relation, this one outgoing), then the
+    # other seeds' calls into their own tree's `place`.
     "pyapp.orders.OrderService.place -[INVOKES 1.00 same_file]-> pyapp.orders.OrderService.log",
+    "goapp.cmd.main.main -[INVOKES 0.90 via_import]-> goapp.orders.service.Service.Place",
     "rsapp.tests.orders -[IMPORTS 0.95 import_path]-> rsapp.src.orders.OrderService",
     "rsapp.src.orders.tests.place_totals -[INVOKES 1.00 same_file]-> rsapp.src.orders.OrderService.place",
-    "pyapp.cli -[IMPORTS 0.90 reexport]-> pyapp.orders.OrderService",
     # Turn 3: at omega=0.90 an *incoming* call now comes before place's own outgoing ones - this is
     # the line that answers "who calls place", and out-then-in used to bury it (QA1 defect 1).
     "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
     "pyapp.orders -[TESTED_BY 0.75 test_filename]-> tests.test_orders",
     "rsapp.src.orders -[TESTED_BY 0.75 test_filename]-> rsapp.tests.orders",
+    "rsapp.src.orders.OrderService.place -[TESTED_BY 0.85 test_import]-> rsapp.src.orders.tests.place_totals",
     # Turns 4-7: place's remaining omega=0.90 edges, in-then-out inside the tier.
     "pyapp.orders.OrderService.place -[CATCHES 0.90 resolved]-> pyapp.store.OrderError",
     "tests.test_orders.test_place -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
@@ -141,11 +146,13 @@ CODE_BLOCK_BODY = [
     "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total",
     "Tests: tests.test_orders.test_place",
     "Commits: b2b2b2b 2026-01-02 Total the order in place",
+    # One subsystem line per community the seeds reach: each tree is its own.
+    "Subsystems: goapp.billing.billing: goapp.cmd.main, goapp.cmd.main.main, "
+    "goapp.orders.service.Service.Place",
     "Subsystems: pyapp.__init__: pyapp.__init__, pyapp.billing.send_invoice, pyapp.billing.total, "
-    "pyapp.cli, pyapp.cli.main, pyapp.orders, pyapp.orders.OrderService, "
+    "pyapp.cli.main, pyapp.orders, pyapp.orders.OrderService, "
     "pyapp.orders.OrderService.log, pyapp.orders.OrderService.place, pyapp.store.OrderError, "
     "tests.test_orders, tests.test_orders.test_place",
-    # One subsystem line per community the seeds reach: the Rust tree is its own.
     "Subsystems: rsapp.src.billing: rsapp.src.orders, rsapp.src.orders.OrderService, "
     "rsapp.src.orders.OrderService.place, rsapp.src.orders.tests, "
     "rsapp.src.orders.tests.place_totals, rsapp.tests.orders, rsapp.tests.orders.test_place",
@@ -162,7 +169,7 @@ def coded(code_index) -> AppContext:
 
 def test_a_code_question_carries_the_block_exactly(coded: AppContext) -> None:
     # A budget wide enough for the whole block: what is pinned here is the grammar and the order,
-    # and `code_triples_chars` (1500 by default, 2312 needed for two trees) is the next test.
+    # and `code_triples_chars` (1500 by default, 2674 needed for three trees) is the next test.
     _, answer = ask(coded, PLACE, {"code_triples_chars": 8000})
     assert answer.context_block == "\n".join([prompts.CODE_GRAPH_HEADER, *CODE_BLOCK_BODY])
 
