@@ -297,7 +297,6 @@ def test_a_member_of_a_sibling_file_in_the_same_scope_is_worth_1_00(monkeypatch)
     assert edge(graph_of(files), "INVOKES", *call)[1:3] == (1.00, "same_scope")
 
 
-@pytest.mark.skipif("go" not in PARSED_LANGS, reason="needs the Go walker (lands with wp/lgo)")
 def test_the_fuzzy_stoplist_is_matched_in_any_case():
     """
     `Close` is the name `close` in a language that capitalises its methods -- Go's and C#'s
