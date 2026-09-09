@@ -47,9 +47,9 @@ and the chunker fix for members-outside-their-type / inline modules (L3) are mer
 
 ## Load-bearing constraints from phase A (all languages read all three)
 
-- **Go**: a symbol's `doc` is the FIRST PARAGRAPH only — the Acme Robotics / Priya Natarajan sentences
-  must sit in the first paragraph and keep it ≥ 80 chars, or `extract_text` is `""` and OpenIE never
-  sees them. `goapp/go.mod` becomes ONE prose-chunked passage (a known text name) and NO
+- **Go**: a symbol's `doc` is the FIRST PARAGRAPH only — the ≥ 80-char prose (see the doc-comment
+  rule below: its own words, not the Acme/Priya/Boulder sentences) must sit in the first paragraph, or
+  `extract_text` is `""` and OpenIE never sees it. `goapp/go.mod` becomes ONE prose-chunked passage (a known text name) and NO
   `files_skipped` row, so `len(extracted)` in `test_indexer.py` goes up by one. `FileFacts.scope` is
   the directory. Import resolution is `go.mod` first, then ≥ 2 shared trailing path segments.
 - **C#**: `csapp/Program.cs` MUST carry `using CsApp.Orders;` or its call resolves at 0.50
