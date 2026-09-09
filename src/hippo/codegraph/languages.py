@@ -19,11 +19,12 @@ because `from .languages import LanguageRules, RULES` is the one import a new wa
 
 from __future__ import annotations
 
+from . import csharp as csharp_walker
 from . import go as go_walker
 from . import python as python_walker
 from . import rust as rust_walker
 from . import typescript as typescript_walker
-from .model import SUPER_NAMES, LanguageRules
+from .model import LanguageRules
 
 __all__ = ["PARSED_LANGS", "RULES", "LanguageRules"]
 
@@ -39,17 +40,13 @@ def register(entry: LanguageRules) -> LanguageRules:
 register(python_walker.RULES_ENTRY)
 register(typescript_walker.RULES_ENTRY)
 register(go_walker.RULES_ENTRY)
+register(csharp_walker.RULES_ENTRY)
 register(rust_walker.RULES_ENTRY)
 
-# Registered without a walker yet: the grammar loads and the suffix is known, but nothing
-# turns these files into symbols, so they keep line windows. Landing `csharp.py` means
-# importing it above and replacing its line here with `register(csharp_walker.RULES_ENTRY)`
-# -- one line, and the only shared file a walker has to touch.
-#
-# `self_names` / `super_names` are per language on purpose: `base` is C#'s `super`, but an
-# ordinary Python module name -- `from . import base` then `base.helper()` is a real INVOKES
-# edge, and a shared `SUPER_NAMES` holding `base` would silently route it to the MRO instead.
-register(LanguageRules(name="csharp", line_comment="//", super_names=SUPER_NAMES | {"base"}))
+# Every language now brings its own walker. `self_names` / `super_names` stay per language
+# on purpose: `Self` is Rust's and `base` is C#'s `super`, but `base` is also an ordinary
+# Python module name -- `from . import base` then `base.helper()` is a real INVOKES edge,
+# and a shared `SUPER_NAMES` holding `base` would silently route it to the MRO instead.
 
 # The languages a walker turns into symbols, derived rather than listed: `git_history.py`
 # only reads hunks in files it can parse, and a hand-kept literal would be one more thing a
