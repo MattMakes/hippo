@@ -37,15 +37,18 @@ from hippo.codegraph.data_access import (
     read_sql_file,
     sql_tables,
 )
+from hippo.codegraph.languages import RULES
 from hippo.codegraph.model import (
     CODE_MAX_FILE_BYTES,
+    LANG_BY_SUFFIX,
+    PARSED_LANGS,
     CodeEdge,
     merge_edges,
     name_text,
     symbol_id,
 )
 from hippo.codegraph.python import is_test_path, module_qualname
-from hippo.codegraph.treesitter import get_language, grammar_for
+from hippo.codegraph.treesitter import GRAMMARS, get_language, grammar_for
 from hippo.ingest import readers
 from tests.conftest import CODE_SAMPLE_PATH, code_sample_docs
 
@@ -108,8 +111,9 @@ def edge(graph, kind: str, a: str, b: str):
 
 
 def test_grammars_load():
-    """All three grammars build. Catches a wheel whose ABI moved out from under us."""
-    for grammar in ("python", "typescript", "tsx"):
+    """All six grammars build. Catches a wheel whose ABI moved out from under us."""
+    assert GRAMMARS == ("python", "typescript", "tsx", "go", "csharp", "rust")
+    for grammar in GRAMMARS:
         assert get_language(grammar) is not None
     with pytest.raises(ValueError):
         get_language("cobol")
@@ -121,6 +125,87 @@ def test_grammar_choice_by_suffix():
     for name in ("a.tsx", "a.js", "a.jsx", "a.mjs", "a.cjs"):
         assert grammar_for(name, "typescript") == "tsx"
     assert grammar_for("a.py", "python") == "python"
+    # One grammar each for the rest, so the language name is the grammar name.
+    for name, lang in (("a.go", "go"), ("A.cs", "csharp"), ("a.rs", "rust")):
+        assert grammar_for(name, lang) == lang
+
+
+def test_every_language_is_a_complete_registration():
+    """
+    A language is `RULES[name]`, not a branch. Every entry answers every question the
+    extractor, the resolver and the chunker ask -- a half-filled entry would fail at the one
+    call site that happens to reach it, on somebody else's source, months later.
+    """
+    assert sorted(RULES) == ["csharp", "go", "python", "rust", "typescript"]
+    for name, rules in sorted(RULES.items()):
+        assert rules.name == name
+        assert rules.line_comment in ("#", "//"), name
+        assert rules.walk is None or callable(rules.walk), name
+        for field in ("resolve_module", "scope_defines", "module_qualname", "is_test_path",
+                      "test_stem", "member_paths"):  # fmt: skip
+            assert callable(getattr(rules, field)), f"{name}.{field}"
+        assert rules.source_setup is None or callable(rules.source_setup), name
+        assert rules.self_names and rules.super_names, name
+        # Byte-for-byte behaviour of the two languages that already shipped.
+        if name in ("python", "typescript"):
+            assert rules.scope_defines(None, None) == {}
+            assert rules.self_names == frozenset({"self", "cls", "this"})
+            assert rules.super_names == frozenset({"super", "super()"})
+
+
+def test_base_is_csharps_super_and_nobody_elses():
+    """
+    `base` means `super` in C# and is an ordinary module name in Python -- `from . import
+    base` then `base.helper()` is a real INVOKES edge. One shared `SUPER_NAMES` holding
+    `base` would route that to the MRO and silently drop the edge, so the names are per
+    language. Same for Rust's `Self`.
+    """
+    assert "base" in RULES["csharp"].super_names
+    assert "base" not in RULES["python"].super_names | RULES["typescript"].super_names
+    assert "Self" in RULES["rust"].self_names
+    assert "Self" not in RULES["python"].self_names
+
+    graph = graph_of(
+        {
+            "pkg/__init__.py": "",
+            "pkg/base.py": "def helper():\n    return 1\n",
+            "pkg/app.py": "from . import base\n\ndef go():\n    return base.helper()\n",
+        }
+    )
+    assert ("INVOKES", 0.90, "via_import", "pkg/app.py::go", "pkg/base.py::helper") in edges_of(
+        graph, "INVOKES"
+    )
+
+
+def test_every_known_suffix_has_a_grammar_and_a_registration():
+    """`lang_of` may not name a language the extractor cannot at least load a grammar for."""
+    for suffix, lang in sorted(LANG_BY_SUFFIX.items()):
+        if lang == "sql":  # sqlglot reads these; there is no tree-sitter grammar and no walker
+            continue
+        assert lang in RULES, suffix
+        assert grammar_for(f"file{suffix}", lang) in GRAMMARS, suffix
+
+
+def test_parsed_langs_is_exactly_the_languages_with_a_walker():
+    """
+    `git_history` filters hunks by `PARSED_LANGS`; it is a literal in `model.py` because
+    `model` is the leaf every walker imports. This is what keeps it honest when a walker
+    lands: register the walker, add the language here.
+    """
+    assert sorted(PARSED_LANGS) == sorted(name for name, r in RULES.items() if r.walk is not None)
+
+
+def test_a_registered_language_with_no_walker_is_skipped_as_unsupported():
+    """
+    Go, C# and Rust are registered for their suffix, grammar and comment style before their
+    walkers exist. Until then their files behave exactly as a language we have no grammar
+    for: no symbols, line windows, one `unsupported` row -- which is why `tools/build.go` is
+    still the fixture's unparsed-code file.
+    """
+    graph = graph_of({"good.py": "def fine():\n    return 1\n", "tool.go": "package main\n"})
+    assert graph.files_skipped == {"tool.go": "unsupported"}
+    assert graph.files_parsed == ["good.py"]
+    assert graph.stats()["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}
 
 
 def test_jsx_and_fragments_parse():
@@ -1011,6 +1096,36 @@ def test_mongo_and_mongoose_hits():
     assert mongo_hit("db.orders", "sprinkle") is None
     assert mongoose_hit("Order", "find").provenance == "mongoose_model"
     assert mongoose_hit("Order", "sprinkle") is None
+
+
+def test_mongo_names_the_pascalcase_drivers_use():
+    """
+    The Go driver and `MongoDB.Driver` spell the same methods in PascalCase, and C# adds
+    `Async`. One name set, with the ceremony stripped before the lookup.
+    """
+    assert mongo_hit("db.orders", "InsertOne").access == "WRITES"
+    assert mongo_hit("db.orders", "FindAsync").access == "READS"
+    assert mongo_hit("db.orders", "InsertOneAsync").access == "WRITES"
+    assert mongoose_hit("Order", "CountDocuments").access == "READS"
+    assert mongo_hit("db.orders", "SprinkleAsync") is None
+
+
+def test_a_collection_call_names_the_collection():
+    """
+    Go, C# and Rust reach a collection through a *call*, not an attribute; the string
+    argument is the collection name. An ordinary `a.b()` chain still names nothing.
+    """
+    for chain in (
+        'client.Database("app").Collection("archive_orders")',
+        '_db.GetCollection<Order>("archive_orders")',
+        'db.collection::<Order>("archive_orders")',
+        'client.get_collection("archive_orders")',
+    ):
+        hit = mongo_hit(chain, "InsertOne", 12)
+        assert hit is not None, chain
+        assert (hit.kind, hit.qualname, hit.access) == ("collection", "archive_orders", "WRITES"), chain
+    assert mongo_hit("service.repository()", "InsertOne") is None
+    assert mongo_hit("client.Collection(name)", "InsertOne") is None  # not a literal: no name
 
 
 # ---------------------------------------------------- properties and budgets
