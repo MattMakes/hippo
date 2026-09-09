@@ -65,6 +65,8 @@ def test_symbols_finds_by_substring_with_display_names(client):
     # A substring, not a token: the Cypher rel type `PLACED_BY` matches "place" too, and saying so
     # is the point - this endpoint is a name search, not a resolver.
     assert [r["display"] for r in rows] == [
+        "goapp.orders.service.Service.Place",
+        "goapp.orders.service_test.TestPlace",
         PLACE,
         "rel_type PLACED_BY",
         "rsapp.src.orders.OrderService.place",
@@ -72,7 +74,8 @@ def test_symbols_finds_by_substring_with_display_names(client):
         "rsapp.tests.orders.test_place",
         "tests.test_orders.test_place",
     ]
-    place = rows[0]
+    # By display name, so a third tree sorting before `pyapp` moves the row rather than the claim.
+    place = next(r for r in rows if r["display"] == PLACE)
     assert place["kind"] == "symbol" and place["code_kind"] == "method"
     assert place["lang"] == "python" and place["path"] == "pyapp/orders.py"
     assert place["line_start"] > 0 and place["line_end"] >= place["line_start"]
@@ -194,6 +197,8 @@ def test_an_ambiguous_symbol_is_a_409_with_its_candidates(client):
     assert response.status_code == 409
     body = response.json()
     assert body["candidates"] == [
+        "goapp.orders.service.Service.Log",
+        "goapp.store.base.Base.Log",
         "pyapp.orders.OrderService.log",
         "pyapp.store.Base.log",
         "rsapp.src.orders.OrderService.log",

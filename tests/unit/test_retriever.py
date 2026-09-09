@@ -520,22 +520,29 @@ def test_naming_a_symbol_lifts_its_passage_into_what_the_model_reads(
     PLAN.md asks for "in the top 3". What is pinned here is the durable part of that, split by the
     mechanism that carries it.
 
-    **The lexical anchor on its own** (`code_dense_seeds=0`) lifts the passage from rank 25 --
-    where dense similarity had it -- into the `qa_top_k` slice the answerer actually reads, at
-    rank 5. That is the sentence the docs make, and it is a property of the anchor.
+    **The lexical anchor on its own** puts the passage first. `code_dense_seeds=0` takes the dense
+    seeds away and `passage_node_weight=0` stops a passage seeding itself, so the anchored symbol
+    is the only thing in the graph that can reach a passage at all -- and what it reaches, through
+    DEFINED_IN, is the passage that defines it: rank 1 of 75, from rank 35 with the anchor off.
+    That is the sentence the docs make, and it is a property of the anchor rather than of any
+    embedder.
 
     **At the defaults the exact position is not.** `split_question` leaves "What does do?" as the
-    prose half, so `FakeOllama`'s feature-hashed vectors order 63 passages on noise, and every tree
-    the fixture adds puts more twins of this passage among the five dense seeds -- three of them
-    are `rsapp`'s. What holds at the defaults is the lift itself and the activation: the passage
-    ranks better than it does with the anchor off, and the symbol is the most activated node in
-    the graph by a factor of three. A real embedder is what would make the literal top 3 hold.
+    prose half, so `FakeOllama`'s feature-hashed vectors order 75 passages on noise, and every tree
+    the fixture adds puts another twin of this passage above it: each tells the same story, so each
+    contributes a four-line entry point calling `place`, and under feature hashing those are the
+    passage's nearest neighbours (`goapp/cmd/main.go` ranks 4th here, `rsapp/src/main.rs` 9th,
+    `pyapp/cli.py` 7th). Measured with three trees: rank 35 with the anchor off, 6 with the anchor
+    and the default passage weight, 7 at the defaults. What holds at the defaults is the lift
+    itself and the activation: the passage ranks better than it does with the anchor off, and the
+    symbol is the most activated node in the graph by a factor of three. A real embedder is what
+    would make the literal top 3 hold.
     """
     index = code_retriever.index
     passage_id = index.node_ids[index.defining_passages(index.idx_of[place_id(index, code_source)])[0]]
 
     without = code_retriever.retrieve(PLACE, settings(code_seed_weight=0.0, code_dense_seeds=0))
-    anchor_only = code_retriever.retrieve(PLACE, settings(code_dense_seeds=0))
+    anchor_only = code_retriever.retrieve(PLACE, settings(code_dense_seeds=0, passage_node_weight=0.0))
     trace = code_retriever.retrieve(PLACE, settings())
 
     assert trace.used_code_seeds is True
@@ -576,6 +583,40 @@ def test_naming_the_rust_symbol_seeds_the_rust_one_and_lifts_its_passage(
     assert index.node_ids[trace.top_nodes[0].vertex] == rust_place
     assert trace.top_nodes[0].score > 4 * trace.top_nodes[1].score
     ranks = {p.passage_id: p.rank for p in trace.passages}
+    assert ranks[passage_id] < {p.passage_id: p.rank for p in without.passages}[passage_id] - 10
+
+
+def test_naming_the_go_symbol_seeds_the_go_one_and_lifts_its_passage(
+    code_retriever: Retriever, code_source: str
+) -> None:
+    """
+    The third tree, and the case where a display name is doing something the qualname could not do
+    on its own: Go spells the method `Service.Place`, so the *qualname* is unique already -- what
+    the display name adds is the module path that tells `goapp` from a `Service.Place` any other
+    tree might grow. Naming `goapp.orders.service.Service.Place` in full seeds that symbol alone
+    and leaves the Python `place` unseeded.
+
+    Its passage goes from dense rank 20 to rank 2, inside `qa_top_k`. The one passage above it is
+    `goapp/cmd/main.go`, the four-line entry point that calls it -- the same dense twin that costs
+    the Python case its top slot, except here it is the *caller* of the named symbol, so PPR has
+    every reason to rank it.
+    """
+    index = code_retriever.index
+    go_place = symbol_id(code_source, "goapp/orders/service.go", "Service.Place")
+    passage_id = index.node_ids[index.defining_passages(index.idx_of[go_place])[0]]
+    question = "What does goapp.orders.service.Service.Place do?"
+
+    without = code_retriever.retrieve(question, settings(code_seed_weight=0.0, code_dense_seeds=0))
+    trace = code_retriever.retrieve(question, settings(code_dense_seeds=0))
+
+    assert trace.used_code_seeds is True
+    named = [s for s in trace.seed_symbols if s.kept and s.how == "identifier"]
+    assert [(s.node_id, s.n_matches) for s in named] == [(go_place, 1)]
+    assert place_id(index, code_source) not in {s.node_id for s in trace.seed_symbols}
+    assert index.node_ids[trace.top_nodes[0].vertex] == go_place
+    assert trace.top_nodes[0].score > 4 * trace.top_nodes[1].score
+    ranks = {p.passage_id: p.rank for p in trace.passages}
+    assert ranks[passage_id] <= settings()["qa_top_k"]
     assert ranks[passage_id] < {p.passage_id: p.rank for p in without.passages}[passage_id] - 10
 
 

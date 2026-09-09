@@ -295,27 +295,28 @@ def test_a_code_archive_is_parsed_chunked_by_symbol_and_recorded_in_meta(code_in
     source = ctx.store.get_source(source_id)
     code = source["meta"]["code"]
 
-    assert (code["symbols"], code["data_objects"], code["edges"]) == (54, 12, 110)
+    assert (code["symbols"], code["data_objects"], code["edges"]) == (73, 12, 143)
     assert code["edges_by_kind"] == {
         "CATCHES": 1,
-        "CONTAINS": 43,
-        "IMPORTS": 18,
-        "INHERITS": 3,
-        "INVOKES": 19,
-        "OVERRIDES": 2,
+        "CONTAINS": 57,
+        "IMPORTS": 21,
+        "INHERITS": 4,
+        "INVOKES": 24,
+        "OVERRIDES": 3,
         "RAISES": 3,
-        "READS": 10,
-        "TESTED_BY": 7,
-        "WRITES": 4,
+        "READS": 14,
+        "TESTED_BY": 10,
+        "WRITES": 6,
     }
-    assert code["files_parsed"] == 17  # six Python, three TypeScript, six Rust, one .sql, one Go
+    # six Python, three TypeScript, six Rust, six Go, one .sql
+    assert code["files_parsed"] == 22
     assert code["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # build.rb
     assert code["truncated"] is False
     # Calls that resolve to nothing in the repo -- builtins included -- are counted per file, so
     # phase 2 has a baseline to work from (D15). Only parsed files can have any.
     assert set(code["unresolved_calls"]) <= set(code_sample_paths())
     assert code["unresolved_calls_total"] == sum(code["unresolved_calls"].values())
-    assert source["meta"]["counts"]["symbols"] == 54
+    assert source["meta"]["counts"]["symbols"] == 73
 
 
 def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
@@ -328,12 +329,16 @@ def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
     assert "schema/orders.sql (lines 1-2)" in titles  # no symbols to cut by; windows as before
     assert "tools/build.rb (lines 1-3)" in titles  # no grammar; windows as before
     assert "tools/build.go :: tools.build.main (lines 3-3)" in titles  # Go parses now
+    # Go writes a type's methods outside it as well, so the struct's passage is its own lines (L3).
+    assert "goapp/orders/service.go :: goapp.orders.service.Service (lines 15-19)" in titles
+    # `go.mod` has no walker but is readable text, so it is one prose passage, not a skipped file.
+    assert "goapp/go.mod" in titles
     assert not any(t == "pyapp/orders.py (lines 1-40)" for t in titles)
 
 
 def test_deleting_a_code_source_removes_its_symbols_and_data_objects(code_index) -> None:
     ctx, source_id = code_index
-    assert len(ctx.store.load_symbols()) == 54
+    assert len(ctx.store.load_symbols()) == 73
 
     pipeline.delete_source(ctx, source_id)
 

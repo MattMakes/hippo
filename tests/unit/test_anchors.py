@@ -173,9 +173,11 @@ def test_backticks_rescue_a_single_token_lowercase_name(index: GraphIndex) -> No
     # The cost spike 1 asks us to accept and document: bare `place` in prose does not anchor,
     # because a lowercase single token is indistinguishable from English. Backticks say "code".
     assert find_anchors("what does place do?", index) == []
+    # `goapp` spells it `Place`, and the bare-name lookup is case-blind, so three symbols share it.
     assert seeds(index, find_anchors("what does `place` do?", index)) == {
-        "pyapp.orders.OrderService.place": 0.5,
-        "rsapp.src.orders.OrderService.place": 0.5,
+        "goapp.orders.service.Service.Place": pytest.approx(1 / 3),
+        "pyapp.orders.OrderService.place": pytest.approx(1 / 3),
+        "rsapp.src.orders.OrderService.place": pytest.approx(1 / 3),
     }
 
 
@@ -451,9 +453,12 @@ def test_an_ambiguous_name_splits_its_weight_and_is_capped(code_index) -> None:
 
 
 def test_a_split_over_every_match_sums_to_one_share_of_the_seed_weight(index: GraphIndex) -> None:
-    # `log` is a method on both `OrderService`s and on all three `Base`s: five real symbols.
+    # `log` is a method on every service and on every `Base`: seven real symbols, and the two Go
+    # ones are `Log` -- the lookup lower-cases, so a language's capitalisation costs nothing.
     found = find_anchors("what does `log` do?", index)
     assert sorted(seeds(index, found)) == [
+        "goapp.orders.service.Service.Log",
+        "goapp.store.base.Base.Log",
         "pyapp.orders.OrderService.log",
         "pyapp.store.Base.log",
         "rsapp.src.orders.OrderService.log",
@@ -461,7 +466,7 @@ def test_a_split_over_every_match_sums_to_one_share_of_the_seed_weight(index: Gr
         "tsapp.models.base.Base.log",
     ]
     assert sum(a.weight for a in found) == pytest.approx(1.0)
-    assert {a.n_matches for a in found} == {5}
+    assert {a.n_matches for a in found} == {7}
 
 
 def test_a_name_matching_more_than_ten_symbols_seeds_nothing_and_says_so(code_index) -> None:
@@ -473,7 +478,7 @@ def test_a_name_matching_more_than_ten_symbols_seeds_nothing_and_says_so(code_in
 
 
 def test_a_path_qualified_match_is_never_split(index: GraphIndex) -> None:
-    # Three symbols are called `log`; naming one of them by its module picks that one, whole.
+    # Seven symbols are called `log`; naming one of them by its module picks that one, whole.
     found = find_anchors("what does pyapp.store.Base.log do?", index)
     assert names(index, found) == ["Base.log"]
     assert found[0].weight == 1.0 and found[0].n_matches == 1

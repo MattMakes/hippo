@@ -453,15 +453,16 @@ def test_indexing_a_code_source_returns_all_nine_counts(store, ollama, code_sour
         entities=written["entities"],
         facts=written["facts"],
         synonyms=written["synonyms"],
-        symbols=54,
+        symbols=73,
         data_objects=12,
-        code_edges=110,
+        code_edges=143,
         # the README names `OrderService.place` and "the order service"; each reaches the Python
         # symbol and its Rust twin, which share the qualname (S2.13 never splits a dotted name).
+        # `goapp` spells it `Service.Place`, so it is not a third match for either.
         refers_to=4,
     )
-    assert (store.stats()["symbols"], store.stats()["data_objects"]) == (54, 12)
-    assert len(store.load_code_edges()) == 110
+    assert (store.stats()["symbols"], store.stats()["data_objects"]) == (73, 12)
+    assert len(store.load_code_edges()) == 143
 
 
 def test_every_passage_is_linked_to_what_it_defines(store, ollama, code_source, code_chunks):
@@ -509,7 +510,9 @@ def test_the_openie_bill_is_two_calls_per_extracted_passage(
     extracted = [c for c in chunks if c.extract_text is None or c.extract_text != ""]
     index_source(store, ollama, code_source, chunks, code=graph)
     assert openie_calls(fake_ollama) == 2 * len(extracted)
-    assert len(extracted) == 7  # README, build.rb, and five docs of 80+ characters (two are rsapp's)
+    # README, build.rb, `goapp/go.mod` (prose: Go's manifest has no walker but is readable text),
+    # and seven docs of 80+ characters -- two of them `rsapp`'s, two `goapp`'s.
+    assert len(extracted) == 10
 
 
 def test_a_skipped_passage_still_stores_an_empty_extraction_without_an_error(

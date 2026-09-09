@@ -44,6 +44,10 @@
       "kind": "collection",
       "mentions": [
         [
+          "goapp/orders/service.go",
+          45
+        ],
+        [
           "pyapp/orders.py",
           35
         ],
@@ -120,6 +124,10 @@
       "kind": "label",
       "mentions": [
         [
+          "goapp/orders/service.go",
+          49
+        ],
+        [
           "pyapp/orders.py",
           38
         ],
@@ -136,6 +144,10 @@
       "kind": "label",
       "mentions": [
         [
+          "goapp/orders/service.go",
+          49
+        ],
+        [
           "pyapp/orders.py",
           38
         ],
@@ -151,6 +163,10 @@
       "dialect": "cypher",
       "kind": "rel_type",
       "mentions": [
+        [
+          "goapp/orders/service.go",
+          49
+        ],
         [
           "pyapp/orders.py",
           38
@@ -179,6 +195,14 @@
       "dialect": "sql",
       "kind": "table",
       "mentions": [
+        [
+          "goapp/orders/service.go",
+          35
+        ],
+        [
+          "goapp/orders/service.go",
+          39
+        ],
         [
           "pyapp/orders.py",
           14
@@ -224,6 +248,14 @@
         "Order"
       ],
       "passage": "tsapp/models/order.ts :: tsapp.models.order (lines 1-17)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Archive (lines 43-46)"
     },
     {
       "node": [
@@ -287,6 +319,14 @@
         "label",
         "Customer"
       ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Customer"
+      ],
       "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
     },
     {
@@ -303,6 +343,14 @@
         "label",
         "Order"
       ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Order"
+      ],
       "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
     },
     {
@@ -312,6 +360,14 @@
         "Order"
       ],
       "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
+    },
+    {
+      "node": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
     },
     {
       "node": [
@@ -336,6 +392,22 @@
         "customers"
       ],
       "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.ListOpen (lines 34-36)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Save (lines 38-41)"
     },
     {
       "node": [
@@ -384,6 +456,158 @@
         "orders"
       ],
       "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "SendInvoice"
+      ],
+      "passage": "goapp/billing/billing.go :: goapp.billing.billing.SendInvoice (lines 16-18)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "Total"
+      ],
+      "passage": "goapp/billing/billing.go :: goapp.billing.billing.Total (lines 7-13)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "goapp.billing.billing"
+      ],
+      "passage": "goapp/billing/billing.go :: goapp.billing.billing (lines 1-15)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "goapp.cmd.main"
+      ],
+      "passage": "goapp/cmd/main.go :: goapp.cmd.main (lines 1-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "main"
+      ],
+      "passage": "goapp/cmd/main.go :: goapp.cmd.main.main (lines 5-8)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service (lines 15-19)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Archive"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Archive (lines 43-46)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.ListOpen"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.ListOpen (lines 34-36)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Log"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Log (lines 30-32)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Place (lines 23-28)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Save"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Save (lines 38-41)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service (lines 1-22)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "passage": "goapp/orders/service_test.go :: goapp.orders.service_test.TestPlace (lines 5-7)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "goapp.orders.service_test"
+      ],
+      "passage": "goapp/orders/service_test.go :: goapp.orders.service_test (lines 1-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base"
+      ],
+      "passage": "goapp/store/base.go :: goapp.store.base.Base (lines 5-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base.Log"
+      ],
+      "passage": "goapp/store/base.go :: goapp.store.base.Base.Log (lines 8-10)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/store/base.go",
+        "OrderError"
+      ],
+      "passage": "goapp/store/base.go :: goapp.store.base.OrderError (lines 13-13)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/store/base.go",
+        "goapp.store.base"
+      ],
+      "passage": "goapp/store/base.go :: goapp.store.base (lines 1-12)"
     },
     {
       "node": [
@@ -912,6 +1136,216 @@
     {
       "a": [
         "symbol",
+        "goapp/billing/billing.go",
+        "goapp.billing.billing"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "SendInvoice"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "goapp.billing.billing"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "Total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "goapp.cmd.main"
+      ],
+      "b": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "main"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Archive"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.ListOpen"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Save"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "goapp.orders.service_test"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base.Log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/store/base.go",
+        "goapp.store.base"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/store/base.go",
+        "goapp.store.base"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "OrderError"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
         "pyapp/billing.py",
         "pyapp.billing"
       ],
@@ -1482,6 +1916,51 @@
     {
       "a": [
         "symbol",
+        "goapp/cmd/main.go",
+        "goapp.cmd.main"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "goapp.billing.billing"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "goapp.store.base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
         "pyapp/__init__.py",
         "pyapp.__init__"
       ],
@@ -1752,6 +2231,21 @@
     {
       "a": [
         "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
         "pyapp/orders.py",
         "OrderService"
       ],
@@ -1793,6 +2287,121 @@
       "kind": "INHERITS",
       "omega": 0.9,
       "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "orders.Order{}"
+        },
+        "call_line": 7,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "SendInvoice"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 25,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "Total"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 24,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Log"
+      ],
+      "extra": {
+        "arg_binding": {
+          "message": "\"x\""
+        },
+        "call_line": 26,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "Order{}"
+        },
+        "call_line": 6,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_scope"
     },
     {
       "a": [
@@ -2226,6 +2835,21 @@
     {
       "a": [
         "symbol",
+        "goapp/orders/service.go",
+        "Service.Log"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base.Log"
+      ],
+      "kind": "OVERRIDES",
+      "omega": 0.9,
+      "provenance": "mro"
+    },
+    {
+      "a": [
+        "symbol",
         "pyapp/orders.py",
         "OrderService.log"
       ],
@@ -2297,6 +2921,66 @@
       "kind": "RAISES",
       "omega": 0.9,
       "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "b": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.ListOpen"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "sql_literal"
     },
     {
       "a": [
@@ -2451,6 +3135,51 @@
     {
       "a": [
         "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.6,
+      "provenance": "test_mention"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "goapp.orders.service_test"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.75,
+      "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
         "pyapp/orders.py",
         "OrderService"
       ],
@@ -2552,6 +3281,36 @@
       "kind": "TESTED_BY",
       "omega": 0.75,
       "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Archive"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "mongo_chain"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Save"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "sql_literal"
     },
     {
       "a": [
@@ -2682,6 +3441,329 @@
       "ordinal": 1,
       "path": "pyapp/orders.py",
       "qualname": "OrderService.place"
+    },
+    {
+      "hunk": {
+        "churn": 18,
+        "file": "goapp/billing/billing.go",
+        "new_range": [
+          1,
+          18
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/billing/billing.go",
+      "qualname": "SendInvoice"
+    },
+    {
+      "hunk": {
+        "churn": 18,
+        "file": "goapp/billing/billing.go",
+        "new_range": [
+          1,
+          18
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/billing/billing.go",
+      "qualname": "Total"
+    },
+    {
+      "hunk": {
+        "churn": 18,
+        "file": "goapp/billing/billing.go",
+        "new_range": [
+          1,
+          18
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/billing/billing.go",
+      "qualname": "goapp.billing.billing"
+    },
+    {
+      "hunk": {
+        "churn": 8,
+        "file": "goapp/cmd/main.go",
+        "new_range": [
+          1,
+          8
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/cmd/main.go",
+      "qualname": "goapp.cmd.main"
+    },
+    {
+      "hunk": {
+        "churn": 8,
+        "file": "goapp/cmd/main.go",
+        "new_range": [
+          1,
+          8
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/cmd/main.go",
+      "qualname": "main"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Archive"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Graph"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.ListOpen"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Log"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Place"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Save"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "goapp.orders.service"
+    },
+    {
+      "hunk": {
+        "churn": 7,
+        "file": "goapp/orders/service_test.go",
+        "new_range": [
+          1,
+          7
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service_test.go",
+      "qualname": "TestPlace"
+    },
+    {
+      "hunk": {
+        "churn": 7,
+        "file": "goapp/orders/service_test.go",
+        "new_range": [
+          1,
+          7
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service_test.go",
+      "qualname": "goapp.orders.service_test"
+    },
+    {
+      "hunk": {
+        "churn": 13,
+        "file": "goapp/store/base.go",
+        "new_range": [
+          1,
+          13
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/store/base.go",
+      "qualname": "Base"
+    },
+    {
+      "hunk": {
+        "churn": 13,
+        "file": "goapp/store/base.go",
+        "new_range": [
+          1,
+          13
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/store/base.go",
+      "qualname": "Base.Log"
+    },
+    {
+      "hunk": {
+        "churn": 13,
+        "file": "goapp/store/base.go",
+        "new_range": [
+          1,
+          13
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/store/base.go",
+      "qualname": "OrderError"
+    },
+    {
+      "hunk": {
+        "churn": 13,
+        "file": "goapp/store/base.go",
+        "new_range": [
+          1,
+          13
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/store/base.go",
+      "qualname": "goapp.store.base"
     },
     {
       "hunk": {
@@ -3594,6 +4676,396 @@
     }
   ],
   "symbols": [
+    {
+      "display": "goapp.billing.billing.SendInvoice",
+      "doc": "SendInvoice mails the invoice for one order.",
+      "header_end": 18,
+      "is_test": false,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 18,
+      "line_start": 16,
+      "params": [
+        "order"
+      ],
+      "path": "goapp/billing/billing.go",
+      "qualname": "SendInvoice",
+      "raises": [],
+      "signature": "func SendInvoice(order Order)",
+      "statement_lines": [
+        17
+      ]
+    },
+    {
+      "display": "goapp.billing.billing.Total",
+      "doc": "Total adds up an order's lines.",
+      "header_end": 13,
+      "is_test": false,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 13,
+      "line_start": 7,
+      "params": [
+        "order"
+      ],
+      "path": "goapp/billing/billing.go",
+      "qualname": "Total",
+      "raises": [],
+      "signature": "func Total(order Order) int",
+      "statement_lines": [
+        8,
+        9,
+        12
+      ]
+    },
+    {
+      "display": "goapp.billing.billing",
+      "doc": "Package billing totals orders and sends their invoices.",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 18,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/billing/billing.go",
+      "qualname": "goapp.billing.billing",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        2,
+        4,
+        7,
+        16
+      ]
+    },
+    {
+      "display": "goapp.cmd.main",
+      "doc": "",
+      "header_end": 4,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 8,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/cmd/main.go",
+      "qualname": "goapp.cmd.main",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        5
+      ]
+    },
+    {
+      "display": "goapp.cmd.main.main",
+      "doc": "",
+      "header_end": 8,
+      "is_test": false,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 8,
+      "line_start": 5,
+      "params": [],
+      "path": "goapp/cmd/main.go",
+      "qualname": "main",
+      "raises": [],
+      "signature": "func main()",
+      "statement_lines": [
+        6,
+        7
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service",
+      "doc": "Service keeps orders. Every order is totalled by the billing package, written to Postgres as\none row and copied into the archive collection the reporting team reads.",
+      "header_end": 19,
+      "is_test": false,
+      "kind": "class",
+      "lang": "go",
+      "line_end": 19,
+      "line_start": 15,
+      "params": [],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service",
+      "raises": [],
+      "signature": "type Service struct",
+      "statement_lines": [
+        16,
+        18
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Archive",
+      "doc": "",
+      "header_end": 46,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 46,
+      "line_start": 43,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Archive",
+      "raises": [],
+      "signature": "func (s *Service) Archive(order Order)",
+      "statement_lines": [
+        44,
+        45
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Graph",
+      "doc": "",
+      "header_end": 50,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 50,
+      "line_start": 48,
+      "params": [
+        "self"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Graph",
+      "raises": [],
+      "signature": "func (s *Service) Graph()",
+      "statement_lines": [
+        49
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.ListOpen",
+      "doc": "",
+      "header_end": 36,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 36,
+      "line_start": 34,
+      "params": [
+        "self"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.ListOpen",
+      "raises": [],
+      "signature": "func (s *Service) ListOpen()",
+      "statement_lines": [
+        35
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Log",
+      "doc": "",
+      "header_end": 32,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 32,
+      "line_start": 30,
+      "params": [
+        "self",
+        "message"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Log",
+      "raises": [],
+      "signature": "func (s *Service) Log(message string) string",
+      "statement_lines": [
+        31
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Place",
+      "doc": "Place totals an order with billing, sends its invoice and logs the route the order took\nbefore handing back the amount the customer owes.",
+      "header_end": 28,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 28,
+      "line_start": 23,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Place",
+      "raises": [],
+      "signature": "func (s *Service) Place(order Order) int",
+      "statement_lines": [
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Save",
+      "doc": "",
+      "header_end": 41,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 41,
+      "line_start": 38,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Save",
+      "raises": [],
+      "signature": "func (s *Service) Save(order Order) error",
+      "statement_lines": [
+        39,
+        40
+      ]
+    },
+    {
+      "display": "goapp.orders.service",
+      "doc": "Package orders places, stores and archives customer orders.",
+      "header_end": 14,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 50,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/orders/service.go",
+      "qualname": "goapp.orders.service",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        2,
+        4,
+        15,
+        23,
+        30,
+        34,
+        38,
+        43,
+        48
+      ]
+    },
+    {
+      "display": "goapp.orders.service_test.TestPlace",
+      "doc": "",
+      "header_end": 7,
+      "is_test": true,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 7,
+      "line_start": 5,
+      "params": [
+        "t"
+      ],
+      "path": "goapp/orders/service_test.go",
+      "qualname": "TestPlace",
+      "raises": [],
+      "signature": "func TestPlace(t *testing.T)",
+      "statement_lines": [
+        6
+      ]
+    },
+    {
+      "display": "goapp.orders.service_test",
+      "doc": "",
+      "header_end": 4,
+      "is_test": true,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 7,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/orders/service_test.go",
+      "qualname": "goapp.orders.service_test",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        5
+      ]
+    },
+    {
+      "display": "goapp.store.base.Base",
+      "doc": "Base is a tiny base type.",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "class",
+      "lang": "go",
+      "line_end": 5,
+      "line_start": 5,
+      "params": [],
+      "path": "goapp/store/base.go",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "type Base struct",
+      "statement_lines": []
+    },
+    {
+      "display": "goapp.store.base.Base.Log",
+      "doc": "Log returns the message it was handed.",
+      "header_end": 10,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 10,
+      "line_start": 8,
+      "params": [
+        "self",
+        "message"
+      ],
+      "path": "goapp/store/base.go",
+      "qualname": "Base.Log",
+      "raises": [],
+      "signature": "func (b *Base) Log(message string) string",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "goapp.store.base.OrderError",
+      "doc": "OrderError is what an order returns when it will not save.",
+      "header_end": 13,
+      "is_test": false,
+      "kind": "class",
+      "lang": "go",
+      "line_end": 13,
+      "line_start": 13,
+      "params": [],
+      "path": "goapp/store/base.go",
+      "qualname": "OrderError",
+      "raises": [],
+      "signature": "type OrderError struct",
+      "statement_lines": []
+    },
+    {
+      "display": "goapp.store.base",
+      "doc": "Package store holds what every service embeds.",
+      "header_end": 4,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 13,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/store/base.go",
+      "qualname": "goapp.store.base",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        2,
+        5,
+        8,
+        13
+      ]
+    },
     {
       "display": "pyapp.__init__",
       "doc": "The pyapp package.",
