@@ -44,6 +44,7 @@ from hippo.codegraph.model import (
     LANG_BY_SUFFIX,
     CodeEdge,
     FileFacts,
+    LanguageRules,
     Symbol,
     merge_edges,
     name_text,
@@ -196,7 +197,7 @@ def test_parsed_langs_is_exactly_the_languages_with_a_walker():
     second place to remember.
     """
     assert sorted(PARSED_LANGS) == sorted(name for name, r in RULES.items() if r.walk is not None)
-    assert sorted(PARSED_LANGS) == ["python", "typescript"]
+    assert sorted(PARSED_LANGS) == ["go", "python", "typescript"]
 
 
 def as_python(**overrides):
@@ -343,20 +344,32 @@ def test_source_setup_runs_once_over_the_raw_documents(monkeypatch):
         return "once"
 
     monkeypatch.setitem(RULES, "python", as_python(source_setup=source_setup))
-    monkeypatch.setitem(RULES, "go", dataclasses.replace(RULES["go"], source_setup=source_setup))
-    graph_of({"a.py": "def f():\n    return 1\n", "notes.md": "# hi\n", "tool.go": "package main\n"})
-    assert seen == [["a.py", "notes.md", "tool.go"]]  # once, for Python only: Go has no walker
+    no_walker_yet(monkeypatch)
+    monkeypatch.setitem(RULES, "cobol", dataclasses.replace(RULES["cobol"], source_setup=source_setup))
+    graph_of({"a.py": "def f():\n    return 1\n", "notes.md": "# hi\n", "tool.cob": "DISPLAY 'hi'.\n"})
+    assert seen == [["a.py", "notes.md", "tool.cob"]]  # once, for Python: COBOL has no walker
 
 
-def test_a_registered_language_with_no_walker_is_skipped_as_unsupported():
+def no_walker_yet(monkeypatch, name: str = "cobol", suffix: str = ".cob") -> None:
     """
-    Go, C# and Rust are registered for their suffix, grammar and comment style before their
-    walkers exist. Until then their files behave exactly as a language we have no grammar
-    for: no symbols, line windows, one `unsupported` row -- which is why `tools/build.go` is
-    still the fixture's unparsed-code file.
+    Register a language the way L0 registers one before its walker lands: a suffix, a
+    comment style, no `walk`. A made-up language rather than a real one, so these tests keep
+    their meaning as Go, C# and Rust get their walkers one branch at a time.
     """
-    graph = graph_of({"good.py": "def fine():\n    return 1\n", "tool.go": "package main\n"})
-    assert graph.files_skipped == {"tool.go": "unsupported"}
+    monkeypatch.setitem(LANG_BY_SUFFIX, suffix, name)
+    monkeypatch.setitem(RULES, name, LanguageRules(name=name, line_comment="*"))
+
+
+def test_a_registered_language_with_no_walker_is_skipped_as_unsupported(monkeypatch):
+    """
+    A language is registered for its suffix, grammar and comment style before its walker
+    exists -- C# and Rust are today, and Go was. Until then its files behave exactly as a
+    language we have no grammar for: no symbols, line windows, one `unsupported` row, which
+    is the part `tools/build.rb` plays in the fixture now that Go parses.
+    """
+    no_walker_yet(monkeypatch)
+    graph = graph_of({"good.py": "def fine():\n    return 1\n", "tool.cob": "DISPLAY 'hi'.\n"})
+    assert graph.files_skipped == {"tool.cob": "unsupported"}
     assert graph.files_parsed == ["good.py"]
     assert graph.stats()["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}
 
@@ -426,7 +439,7 @@ def test_fixture_symbol_set(fixture_graph):
         (s["path"], s["qualname"], s["kind"], s["line_start"], s["line_end"]) for s in EXPECTED["symbols"]
     }
     assert found == wanted
-    assert len(fixture_graph.symbols) == 30
+    assert len(fixture_graph.symbols) == 32
 
 
 def test_fixture_symbol_line_ranges(fixture_graph):
@@ -1350,9 +1363,9 @@ def test_stats_shape(fixture_graph):
         "modifies",
         "history_skipped",
     }
-    assert stats["symbols"] == 30
-    assert stats["files_parsed"] == 10
-    assert stats["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # tools/build.go
+    assert stats["symbols"] == 32
+    assert stats["files_parsed"] == 11  # tools/build.go joined them when the Go walker landed
+    assert stats["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # tools/build.rb
     assert stats["unresolved_calls"]["pyapp/orders.py"] == 2  # os.path.join and print
     assert stats["truncated"] is False
     # An archive has no history to read, so the three history counts are zero rather than absent:
@@ -1379,20 +1392,21 @@ def test_history_is_carried_on_the_graph_for_the_indexer_to_write():
     assert json.loads(json.dumps(stats)) == stats
 
 
-def test_unparsed_and_oversized_files_are_recorded_not_fatal():
+def test_unparsed_and_oversized_files_are_recorded_not_fatal(monkeypatch):
     """A bad file costs its own symbols and nothing else; the chunker keeps line windows for it."""
+    no_walker_yet(monkeypatch)
     graph = graph_of(
         {
             "good.py": "def fine():\n    return 1\n",
             "broken.py": "def (:\n",
             "huge.py": "x = 1\n" * (CODE_MAX_FILE_BYTES // 3),
-            "tool.go": "package main\n\nfunc main() {}\n",
+            "tool.cob": "DISPLAY 'hi'.\n",
         }
     )
     assert graph.files_skipped == {
         "broken.py": "parse_error",
         "huge.py": "too_big",
-        "tool.go": "unsupported",
+        "tool.cob": "unsupported",
     }
     assert graph.files_parsed == ["good.py"]
     assert graph.parsed("good.py") and not graph.parsed("broken.py")

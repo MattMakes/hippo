@@ -10,7 +10,14 @@ import pytest
 
 from hippo.ingest import readers
 from hippo.ingest.html_text import html_to_text
-from hippo.ingest.readers import Document, is_probably_binary, is_supported, read_file, read_zip
+from hippo.ingest.readers import (
+    Document,
+    is_probably_binary,
+    is_supported,
+    is_supported_name,
+    read_file,
+    read_zip,
+)
 
 # ------------------------------------------------------------------ helpers
 
@@ -117,6 +124,22 @@ def test_extensionless_text_is_supported(tmp_path: Path) -> None:
     (doc,) = read_file(readme)
     assert doc.title == "README"
     assert doc.is_code is False
+
+
+def test_go_mod_is_read_but_is_not_code(tmp_path: Path) -> None:
+    """
+    `go.mod` is read for its `module` line, which is how the Go walker turns an import path
+    into a directory (`LanguageRules.source_setup`). It is known by its whole name, not by
+    `.mod` -- Fortran and half a dozen other things use that suffix -- so it is not code and
+    the code graph never tries to parse it.
+    """
+    path = tmp_path / "go.mod"
+    path.write_text("module example.com/goapp\n\ngo 1.22\n")
+    assert is_supported_name("goapp/go.mod")
+    assert is_supported(path)
+    (doc,) = read_file(path)
+    assert doc.is_code is False
+    assert readers.lang_of("go.mod") is None
 
 
 def test_extensionless_binary_is_not_supported(tmp_path: Path) -> None:
@@ -354,9 +377,9 @@ def test_lang_of() -> None:
     for name in ("a.ts", "a.tsx", "a.js", "a.jsx", "a.mjs", "a.cjs"):
         assert readers.lang_of(name) == "typescript"
     assert readers.lang_of("schema/orders.sql") == "sql"
-    # The three languages registered by L0. Naming one is not the same as parsing it: until
-    # its walker lands, `extract_code` skips its files as `unsupported` and they keep line
-    # windows -- which is why `tools/build.go` is still the unparsed-code fixture.
+    # Naming a language is not the same as parsing it: C# and Rust are registered and have
+    # no walker yet, so `extract_code` skips their files as `unsupported` and they keep line
+    # windows. Go has one, which is why `tools/build.rb` is the unparsed-code fixture now.
     assert readers.lang_of("tool.go") == "go"
     assert readers.lang_of("App/Orders/OrderService.cs") == "csharp"
     assert readers.lang_of("main.rs") == "rust"

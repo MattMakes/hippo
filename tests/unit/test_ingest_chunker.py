@@ -382,8 +382,10 @@ def test_a_sql_file_keeps_line_windows_but_defines_its_tables_and_skips_openie(c
 
 
 def test_a_code_file_with_no_grammar_is_chunked_exactly_as_before(code_graph) -> None:
-    (chunk,) = chunks_of("tools/build.go", code_graph)
-    assert chunk.title == "tools/build.go (lines 1-3)"
+    """Ruby has no grammar and no walker, so `tools/build.rb` keeps today's line windows.
+    `tools/build.go` used to play this part and is a parsed Go file now."""
+    (chunk,) = chunks_of("tools/build.rb", code_graph)
+    assert chunk.title == "tools/build.rb (lines 1-3)"
     assert chunk.extract_text is None and chunk.defines == []  # OpenIE as today
 
 
