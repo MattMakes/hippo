@@ -196,7 +196,7 @@ def test_parsed_langs_is_exactly_the_languages_with_a_walker():
     second place to remember.
     """
     assert sorted(PARSED_LANGS) == sorted(name for name, r in RULES.items() if r.walk is not None)
-    assert sorted(PARSED_LANGS) == ["python", "typescript"]
+    assert sorted(PARSED_LANGS) == ["csharp", "python", "typescript"]
 
 
 def as_python(**overrides):
