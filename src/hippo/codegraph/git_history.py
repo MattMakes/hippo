@@ -52,6 +52,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .extract import _walk
+from .languages import PARSED_LANGS
 from .model import Symbol, commit_id, lang_of
 
 # Field separators inside one `git log` record, and between records. A commit message is
@@ -326,7 +327,7 @@ def _modifies(
     """
     by_file: dict[str, list[_Hunk]] = {}
     for hunk in hunks:
-        if lang_of(hunk.file) in ("python", "typescript"):
+        if lang_of(hunk.file) in PARSED_LANGS:
             by_file.setdefault(hunk.file, []).append(hunk)
 
     rows: dict[str, dict] = {}

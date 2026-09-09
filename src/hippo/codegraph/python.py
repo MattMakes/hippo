@@ -24,9 +24,13 @@ from .model import (
     CallFact,
     FileFacts,
     ImportFact,
+    LanguageRules,
     LiteralFact,
     RaiseFact,
     Symbol,
+    is_test_path,
+    module_qualname,
+    package_of,
     symbol_id,
 )
 from .treesitter import end_line_of, line_of, text_of
@@ -53,28 +57,22 @@ BRANCH_TYPES = {
 DEFINITIONS = {"class_definition", "function_definition", "decorated_definition"}
 
 
-def module_qualname(path: str) -> str:
+def resolve_module(index, facts: FileFacts, spec: ImportFact) -> FileFacts | None:
     """
-    A module's qualname: the repo-relative path, `/` to `.`, extension stripped, `__init__`
-    kept (2.2a). `pyapp/__init__.py` -> `pyapp.__init__`, so a package and its `__init__`
-    module are never the same node.
-    """
-    posix = path.replace("\\", "/")
-    head, _, tail = posix.rpartition("/")
-    stem = tail.rsplit(".", 1)[0] if "." in tail else tail
-    return (f"{head}/{stem}" if head else stem).replace("/", ".")
+    `from ..b import c` in `a/x/y.py`: walk `spec.level` packages up, then down `spec.module`.
 
-
-def is_test_path(path: str) -> bool:
+    One dot means "the package this module is in", and for `pyapp/__init__.py` that package
+    is `pyapp` itself, not its parent -- `from .orders import X` inside `pyapp/__init__.py`
+    must reach `pyapp.orders`, which dropping a component would miss.
     """
-    A file counts as test code by directory or by name; every symbol in it gets `is_test`.
-    One rule for both languages, so `tests/test_orders.py` and `src/order.spec.ts` agree.
-    """
-    parts = path.replace("\\", "/").split("/")
-    if any(part in ("test", "tests", "__tests__") for part in parts[:-1]):
-        return True
-    stem = parts[-1].rsplit(".", 1)[0] if "." in parts[-1] else parts[-1]
-    return stem.startswith("test_") or stem.endswith(("_test", ".test", ".spec"))
+    origin, text, level = facts.module, spec.module, spec.level
+    if not level:
+        return index.module(text)
+    base = package_of(origin) if origin.endswith(".__init__") else origin.rpartition(".")[0]
+    for _ in range(level - 1):
+        base = base.rpartition(".")[0]
+    target = f"{base}.{text}" if base and text else (base or text)
+    return index.module(target)
 
 
 def walk(path: str, root: Node, source_id: str) -> FileFacts:
@@ -468,3 +466,17 @@ def _from_import(facts: FileFacts, node: Node) -> None:
     for child in names:
         name, alias = _aliased(child)
         facts.imports.append(ImportFact(module=module, name=name, alias=alias, line=line, level=level))
+
+
+# ------------------------------------------------------------ registration
+
+# What `languages.RULES["python"]` is. Everything Python-shaped that the extractor, the
+# resolver or the chunker needs lives behind this entry; none of them names the language.
+RULES_ENTRY = LanguageRules(
+    name="python",
+    line_comment="#",
+    walk=walk,
+    resolve_module=resolve_module,
+    module_qualname=module_qualname,
+    is_test_path=is_test_path,
+)

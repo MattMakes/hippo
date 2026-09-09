@@ -17,6 +17,8 @@ differences the language forces:
 
 from __future__ import annotations
 
+import posixpath
+
 from tree_sitter import Node
 
 from .model import (
@@ -25,13 +27,19 @@ from .model import (
     CallFact,
     FileFacts,
     ImportFact,
+    LanguageRules,
     LiteralFact,
     RaiseFact,
     Symbol,
+    is_test_path,
+    module_qualname,
     symbol_id,
 )
-from .python import is_test_path, module_qualname
 from .treesitter import end_line_of, line_of, text_of
+
+# Where a TypeScript relative import may land, in the order `resolve_module` tries them.
+TS_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+JS_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs")
 
 BRANCH_TYPES = {
     "if_statement",
@@ -522,3 +530,43 @@ def _source_text(node: Node) -> str:
     if source is None:
         return ""
     return "".join(text_of(c) for c in source.children if c.type == "string_fragment")
+
+
+# ------------------------------------------------------------ registration
+
+
+def resolve_module(index, facts: FileFacts, spec: ImportFact) -> FileFacts | None:
+    """
+    `./base` from `tsapp/models/order.ts`. A bare specifier (`react`, `mongoose`) is a
+    dependency, not part of this source, and resolves to nothing (2.2b: no edge).
+    """
+    origin_path, text = facts.path, spec.module
+    if not text.startswith("."):
+        return None
+    base = posixpath.normpath(posixpath.join(posixpath.dirname(origin_path), text))
+    candidates: list[str] = []
+    if base.endswith(JS_EXTENSIONS):  # `./b.js` is written for the runtime; `./b.ts` is the source
+        stem = base.rsplit(".", 1)[0]
+        candidates += [f"{stem}.ts", f"{stem}.tsx", base]
+    elif base.endswith((".ts", ".tsx")):
+        candidates.append(base)
+    else:
+        candidates += [f"{base}{ext}" for ext in TS_EXTENSIONS]
+        candidates += [f"{base}/index{ext}" for ext in TS_EXTENSIONS]
+    for candidate in candidates:
+        found = index.files.get(candidate)
+        if found is not None:
+            return found
+    return None
+
+
+# What `languages.RULES["typescript"]` is; `.ts/.tsx/.js/.jsx/.mjs/.cjs` all arrive here,
+# and `treesitter.grammar_for` picks the TSX dialect for the JS-ish ones.
+RULES_ENTRY = LanguageRules(
+    name="typescript",
+    line_comment="//",
+    walk=walk,
+    resolve_module=resolve_module,
+    module_qualname=module_qualname,
+    is_test_path=is_test_path,
+)

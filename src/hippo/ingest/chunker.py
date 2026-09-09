@@ -48,7 +48,6 @@ if TYPE_CHECKING:  # `codegraph` pulls tree-sitter in; the chunker only reads pl
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 MIN_CHUNK_CHARS = 50  # a safety net against 0 or negative sizes; real chunks are far bigger
-LINE_COMMENT = {"python": "#", "typescript": "//"}
 
 # (line number or None for a placeholder, the text of that line).
 Row = tuple[int | None, str]
@@ -448,6 +447,20 @@ def _header_rows(symbol: Symbol, members: list[Symbol], lines: list[str]) -> lis
     return rows
 
 
+def _line_comment(lang: str) -> str:
+    """
+    How this language starts a line comment, from the code-graph language registry.
+
+    Imported inside the function on purpose: `codegraph.languages` pulls tree-sitter in, and
+    the chunker must stay importable without it. Nothing reaches here except through a
+    `code.parsed(...)` branch, by which point the extractor has already loaded it.
+    """
+    from ..codegraph.languages import RULES
+
+    rules = RULES.get(lang)
+    return rules.line_comment if rules is not None else "#"
+
+
 def _placeholder(symbol: Symbol, lines: list[str]) -> str:
     """
     `class OrderService(Base): ...  # lines 9-40` -- what a member looks like from its container.
@@ -457,7 +470,7 @@ def _placeholder(symbol: Symbol, lines: list[str]) -> str:
     """
     source = lines[symbol.line_start - 1] if symbol.line_start <= len(lines) else ""
     indent = source[: len(source) - len(source.lstrip())]
-    comment = LINE_COMMENT.get(symbol.lang, "#")
+    comment = _line_comment(symbol.lang)
     body = f"{symbol.signature}: ..." if symbol.lang == "python" else f"{symbol.signature} {{ ... }}"
     return f"{indent}{body}  {comment} lines {symbol.line_start}-{symbol.line_end}"
 

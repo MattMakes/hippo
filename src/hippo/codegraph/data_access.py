@@ -60,12 +60,16 @@ CYPHER_WRITE = re.compile(r"\b(CREATE|MERGE|SET|DELETE|REMOVE)\b")
 CYPHER_NODE = re.compile(r"\(\s*\w*\s*:\s*([A-Za-z_]\w*)")
 CYPHER_REL = re.compile(r"\[\s*\w*\s*:\s*([A-Za-z_]\w*)")
 
-# Mongo/Mongoose method names. Deliberately narrow: `save`, `remove` and `create` are left
-# out because they are ordinary method names everywhere else and would invent edges.
+# Mongo/Mongoose method names: snake_case (pymongo, the Rust `mongodb` crate), camelCase
+# (mongoose) and PascalCase (the Go driver, `MongoDB.Driver`). Deliberately narrow: `save`,
+# `remove` and `create` are left out because they are ordinary method names everywhere else
+# and would invent edges. A trailing `Async` is stripped before the lookup, not spelled out
+# here -- `FindAsync` and `InsertOneAsync` are the same two names with C# ceremony on them.
 MONGO_READS = frozenset(
     {
         "find", "find_one", "findOne", "aggregate", "distinct", "count_documents",
         "countDocuments", "estimated_document_count", "estimatedDocumentCount", "findById",
+        "Find", "FindOne", "Aggregate", "CountDocuments", "Distinct",
     }
 )  # fmt: skip
 MONGO_WRITES = frozenset(
@@ -74,8 +78,19 @@ MONGO_WRITES = frozenset(
         "updateOne", "updateMany", "delete_one", "delete_many", "deleteOne", "deleteMany",
         "replace_one", "replaceOne", "bulk_write", "bulkWrite", "find_one_and_update",
         "findOneAndUpdate", "find_one_and_delete", "findOneAndDelete", "findByIdAndUpdate",
+        "InsertOne", "InsertMany", "UpdateOne", "UpdateMany", "DeleteOne", "DeleteMany",
+        "ReplaceOne", "BulkWrite",
     }
 )  # fmt: skip
+
+# The last link of a collection chain when it is a *call* rather than an attribute:
+# `client.Database("app").Collection("orders")` (Go), `GetCollection<Order>("orders")` (C#),
+# `collection::<Order>("orders")` (Rust), `db.get_collection("orders")` (pymongo). Only
+# consulted when the plain `db.orders` shape did not already name the collection.
+COLLECTION_MARKER = re.compile(
+    r"^(?:get_collection|getCollection|GetCollection|Collection|collection)"
+    r"(?:::)?(?:<[^<>]*>)?\(\s*[\"'`]([A-Za-z_]\w*)[\"'`]\s*(?:,[^)]*)?\)$"
+)
 
 READS, WRITES = "READS", "WRITES"
 
@@ -268,28 +283,52 @@ def _leading_blank_lines(chunk: str) -> int:
 # ---------------------------------------------------------------- Mongo
 
 
+def mongo_method(name: str) -> str:
+    """
+    The driver method a call name means. `InsertOneAsync` is `InsertOne` with C# ceremony on
+    it, so the `Async` comes off before the sets are consulted rather than being spelled
+    twice in them.
+    """
+    return name.removesuffix("Async") if name.endswith("Async") else name
+
+
+def collection_of(receiver: str) -> str:
+    """
+    The collection the last link of a chain names: `db.archive_orders` -> `archive_orders`,
+    `client.Database("app").Collection("archive_orders")` -> `archive_orders`. "" when the
+    chain does not name one, which is every ordinary `a.b()` call.
+    """
+    if "." not in receiver:
+        return ""
+    last = receiver.rsplit(".", 1)[1]
+    if last.isidentifier():
+        return last
+    found = COLLECTION_MARKER.match(last)
+    return found.group(1) if found is not None else ""
+
+
 def mongo_hit(receiver: str, name: str, line: int = 0) -> Hit | None:
     """
     `db.archive_orders.insert_one(...)` -> the collection `archive_orders`, written.
     The receiver must be a chain (`a.b`), so a bare `x.find()` invents nothing.
     """
-    if "." not in receiver:
+    collection = collection_of(receiver)
+    if not collection:
         return None
-    collection = receiver.rsplit(".", 1)[1]
-    if not collection or not collection.isidentifier():
-        return None
-    if name in MONGO_WRITES:
+    method = mongo_method(name)
+    if method in MONGO_WRITES:
         return Hit("collection", collection, "mongo", WRITES, "mongo_chain", line)
-    if name in MONGO_READS:
+    if method in MONGO_READS:
         return Hit("collection", collection, "mongo", READS, "mongo_chain", line)
     return None
 
 
 def mongoose_hit(collection: str, name: str, line: int = 0) -> Hit | None:
     """A call on a known `mongoose.model("Order", ...)` binding: `OrderModel.find({})`."""
-    if name in MONGO_WRITES:
+    method = mongo_method(name)
+    if method in MONGO_WRITES:
         return Hit("collection", collection, "mongo", WRITES, "mongoose_model", line)
-    if name in MONGO_READS:
+    if method in MONGO_READS:
         return Hit("collection", collection, "mongo", READS, "mongoose_model", line)
     return None
 

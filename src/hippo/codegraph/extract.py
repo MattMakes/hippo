@@ -21,10 +21,10 @@ Three properties everything downstream depends on:
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 
-from . import python as python_walker
 from . import resolve
-from . import typescript as typescript_walker
+from .languages import RULES
 from .model import (
     CODE_MAX_FILE_BYTES,
     CODE_MAX_FILES,
@@ -38,7 +38,10 @@ from .model import (
 )
 from .treesitter import grammar_for, new_parser
 
-WALKERS = {"python": python_walker.walk, "typescript": typescript_walker.walk}
+# Every registered language that has a walker. A language may be registered without one --
+# for its suffix, grammar and comment style -- and its files are then skipped as
+# `unsupported`, keeping today's line windows and OpenIE.
+WALKERS = {name: rules.walk for name, rules in RULES.items() if rules.walk is not None}
 
 
 def extract_code(docs, source_id: str, *, should_stop: Callable[[], bool] | None = None) -> CodeGraph:
@@ -55,6 +58,7 @@ def extract_code(docs, source_id: str, *, should_stop: Callable[[], bool] | None
     parsers: dict[str, object] = {}
     files: list[FileFacts] = []
     sql: list[tuple[str, str]] = []
+    docs = list(docs)  # `source_setup` reads them again after the walk; a generator would be spent
 
     for doc in docs:
         if should_stop is not None and should_stop():
@@ -63,7 +67,12 @@ def extract_code(docs, source_id: str, *, should_stop: Callable[[], bool] | None
         path = getattr(doc, "title", "") or getattr(doc, "path", "")
         text = getattr(doc, "text", "") or ""
         lang = lang_of(path)
-        if lang is None:
+        rules = RULES.get(lang or "")
+        # No language, or a language registered without a walker yet: either way this file
+        # is `unsupported` -- the chunker keeps its line windows and OpenIE reads it whole.
+        # Checked before the size cap so an over-sized file of an unwalked language is
+        # counted exactly as it is today.
+        if lang is None or (lang != "sql" and (rules is None or rules.walk is None)):
             if getattr(doc, "is_code", False):
                 graph.files_skipped[path] = "unsupported"
             continue
@@ -87,8 +96,23 @@ def extract_code(docs, source_id: str, *, should_stop: Callable[[], bool] | None
             graph.truncated = True
             break
 
-    _resolve(graph, files, sql, source_id)
+    _resolve(graph, files, sql, source_id, _source_state(docs, files))
     return graph
+
+
+def _source_state(docs: list, files: list[FileFacts]) -> dict[str, Any]:
+    """
+    What each language needs to know about the source as a whole, once: Go's `go.mod` module
+    path, Rust's crate root. Run after the walk, over the raw documents -- `go.mod` is not a
+    file any walker parses -- and only for a language that actually produced files, so a
+    source with no Go in it pays nothing.
+    """
+    state: dict[str, Any] = {}
+    for lang in sorted({facts.lang for facts in files}):
+        setup = RULES[lang].source_setup
+        if setup is not None:
+            state[lang] = setup(docs)
+    return state
 
 
 def _walk(path: str, text: str, lang: str, source_id: str, parsers: dict) -> FileFacts | None:
@@ -114,9 +138,15 @@ def _walk(path: str, text: str, lang: str, source_id: str, parsers: dict) -> Fil
         return None
 
 
-def _resolve(graph: CodeGraph, files: list[FileFacts], sql: list[tuple[str, str]], source_id: str) -> None:
+def _resolve(
+    graph: CodeGraph,
+    files: list[FileFacts],
+    sql: list[tuple[str, str]],
+    source_id: str,
+    lang_state: dict[str, Any] | None = None,
+) -> None:
     """Pass 2: everything that needs the whole source at once."""
-    index = resolve.build_index(files)
+    index = resolve.build_index(files, lang_state)
     edges: list[CodeEdge] = []
     edges.extend(resolve.resolve_imports(index))
     edges.extend(resolve.resolve_bases(index))

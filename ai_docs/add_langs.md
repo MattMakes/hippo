@@ -43,16 +43,17 @@ New `src/hippo/codegraph/languages.py`:
 ```python
 @dataclass(frozen=True)
 class LanguageRules:
-    name: str                      # "python" | "typescript" | "go" | "csharp" | "rust"
+    name: str  # "python" | "typescript" | "go" | "csharp" | "rust"
     walk: Callable[[str, Node, str], FileFacts]
     resolve_module: Callable[[SourceIndex, FileFacts, ImportFact], FileFacts | None]
-    scope_defines: Callable[[SourceIndex, FileFacts], dict[str, Symbol]]   # names visible without an import
+    scope_defines: Callable[[SourceIndex, FileFacts], dict[str, Symbol]]  # names visible without an import
     module_qualname: Callable[[str], str]
     is_test_path: Callable[[str], bool]
-    test_stem: Callable[[str], str | None]      # "orders_test.go" -> "orders"; None = not a test file
-    line_comment: str                            # "#" or "//"
+    test_stem: Callable[[str], str | None]  # "orders_test.go" -> "orders"; None = not a test file
+    line_comment: str  # "#" or "//"
 
-RULES: dict[str, LanguageRules]                  # filled by python.py, typescript.py, go.py, csharp.py, rust.py
+
+RULES: dict[str, LanguageRules]  # filled by python.py, typescript.py, go.py, csharp.py, rust.py
 ```
 
 - `resolve.target_module` becomes `RULES[facts.lang].resolve_module(index, facts, spec)`; the two

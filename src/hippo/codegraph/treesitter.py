@@ -24,10 +24,10 @@ from functools import cache
 
 from tree_sitter import Language, Node, Parser
 
-# The three grammars. `lang_of` in ingest/readers.py maps a file name to "python",
-# "typescript" or "sql"; only the first two are parsed here, and "typescript" picks
-# between the two TS dialects by suffix.
-GRAMMARS = ("python", "typescript", "tsx")
+# The six grammars. `lang_of` in ingest/readers.py maps a file name to one of the five
+# languages or to "sql"; SQL is sqlglot's, not tree-sitter's, and "typescript" is the one
+# language that picks between two dialects by suffix. Go, C# and Rust are one grammar each.
+GRAMMARS = ("python", "typescript", "tsx", "go", "csharp", "rust")
 
 # Suffixes that JSX would confuse the plain TypeScript grammar with.
 TSX_SUFFIXES = (".tsx", ".js", ".jsx", ".mjs", ".cjs")
@@ -35,7 +35,7 @@ TSX_SUFFIXES = (".tsx", ".js", ".jsx", ".mjs", ".cjs")
 
 @cache
 def get_language(grammar: str) -> Language:
-    """Build (once) one of the three `Language`s. Raises on an unknown grammar name."""
+    """Build (once) one of the six `Language`s. Raises on an unknown grammar name."""
     if grammar == "python":
         import tree_sitter_python
 
@@ -49,13 +49,28 @@ def get_language(grammar: str) -> Language:
             else tree_sitter_typescript.language_typescript()
         )
         return Language(source)
+    if grammar == "go":
+        import tree_sitter_go
+
+        return Language(tree_sitter_go.language())
+    if grammar == "csharp":
+        import tree_sitter_c_sharp
+
+        return Language(tree_sitter_c_sharp.language())
+    if grammar == "rust":
+        import tree_sitter_rust
+
+        return Language(tree_sitter_rust.language())
     raise ValueError(f"unknown grammar: {grammar!r}")
 
 
 def grammar_for(path: str, lang: str) -> str:
-    """Which grammar parses this file: TSX for JS/JSX/TSX, plain TypeScript for `.ts`."""
-    if lang == "python":
-        return "python"
+    """
+    Which grammar parses this file. One grammar per language, except TypeScript: JSX would
+    confuse the plain TS grammar, so every JS-ish suffix goes to TSX instead.
+    """
+    if lang != "typescript":
+        return lang
     return "tsx" if path.lower().endswith(TSX_SUFFIXES) else "typescript"
 
 
