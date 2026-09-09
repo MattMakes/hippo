@@ -78,6 +78,11 @@ RUST_EXTENSIONS = {".rs"}
 SQL_EXTENSIONS = {".sql"}
 # Extensionless files that we know are text.
 KNOWN_TEXT_NAMES = {"makefile", "dockerfile", "license", "readme", "notice", "authors", "changelog"}
+# Files we know by their *whole* name, extension and all. `go.mod` is here rather than in
+# CODE_EXTENSIONS because `.mod` belongs to Fortran and half a dozen other things too; the
+# Go walker reads its `module` line (through `LanguageRules.source_setup`) to turn an import
+# path into a directory, and it can only do that if the file is read at all.
+KNOWN_TEXT_FILENAMES = {"go.mod"}
 
 BINARY_SNIFF_BYTES = 8_000
 
@@ -175,7 +180,10 @@ def is_supported_name(name: str) -> bool:
     suffix = _suffix(name)
     if suffix in PROSE_EXTENSIONS or suffix in RICH_EXTENSIONS or suffix in CODE_EXTENSIONS:
         return True
-    return suffix == "" and PurePosixPath(name).name.lower() in KNOWN_TEXT_NAMES
+    stem = PurePosixPath(name).name.lower()
+    if stem in KNOWN_TEXT_FILENAMES:
+        return True
+    return suffix == "" and stem in KNOWN_TEXT_NAMES
 
 
 def is_supported(path: Path) -> bool:

@@ -484,6 +484,22 @@
     {
       "node": [
         "symbol",
+        "tools/build.go",
+        "main"
+      ],
+      "passage": "tools/build.go :: tools.build.main (lines 3-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tools/build.go",
+        "tools.build"
+      ],
+      "passage": "tools/build.go :: tools.build (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
         "tsapp/index.ts",
         "main"
       ],
@@ -865,6 +881,21 @@
         "symbol",
         "tests/test_orders.py",
         "test_place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tools/build.go",
+        "tools.build"
+      ],
+      "b": [
+        "symbol",
+        "tools/build.go",
+        "main"
       ],
       "kind": "CONTAINS",
       "omega": 1.0,
@@ -2040,6 +2071,40 @@
     },
     {
       "hunk": {
+        "churn": 3,
+        "file": "tools/build.go",
+        "new_range": [
+          1,
+          3
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tools/build.go",
+      "qualname": "main"
+    },
+    {
+      "hunk": {
+        "churn": 3,
+        "file": "tools/build.go",
+        "new_range": [
+          1,
+          3
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tools/build.go",
+      "qualname": "tools.build"
+    },
+    {
+      "hunk": {
         "churn": 5,
         "file": "tsapp/models/base.ts",
         "new_range": [
@@ -2597,6 +2662,41 @@
       "statement_lines": [
         1,
         4
+      ]
+    },
+    {
+      "display": "tools.build.main",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 3,
+      "line_start": 3,
+      "params": [],
+      "path": "tools/build.go",
+      "qualname": "main",
+      "raises": [],
+      "signature": "func main()",
+      "statement_lines": []
+    },
+    {
+      "display": "tools.build",
+      "doc": "",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 3,
+      "line_start": 1,
+      "params": [],
+      "path": "tools/build.go",
+      "qualname": "tools.build",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3
       ]
     },
     {

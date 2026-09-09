@@ -245,7 +245,7 @@ def test_the_commits_under_a_passage_are_newest_first_across_all_its_symbols(cod
 
 
 def test_the_source_header_names_the_files_the_code_pass_could_not_read(client, coded):
-    """`tools/build.go` is checked in unparsed on purpose, so one file is always skipped."""
+    """`tools/build.rb` is checked in unparsed on purpose, so one file is always skipped."""
     _ctx, source_id = coded
     page = client.get(f"/sources/{source_id}")
     assert page.status_code == 200

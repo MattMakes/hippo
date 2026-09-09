@@ -295,10 +295,10 @@ def test_a_code_archive_is_parsed_chunked_by_symbol_and_recorded_in_meta(code_in
     source = ctx.store.get_source(source_id)
     code = source["meta"]["code"]
 
-    assert (code["symbols"], code["data_objects"], code["edges"]) == (30, 12, 64)
+    assert (code["symbols"], code["data_objects"], code["edges"]) == (32, 12, 65)
     assert code["edges_by_kind"] == {
         "CATCHES": 1,
-        "CONTAINS": 26,
+        "CONTAINS": 27,
         "IMPORTS": 9,
         "INHERITS": 2,
         "INVOKES": 13,
@@ -308,14 +308,14 @@ def test_a_code_archive_is_parsed_chunked_by_symbol_and_recorded_in_meta(code_in
         "TESTED_BY": 3,
         "WRITES": 2,
     }
-    assert code["files_parsed"] == 10  # six Python files, three TypeScript, one .sql
-    assert code["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # build.go
+    assert code["files_parsed"] == 11  # six Python, three TypeScript, one .sql, one Go
+    assert code["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # build.rb
     assert code["truncated"] is False
     # Calls that resolve to nothing in the repo -- builtins included -- are counted per file, so
     # phase 2 has a baseline to work from (D15). Only parsed files can have any.
     assert set(code["unresolved_calls"]) <= set(code_sample_paths())
     assert code["unresolved_calls_total"] == sum(code["unresolved_calls"].values())
-    assert source["meta"]["counts"]["symbols"] == 30
+    assert source["meta"]["counts"]["symbols"] == 32
 
 
 def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
@@ -323,13 +323,14 @@ def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
     titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
     assert "pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)" in titles
     assert "schema/orders.sql (lines 1-2)" in titles  # no symbols to cut by; windows as before
-    assert "tools/build.go (lines 1-3)" in titles  # no grammar; windows as before
+    assert "tools/build.rb (lines 1-3)" in titles  # no grammar; windows as before
+    assert "tools/build.go :: tools.build.main (lines 3-3)" in titles  # Go parses now
     assert not any(t == "pyapp/orders.py (lines 1-40)" for t in titles)
 
 
 def test_deleting_a_code_source_removes_its_symbols_and_data_objects(code_index) -> None:
     ctx, source_id = code_index
-    assert len(ctx.store.load_symbols()) == 30
+    assert len(ctx.store.load_symbols()) == 32
 
     pipeline.delete_source(ctx, source_id)
 

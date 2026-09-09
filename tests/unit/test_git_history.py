@@ -238,8 +238,10 @@ def test_the_same_checkout_twice_gives_the_same_history(tmp_path: Path) -> None:
 def test_binary_and_unsupported_files_are_ignored(tmp_path: Path) -> None:
     checkout = make_code_checkout(tmp_path)
     (checkout / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(256)))
-    (checkout / "tools" / "extra.go").write_text("package main\n\nfunc extra() {}\n")
-    add_commit(checkout, "Add a logo and more go")
+    # Ruby has no grammar here and no walker, so it stands for "code we cannot read" now
+    # that Go parses; `PARSED_LANGS` is derived from the walkers, and this is what it gates.
+    (checkout / "tools" / "extra.rb").write_text("module Extra\n  def self.run; end\nend\n")
+    add_commit(checkout, "Add a logo and a ruby helper")
     history, symbols = history_of(checkout)
     assert modified(history, symbols).get(0, set()) == set()  # neither file has a grammar
     assert [c["ordinal"] for c in history.commits] == [0, 1, 2, 3]  # the commit is still a commit

@@ -453,13 +453,13 @@ def test_indexing_a_code_source_returns_all_nine_counts(store, ollama, code_sour
         entities=written["entities"],
         facts=written["facts"],
         synonyms=written["synonyms"],
-        symbols=30,
+        symbols=32,
         data_objects=12,
-        code_edges=64,
+        code_edges=65,
         refers_to=2,  # the README names `OrderService.place` and "the order service"
     )
-    assert (store.stats()["symbols"], store.stats()["data_objects"]) == (30, 12)
-    assert len(store.load_code_edges()) == 64
+    assert (store.stats()["symbols"], store.stats()["data_objects"]) == (32, 12)
+    assert len(store.load_code_edges()) == 65
 
 
 def test_every_passage_is_linked_to_what_it_defines(store, ollama, code_source, code_chunks):
@@ -493,7 +493,9 @@ def test_openie_never_reads_a_function_body_or_ddl(store, ollama, fake_ollama, c
     assert not any("billing.total(order)" in t for t in texts)
     assert not any("CREATE TABLE" in t for t in texts)
     assert len([t for t in texts if "Keeps orders. Acme Robotics is headquartered" in t]) == 1
-    assert [t for t in texts if "package main" in t] == ["package main\n\nfunc main() {}"]
+    # An unparsed code file still gets NER as today: Ruby has no walker, so `tools/build.rb`
+    # keeps its line windows and its whole text reaches OpenIE.
+    assert [t for t in texts if "module Build" in t] == ["module Build\n  def self.run; end\nend"]
 
 
 def test_the_openie_bill_is_two_calls_per_extracted_passage(
@@ -505,7 +507,7 @@ def test_the_openie_bill_is_two_calls_per_extracted_passage(
     extracted = [c for c in chunks if c.extract_text is None or c.extract_text != ""]
     index_source(store, ollama, code_source, chunks, code=graph)
     assert openie_calls(fake_ollama) == 2 * len(extracted)
-    assert len(extracted) == 5  # README, build.go, and three docstrings of 80+ characters
+    assert len(extracted) == 5  # README, build.rb, and three docstrings of 80+ characters
 
 
 def test_a_skipped_passage_still_stores_an_empty_extraction_without_an_error(
