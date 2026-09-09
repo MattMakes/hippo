@@ -42,6 +42,7 @@ from hippo.codegraph.languages import PARSED_LANGS, RULES
 from hippo.codegraph.model import (
     CODE_MAX_FILE_BYTES,
     LANG_BY_SUFFIX,
+    BaseFact,
     CodeEdge,
     FileFacts,
     Symbol,
@@ -295,6 +296,55 @@ def test_a_member_of_a_sibling_file_in_the_same_scope_is_worth_1_00(monkeypatch)
     monkeypatch.setitem(RULES, "python", as_python(walk=scoped_walk, scope_defines=package_names))
     monkeypatch.setitem(extract.WALKERS, "python", scoped_walk)
     assert edge(graph_of(files), "INVOKES", *call)[1:3] == (1.00, "same_scope")
+
+
+def test_a_type_declared_in_another_file_still_inherits_contains_and_overrides(monkeypatch):
+    """
+    Rust writes `impl Base for OrderService` in whatever file it likes, so the class a
+    `BaseFact` is about, and the owner a method hangs off, are not always in the file that
+    wrote them. Both lookups go through `member_paths` -- the same hook `_on_class` uses --
+    so a language that spreads a type over files gets INHERITS, CONTAINS and OVERRIDES, and
+    every other language, whose answer is "this file", is untouched.
+
+    Written against Python with the hook swapped rather than against a real Rust tree: this
+    is a resolver rule, and it must hold for whoever needs it next.
+    """
+    facts = []
+    for path, symbols, bases in (
+        ("base.py", [("Base", "class"), ("Base.log", "method")], []),
+        ("model.py", [("Service", "class")], []),
+        ("impl.py", [("Service.log", "method")], [("Service", "Base")]),
+    ):
+        module = module_qualname(path)
+        rows = [Symbol(id=f"m-{path}", name=module, qualname=module, kind="module", path=path)]
+        rows += [
+            Symbol(id=f"{path}:{q}", name=q.rpartition(".")[2], qualname=q, kind=k, path=path)
+            for q, k in symbols
+        ]
+        facts.append(
+            FileFacts(
+                path=path,
+                lang="python",
+                module=module,
+                symbols=rows,
+                bases=[BaseFact(cls=cls, base=base) for cls, base in bases],
+            )
+        )
+    everywhere = dataclasses.replace(
+        RULES["python"], member_paths=lambda index, qualname, path: sorted(index.files)
+    )
+    monkeypatch.setitem(RULES, "python", everywhere)
+    index = resolve.build_index(facts)
+    index.bindings["impl"] = {"Base": Resolution(index.symbols[("base.py", "Base")], 1.00, "same_file")}
+
+    inherits = resolve.resolve_bases(index)
+    assert [(e.a, e.b, e.omega, e.provenance) for e in inherits] == [
+        ("model.py:Service", "base.py:Base", 0.90, "resolved")
+    ]
+    overrides = resolve.resolve_overrides(index)
+    assert [(e.a, e.b) for e in overrides] == [("impl.py:Service.log", "base.py:Base.log")]
+    contains = extract._contains(index, index.files["impl.py"])
+    assert [(e.a, e.b) for e in contains] == [("model.py:Service", "impl.py:Service.log")]
 
 
 def test_the_fuzzy_stoplist_is_matched_in_any_case():

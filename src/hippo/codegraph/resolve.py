@@ -324,12 +324,28 @@ def resolve_imports(index: SourceIndex) -> list[CodeEdge]:
 # ------------------------------------------------------------------ bases
 
 
+def declared(index: SourceIndex, facts: FileFacts, qualname: str) -> Symbol | None:
+    """
+    The symbol a fact in this file is *about*, which is usually written in this file.
+
+    Rust is the exception: `impl Base for OrderService` says something about a type whose
+    `struct` is in another file, so "which files may hold a member of `OrderService`" -- the
+    language's own `member_paths` answer, the one `_on_class` already asks -- is also where
+    to look for the type itself. Every other language answers "this file", so nothing moves.
+    """
+    for path in RULES[facts.lang].member_paths(index, qualname, facts.path):
+        found = index.symbols.get((path, qualname))
+        if found is not None:
+            return found
+    return None
+
+
 def resolve_bases(index: SourceIndex) -> list[CodeEdge]:
     """INHERITS edges, plus the base list OVERRIDES and `via_inheritance` calls walk."""
     edges: list[CodeEdge] = []
     for facts in index.files.values():
         for base in facts.bases:
-            child = index.symbols.get((facts.path, base.cls))
+            child = declared(index, facts, base.cls)
             if child is None:
                 continue
             found = _lookup_dotted(index, facts, base.base)
@@ -339,7 +355,9 @@ def resolve_bases(index: SourceIndex) -> list[CodeEdge]:
                 continue
             omega = 0.90 if found.provenance != "fuzzy_name" else 0.50
             provenance = "fuzzy_name" if found.provenance == "fuzzy_name" else "resolved"
-            index.bases.setdefault((facts.path, base.cls), []).append(found.symbol)
+            # Keyed by where the *type* is, not where the `impl` was written, so `_mro_lookup`
+            # -- which is always handed a class's own path -- finds the bases either way.
+            index.bases.setdefault((child.path, base.cls), []).append(found.symbol)
             edges.append(_edge(child, found.symbol, "INHERITS", omega, provenance))
     return edges
 
@@ -348,13 +366,16 @@ def resolve_overrides(index: SourceIndex) -> list[CodeEdge]:
     """A method that shadows one on a base, found breadth-first at most `MAX_MRO_DEPTH` deep."""
     edges: list[CodeEdge] = []
     for (path, qualname), members in sorted(index.members.items()):
-        owner = index.symbols.get((path, qualname))
+        # The members are in `path`; the type they belong to may be in another file, which is
+        # what a Rust `impl` in its own module is, so the owner is asked for the same way
+        # `resolve_bases` asks -- and its own path is what `index.bases` is keyed by.
+        owner = declared(index, index.files[path], qualname)
         if owner is None or owner.kind != "class":
             continue
         for name, method in members.items():
             if method.kind != "method":
                 continue
-            inherited = _mro_lookup(index, path, qualname, name)
+            inherited = _mro_lookup(index, owner.path, qualname, name)
             if inherited is not None:
                 edges.append(_edge(method, inherited, "OVERRIDES", 0.90, "mro"))
     return edges
