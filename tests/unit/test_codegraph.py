@@ -145,7 +145,7 @@ def test_every_language_is_a_complete_registration():
         assert rules.line_comment in ("#", "//"), name
         assert rules.walk is None or callable(rules.walk), name
         for field in ("resolve_module", "scope_defines", "module_qualname", "is_test_path",
-                      "test_stem", "member_paths"):  # fmt: skip
+                      "test_stem", "is_test_function", "member_paths"):  # fmt: skip
             assert callable(getattr(rules, field)), f"{name}.{field}"
         assert rules.source_setup is None or callable(rules.source_setup), name
         assert rules.self_names and rules.super_names, name
@@ -307,6 +307,27 @@ def test_build_index_merges_a_scope_and_owns_an_inline_module():
     index = resolve.build_index([inline])
     assert sorted(index.defines["lib"]) == ["tests"]  # the inline mod is a top-level name...
     assert index.members[("lib.rs", "tests")]["works"].id == "f"  # ...and owns what is in it
+
+
+def test_a_language_names_its_own_test_functions(monkeypatch):
+    """
+    Only Python and TypeScript spell a test case `test_*`. Go's is `TestPlace`, C#'s is an
+    ordinary method with `[Fact]` on it -- so the *name* rule is the language's, while
+    "is this file test code at all" stays shared (`is_test_path` already decided that).
+    Without the hook a Go test function is nobody's test and the 0.85 `test_import` row of
+    the ω table is unreachable for it.
+    """
+    files = {
+        "billing.py": "def total(o):\n    return 1\n",
+        "tests/check_orders.py": "from billing import total\n\ndef CheckPlace():\n    return total(1)\n",
+    }
+    assert edges_of(graph_of(files), "TESTED_BY") == set()  # `CheckPlace` is not `test_*`
+
+    monkeypatch.setitem(RULES, "python", as_python(is_test_function=lambda s: s.name.startswith("Check")))
+    edges = edges_of(graph_of(files), "TESTED_BY")
+    assert edges == {
+        ("TESTED_BY", 0.85, "test_import", "billing.py::total", "tests/check_orders.py::CheckPlace")
+    }
 
 
 def test_source_setup_runs_once_over_the_raw_documents(monkeypatch):

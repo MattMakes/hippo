@@ -170,6 +170,19 @@ def test_stem(path: str) -> str | None:
     return subject if subject != stem else None
 
 
+def is_test_function(symbol: Symbol) -> bool:
+    """
+    A function *inside a test file* that is one of its test cases -- what TESTED_BY's
+    `test_import` and `test_mention` rows are about.
+
+    Only the naming convention is here; whether the file is test code at all is
+    `is_test_path`'s answer and stays shared. Python and TypeScript spell a case `test_*`,
+    Go spells it `TestPlace`, and C#'s is an ordinary method with an attribute on it, so a
+    language that does not follow this registers its own.
+    """
+    return symbol.kind in ("function", "method") and symbol.name.startswith("test")
+
+
 def no_scope(index: SourceIndex, facts: FileFacts) -> dict[str, Symbol]:
     """A language whose names are only ever visible through an import: Python, TypeScript."""
     return {}
@@ -219,6 +232,8 @@ class LanguageRules:
     module_qualname: Callable[[str], str] = module_qualname
     is_test_path: Callable[[str], bool] = is_test_path
     test_stem: Callable[[str], str | None] = test_stem
+    # Which symbols of a test file are its test cases: `test_place`, Go's `TestPlace`.
+    is_test_function: Callable[[Symbol], bool] = is_test_function
     # Which files may hold a member of `qualname`. Rust puts `impl S` in any file; every
     # other language keeps a class's members in the file the class is declared in.
     member_paths: Callable[[SourceIndex, str, str], list[str]] = one_path

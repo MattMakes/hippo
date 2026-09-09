@@ -729,7 +729,8 @@ def resolve_tested_by(index: SourceIndex, invokes: list[CodeEdge]) -> list[CodeE
 
 
 def _is_test_function(symbol: Symbol) -> bool:
-    return symbol.is_test and symbol.kind in ("function", "method") and symbol.name.startswith("test")
+    """In a test file, and one of its cases by that language's naming convention."""
+    return symbol.is_test and RULES[symbol.lang].is_test_function(symbol)
 
 
 def _tested_by_filename(index: SourceIndex) -> list[CodeEdge]:
