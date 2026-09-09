@@ -143,28 +143,54 @@ def test_a_dotted_qualname_names_exactly_one_symbol(index: GraphIndex) -> None:
 
 
 def test_a_module_relative_qualname_resolves_too(index: GraphIndex) -> None:
-    assert names(index, find_anchors("Explain OrderService.place", index)) == ["OrderService.place"]
+    # The fixture tells one story in two languages, so `OrderService.place` is a qualname in
+    # `pyapp/orders.py` and in `rsapp/src/orders.rs`. A dotted name is never split (S2.13): the
+    # dots already say "this is code", so both keep the whole share.
+    assert seeds(index, find_anchors("Explain OrderService.place", index)) == {
+        "pyapp.orders.OrderService.place": 1.0,
+        "rsapp.src.orders.OrderService.place": 1.0,
+    }
 
 
 def test_snake_case_pascal_case_and_all_caps_anchor_bare(index: GraphIndex) -> None:
-    assert names(index, find_anchors("what does list_open return?", index)) == ["OrderService.list_open"]
-    assert names(index, find_anchors("what is OrderService for?", index)) == ["OrderService"]
-    assert names(index, find_anchors("where is send_invoice called?", index)) == ["send_invoice"]
+    # A *bare* name is split across everything it matches, and each of these names one symbol per
+    # tree: the surface form is what admits the token, the split is what keeps it honest.
+    assert seeds(index, find_anchors("what does list_open return?", index)) == {
+        "pyapp.orders.OrderService.list_open": 0.5,
+        "rsapp.src.orders.OrderService.list_open": 0.5,
+    }
+    assert seeds(index, find_anchors("what is OrderService for?", index)) == {
+        "pyapp.orders.OrderService": 0.5,
+        "rsapp.src.orders.OrderService": 0.5,
+    }
+    assert seeds(index, find_anchors("where is send_invoice called?", index)) == {
+        "pyapp.billing.send_invoice": 0.5,
+        "rsapp.src.billing.send_invoice": 0.5,
+    }
 
 
 def test_backticks_rescue_a_single_token_lowercase_name(index: GraphIndex) -> None:
     # The cost spike 1 asks us to accept and document: bare `place` in prose does not anchor,
     # because a lowercase single token is indistinguishable from English. Backticks say "code".
     assert find_anchors("what does place do?", index) == []
-    assert names(index, find_anchors("what does `place` do?", index)) == ["OrderService.place"]
+    assert seeds(index, find_anchors("what does `place` do?", index)) == {
+        "pyapp.orders.OrderService.place": 0.5,
+        "rsapp.src.orders.OrderService.place": 0.5,
+    }
 
 
 def test_a_data_object_anchors_by_its_name(index: GraphIndex) -> None:
-    # `orders` is both the table and the module `pyapp/orders.py`, so the two share the weight.
+    # `orders` is the table and three modules -- `pyapp/orders.py`, `rsapp/src/orders.rs` and
+    # `rsapp/tests/orders.rs` -- so the four share the weight.
     found = find_anchors("who writes to the `orders` table?", index)
-    assert sorted(names(index, found)) == ["orders", "pyapp.orders"]
+    assert seeds(index, found) == {
+        "table orders": 0.25,
+        "pyapp.orders": 0.25,
+        "rsapp.src.orders": 0.25,
+        "rsapp.tests.orders": 0.25,
+    }
     assert {a.kind for a in found} == {"data", "symbol"}
-    assert all(a.weight == pytest.approx(0.5) and a.n_matches == 2 for a in found)
+    assert all(a.n_matches == 4 for a in found)
 
 
 def test_an_unknown_identifier_anchors_nothing(index: GraphIndex) -> None:
@@ -223,12 +249,18 @@ def test_a_path_and_line_with_no_frame_wrapper_still_resolves(index: GraphIndex)
 
 
 def test_frames_decay_outwards_and_the_exception_line_anchors_at_08(index: GraphIndex) -> None:
-    found = {index.name_of(a.vertex): a for a in find_anchors(TRACEBACK, index) if not a.ambiguous}
-    assert found["OrderService.place"].weight == pytest.approx(1.0)
-    assert found["OrderService.place"].how == "stack_trace"
-    assert found["main"].weight == pytest.approx(0.8)  # one frame further out
-    assert found["OrderError"].how == "exception"
-    assert found["OrderError"].weight == pytest.approx(0.8)
+    # Keyed by *display* name: `OrderService.place`, `main` and `OrderError` are each a qualname in
+    # more than one tree now, and a frame is placed by its path and line, not by its name.
+    anchors_found = [a for a in find_anchors(TRACEBACK, index) if not a.ambiguous]
+    found = {display_of(index.code_node_at(a.vertex)): a for a in anchors_found}
+    assert found["pyapp.orders.OrderService.place"].weight == pytest.approx(1.0)
+    assert found["pyapp.orders.OrderService.place"].how == "stack_trace"
+    assert found["pyapp.cli.main"].weight == pytest.approx(0.8)  # one frame further out
+    assert found["pyapp.store.OrderError"].how == "exception"
+    # The exception line is still one 0.8 share; it is a bare name, so the two `OrderError`
+    # symbols split it (S2.13) rather than each seeding a whole one.
+    errors = [a for a in anchors_found if a.how == "exception"]
+    assert sum(a.weight for a in errors) == pytest.approx(0.8)
 
 
 def test_a_traceback_is_all_code_and_the_sentence_beside_it_is_all_prose(index: GraphIndex) -> None:
@@ -418,12 +450,18 @@ def test_an_ambiguous_name_splits_its_weight_and_is_capped(code_index) -> None:
     assert all(a.weight == pytest.approx(1.0 / (MAX_MATCHES_PER_TOKEN + 1)) for a in found)
 
 
-def test_a_three_way_split_sums_to_one_share_of_the_seed_weight(index: GraphIndex) -> None:
-    # `log` is a method on OrderService, on pyapp's Base and on tsapp's Base: three real symbols.
+def test_a_split_over_every_match_sums_to_one_share_of_the_seed_weight(index: GraphIndex) -> None:
+    # `log` is a method on both `OrderService`s and on all three `Base`s: five real symbols.
     found = find_anchors("what does `log` do?", index)
-    assert sorted(names(index, found)) == ["Base.log", "Base.log", "OrderService.log"]
+    assert sorted(seeds(index, found)) == [
+        "pyapp.orders.OrderService.log",
+        "pyapp.store.Base.log",
+        "rsapp.src.orders.OrderService.log",
+        "rsapp.src.store.Base.log",
+        "tsapp.models.base.Base.log",
+    ]
     assert sum(a.weight for a in found) == pytest.approx(1.0)
-    assert {a.n_matches for a in found} == {3}
+    assert {a.n_matches for a in found} == {5}
 
 
 def test_a_name_matching_more_than_ten_symbols_seeds_nothing_and_says_so(code_index) -> None:

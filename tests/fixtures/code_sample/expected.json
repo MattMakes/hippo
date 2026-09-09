@@ -46,6 +46,10 @@
         [
           "pyapp/orders.py",
           35
+        ],
+        [
+          "rsapp/src/orders.rs",
+          36
         ]
       ],
       "name": "archive_orders",
@@ -118,6 +122,10 @@
         [
           "pyapp/orders.py",
           38
+        ],
+        [
+          "rsapp/src/orders.rs",
+          40
         ]
       ],
       "name": "Customer",
@@ -130,6 +138,10 @@
         [
           "pyapp/orders.py",
           38
+        ],
+        [
+          "rsapp/src/orders.rs",
+          40
         ]
       ],
       "name": "Order",
@@ -142,6 +154,10 @@
         [
           "pyapp/orders.py",
           38
+        ],
+        [
+          "rsapp/src/orders.rs",
+          40
         ]
       ],
       "name": "PLACED_BY",
@@ -173,6 +189,14 @@
         ],
         [
           "pyapp/orders.py",
+          31
+        ],
+        [
+          "rsapp/src/orders.rs",
+          27
+        ],
+        [
+          "rsapp/src/orders.rs",
           31
         ],
         [
@@ -208,6 +232,14 @@
         "archive_orders"
       ],
       "passage": "pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.archive (lines 35-37)"
     },
     {
       "node": [
@@ -261,7 +293,31 @@
       "node": [
         "data",
         "label",
+        "Customer"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
         "Order"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
+    },
+    {
+      "node": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
       ],
       "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
     },
@@ -271,7 +327,7 @@
         "rel_type",
         "PLACED_BY"
       ],
-      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
     },
     {
       "node": [
@@ -304,6 +360,22 @@
         "orders"
       ],
       "passage": "pyapp/orders.py :: pyapp.orders.OrderService.save (lines 30-32)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.list_open (lines 26-28)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.save (lines 30-33)"
     },
     {
       "node": [
@@ -464,6 +536,182 @@
         "pyapp.store"
       ],
       "passage": "pyapp/store.py :: pyapp.store.Base (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "rsapp.src.billing"
+      ],
+      "passage": "rsapp/src/billing.rs :: rsapp.src.billing (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "send_invoice"
+      ],
+      "passage": "rsapp/src/billing.rs :: rsapp.src.billing.send_invoice (lines 7-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "total"
+      ],
+      "passage": "rsapp/src/billing.rs :: rsapp.src.billing.total (lines 3-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/lib.rs",
+        "rsapp.src.lib"
+      ],
+      "passage": "rsapp/src/lib.rs :: rsapp.src.lib (lines 1-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "main"
+      ],
+      "passage": "rsapp/src/main.rs :: rsapp.src.main.main (lines 3-6)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "rsapp.src.main"
+      ],
+      "passage": "rsapp/src/main.rs :: rsapp.src.main (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService (lines 7-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.archive"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.archive (lines 35-37)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.list_open"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.list_open (lines 26-28)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.log"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.log (lines 12-14)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.place (lines 19-24)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.save"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.save (lines 30-33)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders (lines 1-42)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.tests (lines 44-52)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests.place_totals"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.tests.place_totals (lines 48-51)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base"
+      ],
+      "passage": "rsapp/src/store.rs :: rsapp.src.store.Base (lines 2-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base.log"
+      ],
+      "passage": "rsapp/src/store.rs :: rsapp.src.store.Base.log (lines 3-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "OrderError"
+      ],
+      "passage": "rsapp/src/store.rs :: rsapp.src.store.OrderError (lines 6-6)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "rsapp.src.store"
+      ],
+      "passage": "rsapp/src/store.rs :: rsapp.src.store (lines 1-1)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "rsapp.tests.orders"
+      ],
+      "passage": "rsapp/tests/orders.rs :: rsapp.tests.orders (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "passage": "rsapp/tests/orders.rs :: rsapp.tests.orders.test_place (lines 3-6)"
     },
     {
       "node": [
@@ -874,6 +1122,246 @@
     {
       "a": [
         "symbol",
+        "rsapp/src/billing.rs",
+        "rsapp.src.billing"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "send_invoice"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "rsapp.src.billing"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "rsapp.src.main"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "main"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.archive"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.list_open"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.save"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests.place_totals"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "rsapp.src.store"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "rsapp.src.store"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "OrderError"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "rsapp.tests.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
         "tests/test_orders.py",
         "tests.test_orders"
       ],
@@ -1084,6 +1572,141 @@
     {
       "a": [
         "symbol",
+        "rsapp/src/lib.rs",
+        "rsapp.src.lib"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "rsapp.src.billing"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/lib.rs",
+        "rsapp.src.lib"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/lib.rs",
+        "rsapp.src.lib"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "rsapp.src.store"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "rsapp.src.main"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "send_invoice"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "total"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "OrderError"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "rsapp.tests.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
         "tests/test_orders.py",
         "tests.test_orders"
       ],
@@ -1135,6 +1758,21 @@
       "b": [
         "symbol",
         "pyapp/store.py",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
         "Base"
       ],
       "kind": "INHERITS",
@@ -1341,6 +1979,144 @@
     {
       "a": [
         "symbol",
+        "rsapp/src/main.rs",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "&Order::default()"
+        },
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "send_invoice"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 21,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "total"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 20,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.log"
+      ],
+      "extra": {
+        "arg_binding": {
+          "message": "\"x\""
+        },
+        "call_line": 22,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests.place_totals"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "&Order::default()"
+        },
+        "call_line": 50,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "&Order::default()"
+        },
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
         "tests/test_orders.py",
         "test_place"
       ],
@@ -1465,12 +2241,57 @@
     {
       "a": [
         "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.log"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base.log"
+      ],
+      "kind": "OVERRIDES",
+      "omega": 0.9,
+      "provenance": "mro"
+    },
+    {
+      "a": [
+        "symbol",
         "pyapp/orders.py",
         "OrderService.save"
       ],
       "b": [
         "symbol",
         "pyapp/store.py",
+        "OrderError"
+      ],
+      "kind": "RAISES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "OrderError"
+      ],
+      "kind": "RAISES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.save"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
         "OrderError"
       ],
       "kind": "RAISES",
@@ -1555,6 +2376,66 @@
     {
       "a": [
         "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.list_open"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
         "tsapp/index.ts",
         "main"
       ],
@@ -1615,6 +2496,66 @@
     {
       "a": [
         "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.6,
+      "provenance": "test_mention"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests.place_totals"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "rsapp.tests.orders"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.75,
+      "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
         "pyapp/orders.py",
         "OrderService.archive"
       ],
@@ -1631,6 +2572,36 @@
       "a": [
         "symbol",
         "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.archive"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "mongo_chain"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
         "OrderService.save"
       ],
       "b": [
@@ -2037,6 +3008,380 @@
     },
     {
       "hunk": {
+        "churn": 9,
+        "file": "rsapp/src/billing.rs",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/billing.rs",
+      "qualname": "rsapp.src.billing"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "rsapp/src/billing.rs",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/billing.rs",
+      "qualname": "send_invoice"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "rsapp/src/billing.rs",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/billing.rs",
+      "qualname": "total"
+    },
+    {
+      "hunk": {
+        "churn": 5,
+        "file": "rsapp/src/lib.rs",
+        "new_range": [
+          1,
+          5
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/lib.rs",
+      "qualname": "rsapp.src.lib"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/main.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/main.rs",
+      "qualname": "main"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/main.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/main.rs",
+      "qualname": "rsapp.src.main"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.archive"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.graph"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.list_open"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.log"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.place"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.save"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "rsapp.src.orders"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "tests"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "tests.place_totals"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/store.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/store.rs",
+      "qualname": "Base"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/store.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/store.rs",
+      "qualname": "Base.log"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/store.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/store.rs",
+      "qualname": "OrderError"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/store.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/store.rs",
+      "qualname": "rsapp.src.store"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/tests/orders.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/tests/orders.rs",
+      "qualname": "rsapp.tests.orders"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/tests/orders.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/tests/orders.rs",
+      "qualname": "test_place"
+    },
+    {
+      "hunk": {
         "churn": 5,
         "file": "tests/test_orders.py",
         "new_range": [
@@ -2221,6 +3566,26 @@
       "node": [
         "symbol",
         "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "omega": 0.85,
+      "passage": "Code sample",
+      "token": "OrderService.place"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "omega": 0.6,
+      "passage": "Code sample",
+      "token": "order service"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
         "OrderService.place"
       ],
       "omega": 0.85,
@@ -2625,6 +3990,432 @@
       "statement_lines": [
         1,
         8
+      ]
+    },
+    {
+      "display": "rsapp.src.billing",
+      "doc": "Billing helpers.",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 9,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/billing.rs",
+      "qualname": "rsapp.src.billing",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        3,
+        7
+      ]
+    },
+    {
+      "display": "rsapp.src.billing.send_invoice",
+      "doc": "",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 9,
+      "line_start": 7,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/billing.rs",
+      "qualname": "send_invoice",
+      "raises": [],
+      "signature": "pub fn send_invoice(order: &Order)",
+      "statement_lines": [
+        8
+      ]
+    },
+    {
+      "display": "rsapp.src.billing.total",
+      "doc": "",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 5,
+      "line_start": 3,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/billing.rs",
+      "qualname": "total",
+      "raises": [],
+      "signature": "pub fn total(order: &Order) -> i64",
+      "statement_lines": [
+        4
+      ]
+    },
+    {
+      "display": "rsapp.src.lib",
+      "doc": "The rsapp crate.",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/lib.rs",
+      "qualname": "rsapp.src.lib",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "display": "rsapp.src.main.main",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 3,
+      "params": [],
+      "path": "rsapp/src/main.rs",
+      "qualname": "main",
+      "raises": [],
+      "signature": "fn main()",
+      "statement_lines": [
+        4,
+        5
+      ]
+    },
+    {
+      "display": "rsapp.src.main",
+      "doc": "",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/main.rs",
+      "qualname": "rsapp.src.main",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService",
+      "doc": "Keeps orders. The crate stores every order in Postgres and mails each invoice to the buyer.\n\nSecond paragraph, not part of the first.",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "class",
+      "lang": "rust",
+      "line_end": 9,
+      "line_start": 7,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService",
+      "raises": [],
+      "signature": "pub struct OrderService",
+      "statement_lines": [
+        8
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.archive",
+      "doc": "",
+      "header_end": 37,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 37,
+      "line_start": 35,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.archive",
+      "raises": [],
+      "signature": "pub fn archive(&self, order: &Order)",
+      "statement_lines": [
+        36
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.graph",
+      "doc": "",
+      "header_end": 41,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 41,
+      "line_start": 39,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.graph",
+      "raises": [],
+      "signature": "pub fn graph(&self)",
+      "statement_lines": [
+        40
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.list_open",
+      "doc": "",
+      "header_end": 28,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 28,
+      "line_start": 26,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.list_open",
+      "raises": [],
+      "signature": "pub fn list_open(&self)",
+      "statement_lines": [
+        27
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.log",
+      "doc": "",
+      "header_end": 14,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 14,
+      "line_start": 12,
+      "params": [
+        "message"
+      ],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.log",
+      "raises": [],
+      "signature": "fn log(&self, message: &str) -> String",
+      "statement_lines": [
+        13
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.place",
+      "doc": "Place an order: total it with billing, send the invoice and log the route the order took.",
+      "header_end": 24,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 24,
+      "line_start": 19,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.place",
+      "raises": [],
+      "signature": "pub fn place(&self, order: &Order) -> Result<i64, OrderError>",
+      "statement_lines": [
+        20,
+        21,
+        22,
+        23
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.save",
+      "doc": "",
+      "header_end": 33,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 33,
+      "line_start": 30,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.save",
+      "raises": [],
+      "signature": "pub fn save(&self, order: &Order) -> Result<(), OrderError>",
+      "statement_lines": [
+        31,
+        32
+      ]
+    },
+    {
+      "display": "rsapp.src.orders",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 52,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "rsapp.src.orders",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        2,
+        7,
+        11,
+        17,
+        44,
+        45
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.tests",
+      "doc": "",
+      "header_end": 47,
+      "is_test": true,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 52,
+      "line_start": 44,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "tests",
+      "raises": [],
+      "signature": "mod tests",
+      "statement_lines": [
+        46,
+        48,
+        49
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.tests.place_totals",
+      "doc": "",
+      "header_end": 51,
+      "is_test": true,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 51,
+      "line_start": 48,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "tests.place_totals",
+      "raises": [],
+      "signature": "fn place_totals()",
+      "statement_lines": [
+        50
+      ]
+    },
+    {
+      "display": "rsapp.src.store.Base",
+      "doc": "A tiny base trait.",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "class",
+      "lang": "rust",
+      "line_end": 4,
+      "line_start": 2,
+      "params": [],
+      "path": "rsapp/src/store.rs",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "pub trait Base",
+      "statement_lines": [
+        3
+      ]
+    },
+    {
+      "display": "rsapp.src.store.Base.log",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 3,
+      "line_start": 3,
+      "params": [
+        "message"
+      ],
+      "path": "rsapp/src/store.rs",
+      "qualname": "Base.log",
+      "raises": [],
+      "signature": "fn log(&self, message: &str) -> String",
+      "statement_lines": []
+    },
+    {
+      "display": "rsapp.src.store.OrderError",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "class",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 6,
+      "params": [],
+      "path": "rsapp/src/store.rs",
+      "qualname": "OrderError",
+      "raises": [],
+      "signature": "pub struct OrderError",
+      "statement_lines": []
+    },
+    {
+      "display": "rsapp.src.store",
+      "doc": "",
+      "header_end": 1,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/store.rs",
+      "qualname": "rsapp.src.store",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        2,
+        6
+      ]
+    },
+    {
+      "display": "rsapp.tests.orders",
+      "doc": "",
+      "header_end": 2,
+      "is_test": true,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/tests/orders.rs",
+      "qualname": "rsapp.tests.orders",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "display": "rsapp.tests.orders.test_place",
+      "doc": "",
+      "header_end": 6,
+      "is_test": true,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 3,
+      "params": [],
+      "path": "rsapp/tests/orders.rs",
+      "qualname": "test_place",
+      "raises": [],
+      "signature": "fn test_place()",
+      "statement_lines": [
+        5
       ]
     },
     {

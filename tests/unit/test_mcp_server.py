@@ -182,7 +182,12 @@ def test_blast_radius_depth_is_clamped(code_server):
 
 def test_exception_path_finds_the_raise(code_server):
     data = structured(
-        call(code_server, "hippo_exception_path", symbol="OrderService.save", exception="OrderError")
+        call(
+            code_server,
+            "hippo_exception_path",
+            symbol="pyapp.orders.OrderService.save",
+            exception="pyapp.store.OrderError",
+        )
     )
     assert data["lines"] == [
         "pyapp.orders.OrderService.save -[RAISES 0.90 resolved]-> pyapp.store.OrderError"

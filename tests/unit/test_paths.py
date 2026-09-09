@@ -81,14 +81,15 @@ def test_a_fully_qualified_name_resolves(index: GraphIndex) -> None:
 
 
 def test_a_module_relative_qualname_and_a_bare_name_resolve(index: GraphIndex) -> None:
-    assert resolve_symbol(index, "OrderService.place") == resolve_symbol(
-        index, "pyapp.orders.OrderService.place"
-    )
-    assert resolve_symbol(index, "list_open") == resolve_symbol(index, "OrderService.list_open")
+    # `run` is the one method of `OrderService` the Rust tree does not also have, so it is still
+    # the single symbol a short name can mean; every other short name here is now ambiguous, which
+    # is what the test below pins.
+    assert resolve_symbol(index, "OrderService.run") == resolve_symbol(index, "pyapp.orders.OrderService.run")
+    assert resolve_symbol(index, "run") == resolve_symbol(index, "OrderService.run")
 
 
 def test_an_id_resolves_to_itself(index: GraphIndex) -> None:
-    node_id = resolve_symbol(index, "OrderService.save")
+    node_id = resolve_symbol(index, "pyapp.orders.OrderService.save")
     assert resolve_symbol(index, node_id) == node_id
 
 
@@ -98,9 +99,19 @@ def test_an_ambiguous_name_lists_its_candidates(index: GraphIndex) -> None:
     assert raised.value.candidates == [
         "pyapp.orders.OrderService.log",
         "pyapp.store.Base.log",
+        "rsapp.src.orders.OrderService.log",
+        "rsapp.src.store.Base.log",
         "tsapp.models.base.Base.log",
     ]
     assert "could mean any of" in str(raised.value)
+    # A second tree telling the same story makes the *qualname* ambiguous too, not just the bare
+    # name: `OrderService.place` is a symbol in `pyapp/orders.py` and one in `rsapp/src/orders.rs`.
+    with pytest.raises(AmbiguousSymbol) as both:
+        resolve_symbol(index, "OrderService.place")
+    assert both.value.candidates == [
+        "pyapp.orders.OrderService.place",
+        "rsapp.src.orders.OrderService.place",
+    ]
 
 
 def test_an_unknown_name_raises(index: GraphIndex) -> None:
@@ -121,7 +132,10 @@ def test_module_qualnames_come_from_the_path(index: GraphIndex) -> None:
 
 def test_a_direct_call_renders_exactly(index: GraphIndex) -> None:
     walk = shortest_code_path(
-        index, vertex(index, "OrderService.place"), vertex(index, "pyapp.billing.total"), theta=THETA
+        index,
+        vertex(index, "pyapp.orders.OrderService.place"),
+        vertex(index, "pyapp.billing.total"),
+        theta=THETA,
     )
     assert lines(index, walk) == [
         "pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total"
@@ -130,7 +144,7 @@ def test_a_direct_call_renders_exactly(index: GraphIndex) -> None:
 
 def test_a_data_access_edge_renders_with_its_kind_and_confidence(index: GraphIndex) -> None:
     walk = shortest_code_path(
-        index, vertex(index, "OrderService.save"), vertex(index, "table orders"), theta=THETA
+        index, vertex(index, "pyapp.orders.OrderService.save"), vertex(index, "table orders"), theta=THETA
     )
     assert lines(index, walk) == ["pyapp.orders.OrderService.save -[WRITES 0.85 sql_literal]-> table orders"]
 
@@ -148,7 +162,10 @@ def test_a_two_hop_path_is_found(index: GraphIndex) -> None:
 def test_theta_above_an_edge_hides_it(index: GraphIndex) -> None:
     # `graph` calls `self.run` through an unresolvable receiver, so the resolver emits the 0.50
     # fuzzy-name tier for it. Above theta that call is gone and only the longer route survives.
-    caller, callee = vertex(index, "OrderService.graph"), vertex(index, "OrderService.run")
+    caller, callee = (
+        vertex(index, "pyapp.orders.OrderService.graph"),
+        vertex(index, "pyapp.orders.OrderService.run"),
+    )
     assert lines(index, shortest_code_path(index, caller, callee, theta=0.5)) == [
         "pyapp.orders.OrderService.graph -[INVOKES 0.50 fuzzy_name]-> pyapp.orders.OrderService.run"
     ]
@@ -157,7 +174,7 @@ def test_theta_above_an_edge_hides_it(index: GraphIndex) -> None:
 
 
 def test_a_backwards_pair_is_found_by_the_undirected_second_pass(index: GraphIndex) -> None:
-    total, place = vertex(index, "pyapp.billing.total"), vertex(index, "OrderService.place")
+    total, place = vertex(index, "pyapp.billing.total"), vertex(index, "pyapp.orders.OrderService.place")
     walk = shortest_code_path(index, total, place, theta=THETA)
     # The edge comes back pointing the way it really points, so the rendered line stays true.
     assert lines(index, walk) == [
@@ -166,7 +183,8 @@ def test_a_backwards_pair_is_found_by_the_undirected_second_pass(index: GraphInd
 
 
 def test_defined_in_is_never_a_step_in_a_path(index: GraphIndex) -> None:
-    seeds = [vertex(index, n) for n in ("OrderService.place", "OrderService.save")]
+    names = ("pyapp.orders.OrderService.place", "pyapp.orders.OrderService.save")
+    seeds = [vertex(index, n) for n in names]
     edges = code_paths_for(index, seeds, theta=THETA)
     assert edges
     assert {e.kind for e in edges}.isdisjoint({"DEFINED_IN", "REFERS_TO", "PRECEDES", "MODIFIES"})
@@ -174,7 +192,7 @@ def test_defined_in_is_never_a_step_in_a_path(index: GraphIndex) -> None:
 
 
 def test_a_path_to_itself_is_empty(index: GraphIndex) -> None:
-    place = vertex(index, "OrderService.place")
+    place = vertex(index, "pyapp.orders.OrderService.place")
     assert shortest_code_path(index, place, place, theta=THETA) == []
 
 
@@ -185,13 +203,13 @@ def test_only_the_strongest_seeds_are_searched_against_each_other(index: GraphIn
     common case. All 20 would be 190 pairs and 380 traversals per question.
     """
     names = (
-        "OrderService.place",
-        "OrderService.save",
-        "OrderService.log",
+        "pyapp.orders.OrderService.place",
+        "pyapp.orders.OrderService.save",
+        "pyapp.orders.OrderService.log",
         "pyapp.billing.total",
         "pyapp.cli.main",
-        "OrderService.archive",
-        "OrderService.list_open",
+        "pyapp.orders.OrderService.archive",
+        "pyapp.orders.OrderService.list_open",
     )
     seeds = [vertex(index, name) for name in names]
     assert len(seeds) > paths.PAIRED_SEEDS
@@ -215,7 +233,7 @@ def test_only_the_strongest_seeds_are_searched_against_each_other(index: GraphIn
 def test_a_walk_gives_up_once_it_has_spent_its_visit_budget(index: GraphIndex, monkeypatch) -> None:
     # AR1 fix 6: `_bfs` had no time or visit budget at all - `cap` only truncates the result.
     main, total = vertex(index, "pyapp.cli.main"), vertex(index, "pyapp.billing.total")
-    place = vertex(index, "OrderService.place")
+    place = vertex(index, "pyapp.orders.OrderService.place")
     assert len(shortest_code_path(index, main, total, theta=THETA)) == 2
 
     monkeypatch.setattr(paths, "BFS_VISIT_BUDGET", 2)
@@ -293,7 +311,7 @@ def test_the_same_relation_from_two_indexed_copies_is_shown_once(index_with_hub,
 
 def test_display_at_is_memoised_on_the_index(index: GraphIndex) -> None:
     # `_walkable` sorts on two `display_at` calls per edge at every vertex a walk visits.
-    place = vertex(index, "OrderService.place")
+    place = vertex(index, "pyapp.orders.OrderService.place")
     assert index.display_cache == {}
     assert paths.display_at(index, place) == "pyapp.orders.OrderService.place"
     assert index.display_cache[place] == "pyapp.orders.OrderService.place"
@@ -335,7 +353,11 @@ def test_blast_radius_renders_grouped_by_subsystem(index: GraphIndex) -> None:
 
 
 def test_exception_path_finds_the_raise(index: GraphIndex) -> None:
-    walk = exception_path(index, vertex(index, "OrderService.save"), "OrderError", theta=THETA)
+    # The exception is named in full for the same reason every symbol here is: the Rust tree has an
+    # `OrderError` of its own, so the short name is ambiguous.
+    walk = exception_path(
+        index, vertex(index, "pyapp.orders.OrderService.save"), "pyapp.store.OrderError", theta=THETA
+    )
     assert lines(index, walk) == [
         "pyapp.orders.OrderService.save -[RAISES 0.90 resolved]-> pyapp.store.OrderError"
     ]
@@ -343,14 +365,14 @@ def test_exception_path_finds_the_raise(index: GraphIndex) -> None:
 
 def test_exception_path_for_an_unknown_exception_raises(index: GraphIndex) -> None:
     with pytest.raises(UnknownSymbol):
-        exception_path(index, vertex(index, "OrderService.save"), "NoSuchError", theta=THETA)
+        exception_path(index, vertex(index, "pyapp.orders.OrderService.save"), "NoSuchError", theta=THETA)
 
 
 def test_history_lists_the_commits_that_touched_a_symbol_newest_first(
     index_with_history: GraphIndex,
 ) -> None:
     index = index_with_history
-    commits = history(index, vertex(index, "OrderService.place"), limit=3)
+    commits = history(index, vertex(index, "pyapp.orders.OrderService.place"), limit=3)
     assert [c.sha for c in commits] == ["b2b2b2b"]
     assert history_rows(commits) == [
         {"id": commits[0].id, "sha": "b2b2b2b", "date": "2026-01-02", "subject": "Total the order in place"}
@@ -358,7 +380,7 @@ def test_history_lists_the_commits_that_touched_a_symbol_newest_first(
 
 
 def test_tests_for_finds_the_covering_test(index: GraphIndex) -> None:
-    covering = paths.tests_for(index, [vertex(index, "OrderService.place")], theta=THETA)
+    covering = paths.tests_for(index, [vertex(index, "pyapp.orders.OrderService.place")], theta=THETA)
     assert paths.test_rows(index, covering) == [
         {
             "id": covering[0].id,
@@ -374,7 +396,7 @@ def test_tests_for_finds_the_covering_test(index: GraphIndex) -> None:
 def test_in_branch_and_await_flags_appear_in_the_line(index: GraphIndex) -> None:
     walk = shortest_code_path(
         index,
-        vertex(index, "OrderService.place"),
+        vertex(index, "pyapp.orders.OrderService.place"),
         vertex(index, "pyapp.billing.send_invoice"),
         theta=THETA,
     )
@@ -384,7 +406,7 @@ def test_in_branch_and_await_flags_appear_in_the_line(index: GraphIndex) -> None
 
 
 def block_trace(index: GraphIndex):
-    seeds = [vertex(index, "OrderService.place")]
+    seeds = [vertex(index, "pyapp.orders.OrderService.place")]
     return SimpleNamespace(
         paths=triple_rows(index, code_paths_for(index, seeds, theta=THETA)),
         tests=paths.test_rows(index, paths.tests_for(index, seeds, theta=THETA)),
@@ -438,7 +460,7 @@ def test_an_empty_block_renders_as_an_empty_string(index: GraphIndex) -> None:
 def test_simulation_edge_edits_do_not_reach_the_path_tools(index: GraphIndex) -> None:
     from hippo.hipporag.graph_index import EdgeEdit
 
-    place, total = vertex(index, "OrderService.place"), vertex(index, "pyapp.billing.total")
+    place, total = vertex(index, "pyapp.orders.OrderService.place"), vertex(index, "pyapp.billing.total")
     index.graph_with_edits([EdgeEdit(index.node_ids[place], index.node_ids[total], 0.0)])
     assert shortest_code_path(index, place, total, theta=THETA)
 
@@ -451,7 +473,7 @@ def test_a_scoped_index_cannot_be_walked_to_a_hidden_symbol(mixed_index) -> None
     """
     ctx, prose_source_id, _code_source_id = mixed_index
     full = ctx.graph()
-    place, total = vertex(full, "OrderService.place"), vertex(full, "pyapp.billing.total")
+    place, total = vertex(full, "pyapp.orders.OrderService.place"), vertex(full, "pyapp.billing.total")
     assert shortest_code_path(full, place, total, theta=THETA)
     assert blast_radius(full, total, theta=THETA, depth=2).levels
 

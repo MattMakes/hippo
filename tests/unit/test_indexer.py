@@ -453,13 +453,15 @@ def test_indexing_a_code_source_returns_all_nine_counts(store, ollama, code_sour
         entities=written["entities"],
         facts=written["facts"],
         synonyms=written["synonyms"],
-        symbols=32,
+        symbols=54,
         data_objects=12,
-        code_edges=65,
-        refers_to=2,  # the README names `OrderService.place` and "the order service"
+        code_edges=110,
+        # the README names `OrderService.place` and "the order service"; each reaches the Python
+        # symbol and its Rust twin, which share the qualname (S2.13 never splits a dotted name).
+        refers_to=4,
     )
-    assert (store.stats()["symbols"], store.stats()["data_objects"]) == (32, 12)
-    assert len(store.load_code_edges()) == 65
+    assert (store.stats()["symbols"], store.stats()["data_objects"]) == (54, 12)
+    assert len(store.load_code_edges()) == 110
 
 
 def test_every_passage_is_linked_to_what_it_defines(store, ollama, code_source, code_chunks):
@@ -507,7 +509,7 @@ def test_the_openie_bill_is_two_calls_per_extracted_passage(
     extracted = [c for c in chunks if c.extract_text is None or c.extract_text != ""]
     index_source(store, ollama, code_source, chunks, code=graph)
     assert openie_calls(fake_ollama) == 2 * len(extracted)
-    assert len(extracted) == 5  # README, build.rb, and three docstrings of 80+ characters
+    assert len(extracted) == 7  # README, build.rb, and five docs of 80+ characters (two are rsapp's)
 
 
 def test_a_skipped_passage_still_stores_an_empty_extraction_without_an_error(
@@ -516,7 +518,7 @@ def test_a_skipped_passage_still_stores_an_empty_extraction_without_an_error(
     graph, chunks = code_chunks
     index_source(store, ollama, code_source, chunks, code=graph)
     skipped = next(c for c in chunks if c.extract_text == "")
-    (row,) = [p for p in store.passages_for_source(code_source) if p["title"] == skipped.title]
+    (row,) = [p for p in store.passages_for_source(code_source, limit=500) if p["title"] == skipped.title]
     assert row["entities"] == [] and row["triples"] == [] and row["extraction_error"] is None
 
 
@@ -608,11 +610,19 @@ def test_a_one_token_symbol_is_kept_out_of_the_cross_kind_synonym_search(store, 
 def test_symbols_carry_a_community_from_the_module_projection(store, ollama, code_source, code_chunks):
     graph, chunks = code_chunks
     index_source(store, ollama, code_source, chunks, code=graph)
-    by_qualname = {row["qualname"]: row for row in store.load_symbols()}
+    # Keyed by (path, qualname): `OrderService.place` is a qualname in `pyapp/orders.py` and in
+    # `rsapp/src/orders.rs`, and the two are different symbols in different communities.
+    by_qualname = {(row["path"], row["qualname"]): row for row in store.load_symbols()}
+    orders, tsapp = "pyapp/orders.py", "tsapp/index.ts"
     # Every symbol of one module shares that module's community.
-    assert by_qualname["OrderService.place"]["community"] == by_qualname["pyapp.orders"]["community"]
+    assert (
+        by_qualname[(orders, "OrderService.place")]["community"]
+        == by_qualname[(orders, "pyapp.orders")]["community"]
+    )
     # `pyapp` and `tsapp` share no edge, so Leiden must not put them together.
-    assert by_qualname["pyapp.orders"]["community"] != by_qualname["tsapp.index"]["community"]
+    assert (
+        by_qualname[(orders, "pyapp.orders")]["community"] != by_qualname[(tsapp, "tsapp.index")]["community"]
+    )
     assert all(row["community"] is not None for row in store.load_symbols())
 
 
@@ -709,7 +719,7 @@ def comparable(store, source_id: str):
         r["id"]: (r["kind"], r["qualname"]) for r in store.load_data_objects() if r["source_id"] == source_id
     }
     keys = {**symbols, **data}
-    passages = {p["id"]: p["title"] for p in store.passages_for_source(source_id)}
+    passages = {p["id"]: p["title"] for p in store.passages_for_source(source_id, limit=500)}
     nodes = sorted(
         (keys[r["id"]], r["kind"], r["lang"], r["line_start"], r["line_end"], r["signature"], r["doc"])
         for r in store.load_symbols()
@@ -807,7 +817,9 @@ def indexed_spec(store, source_id: str) -> dict[str, list]:
     data = [r for r in store.load_data_objects() if r["source_id"] == source_id]
     keys = {r["id"]: ("symbol", r["path"], r["qualname"]) for r in symbols}
     keys.update({r["id"]: ("data", r["kind"], r["qualname"]) for r in data})
-    titles = {p["id"]: p["title"] for p in store.passages_for_source(source_id)}
+    # `limit` defaults to 50 and the fixture makes more code passages than that: without it the
+    # tail of the tree (whatever sorts last) silently has no passage to be defined by.
+    titles = {p["id"]: p["title"] for p in store.passages_for_source(source_id, limit=500)}
     return {
         "symbols": sorted(
             (
