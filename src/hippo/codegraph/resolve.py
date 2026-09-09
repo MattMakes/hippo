@@ -39,7 +39,8 @@ from .model import (
 
 # Method names too common to guess from. A `fuzzy_name` edge on any of these would be
 # noise at best and wrong at worst; 2.2b's "ambiguous or stoplisted -> no edge" row is
-# what this list implements.
+# what this list implements. Written in lower case and matched in lower case, so Go's and
+# C#'s `Close`/`Get`/`Write` are the same names as Python's.
 FUZZY_STOPLIST = frozenset(
     {
         "add", "all", "any", "append", "apply", "build", "call", "check", "clear", "close",
@@ -323,12 +324,28 @@ def resolve_imports(index: SourceIndex) -> list[CodeEdge]:
 # ------------------------------------------------------------------ bases
 
 
+def declared(index: SourceIndex, facts: FileFacts, qualname: str) -> Symbol | None:
+    """
+    The symbol a fact in this file is *about*, which is usually written in this file.
+
+    Rust is the exception: `impl Base for OrderService` says something about a type whose
+    `struct` is in another file, so "which files may hold a member of `OrderService`" -- the
+    language's own `member_paths` answer, the one `_on_class` already asks -- is also where
+    to look for the type itself. Every other language answers "this file", so nothing moves.
+    """
+    for path in RULES[facts.lang].member_paths(index, qualname, facts.path):
+        found = index.symbols.get((path, qualname))
+        if found is not None:
+            return found
+    return None
+
+
 def resolve_bases(index: SourceIndex) -> list[CodeEdge]:
     """INHERITS edges, plus the base list OVERRIDES and `via_inheritance` calls walk."""
     edges: list[CodeEdge] = []
     for facts in index.files.values():
         for base in facts.bases:
-            child = index.symbols.get((facts.path, base.cls))
+            child = declared(index, facts, base.cls)
             if child is None:
                 continue
             found = _lookup_dotted(index, facts, base.base)
@@ -338,7 +355,9 @@ def resolve_bases(index: SourceIndex) -> list[CodeEdge]:
                 continue
             omega = 0.90 if found.provenance != "fuzzy_name" else 0.50
             provenance = "fuzzy_name" if found.provenance == "fuzzy_name" else "resolved"
-            index.bases.setdefault((facts.path, base.cls), []).append(found.symbol)
+            # Keyed by where the *type* is, not where the `impl` was written, so `_mro_lookup`
+            # -- which is always handed a class's own path -- finds the bases either way.
+            index.bases.setdefault((child.path, base.cls), []).append(found.symbol)
             edges.append(_edge(child, found.symbol, "INHERITS", omega, provenance))
     return edges
 
@@ -347,13 +366,16 @@ def resolve_overrides(index: SourceIndex) -> list[CodeEdge]:
     """A method that shadows one on a base, found breadth-first at most `MAX_MRO_DEPTH` deep."""
     edges: list[CodeEdge] = []
     for (path, qualname), members in sorted(index.members.items()):
-        owner = index.symbols.get((path, qualname))
+        # The members are in `path`; the type they belong to may be in another file, which is
+        # what a Rust `impl` in its own module is, so the owner is asked for the same way
+        # `resolve_bases` asks -- and its own path is what `index.bases` is keyed by.
+        owner = declared(index, index.files[path], qualname)
         if owner is None or owner.kind != "class":
             continue
         for name, method in members.items():
             if method.kind != "method":
                 continue
-            inherited = _mro_lookup(index, path, qualname, name)
+            inherited = _mro_lookup(index, owner.path, qualname, name)
             if inherited is not None:
                 edges.append(_edge(method, inherited, "OVERRIDES", 0.90, "mro"))
     return edges
@@ -484,10 +506,30 @@ def _on_class(
     for candidate in RULES[facts.lang].member_paths(index, qualname, path):
         found = index.members.get((candidate, qualname), {}).get(name)
         if found is not None:
-            omega, provenance = (1.00, "same_file") if candidate == facts.path else (0.90, "via_import")
-            return Resolution(found, omega, provenance)
+            return Resolution(found, *_member_tier(index, facts, candidate))
     inherited = _mro_lookup(index, path, qualname, name)
     return Resolution(inherited, 0.90, "via_inheritance") if inherited is not None else None
+
+
+def _member_tier(index: SourceIndex, facts: FileFacts, candidate: str) -> tuple[float, str]:
+    """
+    What a member found in `candidate` is worth, by how far away that file is.
+
+    The file itself is 1.00 `same_file`. A sibling of the same Go package or C# namespace is
+    1.00 `same_scope`: the language resolves it with no import at all, which is the same
+    reason `resolve_imports` gives a bare same-scope name 1.00, and calling a *method* of a
+    sibling file 0.90 would contradict it. Anything else came through an import, at 0.90.
+
+    Python and TypeScript have no scope above the file, so `facts.scope` is None and the
+    middle row is unreachable for them -- `None == None` is deliberately not enough.
+    """
+    if candidate == facts.path:
+        return 1.00, "same_file"
+    other = index.files.get(candidate)
+    if facts.scope is not None and other is not None:
+        if other.lang == facts.lang and other.scope == facts.scope:
+            return 1.00, "same_scope"
+    return 0.90, "via_import"
 
 
 def _through(facts: FileFacts, found: Resolution) -> Resolution:
@@ -551,8 +593,12 @@ def _fuzzy(index: SourceIndex, lang: str, name: str, kinds: tuple[str, ...]) -> 
     """
     2.2b's last resort: exactly one symbol of the right kind in this language carries the
     name, and the name is not one everybody uses. Anything else is no edge at all.
+
+    The stoplist is matched case-insensitively: `Close`, `Get` and `Write` are as ordinary
+    in Go and C# as `close`, `get` and `write` are in Python, and a list written in one case
+    would refuse the guess for one language and wave it through for another.
     """
-    if not name or name in FUZZY_STOPLIST:
+    if not name or name.lower() in FUZZY_STOPLIST:
         return None
     candidates = [s for s in index.by_name.get((lang, name), []) if s.kind in kinds]
     if len(candidates) != 1:
@@ -678,13 +724,35 @@ def sql_file_objects(source_id: str, path: str, text: str) -> tuple[list[DataObj
 
 
 def _data_call(index: SourceIndex, facts: FileFacts, call) -> Hit | None:
-    """A Mongo chain (`db.orders.find`) or a call on a `mongoose.model` binding."""
+    """
+    A Mongo chain (`db.orders.find`), a call on a `mongoose.model` binding, or a call on a
+    variable bound earlier in the same scope to a Mongo chain (`const col =
+    db.collection("orders"); col.find(...)`).
+    """
     if not call.receiver:
         return None
     binding = _model_binding(index, facts, call.receiver)
     if binding:
         return mongoose_hit(binding, call.name, call.line)
-    return mongo_hit(call.receiver, call.name, call.line)
+    hit = mongo_hit(call.receiver, call.name, call.line)
+    if hit is not None:
+        return hit
+    return _bound_mongo_hit(facts, call)
+
+
+def _bound_mongo_hit(facts: FileFacts, call) -> Hit | None:
+    """`col` in `const col = db.collection("orders"); col.updateOne(...)` -- read the
+    collection off the assignment's own call chain, the same way `mongo_hit` reads it off a
+    direct `db.collection("orders").updateOne(...)` chain."""
+    for assignment in facts.assignments:
+        if assignment.scope != call.caller or assignment.target != call.receiver:
+            continue
+        if assignment.line > call.line or not assignment.chain:
+            continue
+        hit = mongo_hit(assignment.chain, call.name, call.line)
+        if hit is not None:
+            return hit
+    return None
 
 
 def _model_binding(index: SourceIndex, facts: FileFacts, receiver: str) -> str:

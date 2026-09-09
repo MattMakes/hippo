@@ -178,12 +178,17 @@ def _resolve(
 
 
 def _contains(index: resolve.SourceIndex, facts: FileFacts) -> list[CodeEdge]:
-    """CONTAINS, straight from the syntax: module -> class/function, class -> member."""
+    """
+    CONTAINS, straight from the syntax: module -> class/function, class -> member.
+
+    The owner is looked up the way `resolve.declared` looks one up, so a method written in a
+    Rust `impl` block far from its `struct` still hangs off the type rather than off nothing.
+    """
     edges: list[CodeEdge] = []
     module = facts.symbols[0]
     for symbol in facts.symbols[1:]:
         owner, _, _ = symbol.qualname.rpartition(".")
-        parent = index.symbols.get((facts.path, owner)) if owner else module
+        parent = resolve.declared(index, facts, owner) if owner else module
         if parent is not None:
             edges.append(CodeEdge(a=parent.id, b=symbol.id, kind="CONTAINS", omega=1.00, provenance="syntax"))
     return edges
