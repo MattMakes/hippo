@@ -199,6 +199,7 @@ def _types(facts: FileFacts, node: Node, source_id: str, is_test: bool, owned: s
         # `type ( ... )` the spec is the only honest start line.
         outer = node if len(specs) == 1 else spec
         fields = _field_list(inner)
+        members = fields if fields is not None else inner
         symbol = Symbol(
             id=symbol_id(source_id, facts.path, name),
             source_id=source_id,
@@ -209,12 +210,12 @@ def _types(facts: FileFacts, node: Node, source_id: str, is_test: bool, owned: s
             path=facts.path,
             line_start=line_of(outer),
             line_end=end_line_of(outer),
-            signature=_signature(outer, fields),
+            signature=_signature(outer, _brace(members)),
             doc=_doc(outer),
             is_test=is_test,
             module=facts.module,
             display=f"{facts.module}.{name}",
-            statement_lines=_statement_lines(fields) if fields is not None else [],
+            statement_lines=_statement_lines(members),
         )
         # A Go type has no members inside it -- `func (s *Service) Place` is a top-level
         # declaration -- so the whole declaration is its header.
@@ -226,11 +227,21 @@ def _types(facts: FileFacts, node: Node, source_id: str, is_test: bool, owned: s
 
 
 def _field_list(inner: Node) -> Node | None:
-    """A struct's `field_declaration_list` or an interface's body, whichever it has."""
+    """A struct's `field_declaration_list`, or None -- an interface holds its `method_elem`s
+    directly, with no list node around them."""
     found = inner.child_by_field_name("body")
     if found is not None:
         return found
     return next((c for c in inner.children if c.type == "field_declaration_list"), None)
+
+
+def _brace(members: Node) -> Node | None:
+    """
+    The `{` that opens a type's body, which is where its signature stops: `type Service
+    struct`, `type Lister interface`. A struct's brace sits on its field list and an
+    interface's on the type itself, so the node to look at is whichever holds the members.
+    """
+    return next((c for c in members.children if not c.is_named and text_of(c) == "{"), None)
 
 
 def _embedded(facts: FileFacts, cls: str, fields: Node | None) -> None:

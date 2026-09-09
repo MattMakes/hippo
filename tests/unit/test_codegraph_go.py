@@ -325,6 +325,12 @@ def test_an_interface_is_a_class_and_its_method_signatures_are_not_symbols():
         ("Reader", "class"),
     ]
     assert not [e for e in graph.edges if e.kind == "INHERITS"]
+    # An interface holds its `method_elem`s with no list node around them, unlike a struct's
+    # fields -- so both the signature and the split points have to look past that.
+    reader = symbol(graph, "app/store.go", "Reader")
+    assert (reader.signature, reader.statement_lines) == ("type Reader interface", [4])
+    file_type = symbol(graph, "app/file.go", "File")
+    assert (file_type.signature, file_type.statement_lines) == ("type File struct", [])
 
 
 def test_a_type_alias_and_a_defined_type_are_no_symbol_but_a_grouped_declaration_is():
