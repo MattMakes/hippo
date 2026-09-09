@@ -625,9 +625,7 @@ def _using(facts: FileFacts, node: Node) -> None:
     if not target:
         return
     alias = text_of(named[0]) if aliased and len(named) > 1 else ""
-    facts.imports.append(
-        ImportFact(module=target, alias=alias, line=line_of(node), is_wildcard=is_static)
-    )
+    facts.imports.append(ImportFact(module=target, alias=alias, line=line_of(node), is_wildcard=is_static))
 
 
 # ------------------------------------------------------------ registration
