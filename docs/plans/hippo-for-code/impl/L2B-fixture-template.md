@@ -71,6 +71,13 @@ and the chunker fix for members-outside-their-type / inline modules (L3) are mer
   `test_mcp_*`, `test_web_code.py`, `test_git_history.py`) — the Rust phase-B ledger lists them; and the
   inertness test compares ids/order exactly and scores with `pytest.approx(rel=1e-9)` (PPR summation
   noise from more isolated vertices at scale 0).
+- **All — the 'naming a symbol lifts its passage' test** (`test_retriever.py::
+  test_naming_a_symbol_lifts_its_passage_into_what_the_model_reads`): under FakeOllama the prose half
+  of "What does X do?" is noise, so every extra tree adds dense-seed twins to the window and the
+  named passage's rank at defaults drifts. Ruling: the 'inside `qa_top_k`' assertion is pinned with
+  `code_dense_seeds=0` (the lexical anchor alone must do it); at defaults only 'rank strictly better
+  than with the anchor off' and 'top node by 2x' are asserted. Do not relax further — if the
+  anchor-only case leaves `qa_top_k`, stop and report the rank and seed table.
 - **All**: `extract.WALKERS` is an import-time snapshot (tests swapping a walker patch both); the
   `make_code_checkout` three commits gain no files, so history tests do not move.
 
