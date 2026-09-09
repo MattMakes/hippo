@@ -727,6 +727,33 @@ def test_the_rows_that_produce_no_edge(crate):
     assert links(graph, "INVOKES") == set()
 
 
+def test_a_call_inside_a_macro_is_not_a_call():
+    """
+    A macro's arguments are *tokens*, not an expression tree: `assert_eq!(s.place(&o), ..)`
+    parses as `identifier s`, `.`, `identifier place`, `token_tree (&o)` and there is no
+    call node in it to resolve. So the commonest shape of a Rust test case yields no INVOKES
+    -- and therefore no 0.85 `test_import` -- but the names it says are still names, so
+    TESTED_BY's 0.60 `test_mention` row still reaches the method. Worth knowing before a
+    fixture is written against it, and worth saying in the docs.
+    """
+    graph = graph_of(
+        {
+            "t/src/lib.rs": (
+                "pub struct Service;\n\nimpl Service {\n    pub fn place(&self) -> i64 {\n        1\n    }\n}\n"
+            ),
+            "t/tests/it.rs": (
+                "use t::Service;\n\n#[test]\nfn test_place() {\n"
+                "    let s = Service;\n    assert_eq!(s.place(), 1);\n}\n"
+            ),
+        }
+    )
+    assert links(graph, "INVOKES") == set()
+    assert edge(graph, "TESTED_BY", "t/src/lib.rs::Service.place", "t/tests/it.rs::test_place")[1:3] == (
+        0.60,
+        "test_mention",
+    )
+
+
 def test_a_macro_body_still_yields_its_literals():
     """
     `sqlx::query!("SELECT ...")` is not a call, but the SQL in it is still SQL: the walker
