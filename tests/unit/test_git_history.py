@@ -135,9 +135,15 @@ def history_of(checkout: Path, symbols: list | None = None, **budgets) -> tuple:
     return read_history(checkout, symbols, SOURCE_ID, **options), symbols
 
 
-def modified(history, symbols: list) -> dict[int, set[str]]:
-    """ordinal -> the symbol qualnames that commit's MODIFIES edges point at."""
-    qualname = {s.id: s.qualname for s in symbols}
+def modified(history, symbols: list, key=lambda s: s.qualname) -> dict[int, set[str]]:
+    """
+    ordinal -> the symbol qualnames that commit's MODIFIES edges point at.
+
+    `key` names a symbol some other way, for the cases where a qualname is not unique across the
+    fixture tree: `OrderService.save` is one symbol in `pyapp/orders.py` and another in
+    `rsapp/src/orders.rs`.
+    """
+    qualname = {s.id: key(s) for s in symbols}
     ordinal = {c["id"]: c["ordinal"] for c in history.commits}
     touched: dict[int, set[str]] = {}
     for row in history.modifies:
@@ -263,9 +269,11 @@ def test_the_hunk_is_read_against_the_file_at_that_commit_not_at_head(tmp_path: 
     add_commit(checkout, "Add an audit helper above the service")
 
     history, symbols = history_of(checkout)
-    at_head = {s.qualname: (s.line_start, s.line_end) for s in symbols}
-    assert at_head["audit"][0] <= 19 and at_head["audit"][1] >= 19  # the drift is real
-    assert at_head["OrderService.place"][0] > 22
+    # Keyed by (path, qualname): `rsapp/src/orders.rs` has an `OrderService.place` of its own.
+    at_head = {(s.path, s.qualname): (s.line_start, s.line_end) for s in symbols}
+    orders = "pyapp/orders.py"
+    assert at_head[(orders, "audit")][0] <= 19 and at_head[(orders, "audit")][1] >= 19  # drift is real
+    assert at_head[(orders, "OrderService.place")][0] > 22
     assert modified(history, symbols)[2] == {"OrderService.place"}
 
 
@@ -276,10 +284,14 @@ def test_a_symbol_deleted_after_the_commit_that_touched_it_gets_no_edge(tmp_path
     add_commit(checkout, "Drop save")
 
     history, symbols = history_of(checkout)
-    assert "OrderService.save" not in {s.qualname for s in symbols}
-    touched = modified(history, symbols)
-    assert all("OrderService.save" not in names for names in touched.values())
-    assert touched[1] == {"tsapp.index", "main"}  # the rest of that commit's edges survive
+    # By path: the Rust tree tells the same story and still has a `save` of its own.
+    by_path = lambda s: f"{s.path}::{s.qualname}"  # noqa: E731
+    save = "pyapp/orders.py::OrderService.save"
+    assert save not in {by_path(s) for s in symbols}
+    touched = modified(history, symbols, key=by_path)
+    assert all(save not in names for names in touched.values())
+    # the rest of that commit's edges survive
+    assert touched[1] == {"tsapp/index.ts::tsapp.index", "tsapp/index.ts::main"}
 
 
 def test_a_commit_whose_diff_times_out_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

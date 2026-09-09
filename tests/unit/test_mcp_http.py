@@ -144,7 +144,10 @@ def test_a_real_mcp_client_can_walk_the_code_graph(code_server_url):
                 raised = tool_payload(
                     await session.call_tool(
                         "hippo_exception_path",
-                        {"symbol": "OrderService.save", "exception": "OrderError"},
+                        {
+                            "symbol": "pyapp.orders.OrderService.save",
+                            "exception": "pyapp.store.OrderError",
+                        },
                     )
                 )
                 assert raised["found"] is True

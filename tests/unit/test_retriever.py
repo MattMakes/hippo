@@ -501,9 +501,12 @@ def test_with_the_four_code_settings_off_the_code_graph_contributes_nothing(mixe
     after = Retriever(after_index, ctx.ollama).retrieve(DIRECT, settings(**CODE_OFF))
 
     assert after_index.code_nodes == []
-    assert [(p.passage_id, p.score) for p in after.passages] == [
-        (p.passage_id, p.score) for p in before.passages
-    ]
+    # Same passages, same order, same scores. `approx` on the scores alone: at scale 0 the code
+    # vertices are isolated rather than absent, and summing a personalised PageRank over 66 more
+    # isolated vertices moves the last few ulps (5e-14 on the winner here). The ranking claim --
+    # what the graph contributes -- is unchanged; only float equality is.
+    assert [p.passage_id for p in after.passages] == [p.passage_id for p in before.passages]
+    assert [p.score for p in after.passages] == pytest.approx([p.score for p in before.passages], rel=1e-9)
     assert before.seed_symbols == [] and before.used_code_seeds is False
 
 
@@ -514,27 +517,66 @@ def test_naming_a_symbol_lifts_its_passage_into_what_the_model_reads(
     code_retriever: Retriever, code_source: str
 ) -> None:
     """
-    PLAN.md asks for "in the top 3". What is pinned here is the durable part of that: naming a
-    symbol lifts its passage from wherever dense similarity had it into the `qa_top_k` slice the
-    answerer actually reads, and makes the symbol itself the most activated node in the graph.
+    PLAN.md asks for "in the top 3". What is pinned here is the durable part of that, split by the
+    mechanism that carries it.
 
-    The exact position is a function of `FakeOllama`'s feature-hashed vectors, which rank a
-    three-line module header above an eight-line function body on a question naming both. Measured
-    against this fixture: the passage moves from dense rank 9 to rank 5, and `place` is the top
-    node by a factor of three. A real embedder is what would make the literal top 3 hold.
+    **The lexical anchor on its own** (`code_dense_seeds=0`) lifts the passage from rank 25 --
+    where dense similarity had it -- into the `qa_top_k` slice the answerer actually reads, at
+    rank 5. That is the sentence the docs make, and it is a property of the anchor.
+
+    **At the defaults the exact position is not.** `split_question` leaves "What does do?" as the
+    prose half, so `FakeOllama`'s feature-hashed vectors order 63 passages on noise, and every tree
+    the fixture adds puts more twins of this passage among the five dense seeds -- three of them
+    are `rsapp`'s. What holds at the defaults is the lift itself and the activation: the passage
+    ranks better than it does with the anchor off, and the symbol is the most activated node in
+    the graph by a factor of three. A real embedder is what would make the literal top 3 hold.
     """
     index = code_retriever.index
     passage_id = index.node_ids[index.defining_passages(index.idx_of[place_id(index, code_source)])[0]]
 
     without = code_retriever.retrieve(PLACE, settings(code_seed_weight=0.0, code_dense_seeds=0))
+    anchor_only = code_retriever.retrieve(PLACE, settings(code_dense_seeds=0))
     trace = code_retriever.retrieve(PLACE, settings())
 
     assert trace.used_code_seeds is True
-    ranks = {p.passage_id: p.rank for p in trace.passages}
-    assert ranks[passage_id] < {p.passage_id: p.rank for p in without.passages}[passage_id]
-    assert ranks[passage_id] <= settings()["qa_top_k"]
+    off = {p.passage_id: p.rank for p in without.passages}[passage_id]
+    assert {p.passage_id: p.rank for p in anchor_only.passages}[passage_id] <= settings()["qa_top_k"]
+    assert off > settings()["qa_top_k"], "the anchor is what puts it there, not dense similarity"
+    assert {p.passage_id: p.rank for p in trace.passages}[passage_id] < off
     assert trace.top_nodes[0].name == "OrderService.place"
     assert trace.top_nodes[0].score > 2 * trace.top_nodes[1].score
+
+
+def test_naming_the_rust_symbol_seeds_the_rust_one_and_lifts_its_passage(
+    code_retriever: Retriever, code_source: str
+) -> None:
+    """
+    The same claim for the other tree, and the reason a display name is a display name: the fixture
+    tells one story in Python and in Rust, so `OrderService.place` is a qualname in both. Naming
+    `rsapp.src.orders.OrderService.place` in full seeds *that* symbol, alone and whole, and makes
+    it the most activated node in the graph.
+
+    The passage goes from dense rank 26 to rank 9, not into `qa_top_k`: the eight above it are the
+    short `rsapp` module headers `FakeOllama`'s feature-hashed vectors happen to like on a question
+    whose prose half is "What does do?". The lift is the anchor's doing; the exact position is the
+    embedder's, as the test above says at length.
+    """
+    index = code_retriever.index
+    rust_place = symbol_id(code_source, "rsapp/src/orders.rs", "OrderService.place")
+    passage_id = index.node_ids[index.defining_passages(index.idx_of[rust_place])[0]]
+    question = "What does rsapp.src.orders.OrderService.place do?"
+
+    without = code_retriever.retrieve(question, settings(code_seed_weight=0.0, code_dense_seeds=0))
+    trace = code_retriever.retrieve(question, settings(code_dense_seeds=0))
+
+    assert trace.used_code_seeds is True
+    named = [s for s in trace.seed_symbols if s.kept and s.how == "identifier"]
+    assert [(s.node_id, s.n_matches) for s in named] == [(rust_place, 1)]
+    assert place_id(index, code_source) not in {s.node_id for s in trace.seed_symbols}
+    assert index.node_ids[trace.top_nodes[0].vertex] == rust_place
+    assert trace.top_nodes[0].score > 4 * trace.top_nodes[1].score
+    ranks = {p.passage_id: p.rank for p in trace.passages}
+    assert ranks[passage_id] < {p.passage_id: p.rank for p in without.passages}[passage_id] - 10
 
 
 def test_a_stack_trace_seeds_ppr_even_when_no_fact_survives(code_retriever: Retriever) -> None:

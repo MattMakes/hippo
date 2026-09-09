@@ -295,33 +295,36 @@ def test_a_code_archive_is_parsed_chunked_by_symbol_and_recorded_in_meta(code_in
     source = ctx.store.get_source(source_id)
     code = source["meta"]["code"]
 
-    assert (code["symbols"], code["data_objects"], code["edges"]) == (32, 12, 65)
+    assert (code["symbols"], code["data_objects"], code["edges"]) == (54, 12, 110)
     assert code["edges_by_kind"] == {
         "CATCHES": 1,
-        "CONTAINS": 27,
-        "IMPORTS": 9,
-        "INHERITS": 2,
-        "INVOKES": 13,
-        "OVERRIDES": 1,
-        "RAISES": 1,
-        "READS": 6,
-        "TESTED_BY": 3,
-        "WRITES": 2,
+        "CONTAINS": 43,
+        "IMPORTS": 18,
+        "INHERITS": 3,
+        "INVOKES": 19,
+        "OVERRIDES": 2,
+        "RAISES": 3,
+        "READS": 10,
+        "TESTED_BY": 7,
+        "WRITES": 4,
     }
-    assert code["files_parsed"] == 11  # six Python, three TypeScript, one .sql, one Go
+    assert code["files_parsed"] == 17  # six Python, three TypeScript, six Rust, one .sql, one Go
     assert code["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # build.rb
     assert code["truncated"] is False
     # Calls that resolve to nothing in the repo -- builtins included -- are counted per file, so
     # phase 2 has a baseline to work from (D15). Only parsed files can have any.
     assert set(code["unresolved_calls"]) <= set(code_sample_paths())
     assert code["unresolved_calls_total"] == sum(code["unresolved_calls"].values())
-    assert source["meta"]["counts"]["symbols"] == 32
+    assert source["meta"]["counts"]["symbols"] == 54
 
 
 def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
     ctx, source_id = code_index
-    titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
+    titles = [p["title"] for p in ctx.store.passages_for_source(source_id, limit=500)]
     assert "pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)" in titles
+    # Rust writes a type's methods outside it, so the struct's own passage is its own lines (L3).
+    assert "rsapp/src/orders.rs :: rsapp.src.orders.OrderService (lines 7-9)" in titles
+    assert "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.place (lines 19-24)" in titles
     assert "schema/orders.sql (lines 1-2)" in titles  # no symbols to cut by; windows as before
     assert "tools/build.rb (lines 1-3)" in titles  # no grammar; windows as before
     assert "tools/build.go :: tools.build.main (lines 3-3)" in titles  # Go parses now
@@ -330,7 +333,7 @@ def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
 
 def test_deleting_a_code_source_removes_its_symbols_and_data_objects(code_index) -> None:
     ctx, source_id = code_index
-    assert len(ctx.store.load_symbols()) == 32
+    assert len(ctx.store.load_symbols()) == 54
 
     pipeline.delete_source(ctx, source_id)
 
@@ -382,7 +385,7 @@ def test_a_repo_source_indexes_its_git_history(git_index) -> None:
 
 def test_a_commit_gets_a_passage_of_its_own(git_index) -> None:
     ctx, source_id, _ = git_index
-    titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
+    titles = [p["title"] for p in ctx.store.passages_for_source(source_id, limit=500)]
     assert "commit " in "".join(titles)
     subjects = sorted(t.split(": ", 1)[1] for t in titles if t.startswith("commit "))
     assert subjects == sorted(CODE_CHECKOUT_SUBJECTS)
@@ -473,7 +476,7 @@ def test_a_repo_source_still_links_its_prose_to_its_code(git_index) -> None:
     # prose source at once, and reading its history must not have cost it the prose half.
     ctx, source_id, _ = git_index
     symbols = {s["id"]: s["qualname"] for s in ctx.store.load_symbols()}
-    titles = {p["id"]: p["title"] for p in ctx.store.passages_for_source(source_id)}
+    titles = {p["id"]: p["title"] for p in ctx.store.passages_for_source(source_id, limit=500)}
     found = {
         (titles[r["passage_id"]], symbols[r["node_id"]], r["omega"], r["token"])
         for r in ctx.store.load_refers_to()
@@ -491,7 +494,7 @@ def test_a_commit_passage_is_scanned_for_the_symbols_its_message_names(git_index
     commit_ids = {c["id"] for c in ctx.store.load_commits()}
     commit_passages = {
         p["id"]: p["title"]
-        for p in ctx.store.passages_for_source(source_id)
+        for p in ctx.store.passages_for_source(source_id, limit=500)
         if p["title"].startswith("commit ")
     }
     assert len(commit_passages) == 3
@@ -523,7 +526,10 @@ def test_a_symbol_carries_the_commits_that_touched_it_all_the_way_to_an_answer(g
     from hippo import ask
 
     ctx, source_id, _ = git_index
-    trace = ask.search(ctx, "What does OrderService.place do?")
+    # Fully qualified: `OrderService.place` is a qualname in `pyapp/orders.py` and in
+    # `rsapp/src/orders.rs`, and a dotted name is never split (S2.13), so the short form would
+    # seed both trees and fill the block with Rust relations before the commits were reached.
+    trace = ask.search(ctx, "What does pyapp.orders.OrderService.place do?")
     assert trace.used_code_seeds
     assert trace.history, "a seeded symbol with MODIFIES edges must carry its commits"
     row = trace.history[0]

@@ -212,7 +212,10 @@ def test_blast_prints_the_levels_and_the_subsystems(code_cli, capsys):
 
 
 def test_raises_prints_the_route_to_the_exception(code_cli, capsys):
-    assert cli.main(["raises", "OrderService.save", "OrderError"]) == 0
+    # Both names in full: the Rust tree has an `OrderService.save` and an `OrderError` too, and a
+    # name that means several things is an error the CLI reports rather than a guess it makes.
+    args = ["raises", "pyapp.orders.OrderService.save", "pyapp.store.OrderError"]
+    assert cli.main(args) == 0
     assert (
         "pyapp.orders.OrderService.save -[RAISES 0.90 resolved]-> pyapp.store.OrderError"
         in capsys.readouterr().out

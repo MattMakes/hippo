@@ -64,7 +64,14 @@ def test_symbols_finds_by_substring_with_display_names(client):
     rows = client.get("/api/code/symbols", params={"q": "place"}).json()
     # A substring, not a token: the Cypher rel type `PLACED_BY` matches "place" too, and saying so
     # is the point - this endpoint is a name search, not a resolver.
-    assert [r["display"] for r in rows] == [PLACE, "rel_type PLACED_BY", "tests.test_orders.test_place"]
+    assert [r["display"] for r in rows] == [
+        PLACE,
+        "rel_type PLACED_BY",
+        "rsapp.src.orders.OrderService.place",
+        "rsapp.src.orders.tests.place_totals",
+        "rsapp.tests.orders.test_place",
+        "tests.test_orders.test_place",
+    ]
     place = rows[0]
     assert place["kind"] == "symbol" and place["code_kind"] == "method"
     assert place["lang"] == "python" and place["path"] == "pyapp/orders.py"
@@ -73,7 +80,9 @@ def test_symbols_finds_by_substring_with_display_names(client):
 
 
 def test_symbols_finds_data_objects_too(client):
-    rows = client.get("/api/code/symbols", params={"q": "orders"}).json()
+    # `limit`, because "orders" now matches more than the default twenty rows and the answer is
+    # ordered by display name: `table orders` sorts last of all of them.
+    rows = client.get("/api/code/symbols", params={"q": "orders", "limit": 100}).json()
     displays = [r["display"] for r in rows]
     assert "table orders" in displays
     assert next(r for r in rows if r["display"] == "table orders")["kind"] == "data"
@@ -106,8 +115,10 @@ def test_path_renders_the_relations_between_two_symbols(client):
 
 
 def test_path_accepts_a_module_relative_name(client):
-    data = client.get("/api/code/path", params={"a": "OrderService.place", "b": TOTAL}).json()
-    assert data["a"] == PLACE and data["found"] is True
+    # `cli.main` rather than `OrderService.place`: the Rust tree has an `OrderService.place` too,
+    # so that short form is a 409 now (see the ambiguity test below).
+    data = client.get("/api/code/path", params={"a": "cli.main", "b": TOTAL}).json()
+    assert data["a"] == "pyapp.cli.main" and data["found"] is True
 
 
 def test_path_between_unconnected_symbols_is_found_false(client):
@@ -136,7 +147,8 @@ def test_blast_radius_depth_is_clamped_to_one_to_four(client):
 
 def test_exception_path_finds_the_raise(client):
     data = client.get(
-        "/api/code/exception-path", params={"symbol": "OrderService.save", "exception": "OrderError"}
+        "/api/code/exception-path",
+        params={"symbol": PLACE.replace(".place", ".save"), "exception": "pyapp.store.OrderError"},
     ).json()
     assert data["found"] is True
     assert data["lines"] == [
@@ -146,7 +158,8 @@ def test_exception_path_finds_the_raise(client):
 
 def test_exception_path_for_an_unknown_exception_is_a_404(client):
     response = client.get(
-        "/api/code/exception-path", params={"symbol": "OrderService.save", "exception": "NoSuchError"}
+        "/api/code/exception-path",
+        params={"symbol": PLACE.replace(".place", ".save"), "exception": "NoSuchError"},
     )
     assert response.status_code == 404
     assert "NoSuchError" in response.json()["detail"]
@@ -183,6 +196,8 @@ def test_an_ambiguous_symbol_is_a_409_with_its_candidates(client):
     assert body["candidates"] == [
         "pyapp.orders.OrderService.log",
         "pyapp.store.Base.log",
+        "rsapp.src.orders.OrderService.log",
+        "rsapp.src.store.Base.log",
         "tsapp.models.base.Base.log",
     ]
     assert "could mean any of" in body["detail"]
