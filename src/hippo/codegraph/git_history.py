@@ -34,6 +34,10 @@ rather than assumed:
 Two budgets, both from settings (2.2c): `timeout_s` per commit, after which that commit is
 dropped and counted in `skipped`, and `total_s` for the whole pass, after which the loop
 stops and the commits already read are kept (the unread ones are counted in `skipped` too).
+A third, `MAX_DIFF_BYTES`, is a module constant rather than a setting: a commit whose diff
+is bigger is dropped and counted the same way, because a commit that vendors a binary tree
+is not history worth parsing, and reading one would cost real Python-side decoding and
+parsing time that `timeout_s` cannot bound (it only measures how long the subprocess runs).
 `should_stop` is separate: cancelling a job is not a budget being exceeded, so it stops the
 loop without counting anything as skipped.
 
@@ -43,8 +47,10 @@ no `ingest` import. Writing what it returns is the indexer's job.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import select
 import subprocess
 import time
 from collections.abc import Callable
@@ -53,6 +59,8 @@ from pathlib import Path
 
 from .extract import _walk
 from .model import Symbol, commit_id, lang_of
+
+log = logging.getLogger(__name__)
 
 # Field separators inside one `git log` record, and between records. A commit message is
 # multi-line and may contain anything a user typed, so the separators have to be bytes no
@@ -76,9 +84,29 @@ DIFF_OPTIONS = (
 
 MODIFIES_OMEGA = 1.0
 
+# A commit whose diff is bigger than this is skipped like a timeout: a commit that vendors a
+# binary tree (a real one has been seen at ~1 GB) is not history worth parsing, and reading it
+# would cost seconds of Python-side decoding and regex work that `timeout_s` cannot bound --
+# that budget only covers how long the *subprocess* runs, not what we do with its output after.
+MAX_DIFF_BYTES = 20 * 1024 * 1024
+
 
 class HistoryError(RuntimeError):
     """The history could not be read at all -- no git, no repository, no commits."""
+
+
+class _DiffTooLarge(OSError):
+    """
+    A commit's diff exceeded MAX_DIFF_BYTES before it finished.
+
+    Subclasses OSError so `read_history`'s defence-in-depth catch (which must already handle
+    a bare OSError from git plumbing) catches this too if it is ever reached that way -- from
+    the caller's point of view a diff too large to read is exactly like one it could not read.
+    """
+
+    def __init__(self, size: int) -> None:
+        super().__init__(f"diff exceeded {MAX_DIFF_BYTES:,} bytes (read at least {size:,})")
+        self.size = size
 
 
 @dataclass
@@ -183,8 +211,14 @@ def read_history(
                 [] if entry["sha"] in boundary else _hunks(checkout, entry["sha"], entry["parent"], timeout_s)
             )
             rows = _modifies(checkout, entry["sha"], node_id, hunks, head, source_id, parsers, timeout_s)
-        except subprocess.TimeoutExpired:
-            history.skipped += 1  # one slow commit must not cost the rest of the history
+        except _DiffTooLarge as err:
+            log.debug("commit %s diff too large, skipping (%s)", entry["sha"], err)
+            history.skipped += 1
+            continue
+        except (subprocess.TimeoutExpired, UnicodeDecodeError, OSError):
+            # Defence in depth beyond the specific cases above: a slow or otherwise unreadable
+            # commit must not cost the rest of the history.
+            history.skipped += 1
             continue
         history.commits.append(
             {
@@ -271,16 +305,22 @@ def _hunks(checkout: Path, sha: str, parent: str, timeout_s: int) -> list[_Hunk]
     Every `@@` header in this commit's diff, with the file it belongs to.
 
     Against the first parent when there is one, so a merge reports what it brought in
-    instead of the empty combined diff `git show` prints for it.
+    instead of the empty combined diff `git show` prints for it. Read as bytes and decoded
+    with `errors="replace"` -- the pattern `_symbols_at` already uses below -- because a
+    diff is not source code and a byte outside valid UTF-8 (seen for real, inside a vendored
+    binary tree) must not crash the whole index job over one unparseable commit. Raises
+    `_DiffTooLarge` rather than reading past `MAX_DIFF_BYTES`; the caller treats that like a
+    timeout.
     """
     command = ["diff", *DIFF_OPTIONS, parent, sha] if parent else ["show", *DIFF_OPTIONS, "--format=", sha]
-    result = _git(checkout, command, timeout_s)
-    if result.returncode != 0:
+    raw = _git_capped(checkout, command, timeout_s, MAX_DIFF_BYTES)
+    if raw is None:
         return []  # an unreadable commit is a commit with no edges, not a broken index run
+    text = raw.decode("utf-8", errors="replace")
 
     hunks: list[_Hunk] = []
     path = ""
-    for line in result.stdout.splitlines():
+    for line in text.splitlines():
         if line.startswith("+++ "):
             target = line[4:]
             # `/dev/null` is a deletion: no new side, so nothing to intersect against.
@@ -414,9 +454,9 @@ def _head_index(symbols: list[Symbol]) -> dict[tuple[str, str], str]:
 # ------------------------------------------------------------------ plumbing
 
 
-def _git(checkout: Path, args: list[str], timeout_s: int, *, text: bool = True):
+def _git_env() -> dict[str, str]:
     """
-    One git command against the checkout, never through a shell.
+    The environment every git call runs under, for both `_git` and `_git_capped`.
 
     The user's global and system config are switched off for the same reason the tests do
     it: a `diff.noprefix` or an external diff driver on one machine would change what this
@@ -426,10 +466,63 @@ def _git(checkout: Path, args: list[str], timeout_s: int, *, text: bool = True):
     env["GIT_TERMINAL_PROMPT"] = "0"
     for leaked in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
         env.pop(leaked, None)
+    return env
+
+
+def _git(checkout: Path, args: list[str], timeout_s: int, *, text: bool = True):
+    """One git command against the checkout, never through a shell."""
     return subprocess.run(
         ["git", "-C", str(checkout), *args],
         capture_output=True,
         text=text,
         timeout=timeout_s,
-        env=env,
+        env=_git_env(),
     )
+
+
+def _git_capped(checkout: Path, args: list[str], timeout_s: int, max_bytes: int) -> bytes | None:
+    """
+    One git command's stdout, read as it arrives and capped at `max_bytes`.
+
+    `subprocess.run` cannot report a size until the whole output has been captured, so a
+    commit with a gigabyte-sized diff would still cost real time being buffered, decoded and
+    parsed before anyone could tell it was too big to bother with. Reading the pipe as it
+    comes in means the process is killed, and the bytes past the cap are never even read,
+    the moment that becomes clear. Raises `_DiffTooLarge` past the cap, and
+    `subprocess.TimeoutExpired` past `timeout_s` -- the same exception `_git` raises, so
+    callers do not need to know which path was used. `None` for a non-zero exit, matching
+    `_git`'s callers.
+    """
+    proc = subprocess.Popen(
+        ["git", "-C", str(checkout), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env=_git_env(),
+    )
+    assert proc.stdout is not None
+    deadline = time.monotonic() + timeout_s
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(proc.args, timeout_s)
+            ready, _, _ = select.select([proc.stdout], [], [], remaining)
+            if not ready:
+                raise subprocess.TimeoutExpired(proc.args, timeout_s)
+            chunk = os.read(proc.stdout.fileno(), 1 << 16)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise _DiffTooLarge(total)
+            chunks.append(chunk)
+        proc.wait(timeout=max(deadline - time.monotonic(), 0))
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        proc.stdout.close()
+    return None if proc.returncode != 0 else b"".join(chunks)

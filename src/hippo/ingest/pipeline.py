@@ -341,7 +341,7 @@ def _read_history(ctx: AppContext, source: dict[str, Any], code, settings, *, sh
     if depth <= 0:
         return
 
-    from ..codegraph.git_history import HistoryError, read_history
+    from ..codegraph.git_history import read_history
 
     ctx.store.update_source(source["id"], stage="reading history", progress_done=0, progress_total=1)
     checkout = source_dir(ctx, source["id"]) / REPO_DIR
@@ -355,7 +355,7 @@ def _read_history(ctx: AppContext, source: dict[str, Any], code, settings, *, sh
             total_s=int(settings["code_history_total_s"]),
             should_stop=should_stop,
         )
-    except HistoryError as err:
+    except Exception as err:  # noqa: BLE001 - a history that cannot be read is a warning, never a failed job
         log.warning("No git history for source %s: %s", source["id"], err)
         return
     code.commits = history.commits
