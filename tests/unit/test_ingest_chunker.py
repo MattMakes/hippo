@@ -362,6 +362,71 @@ def test_every_line_of_the_rust_fixture_file_is_printed_exactly_once(code_graph)
     assert len(printed) == len(source)
 
 
+# And over the Go tree, where a type's methods are top-level declarations rather than members of
+# an `impl` block. The rule reads the same from the other end: the type's header is exactly its own
+# lines, the module's stands in for every symbol range whoever owns it, and the placeholder is
+# spelled in the language's own comment.
+
+GO_SERVICE_FIXTURE = "goapp/orders/service.go"
+
+
+def test_the_go_tree_is_one_passage_per_symbol_in_source_order(code_graph) -> None:
+    assert [c.title for c in chunks_of(GO_SERVICE_FIXTURE, code_graph)] == [
+        "goapp/orders/service.go :: goapp.orders.service (lines 1-22)",
+        "goapp/orders/service.go :: goapp.orders.service.Service (lines 15-19)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Place (lines 23-28)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Log (lines 30-32)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.ListOpen (lines 34-36)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Save (lines 38-41)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Archive (lines 43-46)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)",
+    ]
+
+
+def test_a_go_struct_header_is_its_own_lines_and_a_placeholder_per_method(code_graph) -> None:
+    struct = chunks_of(GO_SERVICE_FIXTURE, code_graph)[1]
+    assert struct.text.splitlines() == [
+        "type Service struct {",
+        "\tstore.Base",
+        "",
+        "\tdb *sql.DB",
+        "}",
+        # Every method is written below the type, at column zero; the header still lists them all.
+        "func (s *Service) Place(order Order) int { ... }  // lines 23-28",
+        "func (s *Service) Log(message string) string { ... }  // lines 30-32",
+        "func (s *Service) ListOpen() { ... }  // lines 34-36",
+        "func (s *Service) Save(order Order) error { ... }  // lines 38-41",
+        "func (s *Service) Archive(order Order) { ... }  // lines 43-46",
+        "func (s *Service) Graph() { ... }  // lines 48-50",
+    ]
+    assert "billing.Total(order)" not in struct.text  # the body is its own passage
+    # The doc comment sits above the `type` line, outside the symbol's range, so the module header
+    # is what prints it -- and `extract_text` still carries it to OpenIE from here.
+    assert struct.extract_text.startswith("Service keeps orders. Every order is totalled by")
+
+
+def test_the_go_module_header_stands_in_for_the_type_and_every_method(code_graph) -> None:
+    module = chunks_of(GO_SERVICE_FIXTURE, code_graph)[0]
+    assert module.text.startswith("// Package orders places, stores and archives customer orders.")
+    assert '\t"example.com/goapp/billing"' in module.text  # the import block is the module's own
+    assert "type Service struct { ... }  // lines 15-19" in module.text
+    # A method the module does not own still gets a placeholder here: its lines are the module's.
+    assert "func (s *Service) Place(order Order) int { ... }  // lines 23-28" in module.text
+    assert "func (s *Service) Graph() { ... }  // lines 48-50" in module.text
+    # Both doc comments live outside their symbol's lines, so this passage is where they are read.
+    assert "// Second paragraph, not part of the first." in module.text
+    assert "amount := billing.Total(order)" not in module.text
+
+
+def test_every_line_of_the_go_fixture_file_is_printed_exactly_once(code_graph) -> None:
+    source = [
+        line for line in (CODE_SAMPLE_PATH / GO_SERVICE_FIXTURE).read_text().splitlines() if line.strip()
+    ]
+    printed = printed_lines(chunks_of(GO_SERVICE_FIXTURE, code_graph))
+    assert sorted(printed) == sorted(source)
+    assert len(printed) == len(source)
+
+
 def test_every_passage_defines_its_symbol_and_the_data_objects_it_names(code_graph) -> None:
     from hippo.codegraph.model import data_id, symbol_id
 
@@ -634,6 +699,79 @@ def test_an_inline_module_is_a_container_and_its_functions_get_their_own_passage
     ]
     assert place_totals.text.startswith("    #[test]\n    fn place_totals() {")
     assert "assert_eq!(service.place(&Order {}), 0);" in place_totals.text
+
+
+# The same rule in Go, where it is the shape the language always has: `func (s *Service) Place()`
+# is a top-level declaration, so a type's members are never inside it. `GO_ORDERS` is the Rust case
+# above written in Go -- the placeholder is a `//` comment and the methods sit at column zero.
+
+GO_ORDERS = """package orders
+
+import "example.com/goapp/billing"
+
+// Service keeps orders for one customer.
+type Service struct {
+\tOpen int64
+}
+
+// Place an order and return its identifier.
+func (s *Service) Place(order Order) int64 {
+\treturn billing.Total(order)
+}
+
+func (s *Service) Log(message string) {
+\tprintln(message)
+}
+"""
+
+
+def go_chunks(text: str, title: str = "orders/service.go", size: int = 1500) -> list[Chunk]:
+    """`rust_chunks` by another name: the file's extension is what picks the walker."""
+    return rust_chunks(text, title=title, size=size)
+
+
+def test_a_go_type_whose_methods_live_outside_it_gets_a_passage_per_symbol_in_order() -> None:
+    chunks = go_chunks(GO_ORDERS)
+    assert [c.title for c in chunks] == [
+        "orders/service.go :: orders.service (lines 1-10)",
+        "orders/service.go :: orders.service.Service (lines 6-8)",  # its own lines, not up to `Place`
+        "orders/service.go :: orders.service.Service.Place (lines 11-13)",
+        "orders/service.go :: orders.service.Service.Log (lines 15-17)",
+    ]
+    assert [c.ordinal for c in chunks] == list(range(4))
+
+
+def test_every_line_of_such_a_go_file_is_printed_exactly_once() -> None:
+    chunks = go_chunks(GO_ORDERS)
+    source = [line for line in GO_ORDERS.splitlines() if line.strip()]
+    assert sorted(printed_lines(chunks)) == sorted(source)  # no line printed twice, none lost
+    assert len(printed_lines(chunks)) == len(source)
+
+
+def test_the_go_type_header_is_its_own_lines_and_a_placeholder_per_method() -> None:
+    klass = go_chunks(GO_ORDERS)[1]
+    assert klass.text.splitlines() == [
+        "type Service struct {",
+        "\tOpen int64",
+        "}",
+        # Both methods are written below the type; the header still lists what they are.
+        "func (s *Service) Place(order Order) int64 { ... }  // lines 11-13",
+        "func (s *Service) Log(message string) { ... }  // lines 15-17",
+    ]
+    assert "billing.Total(order)" not in klass.text  # the body lives in its own passage
+
+
+def test_the_go_module_header_stands_in_for_every_symbol_range_whatever_its_owner() -> None:
+    module = go_chunks(GO_ORDERS)[0]
+    assert "type Service struct { ... }  // lines 6-8" in module.text
+    # A method the module does not own still gets a placeholder here: its lines are the module's
+    # own, and printing the body would repeat the passage that already holds it. A Go doc comment
+    # is not part of the declaration it documents, so the module is where both of these are read.
+    assert "// Service keeps orders for one customer." in module.text
+    assert "// Place an order and return its identifier." in module.text
+    assert "func (s *Service) Place(order Order) int64 { ... }  // lines 11-13" in module.text
+    assert "func (s *Service) Log(message string) { ... }  // lines 15-17" in module.text
+    assert "billing.Total(order)" not in module.text
 
 
 def test_a_member_that_opens_on_its_containers_own_line_leaves_the_container_the_header() -> None:

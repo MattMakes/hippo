@@ -97,6 +97,8 @@ def test_an_ambiguous_name_lists_its_candidates(index: GraphIndex) -> None:
     with pytest.raises(AmbiguousSymbol) as raised:
         resolve_symbol(index, "log")
     assert raised.value.candidates == [
+        "goapp.orders.service.Service.Log",
+        "goapp.store.base.Base.Log",
         "pyapp.orders.OrderService.log",
         "pyapp.store.Base.log",
         "rsapp.src.orders.OrderService.log",
@@ -159,6 +161,41 @@ def test_the_same_call_in_the_rust_tree_renders_the_same_way(index: GraphIndex) 
         "rsapp.src.orders.OrderService.place -[INVOKES 0.90 via_import]-> rsapp.src.billing.total"
     ]
     assert not any(e.provenance == "same_scope" for e in direct_edges(index, walk[0].src, theta=THETA))
+
+
+def test_the_same_call_in_the_go_tree_renders_the_same_way(index: GraphIndex) -> None:
+    """
+    `hippo path goapp.orders.service.Service.Place goapp.billing.billing.Total`: the third telling
+    of the same story, and the same 0.90 `via_import` tier -- the call goes through an `import` of
+    another package. Go *can* reach 1.00 `same_scope` (the next test), which is why this one says
+    which of the two a cross-package call is.
+    """
+    walk = shortest_code_path(
+        index,
+        vertex(index, "goapp.orders.service.Service.Place"),
+        vertex(index, "goapp.billing.billing.Total"),
+        theta=THETA,
+    )
+    assert lines(index, walk) == [
+        "goapp.orders.service.Service.Place -[INVOKES 0.90 via_import]-> goapp.billing.billing.Total"
+    ]
+
+
+def test_a_go_test_in_the_same_package_calls_at_the_same_scope_tier(index: GraphIndex) -> None:
+    """
+    The 1.00 `same_scope` tier, which only a language with a real package has: `service_test.go`
+    imports nothing to reach `Service` -- it is in the same directory, and in Go that *is* the
+    package. The 0.85 `test_import` TESTED_BY edge runs the other way over the same call.
+    """
+    walk = shortest_code_path(
+        index,
+        vertex(index, "goapp.orders.service_test.TestPlace"),
+        vertex(index, "goapp.orders.service.Service.Place"),
+        theta=THETA,
+    )
+    assert lines(index, walk) == [
+        "goapp.orders.service_test.TestPlace -[INVOKES 1.00 same_scope]-> goapp.orders.service.Service.Place"
+    ]
 
 
 def test_a_data_access_edge_renders_with_its_kind_and_confidence(index: GraphIndex) -> None:
