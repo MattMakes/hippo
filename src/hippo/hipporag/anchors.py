@@ -29,6 +29,16 @@ The cost is real and is documented rather than hidden: "what does run do" names 
 lowercase symbol and produces no anchor, so `used_code_seeds` stays False and the select pass, the
 path block and `timing["paths"]` do not run. Dense seeding can still surface the passage; typing
 ``what does `run` do`` or `GraphIndex.load` restores all of it.
+
+**Five stack-frame shapes are read**, all of them emitting `how="stack_trace"`: CPython's
+`File "x.py", line N, in f` (outermost first, so it is reversed), V8's `at f (x.js:N:M)`, Go's
+two-line `pkg.(*T).M(...)` / `\tpath.go:N +0x1d`, .NET's `at T.M(args) in path.cs:line N` and Rust's
+`thread '…' panicked at path.rs:N:C` plus its `RUST_BACKTRACE=1` `N: fn` / `at path.rs:N:C` pairs.
+Go, .NET and Rust frames carry a *qualified* function name, so a frame whose line has drifted (or a
+.NET frame with no `in file:line` at all) resolves through the last two dotted segments rather than
+the bare last one - which is what keeps a framework frame such as ``List`1.get_Item`` from seeding
+every `get_item` in the index. Go's `panic:` header yields no exception anchor (Go has no RAISES);
+.NET's `Unhandled exception. X: msg` yields one at 0.8, exactly as CPython's `SomeError:` line does.
 """
 
 from __future__ import annotations
@@ -83,7 +93,22 @@ STOPLIST = frozenset(
     }
 )
 
-CODE_SUFFIXES = ("py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "sql", "go", "rb", "java")
+CODE_SUFFIXES = (
+    "py",
+    "pyi",
+    "ts",
+    "tsx",
+    "js",
+    "jsx",
+    "mjs",
+    "cjs",
+    "sql",
+    "go",
+    "cs",
+    "rs",
+    "rb",
+    "java",
+)
 
 _FENCE_MARKER = re.compile(r"^\s*```")
 _FENCE = re.compile(r"```[^\n]*\n(.*?)(?:\n\s*```|\Z)", re.DOTALL)
@@ -101,6 +126,42 @@ _PY_FRAME = re.compile(r'File "([^"\n]+)", line (\d+), in (\S+)')
 _JS_FRAME = re.compile(r"\bat\s+([\w.$<>]+)\s*\(([^()\s:]+):(\d+):(\d+)\)")
 _PATH_LINE = re.compile(rf"\b([\w./\\-]+\.(?:{_SUFFIX_GROUP}))[:(](\d+)")
 _EXCEPTION_LINE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception))\s*:", re.MULTILINE)
+
+# Go: two lines per frame, the function then its tab-indented file. The tail after the path is
+# ` +0x1d` normally and ` +0x1d fp=0x… sp=0x… pc=0x…` under GOTRACEBACK=system, and is absent
+# altogether for an inlined frame (`orders.(*Service).Place(...)` / `\t…/service.go:8`).
+_GO_FUNC = re.compile(r"^\s*(?P<fn>[\w./()*]+)\(.*\)$")
+_GO_FRAME_PATH = re.compile(r"^\s+(?P<path>\S+\.go):(?P<line>\d+)(?: \+0x[0-9a-f]+.*)?$")
+
+# .NET: one line per frame; ` in <file>:line N` is only there for an assembly built with symbols.
+# `$` is in the function class for the `Program.<Main>$` a top-level-statements program frames as,
+# and the path is `.+?` rather than `[^:]+` because a Windows trace names `C:\src\OrderService.cs`.
+_NET_FRAME = re.compile(
+    r"^\s*at (?P<fn>[\w.<>`,$\[\]]+)\((?:[^)]*)\)(?: in (?P<path>.+?\.cs):line (?P<line>\d+))?$"
+)
+_NET_EXCEPTION = re.compile(r"^Unhandled exception\. (?P<exc>[A-Za-z_][\w.`\[\]]*)\s*:", re.MULTILINE)
+
+# Rust: the `panicked at` line is frame 0; `RUST_BACKTRACE=1` adds numbered two-line frames. The
+# thread name is followed by a thread id on rustc 1.89 and later, and a frame's function is `.+`
+# rather than `\S+` because a trait-impl frame is `<T as Trait>::method`, spaces and all.
+_RUST_PANIC = re.compile(
+    r"^thread '(?P<thread>[^']+)'(?: \(\d+\))? panicked at (?P<path>\S+\.rs):(?P<line>\d+):\d+",
+    re.MULTILINE,
+)
+_RUST_FRAME = re.compile(r"^\s*\d+: (?P<fn>.+)$")
+_RUST_AT = re.compile(r"^\s+at (?P<path>\S+\.rs):(?P<line>\d+)(?::\d+)?$")
+_RUST_IMPL = re.compile(r"^<(?P<ty>[^\s<>]+)(?: as [^<>]*)?>::(?P<rest>.+)$")
+
+# The envelope the three runtimes print around their frames: never an anchor, always code.
+_TRACE_NOISE = re.compile(
+    r"^\s*panic: "
+    r"|^\[signal "
+    r"|^goroutine \d+ \["
+    r"|^exit status \d+$"
+    r"|^stack backtrace:$"
+    r"|^note: .*backtrace"
+    r"|^Unhandled exception\. "
+)
 
 _DIFF_FILE = re.compile(r"^\+\+\+ (?:[ab]/)?(\S+)")
 _DIFF_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -165,14 +226,17 @@ def split_question(text: str) -> tuple[str, str]:
     if "```" not in text and len(text.strip().splitlines()) == 1:
         return text, ""
 
+    lines = text.splitlines()
+    shaped = _frame_shape_lines(lines)  # the lines only their neighbours give away as code
+
     prose: list[str] = []
     code: list[str] = []
     fenced = False
-    for line in text.splitlines():
+    for position, line in enumerate(lines):
         if _FENCE_MARKER.match(line):
             fenced = not fenced
             continue  # the ``` marker itself belongs to neither half
-        (code if fenced or _is_code_line(line) else prose).append(line)
+        (code if fenced or position in shaped or _is_code_line(line) else prose).append(line)
     return "\n".join(prose).strip(), "\n".join(code).strip()
 
 
@@ -181,6 +245,10 @@ def _is_code_line(line: str) -> bool:
         return False
     if _STACK_ISH.search(line) or _DIFF_ISH.match(line) or _EXCEPTION_LINE.match(line):
         return True
+    if _NET_FRAME.match(line) or _RUST_PANIC.match(line) or _RUST_AT.match(line):
+        return True
+    if _TRACE_NOISE.match(line):
+        return True
     if _STATEMENT.match(line):
         return True
     if _ENDS_LIKE_CODE.search(line):
@@ -188,6 +256,37 @@ def _is_code_line(line: str) -> bool:
     if _ARROW.search(line) and re.search(r"[()\[\]{}]", line):
         return True
     return bool(_INDENTED_CALL.match(line))
+
+
+def _frame_shape_lines(lines: list[str]) -> set[int]:
+    """
+    The positions of the lines a *neighbouring* line marks as part of a trace.
+
+    Three shapes need the line beside them to be recognised, and both `split_question` (which sends
+    them to the code half) and `_plain` (which keeps them away from the plain tokenizer, because
+    `_frame_anchors` has already read them with the `0.8 ** k` decay) need the same answer:
+
+    * a Go frame - `orders.(*Service).Place(0x0)` alone is indistinguishable from a pasted call, so
+      it counts only when the next line is its `\\tpath.go:N` twin;
+    * a Rust backtrace frame - `  6: rsapp::orders::place` only when the next line is its `at` twin;
+    * the Rust panic *message*, the first non-empty line after `thread '…' panicked at …`. It is an
+      English sentence, so nothing about the line itself says "code"; it belongs with the frames for
+      the same reason CPython's `SomeError: nope` does.
+    """
+    shaped: set[int] = set()
+    after_panic = -1
+    for position, line in enumerate(lines):
+        following = lines[position + 1] if position + 1 < len(lines) else ""
+        if (_GO_FUNC.match(line) and _GO_FRAME_PATH.match(following)) or (
+            _RUST_FRAME.match(line) and _RUST_AT.match(following)
+        ):
+            shaped.update((position, position + 1))
+        if _RUST_PANIC.match(line):
+            after_panic = position
+        elif line.strip() and after_panic >= 0:
+            shaped.add(position)
+            after_panic = -1
+    return shaped
 
 
 # --------------------------------------------------------------- the anchors
@@ -235,12 +334,19 @@ def _plain(text: str) -> str:
     exception weight come from. Letting the plain tokenizer see them again would re-seed the same
     symbols at a flat 1.0 and the decay would mean nothing.
     """
+    lines = text.splitlines()
+    shaped = _frame_shape_lines(lines)
     keep = []
-    for line in text.splitlines():
+    for position, line in enumerate(lines):
         handled = (
-            _PY_FRAME.search(line)
+            position in shaped
+            or _PY_FRAME.search(line)
             or _JS_FRAME.search(line)
             or _PATH_LINE.search(line)
+            or _NET_FRAME.match(line)
+            or _RUST_PANIC.match(line)
+            or _RUST_AT.match(line)
+            or _TRACE_NOISE.match(line)
             or _DIFF_ISH.match(line)
             or _EXCEPTION_LINE.match(line)
             or line.startswith("Traceback")
@@ -399,15 +505,104 @@ def _match(
 # ------------------------------------------------------------- stack frames
 
 
-def _frames(text: str) -> list[tuple[str, int, str]]:
-    """(path, line, function) innermost first. Python lists frames outermost first; V8 does not."""
-    python = [(m.group(1), int(m.group(2)), m.group(3)) for m in _PY_FRAME.finditer(text)]
+@dataclass(frozen=True)
+class _Frame:
+    """
+    One stack frame: where it points and what it calls itself.
+
+    `qualified` says the runtime prints a *dotted* function name (Go, .NET, Rust do; CPython and V8
+    print a bare one), which is what decides how the frame resolves when its path and line cannot -
+    see `_frame_anchors`. `path` is empty and `line` is 0 for a .NET frame from an assembly built
+    without symbols, which is the only shape that has a name and nothing else.
+    """
+
+    path: str
+    line: int
+    name: str
+    qualified: bool = False
+
+
+def _frames(text: str) -> list[_Frame]:
+    """
+    Every frame the question pasted, innermost first.
+
+    One shape wins the whole question: the runtimes never interleave, and the first that matches is
+    the one the user pasted. CPython lists frames outermost first, so it is reversed; V8, Go, .NET
+    and Rust already run inward-out. The bare `path.ext:N` scan is the fallback for a line someone
+    quoted out of a trace, and stays last because every richer shape contains it.
+    """
+    lines = text.splitlines()
+    python = [_Frame(m.group(1), int(m.group(2)), m.group(3)) for m in _PY_FRAME.finditer(text)]
     if python:
         return list(reversed(python))
-    v8 = [(m.group(2), int(m.group(3)), m.group(1)) for m in _JS_FRAME.finditer(text)]
+    v8 = [_Frame(m.group(2), int(m.group(3)), m.group(1)) for m in _JS_FRAME.finditer(text)]
     if v8:
         return v8
-    return [(m.group(1), int(m.group(2)), "") for m in _PATH_LINE.finditer(text)]
+    for shape in (_go_frames, _net_frames, _rust_frames):
+        found = shape(lines)
+        if found:
+            return found
+    return [_Frame(m.group(1), int(m.group(2)), "") for m in _PATH_LINE.finditer(text)]
+
+
+def _go_frames(lines: list[str]) -> list[_Frame]:
+    """`example.com/goapp/orders.(*Service).Place(0x0)` then `\\t/src/goapp/orders/service.go:18`.
+
+    The receiver's stars and parentheses and the import path in front of the package go, leaving
+    `orders.Service.Place` - a dotted name the qualified fallback can read. A `runtime.` frame, a
+    `panic({…})` frame and the `goroutine 1 [running]:` header are all frames or lines that resolve
+    to nothing, which is the whole of what Go needs them to do."""
+    out: list[_Frame] = []
+    for position, line in enumerate(lines[:-1]):
+        function = _GO_FUNC.match(line)
+        located = _GO_FRAME_PATH.match(lines[position + 1])
+        if function and located:
+            name = function["fn"].rsplit("/", 1)[-1].replace("(*", "").replace(")", "")
+            out.append(_Frame(located["path"], int(located["line"]), name, qualified=True))
+    return out
+
+
+def _net_frames(lines: list[str]) -> list[_Frame]:
+    """`at CsApp.Orders.OrderService.Place(Order o) in /src/csapp/Orders/OrderService.cs:line 18`,
+    or the same without the ` in …` half when the assembly carries no symbols."""
+    out: list[_Frame] = []
+    for line in lines:
+        frame = _NET_FRAME.match(line)
+        if frame:
+            path, at = frame["path"] or "", frame["line"]
+            out.append(_Frame(path, int(at) if at else 0, frame["fn"], qualified=True))
+    return out
+
+
+def _rust_frames(lines: list[str]) -> list[_Frame]:
+    """
+    The `panicked at` line, then the `RUST_BACKTRACE=1` frames *below* the one it names.
+
+    The panic header is frame 0: it is the location a person reads first and the one the message
+    belongs to. The backtrace then repeats that location further down, under the unwinding
+    machinery that got there - `rust_begin_unwind`, `core::panicking::panic_fmt`, the slice index
+    check. Those frames are the panic's own implementation, not the user's stack, so the frames
+    before and including the repeat are dropped and the decay carries on outward from the header.
+    Without that a real backtrace puts `main` five frames out at 0.8**5, which says the caller of
+    the panicking function barely matters. If the backtrace never repeats the header's location
+    (an inlined frame, `#[track_caller]`) nothing is dropped and every frame counts.
+    """
+    backtrace: list[_Frame] = []
+    for position, line in enumerate(lines[:-1]):
+        function = _RUST_FRAME.match(line)
+        located = _RUST_AT.match(lines[position + 1])
+        if function and located:
+            name = _RUST_IMPL.sub(r"\g<ty>::\g<rest>", function["fn"].strip()).replace("::", ".")
+            backtrace.append(_Frame(located["path"], int(located["line"]), name, qualified=True))
+
+    panicked = next((m for m in (_RUST_PANIC.match(line) for line in lines) if m), None)
+    if panicked is None:
+        return backtrace
+    header = _Frame(panicked["path"], int(panicked["line"]), "")
+    for position, frame in enumerate(backtrace):
+        if frame.line == header.line and _same_path(frame.path, header.path):
+            return [header, *backtrace[position + 1 :]]
+    return [header, *backtrace]
 
 
 def _same_path(a: str, b: str) -> bool:
@@ -435,11 +630,11 @@ def _symbols_in_file(index: GraphIndex, path: str) -> list[CodeNode]:
 
 def _frame_anchors(text: str, index: GraphIndex) -> list[Anchor]:
     out: list[Anchor] = []
-    for depth, (path, line, name) in enumerate(_frames(text)):
+    for depth, frame in enumerate(_frames(text)):
         weight = FRAME_DECAY**depth
-        token = f"{path}:{line}"
-        in_file = _symbols_in_file(index, path)
-        containing = [n for n in in_file if n.line_start <= line <= n.line_end]
+        token = f"{frame.path}:{frame.line}" if frame.path else frame.name
+        in_file = _symbols_in_file(index, frame.path) if frame.path else []
+        containing = [n for n in in_file if n.line_start <= frame.line <= n.line_end]
         if containing:
             # The innermost definition wins: a method, not the class or module that spans it.
             best = min(containing, key=lambda n: (n.line_end - n.line_start, n.qualname, n.id))
@@ -447,31 +642,73 @@ def _frame_anchors(text: str, index: GraphIndex) -> list[Anchor]:
             if anchor is not None:
                 out.append(anchor)
                 continue
-        if name:
-            # The line drifted (the file was edited since the traceback was captured): fall back to
-            # the function the frame names, in this file if we can, anywhere if we cannot.
-            named = [n.id for n in in_file if (n.name or "").lower() == name.split(".")[-1].lower()]
-            hits = _ordered(index, named) or _name_hits(index, name.split(".")[-1])
-            if len(hits) > AMBIGUOUS_ABOVE:
-                out.append(Anchor("", -1, name, STACK_TRACE, "", 0.0, n_matches=len(hits), ambiguous=True))
-                continue
-            share = weight / len(hits) if hits else weight
-            for node_id in hits[:MAX_MATCHES_PER_TOKEN]:
-                anchor = _anchor(index, node_id, name, STACK_TRACE, share, len(hits))
-                if anchor is not None:
-                    out.append(anchor)
+        if not frame.name:
+            continue
+        if frame.qualified:
+            out += _qualified_frame_anchors(index, frame, in_file, weight)
+            continue
+        # The line drifted (the file was edited since the traceback was captured): fall back to
+        # the function the frame names, in this file if we can, anywhere if we cannot.
+        name = frame.name
+        named = [n.id for n in in_file if (n.name or "").lower() == name.split(".")[-1].lower()]
+        hits = _ordered(index, named) or _name_hits(index, name.split(".")[-1])
+        if len(hits) > AMBIGUOUS_ABOVE:
+            out.append(Anchor("", -1, name, STACK_TRACE, "", 0.0, n_matches=len(hits), ambiguous=True))
+            continue
+        share = weight / len(hits) if hits else weight
+        for node_id in hits[:MAX_MATCHES_PER_TOKEN]:
+            anchor = _anchor(index, node_id, name, STACK_TRACE, share, len(hits))
+            if anchor is not None:
+                out.append(anchor)
     return out
 
 
+def _qualified_frame_anchors(
+    index: GraphIndex, frame: _Frame, in_file: list[CodeNode], weight: float
+) -> list[Anchor]:
+    """
+    A Go / .NET / Rust frame that its path and line could not place, read as a qualified name.
+
+    **The last two dotted segments and no more.** `CsApp.Orders.OrderService.Save` narrowed to
+    `OrderService.Save` is the rule the plan sets, and the wider forms are worse in both
+    directions: the whole name misses (a C# display name repeats the type, `csapp.Orders.
+    OrderService.OrderService.Save`, so the longer suffixes match the *Python* `orders.
+    OrderService.save` instead), and the bare last segment is the ambiguity spike 1 removed - a
+    `Microsoft.AspNetCore.Mvc.ControllerBase.Save` frame would seed every `save` in the index.
+    Like every qualified match, it is never split (S2.13): the dots already say which one it is.
+    A drifted frame that still has a file prefers that file, the way the bare fallback does.
+    """
+    key = ".".join(frame.name.split(".")[-2:]) if "." in frame.name else ""
+    if not key:
+        return []  # a single-segment name (Go's `panic`) is a bare word, and bare words are spike 1's
+    local = [n.id for n in in_file if (n.qualname or "").lower() == key.lower()]
+    hits = _ordered(index, local) if local else _qualified_hits(index, key)[0]
+    found = [_anchor(index, node_id, key, STACK_TRACE, weight, len(hits)) for node_id in hits]
+    return [a for a in found if a is not None]
+
+
 def _exception_anchors(text: str, index: GraphIndex) -> list[Anchor]:
-    """The `SomeError: message` line a traceback ends with names a class; seed it at 0.8."""
-    matches = _EXCEPTION_LINE.findall(text)
-    if not matches:
-        return []
+    """
+    The line that names the exception class; seed it at 0.8.
+
+    CPython puts it *last* (`OrderError: message`) and .NET puts it *first*
+    (`Unhandled exception. CsApp.Store.InvalidOrderException: message`), so the .NET header wins
+    when both are present: its prefix says the type is an exception, where the bare form has to
+    infer it from a name ending in `Error` or `Exception`. Go has no line of either kind - `panic:
+    runtime error: …` names no type and Go has no RAISES for one to reach.
+    """
+    header = _NET_EXCEPTION.search(text)
+    if header:
+        token = header["exc"]
+    else:
+        matches = _EXCEPTION_LINE.findall(text)
+        if not matches:
+            return []
+        token = matches[-1]
     return _match(
         index,
-        matches[-1],
-        "qualified" if "." in matches[-1] else "bare",
+        token,
+        "qualified" if "." in token else "bare",
         how=EXCEPTION,
         strict=False,
         weight=EXCEPTION_WEIGHT,

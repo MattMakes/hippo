@@ -24,7 +24,8 @@ from hippo.hipporag.anchors import (
     split_question,
 )
 from hippo.hipporag.graph_index import GraphIndex
-from tests.fakes.code_fixture import many_symbols
+from hippo.hipporag.paths import display_of
+from tests.fakes.code_fixture import many_symbols, polyglot_symbols
 
 TRACEBACK = (
     "Traceback (most recent call last):\n"
@@ -33,6 +34,52 @@ TRACEBACK = (
     '  File "pyapp/orders.py", line 18, in place\n'
     "    amount = billing.total(order)\n"
     "OrderError: nope"
+)
+
+# The other four runtimes, captured from real programs rather than written from the regexes: `go
+# run` on an out-of-range slice, `dotnet run` on an out-of-range list, `RUST_BACKTRACE=1 cargo run`
+# on the same. Only the paths and line numbers were moved onto the fixture symbols; every other
+# character - the `+0x34` offsets, the rustc hash, the `(677470444)` thread id, ``List`1``, the
+# `<usize as …>` frame, the trailing `exit status 2` - is what the toolchain printed.
+GO_PANIC = (
+    "panic: runtime error: index out of range [5] with length 0\n"
+    "\n"
+    "goroutine 1 [running]:\n"
+    "example.com/goapp/orders.(*Service).Place(0x14000112000, {0x0?})\n"
+    "\t/Users/me/src/goapp/orders/service.go:18 +0x34\n"
+    "main.main()\n"
+    "\tgoapp/cmd/main.go:7 +0x24\n"
+    "runtime.main()\n"
+    "\t/opt/homebrew/Cellar/go/1.19.5/libexec/src/runtime/proc.go:250 +0x24c\n"
+    "exit status 2"
+)
+
+NET_TRACE = (
+    "Unhandled exception. CsApp.Store.InvalidOrderException: order 5 is not open\n"
+    "   at CsApp.Orders.OrderService.Place(Order o)"
+    " in /Users/me/src/csapp/Orders/OrderService.cs:line 18\n"
+    "   at CsApp.Orders.OrderService.Save(Order o) in csapp/Orders/OrderService.cs:line 28\n"
+    "   at System.Collections.Generic.List`1.ForEach(Action`1 action)\n"
+    "   at Program.<Main>$(String[] args) in csapp/Program.cs:line 4"
+)
+
+RUST_PANIC = (
+    "thread 'main' (677470444) panicked at rsapp/src/orders.rs:20:19:\n"
+    "index out of bounds: the len is 0 but the index is 5\n"
+    "stack backtrace:\n"
+    "   0: __rustc::rust_begin_unwind\n"
+    "             at /rustc/ac68faa20c58cbccd/library/std/src/panicking.rs:689:5\n"
+    "   1: core::panicking::panic_fmt\n"
+    "             at /rustc/ac68faa20c58cbccd/library/core/src/panicking.rs:80:14\n"
+    "   2: <usize as core::slice::index::SliceIndex<[T]>>::index\n"
+    "             at /rustc/ac68faa20c58cbccd/library/core/src/slice/index.rs:272:10\n"
+    "   3: rsapp::orders::OrderService::place\n"
+    "             at ./rsapp/src/orders.rs:20:19\n"
+    "   4: rsapp::main\n"
+    "             at ./rsapp/src/main.rs:5:22\n"
+    "   5: core::ops::function::FnOnce::call_once\n"
+    "             at /rustc/ac68faa20c58cbccd/library/core/src/ops/function.rs:250:5\n"
+    "note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace."
 )
 
 # Spike 1's corpus, cut to the questions that actually fired under the planned rule plus the
@@ -62,8 +109,25 @@ def index(code_index) -> GraphIndex:
     return ctx.graph()
 
 
+@pytest.fixture
+def poly_index(code_index) -> GraphIndex:
+    """The fixture tree plus the Go, C# and Rust symbols `ai_docs/add_langs.md` adds to it.
+
+    A separate fixture, not an extension of `index`: `pyapp.store.OrderError` and `Base.log` are
+    the only symbols of their name in the tree today and two tests pin the weights that follow
+    from that, so the polyglot symbols must not reach them."""
+    ctx, source_id = code_index
+    polyglot_symbols(ctx, source_id)
+    return ctx.graph()
+
+
 def names(index: GraphIndex, found: list[Anchor]) -> list[str]:
     return [index.name_of(a.vertex) for a in found if not a.ambiguous]
+
+
+def seeds(index: GraphIndex, found: list[Anchor]) -> dict[str, float]:
+    """{display name: weight}, which is what `names` cannot say once four files hold a `main`."""
+    return {display_of(index.code_node_at(a.vertex)): a.weight for a in found if not a.ambiguous}
 
 
 # ------------------------------------------------------------- identifiers
@@ -173,6 +237,141 @@ def test_a_traceback_is_all_code_and_the_sentence_beside_it_is_all_prose(index: 
     assert code.startswith("Traceback") and 'File "pyapp/orders.py"' in code
     # find_anchors reads both halves, so the sentence never hides the frames.
     assert "OrderService.place" in names(index, find_anchors("Why does this fail?\n" + TRACEBACK, index))
+
+
+# ------------------------------------------ Go, .NET and Rust stack frames (L1)
+
+
+def test_a_go_panic_seeds_its_frames_and_nothing_from_the_runtime(poly_index: GraphIndex) -> None:
+    # The innermost frame names an absolute checkout path and the index holds the repo-relative
+    # one, so this is the basename rule of `test_an_absolute_frame_path_...` on a `.go` file too.
+    assert seeds(poly_index, find_anchors(GO_PANIC, poly_index)) == {
+        "goapp.orders.service.Service.Place": pytest.approx(1.0),
+        "goapp.cmd.main.main": pytest.approx(0.8),
+    }
+    # `runtime.main()` at `runtime/proc.go:250` is a frame like any other and resolves to nothing:
+    # no file of that basename, and `runtime.main` names no symbol. And the `panic:` header is not
+    # an exception anchor -- Go has no RAISES for one to reach.
+    assert [a.how for a in find_anchors(GO_PANIC, poly_index)] == ["stack_trace", "stack_trace"]
+
+
+def test_a_go_frame_still_resolves_with_its_registers_attached(poly_index: GraphIndex) -> None:
+    # `GOTRACEBACK=system` puts `fp=… sp=… pc=…` after the `+0x74` offset, which the plan's
+    # `(?: \+0x[0-9a-f]+)?$` tail cannot match -- and an unmatched second line is not a frame.
+    trace = (
+        "goroutine 1 [running]:\n"
+        "example.com/goapp/orders.(*Service).Place(0x60?, {0x0?})\n"
+        "\t/Users/me/src/goapp/orders/service.go:18 +0x74"
+        " fp=0x14000078f30 sp=0x14000078ef0 pc=0x1009a6274\n"
+        "main.main()\n"
+        "\tgoapp/cmd/main.go:7 +0x34 fp=0x14000078f70 sp=0x14000078f30 pc=0x1009a62e4"
+    )
+    assert seeds(poly_index, find_anchors(trace, poly_index)) == {
+        "goapp.orders.service.Service.Place": pytest.approx(1.0),
+        "goapp.cmd.main.main": pytest.approx(0.8),
+    }
+
+
+def test_a_windows_frame_path_still_finds_the_repo_relative_symbol(poly_index: GraphIndex) -> None:
+    # .NET's home platform names `C:\src\…`, and the plan's `[^:]+\.cs` stops at the drive letter.
+    # The ` in <file>:line N` half is optional, so the frame does not half-match -- it resolves by
+    # name instead, silently losing the line that says which method.
+    frame = r"   at CsApp.Orders.OrderService.ListOpen() in C:\src\csapp\Orders\OrderService.cs:line 38"
+    found = find_anchors(frame, poly_index)
+    assert seeds(poly_index, found) == {"csapp.Orders.OrderService.OrderService.ListOpen": pytest.approx(1.0)}
+    assert found[0].how == "stack_trace"
+    assert found[0].token == r"C:\src\csapp\Orders\OrderService.cs:38"
+
+
+def test_a_dotnet_trace_seeds_its_frames_and_its_exception_header(poly_index: GraphIndex) -> None:
+    found = find_anchors(NET_TRACE, poly_index)
+    assert seeds(poly_index, found) == {
+        "csapp.Orders.OrderService.OrderService.Place": pytest.approx(1.0),
+        "csapp.Orders.OrderService.OrderService.Save": pytest.approx(0.8),
+        "csapp.Store.Base.InvalidOrderException": pytest.approx(0.8),
+    }
+    how = {display_of(poly_index.code_node_at(a.vertex)): a.how for a in found}
+    assert how["csapp.Store.Base.InvalidOrderException"] == "exception"
+    assert how["csapp.Orders.OrderService.OrderService.Place"] == "stack_trace"
+    # ``System.Collections.Generic.List`1.ForEach`` has no ` in file:line`, so it resolves by name
+    # alone -- and `List`1.ForEach` names nothing. `Program.<Main>$` has a file the index does not.
+    assert "OrderService.ForEach" not in names(poly_index, found)
+
+
+def test_a_dotnet_frame_with_no_file_resolves_by_its_qualified_method(poly_index: GraphIndex) -> None:
+    found = find_anchors("   at CsApp.Orders.OrderService.ListOpen()", poly_index)
+    assert seeds(poly_index, found) == {"csapp.Orders.OrderService.OrderService.ListOpen": pytest.approx(1.0)}
+    assert found[0].how == "stack_trace" and found[0].token == "OrderService.ListOpen"
+
+
+def test_a_rust_panic_decays_from_the_header_not_through_the_unwinder(poly_index: GraphIndex) -> None:
+    # The panic line is frame 0. `rust_begin_unwind`, `panic_fmt` and the slice bounds check sit
+    # between it and the backtrace's repeat of the same location; counting them would put `main`
+    # five frames out at 0.8**5. See `_rust_frames`.
+    assert seeds(poly_index, find_anchors(RUST_PANIC, poly_index)) == {
+        "rsapp.src.orders.OrderService.place": pytest.approx(1.0),
+        "rsapp.src.main.main": pytest.approx(0.8),
+    }
+
+
+def test_a_rust_std_frame_never_leaks_its_last_word_as_a_bare_token(poly_index: GraphIndex) -> None:
+    # `2: <usize as core::slice::index::SliceIndex<[T]>>::index` is why the frame regex takes `.+`
+    # and not the `\S+` the plan wrote: a trait-impl frame has spaces in its function. Unmatched,
+    # the line is not a frame, so nothing pairs it away from the plain tokenizer -- and in a fenced
+    # paste, where the tokenizer is not strict, bare `index` seeds `tsapp/index.ts` at a flat 1.0
+    # from a frame inside the standard library.
+    fenced = f"why does this fail?\n```\n{RUST_PANIC}\n```"
+    assert seeds(poly_index, find_anchors(fenced, poly_index)) == {
+        "rsapp.src.orders.OrderService.place": pytest.approx(1.0),
+        "rsapp.src.main.main": pytest.approx(0.8),
+    }
+
+
+def test_a_rust_trait_impl_frame_resolves_in_its_own_file(poly_index: GraphIndex) -> None:
+    # A drifted line, so the qualified fallback decides: `<T as Trait>::m` reads as `T::m`, and the
+    # frame's own file wins over `pyapp.orders.OrderService.log`, which shares the qualname.
+    found = find_anchors(
+        "   2: <rsapp::orders::OrderService as rsapp::store::Base>::log\n"
+        "             at ./rsapp/src/orders.rs:999:9",
+        poly_index,
+    )
+    assert seeds(poly_index, found) == {"rsapp.src.orders.OrderService.log": pytest.approx(1.0)}
+
+
+@pytest.mark.parametrize("trace", [GO_PANIC, NET_TRACE, RUST_PANIC], ids=["go", "dotnet", "rust"])
+def test_every_trace_shape_is_all_code_and_the_sentence_beside_it_is_all_prose(trace: str) -> None:
+    # S2.12 for the three new shapes: the goroutine header, the `+0x34` offsets, `Unhandled
+    # exception.`, `stack backtrace:`, the `note:` footer and the Rust panic *message* all belong
+    # to the code half, so the embedding sees the question and nothing else.
+    prose, code = split_question("Why does this fail?\n" + trace)
+    assert prose == "Why does this fail?"
+    assert code.splitlines() == [line for line in trace.splitlines() if line.strip()]
+
+
+@pytest.mark.parametrize("question", PROSE)
+def test_prose_is_still_inert_against_the_polyglot_symbols(
+    poly_index: GraphIndex, question: str, monkeypatch
+) -> None:
+    # Spike 1's corpus over an index that now also holds `Place`, `Save`, `ListOpen`, `Service` and
+    # three more `main`s. The surface-form rule, not the symbol set, is what keeps it empty.
+    monkeypatch.setattr(anchors, "STOPLIST", frozenset())
+    assert find_anchors(question, poly_index) == [], question
+
+
+@pytest.mark.parametrize("trace", [GO_PANIC, NET_TRACE, RUST_PANIC], ids=["go", "dotnet", "rust"])
+def test_a_sentence_beside_a_trace_adds_no_anchor_of_its_own(poly_index: GraphIndex, trace: str) -> None:
+    # How these traces are actually pasted. `find_anchors` reads both halves, so the frames survive
+    # the split; the sentence goes to the prose half, where spike 1's surface-form rule holds and
+    # `Why`, `does`, `this` and `fail` are English.
+    asked = f"Why does this fail?\n{trace}"
+    assert seeds(poly_index, find_anchors(asked, poly_index)) == seeds(
+        poly_index, find_anchors(trace, poly_index)
+    )
+
+
+@pytest.mark.parametrize("trace", [GO_PANIC, NET_TRACE, RUST_PANIC], ids=["go", "dotnet", "rust"])
+def test_the_new_shapes_are_deterministic(poly_index: GraphIndex, trace: str) -> None:
+    assert find_anchors(trace, poly_index) == find_anchors(trace, poly_index)
 
 
 # ------------------------------------------------------- fenced code and diffs
