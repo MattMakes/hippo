@@ -22,8 +22,11 @@ Code (anything readers.py marks is_code):
 
 Code with a symbol tree (a `CodeGraph` from `codegraph.extract_code`, PLAN 2.3):
   one passage per symbol instead of line windows — a module header holding the
-  file's own lines with a placeholder for each member, a class header holding
-  its own lines with a placeholder for each method, and one passage per
+  file's own lines with a placeholder for every symbol range in it, a class
+  header holding its own lines with a placeholder for each method wherever that
+  method is written (Rust's `impl OrderService { }` and Go's
+  `func (s *Service) Place()` are outside the type), an inline module (Rust's
+  `mod tests { }`) treated as a container like any class, and one passage per
   function or method, titled "path :: module.qualname (lines a-b)". A body too
   long for one passage splits at the top-level statements of that body into
   "(part N)". Each passage carries the ids it `defines` and an `extract_text`
@@ -48,6 +51,9 @@ if TYPE_CHECKING:  # `codegraph` pulls tree-sitter in; the chunker only reads pl
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 MIN_CHUNK_CHARS = 50  # a safety net against 0 or negative sizes; real chunks are far bigger
+# The symbol kinds that hold other symbols: a header passage of their own, then a passage per
+# member. Rust's `mod tests { }` is one of these, so its cases are passages like any other.
+CONTAINER_KINDS = ("class", "module")
 
 # (line number or None for a placeholder, the text of that line).
 Row = tuple[int | None, str]
@@ -366,11 +372,13 @@ def _nice_break(lines: list[str], start: int, end: int) -> int:
 def _chunk_symbols(doc: Document, code: CodeGraph, mentions: Mentions, size: int) -> list[Piece]:
     """
     One passage per symbol, in source order: the module header, then every top-level symbol;
-    a class contributes its own header and then its methods. Every line of the file lands in
-    exactly one passage, placeholders aside.
+    a class or inline module contributes its own header and then its members, wherever in the
+    file those are written -- a Rust `impl OrderService { }` follows the type it belongs to,
+    not the line it sits on. Every line of the file lands in exactly one passage, placeholders
+    aside.
     """
     symbols = code.by_path(doc.title)
-    module = next((s for s in symbols if s.kind == "module"), None)
+    module = _file_module(symbols)
     if module is None:  # parsed, but nothing to cut by: fall back to today's windows
         return [(title, text, [], None) for title, text in _chunk_code(doc, size)]
     pieces = _container_pieces(module, symbols, doc.text.splitlines(), doc, mentions, size)
@@ -403,14 +411,20 @@ def _chunk_sql(doc: Document, mentions: Mentions, size: int) -> list[Piece]:
 def _container_pieces(
     symbol: Symbol, symbols: list[Symbol], lines: list[str], doc: Document, mentions: Mentions, size: int
 ) -> list[Piece]:
-    """The header passage of a module or class, then a passage per member."""
+    """
+    The header passage of a module, class or inline module, then a passage per member.
+
+    Members come grouped under their container, not in the file's own order: a Rust
+    `impl OrderService` written below a top-level function still follows the type it
+    belongs to, the way `class OrderService:` and its methods always have.
+    """
     members = _members(symbol, symbols)
-    rows = _header_rows(symbol, members, lines)
+    rows = _header_rows(symbol, _placeholders(symbol, symbols, members), lines)
     pieces: list[Piece] = []
     if any(line is not None and text.strip() for line, text in rows):
         pieces.extend(_pieces_from_rows(symbol, rows, doc, mentions, size, header=True))
     for member in members:
-        if member.kind == "class":
+        if member.kind in CONTAINER_KINDS:
             pieces.extend(_container_pieces(member, symbols, lines, doc, mentions, size))
         else:
             body = [(n, lines[n - 1]) for n in _line_numbers(member, lines)]
@@ -418,15 +432,70 @@ def _container_pieces(
     return pieces
 
 
+def _file_module(symbols: list[Symbol]) -> Symbol | None:
+    """
+    The symbol standing for the file itself, the one the whole file hangs off.
+
+    Only it names its own module: every walker gives it `qualname == module`. Rust's inline
+    `mod tests { ... }` is a `module` symbol too, but a member of one, so the first
+    `module`-kind symbol is no longer the answer.
+    """
+    modules = [s for s in symbols if s.kind == "module"]
+    return next((s for s in modules if s.qualname == s.module), modules[0] if modules else None)
+
+
 def _members(parent: Symbol, symbols: list[Symbol]) -> list[Symbol]:
-    """Direct members only, in source order -- the same rule the walker used for `header_end`."""
-    if parent.kind == "module":
-        found = [s for s in symbols if s is not parent and s.kind in ("class", "function")]
-        found = [s for s in found if "." not in s.qualname]
-    else:
-        prefix = f"{parent.qualname}."
-        found = [s for s in symbols if s.qualname.startswith(prefix) and "." not in s.qualname[len(prefix) :]]
+    """
+    Direct members only, in source order -- wherever in the file they are written.
+
+    A container owns the names one dot below its own, so `OrderService.place` is the type's
+    method whether it is written inside `class OrderService:` or in a Rust
+    `impl OrderService { }` further down the file (Go's `func (s *Service) Place` likewise).
+    The file's module owns everything no other symbol owns: its top-level functions and
+    types, an inline `mod`, and a method whose type is declared in another file -- which
+    Rust allows, so nothing in the file is left without a passage.
+    """
+    module = _file_module(symbols)
+    named = {s.qualname: s for s in symbols if s is not module}
+    found = [s for s in symbols if s is not module and _owner(s, named, module) is parent]
     return sorted(found, key=lambda s: (s.line_start, s.line_end))
+
+
+def _owner(symbol: Symbol, named: dict[str, Symbol], module: Symbol | None) -> Symbol | None:
+    """The innermost symbol of this file whose qualname is a prefix of `symbol`'s, else the module."""
+    name = symbol.qualname
+    while "." in name:
+        name = name.rpartition(".")[0]
+        found = named.get(name)
+        if found is not None:
+            return found
+    return module
+
+
+def _placeholders(symbol: Symbol, symbols: list[Symbol], members: list[Symbol]) -> list[Symbol]:
+    """
+    Every symbol the container's header stands in for, in source order.
+
+    Its members, wherever they live, plus anything else written inside its own lines but
+    belonging to something else -- the methods of a Rust `impl OrderService` are the module's
+    lines and the type's members, and a header that skipped them would print a body that
+    already has a passage of its own. Nested members are dropped by `_header_rows`, which
+    walks in order and never doubles back; the widest range therefore comes first, so a
+    member that opens on its container's own line (`mod tests { fn t() {}`) is the one
+    dropped, and never the container standing in for it.
+    """
+    module = _file_module(symbols)
+    taken = {id(m) for m in members}
+    inside = [
+        s
+        for s in symbols
+        if id(s) not in taken
+        and s is not symbol
+        and s is not module
+        and symbol.line_start <= s.line_start
+        and s.line_end <= symbol.line_end
+    ]
+    return sorted([*members, *inside], key=lambda s: (s.line_start, -s.line_end))
 
 
 def _line_numbers(symbol: Symbol, lines: list[str]) -> range:
@@ -436,14 +505,28 @@ def _line_numbers(symbol: Symbol, lines: list[str]) -> range:
 
 
 def _header_rows(symbol: Symbol, members: list[Symbol], lines: list[str]) -> list[Row]:
-    """The container's own lines, with one placeholder line standing in for each member."""
+    """
+    The container's own lines, with one placeholder line standing in for each member.
+
+    The walk never runs past the container's last line: a Rust `impl OrderService { }` or a
+    Go `func (s *Service) Place()` puts a member outside the type it belongs to, and a type
+    that swallowed the lines up to its first method would claim -- and print -- code that is
+    not its own. Such a member still gets its placeholder, in the file's order, so the header
+    lists every member wherever it lives. A member already inside an earlier placeholder's
+    range (a method of a class of this module) is left to that placeholder.
+    """
     rows: list[Row] = []
     cursor = symbol.line_start
+    last = min(symbol.line_end, len(lines))
+    covered = 0
     for member in members:
-        rows.extend((n, lines[n - 1]) for n in range(cursor, min(member.line_start, len(lines) + 1)))
+        if member.line_start <= covered:
+            continue
+        rows.extend((n, lines[n - 1]) for n in range(cursor, min(member.line_start, last + 1)))
         rows.append((None, _placeholder(member, lines)))
-        cursor = member.line_end + 1
-    rows.extend((n, lines[n - 1]) for n in range(cursor, min(symbol.line_end, len(lines)) + 1))
+        cursor = max(cursor, member.line_end + 1)
+        covered = max(covered, member.line_end)
+    rows.extend((n, lines[n - 1]) for n in range(cursor, last + 1))
     return rows
 
 

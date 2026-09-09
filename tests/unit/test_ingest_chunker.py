@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -425,6 +426,163 @@ def test_chunk_documents_numbers_symbol_passages_continuously(code_graph) -> Non
     chunks = chunk_documents(docs, 1500, 150, code=code_graph)
     assert [c.ordinal for c in chunks] == list(range(len(chunks)))
     assert chunks[-1].title == "notes.md" and chunks[-1].extract_text is None
+
+
+# --------------------------------------- members written outside their type (L3)
+#
+# Rust writes a type's methods in `impl` blocks of their own and Go writes them as
+# `func (s *Service) Place()`, so a member's lines are nowhere near its type's. The type's
+# header is then exactly its own lines plus one placeholder per member, wherever that member
+# is written, and the *module* header stands in for every symbol range in the file, whatever
+# its kind and owner -- which is what keeps every line in exactly one passage. The rule is
+# language-agnostic: these cases are Rust because that walker is merged, and the Go shape
+# (`type Service struct` at the top, its methods further down) reaches the same code.
+
+RUST_ORDERS = """use crate::billing;
+
+/// Keeps orders for one customer.
+pub struct OrderService {
+    pub open: i64,
+}
+
+impl OrderService {
+    /// Place an order and return its identifier.
+    pub fn place(&self, order: &Order) -> i64 {
+        billing::total(order)
+    }
+}
+
+impl Base for OrderService {
+    fn log(&self, message: &str) {
+        println!("{}", message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn place_totals() {
+        let service = OrderService { open: 0 };
+        assert_eq!(service.place(&Order {}), 0);
+    }
+}
+"""
+
+# `sig { ... }  // lines a-b`: a placeholder stands in for a range, it does not print it.
+PLACEHOLDER_RE = re.compile(r"(?://|#) lines \d+-\d+$")
+
+
+def rust_chunks(text: str, title: str = "src/orders.rs", size: int = 1500) -> list[Chunk]:
+    doc = Document(title=title, text=text, path=title, is_code=True)
+    graph = extract_code([doc], FIXTURE_SOURCE)
+    return chunk_documents([doc], size_chars=size, overlap_chars=150, code=graph)
+
+
+def printed_lines(chunks: list[Chunk]) -> list[str]:
+    """Every source line the passages print, placeholders aside. Blank lines are boundaries."""
+    return [
+        line
+        for chunk in chunks
+        for line in chunk.text.splitlines()
+        if line.strip() and not PLACEHOLDER_RE.search(line)
+    ]
+
+
+def test_a_type_whose_methods_live_outside_it_gets_a_passage_per_symbol_in_order() -> None:
+    chunks = rust_chunks(RUST_ORDERS)
+    assert [c.title for c in chunks] == [
+        "src/orders.rs :: src.orders (lines 1-19)",
+        "src/orders.rs :: src.orders.OrderService (lines 4-6)",  # its own lines, not up to `place`
+        "src/orders.rs :: src.orders.OrderService.place (lines 10-12)",
+        "src/orders.rs :: src.orders.OrderService.log (lines 16-18)",
+        "src/orders.rs :: src.orders.tests (lines 21-30)",
+        "src/orders.rs :: src.orders.tests.place_totals (lines 25-29)",
+    ]
+    assert [c.ordinal for c in chunks] == list(range(6))
+
+
+def test_every_line_of_such_a_file_is_printed_exactly_once() -> None:
+    chunks = rust_chunks(RUST_ORDERS)
+    source = [line for line in RUST_ORDERS.splitlines() if line.strip()]
+    assert sorted(printed_lines(chunks)) == sorted(source)  # no line printed twice, none lost
+    assert len(printed_lines(chunks)) == len(source)
+
+
+def test_the_type_header_is_its_own_lines_and_a_placeholder_per_method_wherever_it_lives() -> None:
+    klass = rust_chunks(RUST_ORDERS)[1]
+    assert klass.text.splitlines() == [
+        "pub struct OrderService {",
+        "    pub open: i64,",
+        "}",
+        # Both impl blocks are elsewhere in the file; the header still lists what they hold.
+        "    pub fn place(&self, order: &Order) -> i64 { ... }  // lines 10-12",
+        "    fn log(&self, message: &str) { ... }  // lines 16-18",
+    ]
+    assert "billing::total(order)" not in klass.text  # the body lives in its own passage
+
+
+def test_the_module_header_stands_in_for_every_symbol_range_whatever_its_owner() -> None:
+    module = rust_chunks(RUST_ORDERS)[0]
+    assert "pub struct OrderService { ... }  // lines 4-6" in module.text
+    # A method the module does not own still gets a placeholder here: its lines are the
+    # module's own, and printing the body would repeat the passage that already holds it.
+    assert "    pub fn place(&self, order: &Order) -> i64 { ... }  // lines 10-12" in module.text
+    assert "    fn log(&self, message: &str) { ... }  // lines 16-18" in module.text
+    assert "mod tests { ... }  // lines 21-30" in module.text
+    assert "impl OrderService {" in module.text  # the impl's own lines belong to nobody else
+    assert "billing::total(order)" not in module.text
+    assert "assert_eq!" not in module.text
+
+
+def test_an_inline_module_is_a_container_and_its_functions_get_their_own_passages() -> None:
+    _, _, _, _, tests, place_totals = rust_chunks(RUST_ORDERS)
+    assert tests.text.splitlines() == [
+        "#[cfg(test)]",
+        "mod tests {",
+        "    use super::*;",
+        "",
+        "    fn place_totals() { ... }  // lines 25-29",
+        "}",
+    ]
+    assert place_totals.text.startswith("    #[test]\n    fn place_totals() {")
+    assert "assert_eq!(service.place(&Order {}), 0);" in place_totals.text
+
+
+def test_a_member_that_opens_on_its_containers_own_line_leaves_the_container_the_header() -> None:
+    """
+    `mod tests { fn t() {}` starts both symbols on line 1 and the member ends first, so the
+    two ranges are only ordered by width. The wider one stands in for the narrower -- the
+    other way round would print the container's closing brace twice, once here and once in
+    the member's own passage.
+    """
+    text = "mod tests { fn t() {}\n}\n"
+    chunks = rust_chunks(text, title="src/compact.rs")
+    assert [c.title for c in chunks] == [
+        "src/compact.rs :: src.compact.tests (lines 1-2)",
+        "src/compact.rs :: src.compact.tests.t (lines 1-1)",
+    ]
+    assert sorted(printed_lines(chunks)) == ["mod tests { fn t() {}", "}"]
+
+
+def test_a_method_whose_type_is_declared_in_another_file_still_gets_a_passage() -> None:
+    """
+    L0d: Rust may write `impl Base for OrderService` in a module that declares neither type,
+    so a member can have no owner in its own file. The module owns whatever nothing else
+    does -- a symbol with no passage would be invisible to a scoped graph (S2.5).
+    """
+    text = (
+        "use crate::orders::OrderService;\n\n"
+        "impl Base for OrderService {\n"
+        '    fn log(&self, message: &str) {\n        println!("{}", message);\n    }\n}\n'
+    )
+    chunks = rust_chunks(text, title="src/logging.rs")
+    assert [c.title for c in chunks] == [
+        "src/logging.rs :: src.logging (lines 1-7)",
+        "src/logging.rs :: src.logging.OrderService.log (lines 4-6)",
+    ]
+    assert sorted(printed_lines(chunks)) == sorted(line for line in text.splitlines() if line.strip())
 
 
 # ------------------------------------------------------- commit passages (WP2b)
