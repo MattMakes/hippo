@@ -305,7 +305,7 @@ def test_status_partial_renders_pills(client, monkeypatch):
         "Graph" in text and "Ollama" in text
     )  # "Graph" is the embedded store; it reads "Neo4j" with that backend
     assert "Neo4j" not in text
-    assert "Code" not in text  # no code indexed in this memory: the Code card stays hidden
+    assert "symbol" not in text  # no code indexed in this memory: the Code card stays hidden
 
 
 def test_status_partial_shows_the_code_card_when_code_is_indexed(code_index, monkeypatch):
