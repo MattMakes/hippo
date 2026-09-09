@@ -596,10 +596,11 @@ def test_naming_the_go_symbol_seeds_the_go_one_and_lifts_its_passage(
     tree might grow. Naming `goapp.orders.service.Service.Place` in full seeds that symbol alone
     and leaves the Python `place` unseeded.
 
-    Its passage goes from dense rank 20 to rank 2, inside `qa_top_k`. The one passage above it is
-    `goapp/cmd/main.go`, the four-line entry point that calls it -- the same dense twin that costs
-    the Python case its top slot, except here it is the *caller* of the named symbol, so PPR has
-    every reason to rank it.
+    Split by mechanism exactly as the test above is. Isolated (`passage_node_weight=0`), the anchor
+    puts the passage first, of 75. With passages seeding themselves it is rank 2, from dense rank
+    20 -- and what sits above it is `goapp/cmd/main.go`, the four-line entry point that calls it.
+    Only the lift is pinned there: another tree's entry point is another twin, and the exact
+    position is the embedder's.
     """
     index = code_retriever.index
     go_place = symbol_id(code_source, "goapp/orders/service.go", "Service.Place")
@@ -607,6 +608,7 @@ def test_naming_the_go_symbol_seeds_the_go_one_and_lifts_its_passage(
     question = "What does goapp.orders.service.Service.Place do?"
 
     without = code_retriever.retrieve(question, settings(code_seed_weight=0.0, code_dense_seeds=0))
+    isolated = code_retriever.retrieve(question, settings(code_dense_seeds=0, passage_node_weight=0.0))
     trace = code_retriever.retrieve(question, settings(code_dense_seeds=0))
 
     assert trace.used_code_seeds is True
@@ -615,8 +617,8 @@ def test_naming_the_go_symbol_seeds_the_go_one_and_lifts_its_passage(
     assert place_id(index, code_source) not in {s.node_id for s in trace.seed_symbols}
     assert index.node_ids[trace.top_nodes[0].vertex] == go_place
     assert trace.top_nodes[0].score > 4 * trace.top_nodes[1].score
+    assert {p.passage_id: p.rank for p in isolated.passages}[passage_id] <= settings()["qa_top_k"]
     ranks = {p.passage_id: p.rank for p in trace.passages}
-    assert ranks[passage_id] <= settings()["qa_top_k"]
     assert ranks[passage_id] < {p.passage_id: p.rank for p in without.passages}[passage_id] - 10
 
 
