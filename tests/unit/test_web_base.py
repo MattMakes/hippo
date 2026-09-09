@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from hippo import mcp_server, prompts
+from hippo import status as status_module
 from hippo.config import Config
 from hippo.context import AppContext
 from hippo.hipporag.indexer import Chunk, index_source
@@ -297,12 +298,23 @@ def test_the_graph_endpoints_survive_an_index_that_contains_code(ctx, client):
     assert client.get("/api/graph/full?kind=symbol").json()["nodes"][0]["id"] == symbol_id
 
 
-def test_status_partial_renders_pills(client):
+def test_status_partial_renders_pills(client, monkeypatch):
+    monkeypatch.setattr(status_module, "CACHE_SECONDS", 0.0)  # a neighbouring test's ctx must not leak in
     text = client.get("/partials/status").text
     assert (
         "Graph" in text and "Ollama" in text
     )  # "Graph" is the embedded store; it reads "Neo4j" with that backend
     assert "Neo4j" not in text
+    assert "symbol" not in text  # no code indexed in this memory: the Code card stays hidden
+
+
+def test_status_partial_shows_the_code_card_when_code_is_indexed(code_index, monkeypatch):
+    monkeypatch.setattr(status_module, "CACHE_SECONDS", 0.0)  # a neighbouring test's ctx must not leak in
+    ctx, _source_id = code_index
+    with TestClient(create_app(ctx), base_url="http://localhost") as client:
+        text = client.get("/partials/status").text
+    assert "Code 30 symbols" in text
+    assert "python, typescript" in text
 
 
 def test_startup_marks_jobs_interrupted_by_a_restart_as_failed(ctx):
