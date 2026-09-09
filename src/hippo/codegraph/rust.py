@@ -673,28 +673,44 @@ def _join(prefix: str, text: str) -> str:
 
 def source_setup(docs: list) -> dict[str, str]:
     """
-    The crate, read once per source: the directory holding `lib.rs`/`main.rs` (what `crate::`
-    means) and the name other files spell it with (`use rsapp::orders::…`, which is how a
-    binary and an integration test reach the library half of the same crate).
+    Every crate in the source, read once: the directory holding a `lib.rs`/`main.rs` mapped
+    to the name other files spell it with (`use rsapp::orders::…`, which is how a binary and
+    an integration test reach the library half of the same crate).
 
-    The name comes from `Cargo.toml` when the source has one, and otherwise from the
-    directory the crate root sits in -- `rsapp/src/lib.rs` is the crate `rsapp`, which is
-    the layout `cargo new` produces.
+    A workspace has several, and `crate::` in one of them must never reach into another --
+    so this is a *table*, and the root a file uses is the nearest one above it. The name
+    comes from `Cargo.toml` when the source has one, and otherwise from the directory the
+    root sits in: `rsapp/src/lib.rs` is the crate `rsapp`, which is what `cargo new` writes.
     """
-    roots: list[str] = []
+    roots: set[str] = set()
     manifests: dict[str, str] = {}
     for doc in docs:
         title = (getattr(doc, "title", "") or getattr(doc, "path", "") or "").replace("\\", "/")
         head, _, tail = title.rpartition("/")
         if tail in CRATE_ROOT_FILES:
-            roots.append(head)
+            roots.add(head)
         elif tail == "Cargo.toml":
             manifests[head] = getattr(doc, "text", "") or ""
-    if not roots:
-        return {"root": "", "crate": ""}
-    root = min(roots, key=lambda path: (path.count("/") if path else -1, path))
-    home = root.rpartition("/")[0] if root.rpartition("/")[2] == "src" else root
-    return {"root": root, "crate": _package_name(manifests.get(home, "")) or _dir_name(home)}
+    crates: dict[str, str] = {}
+    for root in sorted(roots):
+        home = root.rpartition("/")[0] if root.rpartition("/")[2] == "src" else root
+        crates[root] = _package_name(manifests.get(home, "")) or _dir_name(home)
+    return crates
+
+
+def _crate_root(crates: dict[str, str], path: str) -> str | None:
+    """
+    The crate a file is part of: the nearest root above it, or None when it is above them
+    all -- an integration test under `tests/` is its own crate and cannot say `crate::`
+    about the library at all, which is exactly why it says `rsapp::` instead.
+    """
+    found = [root for root in crates if not root or path.startswith(f"{root}/")]
+    return max(found, key=len) if found else None
+
+
+def _named_crate(crates: dict[str, str], name: str) -> str | None:
+    """The root of the crate spelled `name`, for a path that names a crate rather than `crate`."""
+    return next((root for root in sorted(crates) if crates[root] == name), None)
 
 
 def _package_name(manifest: str) -> str:
@@ -730,16 +746,18 @@ def _module_file(index: SourceIndex, facts: FileFacts, text: str) -> FileFacts |
     """
     The file a `::` path names, or None when nothing in this source is it.
 
-    A head that is neither `crate`, `self`, `super` nor this crate's own name is another
-    crate -- `std`, `serde`, `sqlx` -- and gets no edge at all (2.2b).
+    A head that is neither `crate`, `self`, `super` nor the name of a crate in this source
+    is somebody else's -- `std`, `serde`, `sqlx` -- and gets no edge at all (2.2b).
     """
     segments = [segment for segment in text.split("::") if segment]
     if not segments:
         return None
-    state = index.lang_state.get("rust") or {}
+    crates = index.lang_state.get("rust") or {}
     head, rest = segments[0], segments[1:]
-    if head == "crate" or (state.get("crate") and head == state["crate"]):
-        base = state.get("root", "")
+    if head == "crate" or _named_crate(crates, head) is not None:
+        base = _crate_root(crates, facts.path) if head == "crate" else _named_crate(crates, head)
+        if base is None:
+            return None
     elif head == "self":
         base = _module_dir(facts.path)
     elif head == "super":

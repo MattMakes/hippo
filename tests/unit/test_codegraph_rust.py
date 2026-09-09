@@ -483,12 +483,43 @@ def test_the_crate_name_comes_from_cargo_toml_when_there_is_one():
         "tests/it.rs": "use order_service::orders::place;\n\n#[test]\nfn test_it() {\n    place();\n}\n",
     }
     docs = [Doc(name, text, name) for name, text in files.items()]
-    assert source_setup(docs) == {"root": "src", "crate": "order_service"}
+    assert source_setup(docs) == {"src": "order_service"}
     graph = extract_code(docs, "s")
     assert edge(graph, "INVOKES", "tests/it.rs::test_it", "src/orders.rs::place")[1:3] == (
         0.90,
         "via_import",
     )
+
+
+def test_crate_stays_inside_its_own_crate_in_a_workspace():
+    """
+    A workspace has several crates, and `crate::` in one of them must never reach into
+    another: the root a file uses is the nearest one above it. The sibling is reachable
+    only by name, which is what a `Cargo.toml` dependency actually is.
+    """
+    files = {
+        "crates/alpha/src/lib.rs": "pub mod thing;\n",
+        "crates/alpha/src/thing.rs": "pub fn go() -> i64 {\n    1\n}\n",
+        "crates/beta/src/lib.rs": "pub mod thing;\n",
+        "crates/beta/src/thing.rs": (
+            "use crate::helper;\nuse alpha::thing::go;\n\npub fn run() -> i64 {\n    go()\n}\n"
+        ),
+        "crates/beta/src/helper.rs": "pub fn helper() -> i64 {\n    2\n}\n",
+    }
+    docs = [Doc(name, text, name) for name, text in files.items()]
+    assert source_setup(docs) == {"crates/alpha/src": "alpha", "crates/beta/src": "beta"}
+    graph = extract_code(docs, "s")
+    # `use alpha::thing::go` crosses to the sibling crate by name...
+    assert edge(graph, "INVOKES", "crates/beta/src/thing.rs::run", "crates/alpha/src/thing.rs::go")[1:3] == (
+        0.90,
+        "via_import",
+    )
+    # ...and beta's own `crate::` never lands in alpha, whose `thing` has the same name.
+    assert (
+        "IMPORTS",
+        "crates/beta/src/thing.rs::crates.beta.src.thing",
+        "crates/alpha/src/lib.rs::crates.alpha.src.lib",
+    ) not in links(graph, "IMPORTS")
 
 
 # --------------------------------------------------------------- the calls
@@ -572,6 +603,56 @@ def test_an_awaited_call_says_so():
         }
     )
     assert invokes_extra(graph, "a/src/lib.rs::run", "a/src/lib.rs::fetch")["is_await"] is True
+
+
+def test_a_closure_folds_into_the_function_it_is_written_in():
+    """
+    A closure and a nested `fn` are not symbols (2.2a), so what they call belongs to the
+    function they are written in -- which is also the passage a reader would find it in.
+    """
+    graph = graph_of(
+        {
+            "l/src/lib.rs": (
+                "pub fn helper(x: i64) -> i64 {\n    x\n}\n\n"
+                "pub fn run(v: Vec<i64>) {\n    v.iter().map(|x| helper(*x));\n}\n"
+            )
+        }
+    )
+    assert {s.qualname for s in graph.symbols} == {"l.src.lib", "helper", "run"}
+    assert edge(graph, "INVOKES", "l/src/lib.rs::run", "l/src/lib.rs::helper")[1:3] == (
+        1.00,
+        "same_file",
+    )
+
+
+def test_a_struct_literal_binding_carries_its_type():
+    """`let s = OrderService { .. }` names the type as surely as `OrderService::new()` does."""
+    graph = graph_of(
+        {
+            "b/src/lib.rs": (
+                "pub struct Service {\n    pub on: bool,\n}\n\n"
+                "impl Service {\n    pub fn place(&self) {}\n}\n\n"
+                "pub fn go() {\n    let s = Service { on: true };\n    s.place();\n}\n"
+            )
+        }
+    )
+    assert edge(graph, "INVOKES", "b/src/lib.rs::go", "b/src/lib.rs::Service.place")[1:3] == (
+        1.00,
+        "same_file",
+    )
+
+
+def test_a_trait_holds_both_its_required_and_its_default_methods(crate):
+    """`fn log(&self) -> String;` and `fn describe(&self) { ... }` are both `Base`'s."""
+    assert [s.qualname for s in crate.symbols if s.path == STORE_RS] == [
+        "rsapp.src.store",
+        "Base",
+        "Base.log",
+        "Base.describe",
+        "OrderError",
+        "helper",
+    ]
+    assert symbol(crate, STORE_RS, "Base.describe").kind == "method"
 
 
 def test_a_constructor_chain_names_its_type(crate):
