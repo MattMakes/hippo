@@ -678,13 +678,35 @@ def sql_file_objects(source_id: str, path: str, text: str) -> tuple[list[DataObj
 
 
 def _data_call(index: SourceIndex, facts: FileFacts, call) -> Hit | None:
-    """A Mongo chain (`db.orders.find`) or a call on a `mongoose.model` binding."""
+    """
+    A Mongo chain (`db.orders.find`), a call on a `mongoose.model` binding, or a call on a
+    variable bound earlier in the same scope to a Mongo chain (`const col =
+    db.collection("orders"); col.find(...)`).
+    """
     if not call.receiver:
         return None
     binding = _model_binding(index, facts, call.receiver)
     if binding:
         return mongoose_hit(binding, call.name, call.line)
-    return mongo_hit(call.receiver, call.name, call.line)
+    hit = mongo_hit(call.receiver, call.name, call.line)
+    if hit is not None:
+        return hit
+    return _bound_mongo_hit(facts, call)
+
+
+def _bound_mongo_hit(facts: FileFacts, call) -> Hit | None:
+    """`col` in `const col = db.collection("orders"); col.updateOne(...)` -- read the
+    collection off the assignment's own call chain, the same way `mongo_hit` reads it off a
+    direct `db.collection("orders").updateOne(...)` chain."""
+    for assignment in facts.assignments:
+        if assignment.scope != call.caller or assignment.target != call.receiver:
+            continue
+        if assignment.line > call.line or not assignment.chain:
+            continue
+        hit = mongo_hit(assignment.chain, call.name, call.line)
+        if hit is not None:
+            return hit
+    return None
 
 
 def _model_binding(index: SourceIndex, facts: FileFacts, receiver: str) -> str:
