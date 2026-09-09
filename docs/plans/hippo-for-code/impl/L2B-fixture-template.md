@@ -61,6 +61,16 @@ and the chunker fix for members-outside-their-type / inline modules (L3) are mer
   invisible); `OrderService::new` need not exist for `.place()` to resolve; struct and impls may live in
   different files and still get INHERITS/OVERRIDES/CONTAINS. Rust sets no `FileFacts.scope`, so
   `same_scope` never fires for it.
+- **All — doc comments (ruling from Rust phase B)**: each new tree's `OrderService` and `place` docs
+  must be ≥ 80 chars of their OWN prose that never names Acme Robotics, Priya Natarajan or Boulder.
+  The plan's `csapp` `<summary>` text repeats `pyapp`'s sentences, but repeating them makes two more
+  code passages mention the prose entities and re-weights the mixed-memory ranking, which breaks the
+  exact V2.5 guard in `test_retriever.py`. Record it as a plan deviation in the ledger. Also: a second
+  tree with the same short qualnames (`OrderService.place`, `Base.log`, `OrderError`, `save`) makes
+  bare-name lookups ambiguous, so fully-qualify the call sites in the existing tests (`test_paths.py`,
+  `test_mcp_*`, `test_web_code.py`, `test_git_history.py`) — the Rust phase-B ledger lists them; and the
+  inertness test compares ids/order exactly and scores with `pytest.approx(rel=1e-9)` (PPR summation
+  noise from more isolated vertices at scale 0).
 - **All**: `extract.WALKERS` is an import-time snapshot (tests swapping a walker patch both); the
   `make_code_checkout` three commits gain no files, so history tests do not move.
 
