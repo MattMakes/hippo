@@ -313,7 +313,7 @@ def test_status_partial_shows_the_code_card_when_code_is_indexed(code_index, mon
     ctx, _source_id = code_index
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         text = client.get("/partials/status").text
-    assert "Code 30 symbols" in text
+    assert "Code 32 symbols" in text
     assert "python, typescript" in text
 
 
