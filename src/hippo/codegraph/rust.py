@@ -805,21 +805,24 @@ def resolve_module(index: SourceIndex, facts: FileFacts, spec: ImportFact) -> Fi
 
 def member_paths(index: SourceIndex, qualname: str, path: str) -> list[str]:
     """
-    Where a type's methods may be: any file with an `impl` for it, this one first so a
-    method written beside the call still counts as `same_file`.
+    Every file that has something to say about a type: the ones with an `impl` for it and
+    the one that declares it. This file first, so a method written beside the call still
+    counts as `same_file`.
     """
     return [path, *(p for p in _impls_by_type(index).get(qualname, ()) if p != path)]
 
 
 def _impls_by_type(index: SourceIndex) -> dict[str, list[str]]:
     """
-    `type -> the files that hold its members`, inverted once per source rather than scanned
-    once per call site: this is asked on every resolved method call, and `index.members` has
-    a row per container per file, so scanning it each time is quadratic in the repo.
+    `type -> the files that hold its members or declare it`, inverted once per source rather
+    than scanned once per call site: this is asked on every resolved method call, and
+    `index.members` has a row per container per file, so scanning it each time is quadratic
+    in the repo.
 
-    Cached against the index it was built from -- `build_index` fills `members` before any
-    resolution starts and nothing adds to it afterwards. The reference is weak so a finished
-    source is not held alive, and two extractions at once simply rebuild rather than share.
+    Cached against the index it was built from -- `build_index` fills `members` and `symbols`
+    before any resolution starts and nothing adds to them afterwards. The reference is weak
+    so a finished source is not held alive, and two extractions at once rebuild rather than
+    share.
     """
     global _IMPLS
     cached = _IMPLS  # read once: another extraction may replace it between two reads
@@ -828,6 +831,9 @@ def _impls_by_type(index: SourceIndex) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for owner_path, owner in sorted(index.members):
         found.setdefault(owner, []).append(owner_path)
+    for owner_path, owner in sorted(index.symbols):
+        if index.symbols[(owner_path, owner)].lang == "rust" and owner_path not in found.get(owner, ()):
+            found.setdefault(owner, []).append(owner_path)
     _IMPLS = (weakref.ref(index), found)
     return found
 

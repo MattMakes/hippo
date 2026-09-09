@@ -864,9 +864,12 @@ def test_a_type_may_hold_its_methods_in_another_file():
         0.90,
         "via_import",
     )
-    # The method is a member of `Widget` without being written inside it, so nothing in
-    # `behaviour.rs` contains it -- CONTAINS is syntax, and the syntax is in another file.
-    assert not any(b == "x/src/behaviour.rs::Widget.spin" for _, _, b in links(graph, "CONTAINS"))
+    # And the type contains the method even though the two are in different files: the owner
+    # is looked up through the same `member_paths` hook, so the method is not an orphan.
+    assert edge(graph, "CONTAINS", "x/src/model.rs::Widget", "x/src/behaviour.rs::Widget.spin")[1:3] == (
+        1.00,
+        "syntax",
+    )
 
 
 def test_the_impl_table_is_never_shared_between_two_sources():
@@ -897,6 +900,29 @@ def test_the_impl_table_is_never_shared_between_two_sources():
         "same_file",
     )
     assert not any("only_here" in b for _, _, b in links(second))
+
+
+def test_a_trait_impl_in_its_own_module_still_inherits_and_overrides():
+    """
+    Rust routinely groups trait impls in a module of their own, so the `struct`, the `trait`
+    and the `impl Base for S` are three files. The type is found through `member_paths`, so
+    all three edges land: INHERITS on the type, OVERRIDES on the method, and CONTAINS from
+    the type to a method written nowhere near it.
+    """
+    graph = graph_of(
+        {
+            "k/src/lib.rs": "pub mod t;\npub mod s;\npub mod i;\n",
+            "k/src/t.rs": "pub trait Base {\n    fn log(&self) -> i64;\n}\n",
+            "k/src/s.rs": "pub struct S;\n",
+            "k/src/i.rs": (
+                "use crate::s::S;\nuse crate::t::Base;\n\n"
+                "impl Base for S {\n    fn log(&self) -> i64 {\n        1\n    }\n}\n"
+            ),
+        }
+    )
+    assert edge(graph, "INHERITS", "k/src/s.rs::S", "k/src/t.rs::Base")[1:3] == (0.90, "resolved")
+    assert edge(graph, "OVERRIDES", "k/src/i.rs::S.log", "k/src/t.rs::Base.log")[1:3] == (0.90, "mro")
+    assert edge(graph, "CONTAINS", "k/src/s.rs::S", "k/src/i.rs::S.log")[1:3] == (1.00, "syntax")
 
 
 def test_contains_is_the_syntax_of_one_file(crate):
