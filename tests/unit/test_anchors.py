@@ -278,9 +278,7 @@ def test_a_windows_frame_path_still_finds_the_repo_relative_symbol(poly_index: G
     # name instead, silently losing the line that says which method.
     frame = r"   at CsApp.Orders.OrderService.ListOpen() in C:\src\csapp\Orders\OrderService.cs:line 38"
     found = find_anchors(frame, poly_index)
-    assert seeds(poly_index, found) == {
-        "csapp.Orders.OrderService.OrderService.ListOpen": pytest.approx(1.0)
-    }
+    assert seeds(poly_index, found) == {"csapp.Orders.OrderService.OrderService.ListOpen": pytest.approx(1.0)}
     assert found[0].how == "stack_trace"
     assert found[0].token == r"C:\src\csapp\Orders\OrderService.cs:38"
 
@@ -302,9 +300,7 @@ def test_a_dotnet_trace_seeds_its_frames_and_its_exception_header(poly_index: Gr
 
 def test_a_dotnet_frame_with_no_file_resolves_by_its_qualified_method(poly_index: GraphIndex) -> None:
     found = find_anchors("   at CsApp.Orders.OrderService.ListOpen()", poly_index)
-    assert seeds(poly_index, found) == {
-        "csapp.Orders.OrderService.OrderService.ListOpen": pytest.approx(1.0)
-    }
+    assert seeds(poly_index, found) == {"csapp.Orders.OrderService.OrderService.ListOpen": pytest.approx(1.0)}
     assert found[0].how == "stack_trace" and found[0].token == "OrderService.ListOpen"
 
 
@@ -360,6 +356,17 @@ def test_prose_is_still_inert_against_the_polyglot_symbols(
     # three more `main`s. The surface-form rule, not the symbol set, is what keeps it empty.
     monkeypatch.setattr(anchors, "STOPLIST", frozenset())
     assert find_anchors(question, poly_index) == [], question
+
+
+@pytest.mark.parametrize("trace", [GO_PANIC, NET_TRACE, RUST_PANIC], ids=["go", "dotnet", "rust"])
+def test_a_sentence_beside_a_trace_adds_no_anchor_of_its_own(poly_index: GraphIndex, trace: str) -> None:
+    # How these traces are actually pasted. `find_anchors` reads both halves, so the frames survive
+    # the split; the sentence goes to the prose half, where spike 1's surface-form rule holds and
+    # `Why`, `does`, `this` and `fail` are English.
+    asked = f"Why does this fail?\n{trace}"
+    assert seeds(poly_index, find_anchors(asked, poly_index)) == seeds(
+        poly_index, find_anchors(trace, poly_index)
+    )
 
 
 @pytest.mark.parametrize("trace", [GO_PANIC, NET_TRACE, RUST_PANIC], ids=["go", "dotnet", "rust"])
