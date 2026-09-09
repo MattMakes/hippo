@@ -410,10 +410,10 @@ def test_a_block_namespace_and_a_file_scoped_one_agree():
     )
     assert edges_of(block) == edges_of(scoped)
     assert [s.qualname for s in block.symbols] == [s.qualname for s in scoped.symbols]
-    # The member is reached *through* the class, so it is scored by file distance; 1.00
-    # `same_scope` is the tier of the name itself, which `test_a_namespace_is_the_scope...`
-    # pins on `new OrderService()`.
-    assert edge(block, "INVOKES", "a/Two.cs::C.R", "a/One.cs::Thing.Go")[1:3] == (0.90, "via_import")
+    # A *method* of a sibling file's type is 1.00 `same_scope` too (L0c): the namespace
+    # resolves it with no import, and scoring the member 0.90 would contradict the 1.00 the
+    # name itself gets.
+    assert edge(block, "INVOKES", "a/Two.cs::C.R", "a/One.cs::Thing.Go")[1:3] == (1.00, "same_scope")
 
 
 def test_a_nested_namespace_is_one_dotted_scope():
@@ -477,12 +477,13 @@ def test_the_invokes_edges_with_omega_and_provenance(graph):
         ),
         (
             "INVOKES",
-            0.90,
-            "via_import",
+            1.00,
+            "same_scope",
             f"{TESTS_PATH}::OrderServiceTests.Place_totals",
             f"{ORDERS_PATH}::OrderService.Place",
         ),
-        # `Program.cs`: top-level statements belong to the module symbol.
+        # `Program.cs` declares no namespace, so nothing there is in scope with anything:
+        # its calls come through the `using`, at 0.90.
         ("INVOKES", 0.90, "via_import", f"{PROGRAM_PATH}::csapp.Program", f"{ORDERS_PATH}::OrderService"),
         (
             "INVOKES",
@@ -646,7 +647,11 @@ def test_a_unique_bare_name_is_the_0_50_fuzzy_row():
 
 
 def test_a_stoplisted_name_is_never_guessed():
-    """`x.Get()` must never link to somebody's `Get`."""
+    """
+    `x.Get()` must never link to somebody's `Get`. The stoplist is matched case-insensitively
+    (L0c), which is what makes it reach C#: every name on it is spelled PascalCase here, and
+    a list written in lower case alone would wave all of them through.
+    """
     graph = graph_of(
         {
             "a/App.cs": (
@@ -655,11 +660,15 @@ def test_a_stoplisted_name_is_never_guessed():
                 "public class Service\n"
                 "{\n"
                 "    public int Get() => 1;\n"
+                "\n"
+                "    public void Write() { }\n"
                 "}\n"
                 "\n"
                 "public class Caller\n"
                 "{\n"
-                "    public int Go(dynamic thing) => thing.get();\n"
+                "    public int Go(dynamic thing) => thing.Get();\n"
+                "\n"
+                "    public void Put(dynamic thing) => thing.Write();\n"
                 "}\n"
             )
         }
