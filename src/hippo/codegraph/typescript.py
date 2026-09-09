@@ -395,7 +395,11 @@ def _caught_names(node: Node) -> list[str]:
 
 
 def _binding(facts: FileFacts, symbol: Symbol, node: Node) -> None:
-    """`const o = new Order()` and `const M = mongoose.model("Order", ...)`."""
+    """
+    `const o = new Order()`, `const M = mongoose.model("Order", ...)`, and any other
+    `const x = call(...)` -- `chain` keeps the call's own arguments (`db.collection("orders")`)
+    for a caller that needs them, e.g. resolving a later `x.updateOne(...)` as a Mongo chain.
+    """
     name = node.child_by_field_name("name")
     value = node.child_by_field_name("value")
     if name is None or value is None or name.type != "identifier":
@@ -425,6 +429,7 @@ def _binding(facts: FileFacts, symbol: Symbol, node: Node) -> None:
             target=text_of(name),
             value=_one_line(text_of(called)),
             line=line_of(node),
+            chain=_one_line(text_of(value)),
         )
     )
 
@@ -506,7 +511,11 @@ def _reexport(facts: FileFacts, node: Node) -> None:
 
 
 def _require(facts: FileFacts, node: Node) -> None:
-    """`const x = require("./y")` -- the module edge only; the binding is a plain const."""
+    """
+    `const x = require("./y")` -- the module edge only; the binding is a plain const.
+    `const {a, b: c} = require("./y")` -- one `ImportFact` per destructured name, the same
+    shape `import {a, b as c} from "./y"` already uses, so a bare `a()`/`c()` resolves.
+    """
     called = node.child_by_field_name("function")
     if called is None or text_of(called) != "require":
         return
@@ -515,8 +524,40 @@ def _require(facts: FileFacts, node: Node) -> None:
     if first is None or first.type != "string":
         return
     module = "".join(text_of(c) for c in first.children if c.type == "string_fragment")
-    if module:
-        facts.imports.append(ImportFact(module=module, line=line_of(node)))
+    if not module:
+        return
+    line = line_of(node)
+    pattern = _destructured_pattern(node)
+    if pattern is None:
+        facts.imports.append(ImportFact(module=module, line=line))
+        return
+    for name, alias in _pattern_names(pattern):
+        facts.imports.append(ImportFact(module=module, name=name, alias=alias, line=line))
+
+
+def _destructured_pattern(node: Node) -> Node | None:
+    """The `{a, b: c}` this `require(...)` call is bound into, if it is bound at all."""
+    parent = node.parent
+    if parent is None or parent.type != "variable_declarator":
+        return None
+    pattern = parent.child_by_field_name("name")
+    return pattern if pattern is not None and pattern.type == "object_pattern" else None
+
+
+def _pattern_names(pattern: Node) -> list[tuple[str, str]]:
+    """`(name, alias)` for each property `{a, b: c}` destructures, in source order."""
+    names: list[tuple[str, str]] = []
+    for child in pattern.children:
+        if child.type == "shorthand_property_identifier_pattern":
+            name = text_of(child)
+            if name:
+                names.append((name, name))
+        elif child.type == "pair_pattern":
+            key = child.child_by_field_name("key")
+            value = child.child_by_field_name("value")
+            if key is not None and value is not None:
+                names.append((text_of(key), text_of(value)))
+    return names
 
 
 def _specifier(node: Node) -> tuple[str, str]:

@@ -1260,6 +1260,173 @@ def test_a_collection_call_names_the_collection():
     assert mongo_hit("client.Collection(name)", "InsertOne") is None  # not a literal: no name
 
 
+def test_node_driver_collection_call_direct_chain():
+    """
+    `db.collection("x").method(...)` -- the official Node MongoDB driver's own idiom
+    (E1-territory-updater Defect 2): a call chain, not PyMongo's attribute chain, but the
+    string argument still names the collection.
+    """
+    graph = graph_of(
+        {
+            "src/territoryService.ts": (
+                "async function readOne(db) {\n"
+                '  return db.collection("territory").findOne({});\n'
+                "}\n"
+                "async function writeOne(db) {\n"
+                '  return db.collection("territory").updateOne({}, {});\n'
+                "}\n"
+            ),
+        }
+    )
+    reads_writes = edges_of(graph, "READS") | edges_of(graph, "WRITES")
+    assert (
+        "READS",
+        0.85,
+        "mongo_chain",
+        "src/territoryService.ts::readOne",
+        "collection:territory",
+    ) in reads_writes
+    assert (
+        "WRITES",
+        0.85,
+        "mongo_chain",
+        "src/territoryService.ts::writeOne",
+        "collection:territory",
+    ) in reads_writes
+
+
+def test_node_driver_collection_call_bound_to_a_variable():
+    """
+    `const col = db.collection("x"); col.method(...)` -- the `AssignFact` path: the
+    collection name has to survive being stashed on a binding, then be read back off a bare
+    `col.updateOne(...)` with no chain left in sight.
+    """
+    graph = graph_of(
+        {
+            "src/territoryService.ts": (
+                "async function writeOne(db) {\n"
+                '  const col = db.collection("territory");\n'
+                "  return col.updateOne({}, {});\n"
+                "}\n"
+            ),
+        }
+    )
+    assert (
+        "WRITES",
+        0.85,
+        "mongo_chain",
+        "src/territoryService.ts::writeOne",
+        "collection:territory",
+    ) in edges_of(graph, "WRITES")
+
+
+def test_node_driver_collection_call_non_literal_argument_names_nothing():
+    """
+    A dynamic collection name -- a plain variable or a template literal -- can't be read
+    statically, so it invents no data object, direct or bound.
+    """
+    graph = graph_of(
+        {
+            "src/territoryService.ts": (
+                "async function dynamicName(db, name) {\n"
+                "  return db.collection(name).findOne({});\n"
+                "}\n"
+                "async function templated(db, suffix) {\n"
+                "  return db.collection(`territory_${suffix}`).findOne({});\n"
+                "}\n"
+                "async function boundDynamic(db, name) {\n"
+                "  const col = db.collection(name);\n"
+                "  return col.findOne({});\n"
+                "}\n"
+            ),
+        }
+    )
+    assert graph.data_objects == []
+    assert links(graph, "READS") == set()
+    assert links(graph, "WRITES") == set()
+
+
+def test_pymongo_attribute_chain_is_unchanged():
+    """The PyMongo-style attribute chain still classifies -- the Node driver's call-based
+    idiom is additive, not a replacement."""
+    graph = graph_of(
+        {
+            "src/legacy.ts": ("async function readOne(db) {\n  return db.archive_orders.find_one({});\n}\n"),
+        }
+    )
+    assert (
+        "READS",
+        0.85,
+        "mongo_chain",
+        "src/legacy.ts::readOne",
+        "collection:archive_orders",
+    ) in edges_of(graph, "READS")
+
+
+def test_typescript_destructured_require_resolves_like_a_named_import():
+    """
+    `const {a, b: c} = require("./x")` -- one `ImportFact` per destructured name, with its
+    alias, the same shape `import {a, b as c} from "./x"` already gets (E1-territory-updater
+    Q2: `_tickLoop`'s destructured `runWorkerLoop` never produced an INVOKES edge before this).
+    """
+    graph = graph_of(
+        {
+            "src/workerLoop.ts": (
+                "export async function runWorkerLoop() { return 1; }\n"
+                "export function claimNextJob() { return 2; }\n"
+            ),
+            "src/exportQueueService.ts": (
+                'const { runWorkerLoop, claimNextJob: claim } = require("./workerLoop");\n'
+                "function tick() {\n"
+                "  runWorkerLoop();\n"
+                "  claim();\n"
+                "}\n"
+            ),
+        }
+    )
+    invokes = edges_of(graph, "INVOKES")
+    assert (
+        "INVOKES",
+        0.90,
+        "via_import",
+        "src/exportQueueService.ts::tick",
+        "src/workerLoop.ts::runWorkerLoop",
+    ) in invokes
+    assert (
+        "INVOKES",
+        0.90,
+        "via_import",
+        "src/exportQueueService.ts::tick",
+        "src/workerLoop.ts::claimNextJob",
+    ) in invokes
+
+
+def test_typescript_plain_require_binds_the_whole_module():
+    """`const x = require("./y")` already produces the module-level IMPORTS edge -- CommonJS's
+    whole-module export has no per-name shape to bind, so `x` itself stays unresolved."""
+    graph = graph_of(
+        {
+            "src/workerLoop.ts": "export function claimNextJob() { return 1; }\n",
+            "src/app.ts": 'const wl = require("./workerLoop");\nwl();\n',
+        }
+    )
+    assert (
+        "IMPORTS",
+        0.95,
+        "import_path",
+        "src/app.ts::src.app",
+        "src/workerLoop.ts::src.workerLoop",
+    ) in edges_of(graph, "IMPORTS")
+    assert links(graph, "INVOKES") == set()
+
+
+def test_typescript_bare_specifier_require_has_no_edge():
+    """`require("express")` names a dependency, not part of this source: no edge (2.2b)."""
+    graph = graph_of({"src/app.ts": 'const express = require("express");\nexpress();\n'})
+    assert links(graph, "IMPORTS") == set()
+    assert links(graph, "INVOKES") == set()
+
+
 # ---------------------------------------------------- properties and budgets
 
 
