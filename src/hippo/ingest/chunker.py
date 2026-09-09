@@ -467,7 +467,7 @@ def _owner(symbol: Symbol, named: dict[str, Symbol], module: Symbol | None) -> S
     while "." in name:
         name = name.rpartition(".")[0]
         found = named.get(name)
-        if found is not None and found is not symbol:
+        if found is not None:
             return found
     return module
 
@@ -480,7 +480,9 @@ def _placeholders(symbol: Symbol, symbols: list[Symbol], members: list[Symbol]) 
     belonging to something else -- the methods of a Rust `impl OrderService` are the module's
     lines and the type's members, and a header that skipped them would print a body that
     already has a passage of its own. Nested members are dropped by `_header_rows`, which
-    walks in order and never doubles back.
+    walks in order and never doubles back; the widest range therefore comes first, so a
+    member that opens on its container's own line (`mod tests { fn t() {}`) is the one
+    dropped, and never the container standing in for it.
     """
     module = _file_module(symbols)
     taken = {id(m) for m in members}
@@ -493,7 +495,7 @@ def _placeholders(symbol: Symbol, symbols: list[Symbol], members: list[Symbol]) 
         and symbol.line_start <= s.line_start
         and s.line_end <= symbol.line_end
     ]
-    return sorted([*members, *inside], key=lambda s: (s.line_start, s.line_end))
+    return sorted([*members, *inside], key=lambda s: (s.line_start, -s.line_end))
 
 
 def _line_numbers(symbol: Symbol, lines: list[str]) -> range:

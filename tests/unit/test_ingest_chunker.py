@@ -548,6 +548,22 @@ def test_an_inline_module_is_a_container_and_its_functions_get_their_own_passage
     assert "assert_eq!(service.place(&Order {}), 0);" in place_totals.text
 
 
+def test_a_member_that_opens_on_its_containers_own_line_leaves_the_container_the_header() -> None:
+    """
+    `mod tests { fn t() {}` starts both symbols on line 1 and the member ends first, so the
+    two ranges are only ordered by width. The wider one stands in for the narrower -- the
+    other way round would print the container's closing brace twice, once here and once in
+    the member's own passage.
+    """
+    text = "mod tests { fn t() {}\n}\n"
+    chunks = rust_chunks(text, title="src/compact.rs")
+    assert [c.title for c in chunks] == [
+        "src/compact.rs :: src.compact.tests (lines 1-2)",
+        "src/compact.rs :: src.compact.tests.t (lines 1-1)",
+    ]
+    assert sorted(printed_lines(chunks)) == ["mod tests { fn t() {}", "}"]
+
+
 def test_a_method_whose_type_is_declared_in_another_file_still_gets_a_passage() -> None:
     """
     L0d: Rust may write `impl Base for OrderService` in a module that declares neither type,
