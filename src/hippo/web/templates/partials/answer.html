@@ -11,9 +11,13 @@
   {% if answer.thought %}
   <details><summary>How the model reasoned</summary><p class="muted pre">{{ answer.thought }}</p></details>
   {% endif %}
+  {# Only a LEXICAL anchor counts here, the same gate as `used_code_seeds` (Ruling 1a): a dense
+     seed came from embedding similarity, not the question, and saying "N symbol seeds" over one
+     would overstate what the question actually anchored on. #}
+  {% set symbol_seed_count = trace.seed_symbols | selectattr('kept') | rejectattr('how', 'equalto', 'dense') | list | length %}
   <p class="meta muted">
     {% if trace.used_dpr_fallback %}Found by embedding similarity only ({{ trace.fallback_reason }}).{% else %}
-    Found through the graph: {{ trace.fact_candidates | selectattr('kept') | list | length }} fact(s) kept, {{ trace.seed_entities | selectattr('kept') | list | length }} seed entities, PPR damping {{ trace.settings.damping }}.{% endif %}
+    Found through the graph: {{ trace.fact_candidates | selectattr('kept') | list | length }} fact(s) kept, {{ trace.seed_entities | selectattr('kept') | list | length }} seed entities{% if symbol_seed_count %}, {{ symbol_seed_count }} symbol seed(s){% endif %}, PPR damping {{ trace.settings.damping }}.{% endif %}
     {{ (trace.timing_ms.total or 0) | round | int }} ms.
   </p>
 </section>

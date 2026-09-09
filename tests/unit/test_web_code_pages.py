@@ -50,12 +50,22 @@ def test_the_answer_card_shows_the_code_graph_block_and_the_seed_chips(client):
     # The chips name the symbols the question anchored on, and say how.
     assert "pyapp.orders.OrderService.place" in page.text
     assert "identifier" in page.text
+    # The summary line counts the one lexical (identifier) seed that anchored this question, not
+    # just entity seeds - a stack-trace question that names no entity used to read as "0 seed
+    # entities" even though symbol seeds drove the whole answer (E1 territory-updater surprise).
+    assert (
+        "Found through the graph: 0 fact(s) kept, 0 seed entities, 1 symbol seed(s), PPR damping" in page.text
+    )
 
 
 def test_a_prose_question_gets_no_code_graph_card(client):
     page = client.post("/ask", data={"question": PROSE})
     assert page.status_code == 200
     assert "Code graph" not in page.text
+    # No lexical symbol seed fired (dense seeds don't count), so the summary line's wording is
+    # byte-identical to the pre-existing prose-only phrasing: no "symbol seed(s)" clause at all.
+    assert "Found through the graph: 1 fact(s) kept, 2 seed entities, PPR damping" in page.text
+    assert "symbol seed" not in page.text
 
 
 # ------------------------------------------------------------------ source
