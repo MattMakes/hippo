@@ -427,6 +427,93 @@ def test_every_line_of_the_go_fixture_file_is_printed_exactly_once(code_graph) -
     assert len(printed) == len(source)
 
 
+# And over the C# tree, where a type's methods are members again, as in Python and TypeScript.
+# The L3 rule reads the same from this end too, and the difference is visible in the titles: a
+# `class` that holds its methods has their lines inside its own, so its passage is titled with the
+# whole range and prints only the lines above the first member.
+
+CS_SERVICE_FIXTURE = "csapp/Orders/OrderService.cs"
+CS_BASE_FIXTURE = "csapp/Store/Base.cs"
+
+
+def test_the_csharp_tree_is_one_passage_per_symbol_in_source_order(code_graph) -> None:
+    assert [c.title for c in chunks_of(CS_SERVICE_FIXTURE, code_graph)] == [
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService (lines 1-9)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService (lines 10-57)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Place (lines 16-30)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Log (lines 32-35)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.ListOpen (lines 37-40)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Save (lines 42-46)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Archive (lines 48-51)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)",
+    ]
+
+
+def test_a_csharp_class_header_is_its_own_lines_and_a_placeholder_per_method(code_graph) -> None:
+    cls = chunks_of(CS_SERVICE_FIXTURE, code_graph)[1]
+    assert cls.text.splitlines() == [
+        "public class OrderService : Base",
+        "{",
+        # `Place`'s XML doc sits above the member, outside its range, so the header keeps it.
+        "    /// <summary>",
+        "    /// Place totals an order with billing, sends its invoice and logs the route the order took",
+        "    /// before handing back the amount the customer owes.",
+        "    /// </summary>",
+        "    public int Place(Order order) { ... }  // lines 16-30",
+        "",
+        "    public string Log(string message) { ... }  // lines 32-35",
+        "",
+        "    public void ListOpen() { ... }  // lines 37-40",
+        "",
+        "    public void Save(Order order) { ... }  // lines 42-46",
+        "",
+        "    public void Archive(Order order) { ... }  // lines 48-51",
+        "",
+        "    public void Graph() { ... }  // lines 53-56",
+        "}",
+    ]
+    assert "Billing.Total(order)" not in cls.text  # the body is its own passage
+    # The class's own `<summary>` is above the `class` line, outside its range -- the module header
+    # is what prints it -- and `extract_text` still carries it to OpenIE from here.
+    assert cls.extract_text.startswith("Keeps orders. Every order is totalled by the billing")
+
+
+def test_the_csharp_module_header_stands_in_for_every_type_in_the_file(code_graph) -> None:
+    module = chunks_of(CS_BASE_FIXTURE, code_graph)[0]
+    assert module.text.splitlines() == [
+        "namespace CsApp.Store;",
+        "",
+        "/// <summary>A tiny base type every service derives from.</summary>",
+        "public class Base { ... }  // lines 4-11",
+        "",
+        # A second top-level type in one file gets a placeholder here, not a header of its own.
+        "/// <summary>OrderError is what an order throws when it will not save.</summary>",
+        "public class OrderError : Exception { ... }  // lines 14-16",
+    ]
+    assert "return message;" not in module.text
+
+
+def test_a_csharp_file_of_top_level_statements_is_one_module_passage(code_graph) -> None:
+    # `Program.cs` declares no type at all: the module owns the statements, so there is nothing
+    # to stand in for and the passage is the file.
+    (program,) = chunks_of("csapp/Program.cs", code_graph)
+    assert program.title == "csapp/Program.cs :: csapp.Program (lines 1-4)"
+    assert program.text.splitlines() == [
+        "using CsApp.Orders;",
+        "",
+        "var service = new OrderService();",
+        "service.Place(new Order());",
+    ]
+
+
+def test_every_line_of_the_csharp_fixture_file_is_printed_exactly_once(code_graph) -> None:
+    for path in (CS_SERVICE_FIXTURE, CS_BASE_FIXTURE):
+        source = [line for line in (CODE_SAMPLE_PATH / path).read_text().splitlines() if line.strip()]
+        printed = printed_lines(chunks_of(path, code_graph))
+        assert sorted(printed) == sorted(source)
+        assert len(printed) == len(source)
+
+
 def test_every_passage_defines_its_symbol_and_the_data_objects_it_names(code_graph) -> None:
     from hippo.codegraph.model import data_id, symbol_id
 

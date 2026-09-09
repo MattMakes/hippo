@@ -97,6 +97,8 @@ def test_an_ambiguous_name_lists_its_candidates(index: GraphIndex) -> None:
     with pytest.raises(AmbiguousSymbol) as raised:
         resolve_symbol(index, "log")
     assert raised.value.candidates == [
+        "csapp.Orders.OrderService.OrderService.Log",
+        "csapp.Store.Base.Base.Log",
         "goapp.orders.service.Service.Log",
         "goapp.store.base.Base.Log",
         "pyapp.orders.OrderService.log",
@@ -107,10 +109,12 @@ def test_an_ambiguous_name_lists_its_candidates(index: GraphIndex) -> None:
     ]
     assert "could mean any of" in str(raised.value)
     # A second tree telling the same story makes the *qualname* ambiguous too, not just the bare
-    # name: `OrderService.place` is a symbol in `pyapp/orders.py` and one in `rsapp/src/orders.rs`.
+    # name: `OrderService.place` is a symbol in `pyapp/orders.py`, one in `rsapp/src/orders.rs`
+    # and -- the lookup lower-cases -- one in `csapp/Orders/OrderService.cs`.
     with pytest.raises(AmbiguousSymbol) as both:
         resolve_symbol(index, "OrderService.place")
     assert both.value.candidates == [
+        "csapp.Orders.OrderService.OrderService.Place",
         "pyapp.orders.OrderService.place",
         "rsapp.src.orders.OrderService.place",
     ]
@@ -195,6 +199,44 @@ def test_a_go_test_in_the_same_package_calls_at_the_same_scope_tier(index: Graph
     )
     assert lines(index, walk) == [
         "goapp.orders.service_test.TestPlace -[INVOKES 1.00 same_scope]-> goapp.orders.service.Service.Place"
+    ]
+
+
+def test_the_same_call_in_the_csharp_tree_renders_the_same_way(index: GraphIndex) -> None:
+    """
+    `hippo path csapp.…OrderService.Place csapp.Billing.Billing.Billing.Total`: the fourth telling,
+    and the same 0.90 `via_import` tier -- the call goes through `using CsApp.Billing;`. C# reaches
+    1.00 `same_scope` for a *sibling of its namespace* (the walker's own tests pin that), which the
+    fixture tree deliberately has no site for: two files declaring one namespace would make the
+    IMPORTS edge for a `using` of it a choice between them.
+    """
+    walk = shortest_code_path(
+        index,
+        vertex(index, "csapp.Orders.OrderService.OrderService.Place"),
+        vertex(index, "csapp.Billing.Billing.Billing.Total"),
+        theta=THETA,
+    )
+    assert lines(index, walk) == [
+        "csapp.Orders.OrderService.OrderService.Place "
+        "-[INVOKES 0.90 via_import]-> csapp.Billing.Billing.Billing.Total"
+    ]
+    assert not any(e.provenance == "same_scope" for e in direct_edges(index, walk[0].src, theta=THETA))
+
+
+def test_a_csharp_entry_point_reaches_place_through_its_using(index: GraphIndex) -> None:
+    """
+    `csapp/Program.cs` is top-level statements, so the *module* is the caller. The `using` is what
+    makes this an edge at all: phase A measured the same file without one at 0.50 `fuzzy_name`,
+    pointing at the method with no edge to the class that holds it.
+    """
+    walk = shortest_code_path(
+        index,
+        vertex(index, "csapp.Program"),
+        vertex(index, "csapp.Orders.OrderService.OrderService.Place"),
+        theta=THETA,
+    )
+    assert lines(index, walk) == [
+        "csapp.Program -[INVOKES 0.90 via_import]-> csapp.Orders.OrderService.OrderService.Place"
     ]
 
 

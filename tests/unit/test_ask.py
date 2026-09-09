@@ -105,14 +105,16 @@ PLACE = "What does pyapp.orders.OrderService.place do?"
 
 # The six kept seeds, in weight order, are `OrderService.place` (the identifier anchor, 0.33) and
 # the dense `tests.test_orders`, `pyapp.__init__`, `goapp.cmd.main.main`, `rsapp.tests.orders`,
-# `tests.place_totals` (0.05 down to 0.038); `pyapp.cli` fell off the end when the Go tree arrived.
+# `csapp.Program` (0.05 down to 0.0379); `pyapp.cli` fell off the end when the Go tree arrived and
+# `rsapp.src.orders.tests.place_totals` when the C# one did -- by 7.5e-7 of dense score, the two
+# entry-point-shaped passages being near-twins under `FakeOllama`'s feature hashing.
 # Lines 1-5 are the pairwise paths between the strongest five (each new edge once) and they are all
-# the Python tree's: the only route from `goapp`/`rsapp` to it is the shared `orders` table, whose
-# `bare_identifier` READS is 0.60 and below theta. The rest is `code_paths_for`'s round-robin over
-# the six seeds' own relations, each seed's strongest first (QA1F) -- a seed whose turn lands on an
-# edge already printed above spends the turn, which is why the first round shows only the three
-# seeds the paths did not already cover. Four of the six seeds belong to the other two trees: the
-# fixture tells the same story in Go and in Rust, and under `FakeOllama`'s feature-hashed vectors
+# the Python tree's: the only route from `goapp`/`rsapp`/`csapp` to it is the shared `orders` table,
+# whose `bare_identifier` READS is 0.60 and below theta. The rest is `code_paths_for`'s round-robin
+# over the six seeds' own relations, each seed's strongest first (QA1F) -- a seed whose turn lands on
+# an edge already printed above spends the turn, which is why the first round shows only the three
+# seeds the paths did not already cover. Four of the six seeds belong to the other three trees: the
+# fixture tells the same story in Go, Rust and C#, and under `FakeOllama`'s feature-hashed vectors
 # their passages are as dense-similar as the Python ones. That is why the whole block no longer fits
 # the default `code_triples_chars` of 1500 -- the cut is the next test's subject, so this one asks
 # for a budget wide enough to see all of it.
@@ -126,19 +128,19 @@ CODE_BLOCK_BODY = [
     # Turn 1: the seeds' strongest edges that are not above yet -- one per tree that the paths missed.
     "goapp.cmd.main -[CONTAINS 1.00 syntax]-> goapp.cmd.main.main",
     "rsapp.tests.orders -[CONTAINS 1.00 syntax]-> rsapp.tests.orders.test_place",
-    "rsapp.src.orders.tests -[CONTAINS 1.00 syntax]-> rsapp.src.orders.tests.place_totals",
+    "csapp.Program -[IMPORTS 0.95 import_path]-> csapp.Orders.OrderService",
     # Turn 2: place's second-strongest (the other omega=1.00 relation, this one outgoing), then the
-    # other seeds' calls into their own tree's `place`.
+    # other seeds' strongest route into their own tree's service.
     "pyapp.orders.OrderService.place -[INVOKES 1.00 same_file]-> pyapp.orders.OrderService.log",
     "goapp.cmd.main.main -[INVOKES 0.90 via_import]-> goapp.orders.service.Service.Place",
     "rsapp.tests.orders -[IMPORTS 0.95 import_path]-> rsapp.src.orders.OrderService",
-    "rsapp.src.orders.tests.place_totals -[INVOKES 1.00 same_file]-> rsapp.src.orders.OrderService.place",
+    "csapp.Program -[INVOKES 0.90 via_import]-> csapp.Orders.OrderService.OrderService",
     # Turn 3: at omega=0.90 an *incoming* call now comes before place's own outgoing ones - this is
     # the line that answers "who calls place", and out-then-in used to bury it (QA1 defect 1).
     "pyapp.cli.main -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
     "pyapp.orders -[TESTED_BY 0.75 test_filename]-> tests.test_orders",
     "rsapp.src.orders -[TESTED_BY 0.75 test_filename]-> rsapp.tests.orders",
-    "rsapp.src.orders.OrderService.place -[TESTED_BY 0.85 test_import]-> rsapp.src.orders.tests.place_totals",
+    "csapp.Program -[INVOKES 0.90 via_import]-> csapp.Orders.OrderService.OrderService.Place",
     # Turns 4-7: place's remaining omega=0.90 edges, in-then-out inside the tier.
     "pyapp.orders.OrderService.place -[CATCHES 0.90 resolved]-> pyapp.store.OrderError",
     "tests.test_orders.test_place -[INVOKES 0.90 via_import]-> pyapp.orders.OrderService.place",
@@ -147,6 +149,9 @@ CODE_BLOCK_BODY = [
     "Tests: tests.test_orders.test_place",
     "Commits: b2b2b2b 2026-01-02 Total the order in place",
     # One subsystem line per community the seeds reach: each tree is its own.
+    "Subsystems: csapp.Billing.Billing: csapp.Orders.OrderService, "
+    "csapp.Orders.OrderService.OrderService, csapp.Orders.OrderService.OrderService.Place, "
+    "csapp.Program",
     "Subsystems: goapp.billing.billing: goapp.cmd.main, goapp.cmd.main.main, "
     "goapp.orders.service.Service.Place",
     "Subsystems: pyapp.__init__: pyapp.__init__, pyapp.billing.send_invoice, pyapp.billing.total, "
@@ -154,8 +159,7 @@ CODE_BLOCK_BODY = [
     "pyapp.orders.OrderService.log, pyapp.orders.OrderService.place, pyapp.store.OrderError, "
     "tests.test_orders, tests.test_orders.test_place",
     "Subsystems: rsapp.src.billing: rsapp.src.orders, rsapp.src.orders.OrderService, "
-    "rsapp.src.orders.OrderService.place, rsapp.src.orders.tests, "
-    "rsapp.src.orders.tests.place_totals, rsapp.tests.orders, rsapp.tests.orders.test_place",
+    "rsapp.tests.orders, rsapp.tests.orders.test_place",
 ]
 
 
@@ -169,7 +173,7 @@ def coded(code_index) -> AppContext:
 
 def test_a_code_question_carries_the_block_exactly(coded: AppContext) -> None:
     # A budget wide enough for the whole block: what is pinned here is the grammar and the order,
-    # and `code_triples_chars` (1500 by default, 2674 needed for three trees) is the next test.
+    # and `code_triples_chars` (1500 by default, 2359 needed for four trees) is the next test.
     _, answer = ask(coded, PLACE, {"code_triples_chars": 8000})
     assert answer.context_block == "\n".join([prompts.CODE_GRAPH_HEADER, *CODE_BLOCK_BODY])
 

@@ -131,7 +131,7 @@ def test_the_card_separates_what_the_question_named_from_what_similarity_found(c
 
 
 def test_one_chip_per_token_the_question_typed(client, coded):
-    """`self.log` reaches three different `log` symbols; three identical chips say nothing."""
+    """`self.log` names nine `log` symbols (eight after the cap); identical chips say nothing."""
     ctx, _source_id = coded
     question = "Why does self.log fail in pyapp.orders.OrderService.place?"
     trace = ask_service.search(ctx, question)

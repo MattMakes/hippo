@@ -164,10 +164,10 @@ def test_the_code_card_counts_an_indexed_repository(code_index):
     ctx, _source_id = code_index
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         card = client.get("/api/status").json()["code"]
-    assert card["symbols"] == 73 and card["data_objects"] == 12
+    assert card["symbols"] == 93 and card["data_objects"] == 12
     assert card["code_edges"] > 0
     # Both come from Source.meta["code"], which the indexer wrote; nothing here loads the graph.
-    assert card["languages"] == ["go", "python", "rust", "typescript"]
+    assert card["languages"] == ["csharp", "go", "python", "rust", "typescript"]
     assert card["unresolved_calls"] >= 2  # os.path.join and print in pyapp/orders.py
     # No repo source, so no history: WP2b's commits and skips stay at zero.
     assert card["commits"] == 0 and card["history_skipped"] == 0
@@ -313,7 +313,7 @@ def test_status_partial_shows_the_code_card_when_code_is_indexed(code_index, mon
     ctx, _source_id = code_index
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         text = client.get("/partials/status").text
-    assert "Code 73 symbols" in text
+    assert "Code 93 symbols" in text
     assert "python, rust, typescript" in text
 
 

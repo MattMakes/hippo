@@ -40,7 +40,7 @@ def client(coded):
 
 
 def test_the_answer_card_shows_the_code_graph_block_and_the_seed_chips(client, coded):
-    # The block is cut at `code_triples_chars`, and two trees telling the same story now spend the
+    # The block is cut at `code_triples_chars`, and four trees telling the same story now spend the
     # default 1500 on relations alone, so its `Commits:` line -- what this test is here for -- ends
     # up past the cut. Widen the budget: the cut itself is `test_ask.py`'s subject, not the page's.
     ctx, _source_id = coded

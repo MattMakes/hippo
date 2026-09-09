@@ -44,6 +44,10 @@
       "kind": "collection",
       "mentions": [
         [
+          "csapp/Orders/OrderService.cs",
+          50
+        ],
+        [
           "goapp/orders/service.go",
           45
         ],
@@ -124,6 +128,10 @@
       "kind": "label",
       "mentions": [
         [
+          "csapp/Orders/OrderService.cs",
+          55
+        ],
+        [
           "goapp/orders/service.go",
           49
         ],
@@ -144,6 +152,10 @@
       "kind": "label",
       "mentions": [
         [
+          "csapp/Orders/OrderService.cs",
+          55
+        ],
+        [
           "goapp/orders/service.go",
           49
         ],
@@ -163,6 +175,10 @@
       "dialect": "cypher",
       "kind": "rel_type",
       "mentions": [
+        [
+          "csapp/Orders/OrderService.cs",
+          55
+        ],
         [
           "goapp/orders/service.go",
           49
@@ -195,6 +211,14 @@
       "dialect": "sql",
       "kind": "table",
       "mentions": [
+        [
+          "csapp/Orders/OrderService.cs",
+          39
+        ],
+        [
+          "csapp/Orders/OrderService.cs",
+          44
+        ],
         [
           "goapp/orders/service.go",
           35
@@ -248,6 +272,14 @@
         "Order"
       ],
       "passage": "tsapp/models/order.ts :: tsapp.models.order (lines 1-17)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Archive (lines 48-51)"
     },
     {
       "node": [
@@ -319,6 +351,14 @@
         "label",
         "Customer"
       ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Customer"
+      ],
       "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
     },
     {
@@ -343,6 +383,14 @@
         "label",
         "Order"
       ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Order"
+      ],
       "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
     },
     {
@@ -360,6 +408,14 @@
         "Order"
       ],
       "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
+    },
+    {
+      "node": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)"
     },
     {
       "node": [
@@ -392,6 +448,22 @@
         "customers"
       ],
       "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.ListOpen (lines 37-40)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Save (lines 42-46)"
     },
     {
       "node": [
@@ -456,6 +528,166 @@
         "orders"
       ],
       "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing"
+      ],
+      "passage": "csapp/Billing/Billing.cs :: csapp.Billing.Billing.Billing (lines 4-23)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.SendInvoice"
+      ],
+      "passage": "csapp/Billing/Billing.cs :: csapp.Billing.Billing.Billing.SendInvoice (lines 19-22)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.Total"
+      ],
+      "passage": "csapp/Billing/Billing.cs :: csapp.Billing.Billing.Billing.Total (lines 7-16)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "csapp.Billing.Billing"
+      ],
+      "passage": "csapp/Billing/Billing.cs :: csapp.Billing.Billing (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests"
+      ],
+      "passage": "csapp/Orders.Tests/OrderServiceTests.cs :: csapp.Orders.Tests.OrderServiceTests.OrderServiceTests (lines 5-12)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "passage": "csapp/Orders.Tests/OrderServiceTests.cs :: csapp.Orders.Tests.OrderServiceTests.OrderServiceTests.Place_totals (lines 7-11)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "csapp.Orders.Tests.OrderServiceTests"
+      ],
+      "passage": "csapp/Orders.Tests/OrderServiceTests.cs :: csapp.Orders.Tests.OrderServiceTests (lines 1-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService (lines 10-57)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Archive"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Archive (lines 48-51)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.ListOpen"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.ListOpen (lines 37-40)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Log"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Log (lines 32-35)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Place (lines 16-30)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Save"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Save (lines 42-46)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService (lines 1-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Program.cs",
+        "csapp.Program"
+      ],
+      "passage": "csapp/Program.cs :: csapp.Program (lines 1-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base"
+      ],
+      "passage": "csapp/Store/Base.cs :: csapp.Store.Base.Base (lines 4-11)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base.Log"
+      ],
+      "passage": "csapp/Store/Base.cs :: csapp.Store.Base.Base.Log (lines 7-10)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "OrderError"
+      ],
+      "passage": "csapp/Store/Base.cs :: csapp.Store.Base.OrderError (lines 14-16)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "csapp.Store.Base"
+      ],
+      "passage": "csapp/Store/Base.cs :: csapp.Store.Base (lines 1-13)"
     },
     {
       "node": [
@@ -1046,6 +1278,21 @@
     {
       "a": [
         "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "OrderError"
+      ],
+      "kind": "CATCHES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
         "pyapp/orders.py",
         "OrderService.place"
       ],
@@ -1128,6 +1375,231 @@
         "data",
         "column",
         "orders.total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.SendInvoice"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.Total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "csapp.Billing.Billing"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "csapp.Orders.Tests.OrderServiceTests"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Archive"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.ListOpen"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Save"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base.Log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "csapp.Store.Base"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "csapp.Store.Base"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "OrderError"
       ],
       "kind": "CONTAINS",
       "omega": 1.0,
@@ -1916,6 +2388,66 @@
     {
       "a": [
         "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "csapp.Orders.Tests.OrderServiceTests"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "csapp.Billing.Billing"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "csapp.Store.Base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Program.cs",
+        "csapp.Program"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
         "goapp/cmd/main.go",
         "goapp.cmd.main"
       ],
@@ -2231,6 +2763,21 @@
     {
       "a": [
         "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
         "goapp/orders/service.go",
         "Service"
       ],
@@ -2287,6 +2834,163 @@
       "kind": "INHERITS",
       "omega": 0.9,
       "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 10,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "new Order()"
+        },
+        "call_line": 10,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.SendInvoice"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 21,
+        "in_branch": true,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.Total"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 18,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Log"
+      ],
+      "extra": {
+        "arg_binding": {
+          "message": "\"x\""
+        },
+        "call_line": 28,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Program.cs",
+        "csapp.Program"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 3,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Program.cs",
+        "csapp.Program"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "new Order()"
+        },
+        "call_line": 4,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
     },
     {
       "a": [
@@ -2835,6 +3539,21 @@
     {
       "a": [
         "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Log"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base.Log"
+      ],
+      "kind": "OVERRIDES",
+      "omega": 0.9,
+      "provenance": "mro"
+    },
+    {
+      "a": [
+        "symbol",
         "goapp/orders/service.go",
         "Service.Log"
       ],
@@ -2880,6 +3599,21 @@
     {
       "a": [
         "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Save"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "OrderError"
+      ],
+      "kind": "RAISES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
         "pyapp/orders.py",
         "OrderService.save"
       ],
@@ -2921,6 +3655,66 @@
       "kind": "RAISES",
       "omega": 0.9,
       "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "b": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.ListOpen"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "sql_literal"
     },
     {
       "a": [
@@ -3135,6 +3929,51 @@
     {
       "a": [
         "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "csapp.Orders.Tests.OrderServiceTests"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.75,
+      "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
         "goapp/orders/service.go",
         "Service"
       ],
@@ -3281,6 +4120,36 @@
       "kind": "TESTED_BY",
       "omega": 0.75,
       "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Archive"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "mongo_chain"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Save"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "sql_literal"
     },
     {
       "a": [
@@ -3441,6 +4310,346 @@
       "ordinal": 1,
       "path": "pyapp/orders.py",
       "qualname": "OrderService.place"
+    },
+    {
+      "hunk": {
+        "churn": 23,
+        "file": "csapp/Billing/Billing.cs",
+        "new_range": [
+          1,
+          23
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing"
+    },
+    {
+      "hunk": {
+        "churn": 23,
+        "file": "csapp/Billing/Billing.cs",
+        "new_range": [
+          1,
+          23
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing.SendInvoice"
+    },
+    {
+      "hunk": {
+        "churn": 23,
+        "file": "csapp/Billing/Billing.cs",
+        "new_range": [
+          1,
+          23
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing.Total"
+    },
+    {
+      "hunk": {
+        "churn": 23,
+        "file": "csapp/Billing/Billing.cs",
+        "new_range": [
+          1,
+          23
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "csapp.Billing.Billing"
+    },
+    {
+      "hunk": {
+        "churn": 12,
+        "file": "csapp/Orders.Tests/OrderServiceTests.cs",
+        "new_range": [
+          1,
+          12
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "OrderServiceTests"
+    },
+    {
+      "hunk": {
+        "churn": 12,
+        "file": "csapp/Orders.Tests/OrderServiceTests.cs",
+        "new_range": [
+          1,
+          12
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "OrderServiceTests.Place_totals"
+    },
+    {
+      "hunk": {
+        "churn": 12,
+        "file": "csapp/Orders.Tests/OrderServiceTests.cs",
+        "new_range": [
+          1,
+          12
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "csapp.Orders.Tests.OrderServiceTests"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Archive"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Graph"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.ListOpen"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Log"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Place"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Save"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "csapp.Orders.OrderService"
+    },
+    {
+      "hunk": {
+        "churn": 4,
+        "file": "csapp/Program.cs",
+        "new_range": [
+          1,
+          4
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Program.cs",
+      "qualname": "csapp.Program"
+    },
+    {
+      "hunk": {
+        "churn": 16,
+        "file": "csapp/Store/Base.cs",
+        "new_range": [
+          1,
+          16
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Store/Base.cs",
+      "qualname": "Base"
+    },
+    {
+      "hunk": {
+        "churn": 16,
+        "file": "csapp/Store/Base.cs",
+        "new_range": [
+          1,
+          16
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Store/Base.cs",
+      "qualname": "Base.Log"
+    },
+    {
+      "hunk": {
+        "churn": 16,
+        "file": "csapp/Store/Base.cs",
+        "new_range": [
+          1,
+          16
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Store/Base.cs",
+      "qualname": "OrderError"
+    },
+    {
+      "hunk": {
+        "churn": 16,
+        "file": "csapp/Store/Base.cs",
+        "new_range": [
+          1,
+          16
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Store/Base.cs",
+      "qualname": "csapp.Store.Base"
     },
     {
       "hunk": {
@@ -4637,6 +5846,26 @@
     {
       "node": [
         "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "omega": 0.6,
+      "passage": "Code sample",
+      "token": "order service"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "omega": 0.6,
+      "passage": "Code sample",
+      "token": "order service"
+    },
+    {
+      "node": [
+        "symbol",
         "pyapp/orders.py",
         "OrderService"
       ],
@@ -4676,6 +5905,398 @@
     }
   ],
   "symbols": [
+    {
+      "display": "csapp.Billing.Billing.Billing",
+      "doc": "Billing totals orders and sends their invoices.",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 23,
+      "line_start": 4,
+      "params": [],
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing",
+      "raises": [],
+      "signature": "public static class Billing",
+      "statement_lines": [
+        7,
+        19
+      ]
+    },
+    {
+      "display": "csapp.Billing.Billing.Billing.SendInvoice",
+      "doc": "SendInvoice mails the invoice for one order.",
+      "header_end": 22,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 22,
+      "line_start": 19,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing.SendInvoice",
+      "raises": [],
+      "signature": "public static void SendInvoice(Order order)",
+      "statement_lines": [
+        21
+      ]
+    },
+    {
+      "display": "csapp.Billing.Billing.Billing.Total",
+      "doc": "Total adds up an order's lines.",
+      "header_end": 16,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 16,
+      "line_start": 7,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing.Total",
+      "raises": [],
+      "signature": "public static int Total(Order order)",
+      "statement_lines": [
+        9,
+        10,
+        15
+      ]
+    },
+    {
+      "display": "csapp.Billing.Billing",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 23,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "csapp.Billing.Billing",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        4
+      ]
+    },
+    {
+      "display": "csapp.Orders.Tests.OrderServiceTests.OrderServiceTests",
+      "doc": "",
+      "header_end": 6,
+      "is_test": true,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 12,
+      "line_start": 5,
+      "params": [],
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "OrderServiceTests",
+      "raises": [],
+      "signature": "public class OrderServiceTests",
+      "statement_lines": [
+        7
+      ]
+    },
+    {
+      "display": "csapp.Orders.Tests.OrderServiceTests.OrderServiceTests.Place_totals",
+      "doc": "",
+      "header_end": 11,
+      "is_test": true,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 11,
+      "line_start": 7,
+      "params": [],
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "OrderServiceTests.Place_totals",
+      "raises": [],
+      "signature": "public void Place_totals()",
+      "statement_lines": [
+        10
+      ]
+    },
+    {
+      "display": "csapp.Orders.Tests.OrderServiceTests",
+      "doc": "",
+      "header_end": 4,
+      "is_test": true,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 12,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "csapp.Orders.Tests.OrderServiceTests",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        3,
+        5
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService",
+      "doc": "Keeps orders. Every order is totalled by the billing namespace, written to Postgres as one\nrow and copied into the archive collection the reporting team reads.",
+      "header_end": 15,
+      "is_test": false,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 57,
+      "line_start": 10,
+      "params": [],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService",
+      "raises": [],
+      "signature": "public class OrderService : Base",
+      "statement_lines": [
+        16,
+        32,
+        37,
+        42,
+        48,
+        53
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Archive",
+      "doc": "",
+      "header_end": 51,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 51,
+      "line_start": 48,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Archive",
+      "raises": [],
+      "signature": "public void Archive(Order order)",
+      "statement_lines": [
+        50
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Graph",
+      "doc": "",
+      "header_end": 56,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 56,
+      "line_start": 53,
+      "params": [],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Graph",
+      "raises": [],
+      "signature": "public void Graph()",
+      "statement_lines": [
+        55
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.ListOpen",
+      "doc": "",
+      "header_end": 40,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 40,
+      "line_start": 37,
+      "params": [],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.ListOpen",
+      "raises": [],
+      "signature": "public void ListOpen()",
+      "statement_lines": [
+        39
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Log",
+      "doc": "",
+      "header_end": 35,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 35,
+      "line_start": 32,
+      "params": [
+        "message"
+      ],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Log",
+      "raises": [],
+      "signature": "public string Log(string message)",
+      "statement_lines": [
+        34
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Place",
+      "doc": "Place totals an order with billing, sends its invoice and logs the route the order took\nbefore handing back the amount the customer owes.",
+      "header_end": 30,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 30,
+      "line_start": 16,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Place",
+      "raises": [
+        "InvalidOperationException"
+      ],
+      "signature": "public int Place(Order order)",
+      "statement_lines": [
+        18,
+        19,
+        28,
+        29
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Save",
+      "doc": "",
+      "header_end": 46,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 46,
+      "line_start": 42,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Save",
+      "raises": [],
+      "signature": "public void Save(Order order)",
+      "statement_lines": [
+        44,
+        45
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService",
+      "doc": "",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 57,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "csapp.Orders.OrderService",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        3,
+        4,
+        10
+      ]
+    },
+    {
+      "display": "csapp.Program",
+      "doc": "",
+      "header_end": 4,
+      "is_test": false,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 4,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Program.cs",
+      "qualname": "csapp.Program",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "display": "csapp.Store.Base.Base",
+      "doc": "A tiny base type every service derives from.",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 11,
+      "line_start": 4,
+      "params": [],
+      "path": "csapp/Store/Base.cs",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "public class Base",
+      "statement_lines": [
+        7
+      ]
+    },
+    {
+      "display": "csapp.Store.Base.Base.Log",
+      "doc": "Log hands back the message it was given.",
+      "header_end": 10,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 10,
+      "line_start": 7,
+      "params": [
+        "message"
+      ],
+      "path": "csapp/Store/Base.cs",
+      "qualname": "Base.Log",
+      "raises": [],
+      "signature": "public string Log(string message)",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "csapp.Store.Base.OrderError",
+      "doc": "OrderError is what an order throws when it will not save.",
+      "header_end": 16,
+      "is_test": false,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 16,
+      "line_start": 14,
+      "params": [],
+      "path": "csapp/Store/Base.cs",
+      "qualname": "OrderError",
+      "raises": [],
+      "signature": "public class OrderError : Exception",
+      "statement_lines": []
+    },
+    {
+      "display": "csapp.Store.Base",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 16,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Store/Base.cs",
+      "qualname": "csapp.Store.Base",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        4,
+        14
+      ]
+    },
     {
       "display": "goapp.billing.billing.SendInvoice",
       "doc": "SendInvoice mails the invoice for one order.",

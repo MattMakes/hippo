@@ -453,16 +453,18 @@ def test_indexing_a_code_source_returns_all_nine_counts(store, ollama, code_sour
         entities=written["entities"],
         facts=written["facts"],
         synonyms=written["synonyms"],
-        symbols=73,
+        symbols=93,
         data_objects=12,
-        code_edges=143,
+        code_edges=182,
         # the README names `OrderService.place` and "the order service"; each reaches the Python
-        # symbol and its Rust twin, which share the qualname (S2.13 never splits a dotted name).
-        # `goapp` spells it `Service.Place`, so it is not a third match for either.
-        refers_to=4,
+        # symbol and its Rust and C# twins, which share the qualname case-blind (S2.13 never
+        # splits a dotted name), and "the order service" also reaches `csapp`'s module, which is
+        # a *file* called `OrderService.cs`. `goapp` spells it `Service.Place`, so it matches
+        # neither.
+        refers_to=6,
     )
-    assert (store.stats()["symbols"], store.stats()["data_objects"]) == (73, 12)
-    assert len(store.load_code_edges()) == 143
+    assert (store.stats()["symbols"], store.stats()["data_objects"]) == (93, 12)
+    assert len(store.load_code_edges()) == 182
 
 
 def test_every_passage_is_linked_to_what_it_defines(store, ollama, code_source, code_chunks):
@@ -511,8 +513,8 @@ def test_the_openie_bill_is_two_calls_per_extracted_passage(
     index_source(store, ollama, code_source, chunks, code=graph)
     assert openie_calls(fake_ollama) == 2 * len(extracted)
     # README, build.rb, `goapp/go.mod` (prose: Go's manifest has no walker but is readable text),
-    # and seven docs of 80+ characters -- two of them `rsapp`'s, two `goapp`'s.
-    assert len(extracted) == 10
+    # and nine docs of 80+ characters -- two of them `rsapp`'s, two `goapp`'s, two `csapp`'s.
+    assert len(extracted) == 12
 
 
 def test_a_skipped_passage_still_stores_an_empty_extraction_without_an_error(

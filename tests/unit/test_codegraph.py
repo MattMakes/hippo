@@ -551,7 +551,7 @@ def test_fixture_symbol_set(fixture_graph):
         (s["path"], s["qualname"], s["kind"], s["line_start"], s["line_end"]) for s in EXPECTED["symbols"]
     }
     assert found == wanted
-    assert len(fixture_graph.symbols) == 73
+    assert len(fixture_graph.symbols) == 93
 
 
 def test_fixture_symbol_line_ranges(fixture_graph):
@@ -798,12 +798,15 @@ def test_fixture_data_objects_are_deduped_across_every_site(fixture_graph):
     """
     One `table orders` for the DDL, the two SQL literals and `__tablename__` (2.2).
 
-    A second language telling the same story adds *sites*, never a second object: `goapp`'s
-    `ListOpen`/`Save` and `rsapp`'s `list_open`/`save` name the same table the Python ones do.
+    A second language telling the same story adds *sites*, never a second object: `csapp`'s
+    `ListOpen`/`Save`, `goapp`'s `ListOpen`/`Save` and `rsapp`'s `list_open`/`save` name the same
+    table the Python ones do.
     """
     orders = [d for d in fixture_graph.data_objects if d.kind == "table" and d.qualname == "orders"]
     assert len(orders) == 1
     assert orders[0].mentions == [
+        ("csapp/Orders/OrderService.cs", 39),
+        ("csapp/Orders/OrderService.cs", 44),
         ("goapp/orders/service.go", 35),
         ("goapp/orders/service.go", 39),
         ("pyapp/orders.py", 14),
@@ -1651,9 +1654,9 @@ def test_stats_shape(fixture_graph):
         "modifies",
         "history_skipped",
     }
-    assert stats["symbols"] == 73
-    # six Python, three TypeScript, six Rust, six Go, one .sql
-    assert stats["files_parsed"] == 22
+    assert stats["symbols"] == 93
+    # six Python, three TypeScript, six Rust, six Go, five C#, one .sql
+    assert stats["files_parsed"] == 27
     assert stats["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # tools/build.rb
     assert stats["unresolved_calls"]["pyapp/orders.py"] == 2  # os.path.join and print
     assert stats["truncated"] is False
