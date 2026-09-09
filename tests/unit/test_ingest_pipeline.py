@@ -429,6 +429,43 @@ def test_history_depth_clones_one_commit_deeper_than_it_reads(git_index) -> None
     assert depths == [DEFAULT_SETTINGS["code_history_depth"] + 1]
 
 
+def test_a_broken_history_read_does_not_fail_the_whole_index_job(
+    ctx: AppContext, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # E1F-a / Defect 1's defence in depth: whatever `read_history` raises -- not just
+    # `HistoryError` -- must degrade to a warning and an empty history, never a failed job
+    # with the code graph and passages already written thrown away.
+    from hippo.codegraph import git_history
+    from hippo.ingest import pipeline, repos
+
+    checkout = make_code_checkout(tmp_path / "origin")
+
+    def clone_locally(url, dest, timeout=300, depth=1):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", str(depth), "--single-branch", "--", url, str(dest)],
+            check=True,
+            env=git_env(),
+        )
+        return dest
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(repos, "clone_repo", clone_locally)
+    monkeypatch.setattr(git_history, "read_history", broken)
+    source_id = ctx.store.create_source("repo", "broken history", {"url": f"file://{checkout}"})
+    pipeline.source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
+    pipeline.run_indexing(ctx, source_id)
+
+    source = ctx.store.get_source(source_id)
+    assert source["status"] == "ready", source["error"]
+    code = source["meta"]["code"]
+    assert code["symbols"] > 0  # the code graph itself is unaffected
+    assert (code["commits"], code["modifies"], code["history_skipped"]) == (0, 0, 0)
+    assert ctx.store.stats()["commits"] == 0
+
+
 def test_a_repo_source_still_links_its_prose_to_its_code(git_index) -> None:
     # The README names `OrderService.place` in backticks and "the order service" in words. Both
     # become REFERS_TO, at the two omegas the table gives -- a repo source is a code source and a

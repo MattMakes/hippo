@@ -215,10 +215,14 @@ git_history.py   read_history(checkout, symbols, source_id, *, depth, timeout_s,
                      churn summed. The ranges are the symbol's AT THAT COMMIT -- each touched file is re-parsed at
                      each commit -- because a HEAD-range shortcut would make the commit eval measure its own drift.
                      A module whose only content is one class therefore never appears: the class encloses the line.
-                 `skipped` counts BUDGET skips only (a cancellation is not a budget); `truncated` marks a walk
-                     that `should_stop` ended. HistoryError is a logged warning and an empty history, never a
-                     failed index job.
-                 MODIFIES_OMEGA = 1.0; LOG_FORMAT; HUNK_RE; DIFF_OPTIONS
+                 `skipped` counts a commit a BUDGET cost us -- timed out, or its diff exceeded MAX_DIFF_BYTES
+                     (a commit that vendors a binary tree, read as bytes via `_git_capped` and killed past the
+                     cap rather than fully buffered) -- plus, as defence in depth, any commit whose diff could
+                     not be decoded or read at all; a cancellation is not a budget, so it counts nothing.
+                     `truncated` marks a walk that `should_stop` ended. Any exception `read_history` raises,
+                     HistoryError included, is a logged warning and an empty/partial history in the pipeline,
+                     never a failed index job.
+                 MODIFIES_OMEGA = 1.0; MAX_DIFF_BYTES = 20 MiB; LOG_FORMAT; HUNK_RE; DIFF_OPTIONS
 extract.py       extract_code(docs, source_id, *, should_stop=None) -> CodeGraph
                  Each file parses in its own try/except, so one parse failure falls back to today's line windows for
                  that file alone. should_stop() is checked between files, so a big repo stays cancellable.
