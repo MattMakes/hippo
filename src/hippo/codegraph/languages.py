@@ -19,6 +19,7 @@ because `from .languages import LanguageRules, RULES` is the one import a new wa
 
 from __future__ import annotations
 
+from . import go as go_walker
 from . import python as python_walker
 from . import typescript as typescript_walker
 from .model import SELF_NAMES, SUPER_NAMES, LanguageRules
@@ -36,16 +37,16 @@ def register(entry: LanguageRules) -> LanguageRules:
 
 register(python_walker.RULES_ENTRY)
 register(typescript_walker.RULES_ENTRY)
+register(go_walker.RULES_ENTRY)
 
 # Registered without a walker yet: the grammar loads and the suffix is known, but nothing
-# turns these files into symbols, so they keep line windows. Landing `go.py` means importing
-# it above and replacing its line here with `register(go_walker.RULES_ENTRY)` -- one line,
-# and the only shared file a walker has to touch.
+# turns these files into symbols, so they keep line windows. Landing `csharp.py` means
+# importing it above and replacing its line here with `register(csharp_walker.RULES_ENTRY)`
+# -- one line, and the only shared file a walker has to touch.
 #
 # `self_names` / `super_names` are per language on purpose: `base` is C#'s `super`, but an
 # ordinary Python module name -- `from . import base` then `base.helper()` is a real INVOKES
 # edge, and a shared `SUPER_NAMES` holding `base` would silently route it to the MRO instead.
-register(LanguageRules(name="go", line_comment="//"))
 register(LanguageRules(name="csharp", line_comment="//", super_names=SUPER_NAMES | {"base"}))
 register(LanguageRules(name="rust", line_comment="//", self_names=SELF_NAMES | {"Self"}))
 
