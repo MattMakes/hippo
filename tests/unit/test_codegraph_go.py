@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from hippo.codegraph import extract_code
 from hippo.codegraph.go import RULES_ENTRY, package_dir, source_setup
 from hippo.codegraph.languages import PARSED_LANGS, RULES
@@ -176,9 +178,6 @@ BASE = "goapp/store/base.go"
 BILLING = "goapp/billing/billing.go"
 TEST = "goapp/orders/service_test.go"
 MAIN = "goapp/cmd/main.go"
-
-
-import pytest  # noqa: E402 - the tree above reads better before the fixture that extracts it
 
 
 @pytest.fixture(scope="module")
@@ -487,6 +486,16 @@ def test_the_fuzzy_rule_is_the_last_resort():
         }
     )
     assert not [e for e in two.edges if e.kind == "INVOKES"]
+
+    # And a name everybody uses is refused however it is capitalised: `FUZZY_STOPLIST` is
+    # written in lower case and matched in lower case, so Go's `Close` is Python's `close`.
+    common = graph_of(
+        {
+            "app/a.go": "package app\n\ntype T struct{}\n\nfunc (t *T) Close() {}\n",
+            "app/b.go": "package other\n\nfunc Run(x Thing) { x.Close() }\n",
+        }
+    )
+    assert edges_of(common, "INVOKES") == set()
 
 
 # --------------------------------------------------------------- no edge

@@ -300,26 +300,27 @@ def test_a_member_of_a_sibling_file_in_the_same_scope_is_worth_1_00(monkeypatch)
 
 def test_the_fuzzy_stoplist_is_matched_in_any_case():
     """
-    `x.Close()` in Go is the name `close` in a language that capitalises its methods, and a
-    stoplist written in one case only would refuse Python's guess and wave Go's through --
-    the opposite of what the list is for. `Frobnicate` is not on it, so that one still
-    resolves and this is a test about the stoplist rather than about fuzzy matching.
+    `Close` is the name `close` in a language that capitalises its methods -- Go's and C#'s
+    do -- and a stoplist written in one case only would refuse Python's guess and wave
+    theirs through, the opposite of what the list is for. Pinned in Python, because the
+    rule is the resolver's and holds for every language. `Frobnicate` is not on the list, so
+    that one still resolves: this is a test about the stoplist, not about fuzzy matching.
     """
     common = graph_of(
         {
-            "app/a.go": "package app\n\ntype T struct{}\n\nfunc (t *T) Close() {}\n",
-            "app/b.go": "package other\n\nfunc Run(x Thing) { x.Close() }\n",
+            "app/a.py": "class T:\n    def Close(self):\n        return 1\n",
+            "app/b.py": "def run(x):\n    return x.Close()\n",
         }
     )
     assert edges_of(common, "INVOKES") == set()
 
     rare = graph_of(
         {
-            "app/a.go": "package app\n\ntype T struct{}\n\nfunc (t *T) Frobnicate() {}\n",
-            "app/b.go": "package other\n\nfunc Run(x Thing) { x.Frobnicate() }\n",
+            "app/a.py": "class T:\n    def Frobnicate(self):\n        return 1\n",
+            "app/b.py": "def run(x):\n    return x.Frobnicate()\n",
         }
     )
-    assert edge(rare, "INVOKES", "app/b.go::Run", "app/a.go::T.Frobnicate")[1:3] == (0.50, "fuzzy_name")
+    assert edge(rare, "INVOKES", "app/b.py::run", "app/a.py::T.Frobnicate")[1:3] == (0.50, "fuzzy_name")
 
 
 def test_a_class_can_hold_members_in_another_file(monkeypatch):
