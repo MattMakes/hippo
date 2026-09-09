@@ -822,8 +822,9 @@ def _impls_by_type(index: SourceIndex) -> dict[str, list[str]]:
     source is not held alive, and two extractions at once simply rebuild rather than share.
     """
     global _IMPLS
-    if _IMPLS is not None and _IMPLS[0]() is index:
-        return _IMPLS[1]
+    cached = _IMPLS  # read once: another extraction may replace it between two reads
+    if cached is not None and cached[0]() is index:
+        return cached[1]
     found: dict[str, list[str]] = {}
     for owner_path, owner in sorted(index.members):
         found.setdefault(owner, []).append(owner_path)
