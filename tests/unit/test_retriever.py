@@ -547,6 +547,38 @@ def test_naming_a_symbol_lifts_its_passage_into_what_the_model_reads(
     assert trace.top_nodes[0].score > 2 * trace.top_nodes[1].score
 
 
+def test_naming_the_rust_symbol_seeds_the_rust_one_and_lifts_its_passage(
+    code_retriever: Retriever, code_source: str
+) -> None:
+    """
+    The same claim for the other tree, and the reason a display name is a display name: the fixture
+    tells one story in Python and in Rust, so `OrderService.place` is a qualname in both. Naming
+    `rsapp.src.orders.OrderService.place` in full seeds *that* symbol, alone and whole, and makes
+    it the most activated node in the graph.
+
+    The passage goes from dense rank 26 to rank 9, not into `qa_top_k`: the eight above it are the
+    short `rsapp` module headers `FakeOllama`'s feature-hashed vectors happen to like on a question
+    whose prose half is "What does do?". The lift is the anchor's doing; the exact position is the
+    embedder's, as the test above says at length.
+    """
+    index = code_retriever.index
+    rust_place = symbol_id(code_source, "rsapp/src/orders.rs", "OrderService.place")
+    passage_id = index.node_ids[index.defining_passages(index.idx_of[rust_place])[0]]
+    question = "What does rsapp.src.orders.OrderService.place do?"
+
+    without = code_retriever.retrieve(question, settings(code_seed_weight=0.0, code_dense_seeds=0))
+    trace = code_retriever.retrieve(question, settings(code_dense_seeds=0))
+
+    assert trace.used_code_seeds is True
+    named = [s for s in trace.seed_symbols if s.kept and s.how == "identifier"]
+    assert [(s.node_id, s.n_matches) for s in named] == [(rust_place, 1)]
+    assert place_id(index, code_source) not in {s.node_id for s in trace.seed_symbols}
+    assert index.node_ids[trace.top_nodes[0].vertex] == rust_place
+    assert trace.top_nodes[0].score > 4 * trace.top_nodes[1].score
+    ranks = {p.passage_id: p.rank for p in trace.passages}
+    assert ranks[passage_id] < {p.passage_id: p.rank for p in without.passages}[passage_id] - 10
+
+
 def test_a_stack_trace_seeds_ppr_even_when_no_fact_survives(code_retriever: Retriever) -> None:
     # The case B's placement could never reach: the DPR fallback returns before its anchor code.
     trace = code_retriever.retrieve(TRACEBACK, settings(), fact_filter=lambda q, c: ([], ""))

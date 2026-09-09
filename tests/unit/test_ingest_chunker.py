@@ -276,6 +276,92 @@ def test_a_typescript_header_uses_a_line_comment_placeholder(code_graph) -> None
     assert "OrderModel = mongoose.model" in module.text  # module-level code after the members
 
 
+# The same three rules over the Rust tree, where they are load-bearing rather than incidental: a
+# struct's methods are written in `impl` blocks outside it, and an inline `mod tests` is a
+# container of its own. The inline-source versions of these cases are the L3 section below; these
+# are the checked-in fixture, so the line numbers in the placeholders are the file's.
+
+RUST_ORDERS_FIXTURE = "rsapp/src/orders.rs"
+
+
+def test_the_rust_tree_is_one_passage_per_symbol_in_source_order(code_graph) -> None:
+    assert [c.title for c in chunks_of(RUST_ORDERS_FIXTURE, code_graph)] == [
+        "rsapp/src/orders.rs :: rsapp.src.orders (lines 1-42)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService (lines 7-9)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.log (lines 12-14)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.place (lines 19-24)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.list_open (lines 26-28)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.save (lines 30-33)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.archive (lines 35-37)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.tests (lines 44-52)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.tests.place_totals (lines 48-51)",
+    ]
+
+
+def test_a_rust_struct_header_is_its_own_lines_and_a_placeholder_per_method(code_graph) -> None:
+    struct = chunks_of(RUST_ORDERS_FIXTURE, code_graph)[1]
+    assert struct.text.splitlines() == [
+        "pub struct OrderService {",
+        "    db: Db,",
+        "}",
+        # Both `impl` blocks are elsewhere in the file; the header still lists what they hold.
+        "    fn log(&self, message: &str) -> String { ... }  // lines 12-14",
+        "    pub fn place(&self, order: &Order) -> Result<i64, OrderError> { ... }  // lines 19-24",
+        "    pub fn list_open(&self) { ... }  // lines 26-28",
+        "    pub fn save(&self, order: &Order) -> Result<(), OrderError> { ... }  // lines 30-33",
+        "    pub fn archive(&self, order: &Order) { ... }  // lines 35-37",
+        "    pub fn graph(&self) { ... }  // lines 39-41",
+    ]
+    assert "let amount = total(order);" not in struct.text  # the body is its own passage
+    # The doc comment is not inside the struct's lines (it is a TS JSDoc, not a Python decorator),
+    # so the module header prints it -- and it still reaches OpenIE from here.
+    assert struct.extract_text.startswith("Keeps orders. The crate stores every order in Postgres")
+
+
+def test_the_rust_module_header_stands_in_for_the_struct_the_impls_and_the_inline_module(
+    code_graph,
+) -> None:
+    module = chunks_of(RUST_ORDERS_FIXTURE, code_graph)[0]
+    assert "pub struct OrderService { ... }  // lines 7-9" in module.text
+    # An `impl` block is not a symbol: its own line belongs to nobody else, so the module keeps it
+    # and stands in for the methods inside it wherever they are written.
+    assert "impl Base for OrderService {" in module.text
+    assert "impl OrderService {" in module.text
+    assert "    fn log(&self, message: &str) -> String { ... }  // lines 12-14" in module.text
+    assert (
+        "    pub fn place(&self, order: &Order) -> Result<i64, OrderError> { ... }  // lines 19-24"
+        in module.text
+    )
+    assert "mod tests { ... }  // lines 44-52" in module.text
+    assert "let amount = total(order);" not in module.text
+    assert "super::OrderService::new()" not in module.text
+
+
+def test_the_rust_inline_test_module_is_a_container_with_its_own_function_passage(code_graph) -> None:
+    chunks = chunks_of(RUST_ORDERS_FIXTURE, code_graph)
+    tests, place_totals = chunks[-2], chunks[-1]
+    assert tests.text.splitlines() == [
+        "#[cfg(test)]",
+        "mod tests {",
+        "    use super::*;",
+        "",
+        "    fn place_totals() { ... }  // lines 48-51",
+        "}",
+    ]
+    assert place_totals.text.startswith("    #[test]\n    fn place_totals() {")
+    assert "super::OrderService::new().place(&Order::default());" in place_totals.text
+
+
+def test_every_line_of_the_rust_fixture_file_is_printed_exactly_once(code_graph) -> None:
+    source = [
+        line for line in (CODE_SAMPLE_PATH / RUST_ORDERS_FIXTURE).read_text().splitlines() if line.strip()
+    ]
+    printed = printed_lines(chunks_of(RUST_ORDERS_FIXTURE, code_graph))
+    assert sorted(printed) == sorted(source)
+    assert len(printed) == len(source)
+
+
 def test_every_passage_defines_its_symbol_and_the_data_objects_it_names(code_graph) -> None:
     from hippo.codegraph.model import data_id, symbol_id
 

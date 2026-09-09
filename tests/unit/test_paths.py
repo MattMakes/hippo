@@ -142,6 +142,25 @@ def test_a_direct_call_renders_exactly(index: GraphIndex) -> None:
     ]
 
 
+def test_the_same_call_in_the_rust_tree_renders_the_same_way(index: GraphIndex) -> None:
+    """
+    `hippo path rsapp.src.orders.OrderService.place rsapp.src.billing.total`: one story in two
+    languages, one grammar. The tier is 0.90 `via_import` -- the call goes through a `use` -- and
+    Rust can never reach the 1.00 `same_scope` tier at all, because its walker sets no
+    `FileFacts.scope` for a language whose modules are files rather than a declared package.
+    """
+    walk = shortest_code_path(
+        index,
+        vertex(index, "rsapp.src.orders.OrderService.place"),
+        vertex(index, "rsapp.src.billing.total"),
+        theta=THETA,
+    )
+    assert lines(index, walk) == [
+        "rsapp.src.orders.OrderService.place -[INVOKES 0.90 via_import]-> rsapp.src.billing.total"
+    ]
+    assert not any(e.provenance == "same_scope" for e in direct_edges(index, walk[0].src, theta=THETA))
+
+
 def test_a_data_access_edge_renders_with_its_kind_and_confidence(index: GraphIndex) -> None:
     walk = shortest_code_path(
         index, vertex(index, "pyapp.orders.OrderService.save"), vertex(index, "table orders"), theta=THETA
