@@ -39,7 +39,8 @@ from .model import (
 
 # Method names too common to guess from. A `fuzzy_name` edge on any of these would be
 # noise at best and wrong at worst; 2.2b's "ambiguous or stoplisted -> no edge" row is
-# what this list implements.
+# what this list implements. Written in lower case and matched in lower case, so Go's and
+# C#'s `Close`/`Get`/`Write` are the same names as Python's.
 FUZZY_STOPLIST = frozenset(
     {
         "add", "all", "any", "append", "apply", "build", "call", "check", "clear", "close",
@@ -484,10 +485,30 @@ def _on_class(
     for candidate in RULES[facts.lang].member_paths(index, qualname, path):
         found = index.members.get((candidate, qualname), {}).get(name)
         if found is not None:
-            omega, provenance = (1.00, "same_file") if candidate == facts.path else (0.90, "via_import")
-            return Resolution(found, omega, provenance)
+            return Resolution(found, *_member_tier(index, facts, candidate))
     inherited = _mro_lookup(index, path, qualname, name)
     return Resolution(inherited, 0.90, "via_inheritance") if inherited is not None else None
+
+
+def _member_tier(index: SourceIndex, facts: FileFacts, candidate: str) -> tuple[float, str]:
+    """
+    What a member found in `candidate` is worth, by how far away that file is.
+
+    The file itself is 1.00 `same_file`. A sibling of the same Go package or C# namespace is
+    1.00 `same_scope`: the language resolves it with no import at all, which is the same
+    reason `resolve_imports` gives a bare same-scope name 1.00, and calling a *method* of a
+    sibling file 0.90 would contradict it. Anything else came through an import, at 0.90.
+
+    Python and TypeScript have no scope above the file, so `facts.scope` is None and the
+    middle row is unreachable for them -- `None == None` is deliberately not enough.
+    """
+    if candidate == facts.path:
+        return 1.00, "same_file"
+    other = index.files.get(candidate)
+    if facts.scope is not None and other is not None:
+        if other.lang == facts.lang and other.scope == facts.scope:
+            return 1.00, "same_scope"
+    return 0.90, "via_import"
 
 
 def _through(facts: FileFacts, found: Resolution) -> Resolution:
@@ -551,8 +572,12 @@ def _fuzzy(index: SourceIndex, lang: str, name: str, kinds: tuple[str, ...]) -> 
     """
     2.2b's last resort: exactly one symbol of the right kind in this language carries the
     name, and the name is not one everybody uses. Anything else is no edge at all.
+
+    The stoplist is matched case-insensitively: `Close`, `Get` and `Write` are as ordinary
+    in Go and C# as `close`, `get` and `write` are in Python, and a list written in one case
+    would refuse the guess for one language and wave it through for another.
     """
-    if not name or name in FUZZY_STOPLIST:
+    if not name or name.lower() in FUZZY_STOPLIST:
         return None
     candidates = [s for s in index.by_name.get((lang, name), []) if s.kind in kinds]
     if len(candidates) != 1:
@@ -678,13 +703,35 @@ def sql_file_objects(source_id: str, path: str, text: str) -> tuple[list[DataObj
 
 
 def _data_call(index: SourceIndex, facts: FileFacts, call) -> Hit | None:
-    """A Mongo chain (`db.orders.find`) or a call on a `mongoose.model` binding."""
+    """
+    A Mongo chain (`db.orders.find`), a call on a `mongoose.model` binding, or a call on a
+    variable bound earlier in the same scope to a Mongo chain (`const col =
+    db.collection("orders"); col.find(...)`).
+    """
     if not call.receiver:
         return None
     binding = _model_binding(index, facts, call.receiver)
     if binding:
         return mongoose_hit(binding, call.name, call.line)
-    return mongo_hit(call.receiver, call.name, call.line)
+    hit = mongo_hit(call.receiver, call.name, call.line)
+    if hit is not None:
+        return hit
+    return _bound_mongo_hit(facts, call)
+
+
+def _bound_mongo_hit(facts: FileFacts, call) -> Hit | None:
+    """`col` in `const col = db.collection("orders"); col.updateOne(...)` -- read the
+    collection off the assignment's own call chain, the same way `mongo_hit` reads it off a
+    direct `db.collection("orders").updateOne(...)` chain."""
+    for assignment in facts.assignments:
+        if assignment.scope != call.caller or assignment.target != call.receiver:
+            continue
+        if assignment.line > call.line or not assignment.chain:
+            continue
+        hit = mongo_hit(assignment.chain, call.name, call.line)
+        if hit is not None:
+            return hit
+    return None
 
 
 def _model_binding(index: SourceIndex, facts: FileFacts, receiver: str) -> str:

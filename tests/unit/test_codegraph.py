@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from hippo.codegraph import extract_code, resolve
+from hippo.codegraph import extract, extract_code, resolve
 from hippo.codegraph.data_access import (
     classify_literal,
     cypher_objects,
@@ -50,6 +50,7 @@ from hippo.codegraph.model import (
     symbol_id,
 )
 from hippo.codegraph.python import is_test_path, module_qualname
+from hippo.codegraph.python import walk as python_walk
 from hippo.codegraph.resolve import Resolution
 from hippo.codegraph.treesitter import GRAMMARS, get_language, grammar_for
 from hippo.ingest import readers
@@ -258,6 +259,67 @@ def test_a_scope_resolution_answers_for_the_names_it_holds(monkeypatch):
     )
     assert edge(graph, "INVOKES", "orders.py::place", "ledger.py::post")[1:3] == (0.90, "via_import")
     assert ("IMPORTS", "orders.py::orders", "ledger.py::ledger") in links(graph, "IMPORTS")
+
+
+def scoped_walk(path: str, root, source_id: str):
+    """Python's walk with a scope on top: every directory is its own package."""
+    facts = python_walk(path, root, source_id)  # the real one: `RULES` holds this wrapper
+    facts.scope = path.rpartition("/")[0] or "."
+    return facts
+
+
+def package_names(index, facts):
+    """What `scope_defines` returns for a language whose directory is its package."""
+    return dict(index.scopes.get(("python", facts.scope or ""), {}))
+
+
+def test_a_member_of_a_sibling_file_in_the_same_scope_is_worth_1_00(monkeypatch):
+    """
+    Go's package and C#'s namespace put a *method* within reach without an import, exactly
+    as they do a bare name -- so `Service().log()` where `Service` lives in a sibling file
+    of the same package is `same_scope` 1.00, not the 0.90 an import would have earned.
+
+    Python and TypeScript have no scope above the file (`FileFacts.scope` is None), so they
+    never reach that row: the same tree resolves at 0.90 `via_import` with the rules as
+    shipped, which is the first half of this test.
+    """
+    files = {
+        "pkg/impl.py": "class Service:\n    def log(self, m):\n        return m\n",
+        "pkg/app.py": "from .impl import Service\n\ndef go():\n    return Service().log(1)\n",
+    }
+    call = ("pkg/app.py::go", "pkg/impl.py::Service.log")
+    assert edge(graph_of(files), "INVOKES", *call)[1:3] == (0.90, "via_import")
+
+    # `extract.WALKERS` is built from `RULES` once, at import, so a walker swapped at run
+    # time has to be put in both places -- registration is an import-time act.
+    monkeypatch.setitem(RULES, "python", as_python(walk=scoped_walk, scope_defines=package_names))
+    monkeypatch.setitem(extract.WALKERS, "python", scoped_walk)
+    assert edge(graph_of(files), "INVOKES", *call)[1:3] == (1.00, "same_scope")
+
+
+@pytest.mark.skipif("go" not in PARSED_LANGS, reason="needs the Go walker (lands with wp/lgo)")
+def test_the_fuzzy_stoplist_is_matched_in_any_case():
+    """
+    `x.Close()` in Go is the name `close` in a language that capitalises its methods, and a
+    stoplist written in one case only would refuse Python's guess and wave Go's through --
+    the opposite of what the list is for. `Frobnicate` is not on it, so that one still
+    resolves and this is a test about the stoplist rather than about fuzzy matching.
+    """
+    common = graph_of(
+        {
+            "app/a.go": "package app\n\ntype T struct{}\n\nfunc (t *T) Close() {}\n",
+            "app/b.go": "package other\n\nfunc Run(x Thing) { x.Close() }\n",
+        }
+    )
+    assert edges_of(common, "INVOKES") == set()
+
+    rare = graph_of(
+        {
+            "app/a.go": "package app\n\ntype T struct{}\n\nfunc (t *T) Frobnicate() {}\n",
+            "app/b.go": "package other\n\nfunc Run(x Thing) { x.Frobnicate() }\n",
+        }
+    )
+    assert edge(rare, "INVOKES", "app/b.go::Run", "app/a.go::T.Frobnicate")[1:3] == (0.50, "fuzzy_name")
 
 
 def test_a_class_can_hold_members_in_another_file(monkeypatch):
@@ -1279,6 +1341,173 @@ def test_a_collection_call_names_the_collection():
         assert (hit.kind, hit.qualname, hit.access) == ("collection", "archive_orders", "WRITES"), chain
     assert mongo_hit("service.repository()", "InsertOne") is None
     assert mongo_hit("client.Collection(name)", "InsertOne") is None  # not a literal: no name
+
+
+def test_node_driver_collection_call_direct_chain():
+    """
+    `db.collection("x").method(...)` -- the official Node MongoDB driver's own idiom
+    (E1-territory-updater Defect 2): a call chain, not PyMongo's attribute chain, but the
+    string argument still names the collection.
+    """
+    graph = graph_of(
+        {
+            "src/territoryService.ts": (
+                "async function readOne(db) {\n"
+                '  return db.collection("territory").findOne({});\n'
+                "}\n"
+                "async function writeOne(db) {\n"
+                '  return db.collection("territory").updateOne({}, {});\n'
+                "}\n"
+            ),
+        }
+    )
+    reads_writes = edges_of(graph, "READS") | edges_of(graph, "WRITES")
+    assert (
+        "READS",
+        0.85,
+        "mongo_chain",
+        "src/territoryService.ts::readOne",
+        "collection:territory",
+    ) in reads_writes
+    assert (
+        "WRITES",
+        0.85,
+        "mongo_chain",
+        "src/territoryService.ts::writeOne",
+        "collection:territory",
+    ) in reads_writes
+
+
+def test_node_driver_collection_call_bound_to_a_variable():
+    """
+    `const col = db.collection("x"); col.method(...)` -- the `AssignFact` path: the
+    collection name has to survive being stashed on a binding, then be read back off a bare
+    `col.updateOne(...)` with no chain left in sight.
+    """
+    graph = graph_of(
+        {
+            "src/territoryService.ts": (
+                "async function writeOne(db) {\n"
+                '  const col = db.collection("territory");\n'
+                "  return col.updateOne({}, {});\n"
+                "}\n"
+            ),
+        }
+    )
+    assert (
+        "WRITES",
+        0.85,
+        "mongo_chain",
+        "src/territoryService.ts::writeOne",
+        "collection:territory",
+    ) in edges_of(graph, "WRITES")
+
+
+def test_node_driver_collection_call_non_literal_argument_names_nothing():
+    """
+    A dynamic collection name -- a plain variable or a template literal -- can't be read
+    statically, so it invents no data object, direct or bound.
+    """
+    graph = graph_of(
+        {
+            "src/territoryService.ts": (
+                "async function dynamicName(db, name) {\n"
+                "  return db.collection(name).findOne({});\n"
+                "}\n"
+                "async function templated(db, suffix) {\n"
+                "  return db.collection(`territory_${suffix}`).findOne({});\n"
+                "}\n"
+                "async function boundDynamic(db, name) {\n"
+                "  const col = db.collection(name);\n"
+                "  return col.findOne({});\n"
+                "}\n"
+            ),
+        }
+    )
+    assert graph.data_objects == []
+    assert links(graph, "READS") == set()
+    assert links(graph, "WRITES") == set()
+
+
+def test_pymongo_attribute_chain_is_unchanged():
+    """The PyMongo-style attribute chain still classifies -- the Node driver's call-based
+    idiom is additive, not a replacement."""
+    graph = graph_of(
+        {
+            "src/legacy.ts": ("async function readOne(db) {\n  return db.archive_orders.find_one({});\n}\n"),
+        }
+    )
+    assert (
+        "READS",
+        0.85,
+        "mongo_chain",
+        "src/legacy.ts::readOne",
+        "collection:archive_orders",
+    ) in edges_of(graph, "READS")
+
+
+def test_typescript_destructured_require_resolves_like_a_named_import():
+    """
+    `const {a, b: c} = require("./x")` -- one `ImportFact` per destructured name, with its
+    alias, the same shape `import {a, b as c} from "./x"` already gets (E1-territory-updater
+    Q2: `_tickLoop`'s destructured `runWorkerLoop` never produced an INVOKES edge before this).
+    """
+    graph = graph_of(
+        {
+            "src/workerLoop.ts": (
+                "export async function runWorkerLoop() { return 1; }\n"
+                "export function claimNextJob() { return 2; }\n"
+            ),
+            "src/exportQueueService.ts": (
+                'const { runWorkerLoop, claimNextJob: claim } = require("./workerLoop");\n'
+                "function tick() {\n"
+                "  runWorkerLoop();\n"
+                "  claim();\n"
+                "}\n"
+            ),
+        }
+    )
+    invokes = edges_of(graph, "INVOKES")
+    assert (
+        "INVOKES",
+        0.90,
+        "via_import",
+        "src/exportQueueService.ts::tick",
+        "src/workerLoop.ts::runWorkerLoop",
+    ) in invokes
+    assert (
+        "INVOKES",
+        0.90,
+        "via_import",
+        "src/exportQueueService.ts::tick",
+        "src/workerLoop.ts::claimNextJob",
+    ) in invokes
+
+
+def test_typescript_plain_require_binds_the_whole_module():
+    """`const x = require("./y")` already produces the module-level IMPORTS edge -- CommonJS's
+    whole-module export has no per-name shape to bind, so `x` itself stays unresolved."""
+    graph = graph_of(
+        {
+            "src/workerLoop.ts": "export function claimNextJob() { return 1; }\n",
+            "src/app.ts": 'const wl = require("./workerLoop");\nwl();\n',
+        }
+    )
+    assert (
+        "IMPORTS",
+        0.95,
+        "import_path",
+        "src/app.ts::src.app",
+        "src/workerLoop.ts::src.workerLoop",
+    ) in edges_of(graph, "IMPORTS")
+    assert links(graph, "INVOKES") == set()
+
+
+def test_typescript_bare_specifier_require_has_no_edge():
+    """`require("express")` names a dependency, not part of this source: no edge (2.2b)."""
+    graph = graph_of({"src/app.ts": 'const express = require("express");\nexpress();\n'})
+    assert links(graph, "IMPORTS") == set()
+    assert links(graph, "INVOKES") == set()
 
 
 # ---------------------------------------------------- properties and budgets
