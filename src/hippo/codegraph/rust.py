@@ -25,9 +25,11 @@ four things Rust does that neither Python nor TypeScript does:
 included (`#[test]` sits inside the test's passage, the way a Python decorator does) and doc
 comments excluded (the way TypeScript leaves a JSDoc block to the container). A type whose
 `impl` blocks are elsewhere in the file therefore has a *short* range and its methods have
-ranges outside it; the chunker's container rule is lexical, so those impl bodies also appear
-in the module's header passage. That is the honest reading -- stretching a struct over its
-impls would make two types with interleaved impls claim each other's lines.
+ranges outside it. That is the honest reading -- stretching a struct over its impls would make
+two types with interleaved impls claim each other's lines -- and the chunker follows it by
+owner rather than by position: the struct's header passage is its own lines plus one
+placeholder per method wherever the `impl` wrote it, and the module's header stands in for
+every symbol range in the file, so an impl body is printed in its own passage and nowhere else.
 """
 
 from __future__ import annotations

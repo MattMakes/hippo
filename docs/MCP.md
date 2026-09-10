@@ -289,8 +289,12 @@ guessing:
 ```
 
 ```
-ToolError: 'log' could mean any of: pyapp.orders.OrderService.log, pyapp.store.Base.log, tsapp.models.base.Base.log
+ToolError: 'log' could mean any of: csapp.Orders.OrderService.OrderService.Log, csapp.Store.Base.Base.Log, goapp.orders.service.Service.Log, goapp.store.base.Base.Log, pyapp.orders.OrderService.log, pyapp.store.Base.log, rsapp.src.orders.OrderService.log, rsapp.src.store.Base.log, tsapp.models.base.Base.log
 ```
+
+The match is **case-blind**, which is why C#'s `Log` and Go's `Log` are in that list beside Python's
+`log`. In a repository written in more than one language the fully-qualified form is the one to
+reach for.
 
 A name nothing matches fails the same way — `no symbol or data object called 'nope'` — and so does a
 blank one. `ToolError` is the one error an MCP client is shown verbatim, so everything you could act
@@ -307,7 +311,8 @@ How one symbol reaches another: the shortest chain of calls, imports and inherit
 Answers "how does this end up calling that?".
 
 ```json
-{"name": "hippo_explain_path", "arguments": {"a": "OrderService.place", "b": "billing.total"}}
+{"name": "hippo_explain_path",
+ "arguments": {"a": "pyapp.orders.OrderService.place", "b": "pyapp.billing.total"}}
 ```
 
 ```json
@@ -329,13 +334,42 @@ Answers "how does this end up calling that?".
 `found` is `false` with an empty `edges` when the two are not connected — that is an answer, not an
 error. `in_branch` says the call sits inside an `if` or a `try`, and `is_await` that it is awaited.
 
+The same tool over a Go repository, and the one provenance a Python or TypeScript answer can never
+carry — `same_scope`, a call the language resolves with no import at all, because both files are in
+the same package:
+
+```json
+{"name": "hippo_explain_path",
+ "arguments": {"a": "goapp.orders.service_test.TestPlace", "b": "goapp.orders.service.Service.Place"}}
+```
+
+```json
+{
+  "a": "goapp.orders.service_test.TestPlace",
+  "b": "goapp.orders.service.Service.Place",
+  "a_id": "symbol-73548d06...", "b_id": "symbol-a986308e...",
+  "found": true,
+  "edges": [
+    {"a": "symbol-73548d06...", "b": "symbol-a986308e...",
+     "a_name": "goapp.orders.service_test.TestPlace", "b_name": "goapp.orders.service.Service.Place",
+     "kind": "INVOKES", "omega": 1.0, "provenance": "same_scope",
+     "in_branch": false, "is_await": false, "call_line": 6}
+  ],
+  "lines": ["goapp.orders.service_test.TestPlace -[INVOKES 1.00 same_scope]-> goapp.orders.service.Service.Place"]
+}
+```
+
+A C# namespace earns the same 1.00. Rust has no scope above the file, so a resolved Rust call across
+files is always 0.90 `via_import` — `rsapp.src.orders.OrderService.place -[INVOKES 0.90 via_import]->
+rsapp.src.billing.total`.
+
 ### `hippo_blast_radius(symbol, depth=2)`
 
 What a change here could break: everything that depends on this symbol, level by level outwards.
 `depth` is clamped to 1–4.
 
 ```json
-{"name": "hippo_blast_radius", "arguments": {"symbol": "OrderService.log", "depth": 2}}
+{"name": "hippo_blast_radius", "arguments": {"symbol": "pyapp.orders.OrderService.log", "depth": 2}}
 ```
 
 ```json
@@ -365,7 +399,8 @@ How a function reaches an exception class: the chain of calls ending in whatever
 "where can this error actually come from?".
 
 ```json
-{"name": "hippo_exception_path", "arguments": {"symbol": "OrderService.save", "exception": "OrderError"}}
+{"name": "hippo_exception_path",
+ "arguments": {"symbol": "pyapp.orders.OrderService.save", "exception": "pyapp.store.OrderError"}}
 ```
 
 ```json
@@ -393,7 +428,7 @@ The commits that touched this symbol, newest first. Needs a source added as a **
 zip or a folder has no history to read — and returns an empty `commits` list otherwise.
 
 ```json
-{"name": "hippo_history", "arguments": {"symbol": "OrderService.place", "limit": 3}}
+{"name": "hippo_history", "arguments": {"symbol": "pyapp.orders.OrderService.place", "limit": 3}}
 ```
 
 ```json

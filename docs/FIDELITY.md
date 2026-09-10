@@ -183,6 +183,8 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
     model, with typed directed edges between them (`CONTAINS`, `IMPORTS`, `INVOKES`, `INHERITS`,
     `OVERRIDES`, `RAISES`, `CATCHES`, `TESTED_BY`, `READS`, `WRITES`), each carrying a confidence
     ω from 1.00 (syntax) down to 0.50 (a unique bare-name match) and the provenance that earned it.
+    A name the language resolves with no import at all — a sibling file of the same Go package or
+    C# namespace — is 1.00 too, under the provenance `same_scope`.
     Reason: an engineer's question about code carries evidence a prose pipeline throws away — an
     identifier, a stack frame, a diff — and a parser knows what a function calls where a model
     guesses. Each part below is separately gated, and the last paragraph is what "gated" means.
@@ -211,7 +213,11 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
       question of one line with no fence splits to `(text, "")` and takes exactly the reference's
       path — that is this part's inert condition, and it is a test (`anchors.split_question`).
     * **A second way to seed.** Identifiers, stack frames, exception names, fenced blocks and diff
-      hunks in the question seed PPR directly, at `code_seed_weight`. A code passage that scored
+      hunks in the question seed PPR directly, at `code_seed_weight`. Five frame shapes are read —
+      CPython, V8, a Go panic, a .NET trace and a Rust panic with its optional backtrace — and only
+      two of the five carry an exception name for the graph to match: CPython's trailing
+      `SomeError:` and .NET's `Unhandled exception. X:` header. Go's `panic:` seeds nothing, because
+      Go has no exception classes to point at. A code passage that scored
       well on plain similarity also seeds the symbols it defines, but at
       `code_seed_weight × passage_node_weight × its similarity`: `dpr_scores` are min-max
       normalised, so the full weight would put the top passage at exactly 1.0 and let it outrank an
@@ -247,7 +253,9 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
       drops the weakest evidence rather than an arbitrary tail.
     * **OpenIE never reads code.** The model sees a symbol's docstring or doc-comment when it is at
       least 80 characters, README and markdown, and commit messages. Never a function body, never
-      DDL. Structure comes from tree-sitter and sqlglot.
+      DDL. Structure comes from tree-sitter — Python, TypeScript/JavaScript, Go, C# and Rust — and
+      from sqlglot for the SQL beside them. A language with no walker keeps the reference's own
+      treatment exactly: line windows, read by the model.
     * **Nothing lets the model author a graph query.** No reply is turned into Cypher, a path
       expression or a graph query. The path tools are ordinary walks over the same in-memory graph,
       and the model's role stays the reference's: filter, and read.

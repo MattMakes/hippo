@@ -112,6 +112,9 @@ readers.py   Document(title: str, text: str, path: str, is_code: bool)
              read_file(path: Path, budget=None) -> list[Document]      # .txt .md .markdown .rst .html .htm .pdf .docx .epub, plus any code/text file
              read_zip(path: Path, name: str, budget=None) -> list[Document]   # every supported file inside, ignoring junk dirs
              is_supported(path: Path) -> bool; is_probably_binary(data: bytes) -> bool
+             KNOWN_TEXT_NAMES = extensionless files we know are text (makefile, dockerfile, license, readme, ...)
+             KNOWN_TEXT_FILENAMES = {"go.mod"} -- known by their WHOLE name. `.mod` is Fortran's too, so `go.mod` is a text file rather than a
+                    code extension: one prose passage, no files_skipped row, and `go.py`'s source_setup reads its `module` line from the raw Document.
              IGNORED_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", "target", ".idea", ".vscode", "vendor"}
              MAX_FILE_BYTES = 2_000_000
              TextBudget(limit=MAX_TEXT_CHARS).add(chars, where)   # one per source; raises TooLarge(ReadError) past the limit, which
@@ -124,10 +127,15 @@ chunker.py   chunk_document(doc, size_chars, overlap_chars, code: CodeGraph | No
                     long paragraphs on sentence ends; overlap = tail of previous chunk (whole sentences). Chunk titles: "Title (part N)" when a
                     section spills into several chunks.
              code: pack lines into <= size chunks, preferring to break at blank lines / lines starting at column 0; title "path (lines a-b)".
-             code with a symbol tree (code= is given and code.parsed(path)): one passage per symbol -- module header with a placeholder line per
-                    member, class header with one per method, one per function/method, title "path :: module.qualname (lines a-b)", "(part N)" when a
-                    body is split at the walker's statement starts. Each carries `defines` (-> DEFINED_IN) and `extract_text`. A .sql file keeps its
-                    windows, still defines its tables, and never reaches OpenIE.
+             code with a symbol tree (code= is given and code.parsed(path)): one passage per symbol, and one rule -- a CONTAINER's header passage is
+                    exactly its OWN lines with each member's range replaced by one `sig { ... }  // lines a-b` placeholder (`sig: ...  # lines a-b`
+                    for Python), wherever in the file that member is written; and the FILE module's header stands in for every symbol range in the
+                    file, whatever its kind or its owner. So every line of a parsed file is printed in exactly ONE passage. That is what makes Go's
+                    `func (s *Service) Place()` and Rust's `impl OrderService { }` work: a member is whatever the innermost symbol whose qualname is a
+                    dotted prefix of it owns, not whatever is written inside it. CONTAINER_KINDS = ("class", "module"), so Rust's inline
+                    `mod tests { }` is a container like any class. Title "path :: module.qualname (lines a-b)", "(part N)" when a body is split at the
+                    walker's statement starts. Each carries `defines` (-> DEFINED_IN) and `extract_text`. A .sql file keeps its windows, still defines
+                    its tables, and never reaches OpenIE.
              ordinal counts up across the whole document list for a source (chunk_documents(docs, size, overlap, code=None) -> list[Chunk] does that).
 repos.py     is_git_url(url) -> bool  (https://, http://, git@, ssh:// forms only)
              clone_repo(url, dest: Path, timeout=300, depth=1) -> Path   # git clone --depth N --single-branch; raise RepoError
@@ -171,12 +179,21 @@ vertices beside the entities. Every edge carries an `omega` (0-1: how sure the r
 src/hippo/codegraph/   pure: stdlib, tree-sitter, sqlglot and hipporag.text only. No store, no LLM, no ingest, no
                        import of the chunker, so there is no cycle. Deterministic: the same files give the same graph.
 model.py         Symbol, DataObject, CodeEdge(a, b, kind, omega, provenance, extra), FileFacts, FileGraph, CodeGraph
+                 LanguageRules (see languages.py below, which re-exports it)
+                 FileFacts.scope -- the scope this file's top-level names live in when the language has one above the
+                     file: a Go package (the DIRECTORY, so two `package main` files in different directories stay two
+                     scopes), a C# namespace. None for Python, TypeScript and Rust.
+                 AssignFact.chain -- the call's own text with its arguments, e.g. `db.collection("orders")`, so a
+                     local bound to a collection chain resolves to the collection (provenance `mongo_chain`)
                  symbol_id(source_id, path, qualname); data_id(source_id, kind, qualname); commit_id(source_id, sha)
                      -- prefixed md5s through make_id, so they cannot collide with entity-/fact-/passage- ids
                  name_text(name) -> the text we embed for a symbol or data object (split tokens, then the name)
-                 lang_of(name) -> 'python'|'typescript'|'sql'|None. ingest/readers.py holds the same table on the
-                     ingest side of the dependency line; codegraph may not import ingest, so the two are kept in step
-                     by a test, not by an import.
+                 lang_of(name) -> 'python'|'typescript'|'go'|'csharp'|'rust'|'sql'|None. ingest/readers.py holds the
+                     same table on the ingest side of the dependency line; codegraph may not import ingest, so the two
+                     are kept in step by a test, not by an import.
+                 the shared LanguageRules defaults live here too, so a walker importing them cannot import the registry
+                     back: module_qualname(path) (repo path, / -> ., extension stripped, __init__ kept), is_test_path,
+                     test_stem, is_test_function, one_path, no_module, no_scope, SELF_NAMES, SUPER_NAMES
                  merge_edges(edges) -> one row per (a, b, kind): the best omega wins, the first call_line is kept and
                      extra.call_lines lists the rest
                  CODE_EDGE_KINDS, SYMBOL_KINDS ('module'|'class'|'function'|'method'), DATA_KINDS ('table'|'column'|
@@ -192,15 +209,59 @@ treesitter.py    get_language(grammar), grammar_for(path, lang), new_parser(gram
                  call (parsers are not thread-safe and two index jobs can run at once); node helpers text_of,
                  line_of, end_line_of, named_children, field_child, walk_tree.
                  .js/.jsx/.mjs/.cjs all parse with the tsx grammar, so there is no third wheel.
+languages.py     RULES: dict[str, LanguageRules], filled by register(<lang>_walker.RULES_ENTRY) once per language at
+                 import, in a fixed order. A language is a REGISTRATION, not a branch: extract.py, resolve.py and the
+                 chunker ask RULES and never name a language. Adding one = a walker module with a module-level
+                 RULES_ENTRY, plus one register(...) line here.
+                 PARSED_LANGS -- the languages a walker turns into symbols, DERIVED from RULES (rules.walk is not
+                 None), not a hand-kept literal. git_history.py reads hunks only in files of these languages.
+                 A walker is optional: a language registered for its suffix, grammar and comment style alone keeps
+                 today's line windows and OpenIE and is counted in files_skipped as 'unsupported'.
+                 LanguageRules (DEFINED in model.py, re-exported here; frozen; only name and line_comment required):
+                     name; line_comment ('#' or '//')
+                     walk(path, root_node, source_id) -> FileFacts, or None for a language with no walker
+                     resolve_module(index, facts, spec) -> FileFacts | Resolution | None -- a Resolution when the
+                         import names a SCOPE rather than a file (a C# `using`, a Rust `use` of a module path)
+                     scope_defines(index, facts) -> {name: Symbol} -- what this file sees with no import at all
+                     module_qualname(path); is_test_path(path); test_stem(path) -> str | None (the stem is taken from
+                         module_qualname(path), not from the file name, so a TS `.spec`/`.test` invents no edge)
+                     is_test_function(symbol) -> bool -- which symbols of a test file are cases (Go's TestX, C#'s
+                         [Fact] method, every fn in Rust test code; the shared default is a `test` name prefix, which
+                         is Python's and TypeScript's convention and nobody else's)
+                     member_paths(index, qualname, path) -> [path] -- which files may hold a member of qualname; the
+                         default is [path], Rust's is every file with an `impl` for the type
+                     self_names / super_names: frozenset -- PER LANGUAGE. 'Self' is only Rust's and 'base' only C#'s,
+                         because `from . import base; base.helper()` is a real Python INVOKES edge.
+                     source_setup(docs) -> Any | None -- run ONCE per extract_code over the RAW documents, after the
+                         walk and only for a language that produced files; the result lands on SourceIndex.lang_state
 python.py        walk(path, root, source_id) -> FileFacts   # the symbols of one file plus its raw imports, calls,
-typescript.py    bases, raises/throws, assignments and string literals, all still unresolved
-                 python.py also: module_qualname(path) (repo path, / -> ., extension stripped, __init__ kept),
-                 is_test_path(path)
+typescript.py    bases, raises/throws, assignments and string literals, all still unresolved. One module per language,
+go.py            each exporting RULES_ENTRY: Go and Rust write a type's methods OUTSIDE the type (qualname
+csharp.py        `Service.Place`, `OrderService.place`); a Go package is a DIRECTORY and a C# namespace is a scope, so
+rust.py          both set FileFacts.scope; Go emits no RaiseFact at all and Rust's come from `-> Result<_, E>` only.
 resolve.py       the second pass over every file at once: build_index(files) -> SourceIndex, then resolve_imports,
                  resolve_bases, resolve_overrides (breadth-first MRO, <= 5), resolve_calls, resolve_raises,
                  resolve_data, resolve_tested_by, sql_file_objects. Resolution carries the omega and provenance the
                  matching rule earns. A call it cannot bind emits NO EDGE; it is counted per file into
                  CodeGraph.unresolved_calls instead.
+                 SourceIndex.scopes[(lang, scope)] -- a Go package or a C# namespace: every top-level name its files
+                     declare, merged, the SMALLEST PATH winning a collision so the graph does not depend on the order
+                     the documents arrived in. SourceIndex.lang_state[lang] -- whatever that language's source_setup
+                     returned, once per source (Go's go.mod module path, Rust's crate-root -> crate-name table).
+                 Resolution.scope: the names a scope holds, when a resolution is a package or a namespace rather than
+                     a file or a class. `Ns.Member` goes through _in_scope, called from _call_target (after
+                     _receiver_type) and from _lookup_dotted, both via _through, so the tier stays the distance rule.
+                 same_scope, omega 1.00, a fourth provenance beside same_file / via_import / via_inheritance: a name
+                     the language resolves with NO import at all. Seeded in resolve_imports AFTER the file's own
+                     defines (so an own name stays same_file 1.00) and awarded to a member by _member_tier(index,
+                     facts, candidate) -- 1.00 same_file for this file, 1.00 same_scope for a sibling of the same
+                     package/namespace, 0.90 via_import for anything else. facts.scope is None for Python,
+                     TypeScript and Rust, so the middle row is unreachable for them; None == None is not enough.
+                 declared(index, facts, qualname) -> the symbol a fact in this file is ABOUT, looked up through
+                     RULES[lang].member_paths -- Rust's `impl Base for OrderService` says something about a struct in
+                     another file, and resolve_bases / resolve_overrides / extract._contains all ask this way.
+                 FUZZY_STOPLIST: the 75 ordinary method names the 0.50 `fuzzy_name` guess refuses, matched in LOWER
+                     CASE, so Go's Close and C#'s Write are refused exactly as Python's close and write are.
 data_access.py   READS/WRITES against the tables, collections and graph labels the repo's own files name:
                  classify_literal(text), sql_tables (sqlglot, errors ignored), cypher_objects, mongo_hit,
                  mongoose_hit, read_sql_file, collect(literals). Cypher is tried BEFORE SQL, because
@@ -306,8 +367,26 @@ src/hippo/hipporag/anchors.py   what a question says about code. Pure: no store,
                  MAX_ANCHORS = 20; MAX_MATCHES_PER_TOKEN = 8; AMBIGUOUS_ABOVE = 10 (more matches than this and the
                      token seeds NOTHING -- counted before the per-token cap, or the rule would be unreachable);
                      MIN_NAME_CHARS = 3; MIN_QUALIFIED_PART = 2; FRAME_DECAY = 0.8; EXCEPTION_WEIGHT = 0.8; STOPLIST
+                     The share is weight / the TRUE match count and only the first MAX_MATCHES_PER_TOKEN are kept, so
+                     a token past the cap under-spends its seed weight rather than redistributing it.
                  A bare word anchors only when it is code-shaped -- PascalCase, camelCase, snake_case or ALL_CAPS.
                      Backticked and dotted spans skip that rule and are never split: the dots already say which one.
+                 FIVE frame shapes, tried in this order and the first match taking the whole question: python (_PY_
+                     FRAME) -> v8 (_JS_FRAME) -> go (_GO_FUNC + _GO_FRAME_PATH, two lines per frame) -> dotnet
+                     (_NET_FRAME) -> rust (_RUST_PANIC, then _RUST_FRAME + _RUST_AT pairs, _RUST_IMPL unwrapping
+                     `<T as Trait>::m`) -> the generic _PATH_LINE. _TRACE_NOISE is the runtimes' envelope (`panic:`,
+                     `goroutine N [`, `stack backtrace:`, `Unhandled exception.`, `exit status N`): always code,
+                     never an anchor. _Frame(path, line, name, qualified) is a frozen DATACLASS -- frames were tuples.
+                     `how` is unchanged at five values: Go, .NET and Rust frames all emit stack_trace; .NET's
+                     `Unhandled exception. X:` header emits exception at EXCEPTION_WEIGHT, like CPython's trailing
+                     `SomeError:`; Go's `panic:` header emits nothing, Go having no exceptions.
+                     A QUALIFIED frame (Go, .NET and Rust print dotted function names) that its path and line cannot
+                     place falls back to the LAST TWO dotted segments only, preferring symbols in the frame's own
+                     file, never split. The full name misses (a C# display name repeats the type) and the bare last
+                     segment would seed every `save` in the repository.
+                 CODE_SUFFIXES gained cs and rs (go was already there), which reaches past frames: a bare `orders.rs:20` in
+                     prose now anchors through _PATH_LINE, and a line holding `.cs:N` / `.rs:N` routes to the code
+                     half through _STACK_ISH.
 
 src/hippo/hipporag/paths.py     deterministic walks over the code graph. No model anywhere in this file.
                  resolve_symbol(index, name) -> node id, raising UnknownSymbol or AmbiguousSymbol(candidates)

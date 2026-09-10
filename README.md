@@ -148,7 +148,7 @@ Every step is recorded in a trace, which is what the Analyze page shows.
 
 Give hippo a git repository or a zip of one and it does something different from the six steps above. Prose gets its facts from the language model; **code gets its facts from a parser**, because a parser already knows what a function calls and a language model only guesses. Prose sources are untouched by every word of this section: without a code graph the chunker, the indexer and the search behave exactly as they always have.
 
-**Two languages, plus the SQL beside them.** Python (`.py`, `.pyi`) and TypeScript/JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`), parsed with tree-sitter, plus `.sql` files. Every other language keeps today's behaviour — line windows read by the model — and gets no code edges. That is "unsupported rather than half-supported": a Go file in a Python repo is still indexed and still searchable, it just has no call graph.
+**Five languages, plus the SQL beside them.** Python (`.py`, `.pyi`), TypeScript/JavaScript (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`), Go (`.go`), C# (`.cs`) and Rust (`.rs`), parsed with tree-sitter, plus `.sql` files. Every other language keeps today's behaviour — line windows read by the model — and gets no code edges. That is "unsupported rather than half-supported": a Ruby file in a Python repo is still indexed and still searchable, it just has no call graph.
 
 **One passage per symbol.** Instead of 1500-character windows that cut a function in half, each module header, class header, function and method becomes its own passage, titled `path :: module.qualname (lines a-b)` — for example `pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)`. A body too long for one passage is split at its own top-level statements into `(part N)`, never mid-expression.
 
@@ -167,7 +167,7 @@ and ten kinds of edge between them, each carrying a confidence (`omega`, 0 to 1)
 | --- | --- | --- |
 | `CONTAINS` | module holds this class, class holds this method, table holds this column | 1.00 |
 | `IMPORTS` | direct path / through a re-export / a wildcard import | 0.95 / 0.90 / 0.60 |
-| `INVOKES` | calls, resolved in the same file / through an import or a base class / by a unique bare name | 1.00 / 0.90 / 0.50 |
+| `INVOKES` | calls, resolved in the same file or the same Go package / C# namespace / through an import or a base class / by a unique bare name | 1.00 / 0.90 / 0.50 |
 | `INHERITS`, `OVERRIDES` | subclass, and a method that shadows its base's | 0.90 |
 | `RAISES`, `CATCHES` | raises or catches an exception class defined in this repository | 0.90 |
 | `TESTED_BY` | a test imports it / names it in its file name / mentions it | 0.85 / 0.75 / 0.60 |
@@ -177,7 +177,7 @@ Plus the edges that tie the code graph to the prose one: `DEFINED_IN` (a symbol 
 
 **A call it cannot justify produces no edge.** Not a guess with a low score — nothing. A call into the standard library, a third-party package, or a name the resolver cannot bind is left out, and only *counted*, per file, so you can see how big the gap is (`meta["code"]["unresolved_calls"]` on the source, and `unresolved_calls_total` beside it).
 
-**What you see.** The Source page's `code` meta records what the parser found: `symbols`, `languages` (which of the three it actually parsed), `data_objects`, `edges` and `edges_by_kind`, `files_parsed`, `files_skipped` (by reason: too big, unsupported, parse error), `unresolved_calls` and `unresolved_calls_total`, `truncated`, and — for a repository — `commits`, `modifies` and `history_skipped`. `GET /api/status` has a `code` card summing the same things across the whole memory — `symbols`, `data_objects`, `code_edges`, `commits`, `languages`, `unresolved_calls`, `history_skipped` — beside the entity and fact counts it always reported. Every value is zero or empty until you index a repository.
+**What you see.** The Source page's `code` meta records what the parser found: `symbols`, `languages` (which of the five it actually parsed), `data_objects`, `edges` and `edges_by_kind`, `files_parsed`, `files_skipped` (by reason: too big, unsupported, parse error), `unresolved_calls` and `unresolved_calls_total`, `truncated`, and — for a repository — `commits`, `modifies` and `history_skipped`. `GET /api/status` has a `code` card summing the same things across the whole memory — `symbols`, `data_objects`, `code_edges`, `commits`, `languages`, `unresolved_calls`, `history_skipped` — beside the entity and fact counts it always reported. Every value is zero or empty until you index a repository.
 
 **Safety rails.** Extraction stops at 5,000 files or 50,000 symbols per source (`truncated` then says so), and a file over 512 KiB keeps its line windows rather than being parsed. These are constants, not knobs — the same class as the 20,000-passage ceiling. The knobs are on the Settings page and in [the table below](#settings-you-can-change-on-the-settings-page): eleven of them, all named `code_*`, and **none of them is an environment variable**.
 
@@ -188,8 +188,8 @@ Everything above is indexing. The other half is what happens when your question 
 **The question is read for names before it is embedded.** A question can carry an identifier, a pasted stack trace, a fenced snippet or a diff hunk. hippo pulls the code nodes out of all four and starts the graph search from them directly, instead of hoping a fact happened to mention them:
 
 * an identifier — `OrderService.place`, a backticked `` `place` ``, or a bare word *written as code* (`PascalCase`, `camelCase`, `snake_case`, `ALL_CAPS`);
-* a **stack trace** — `File "pyapp/orders.py", line 18, in place`, `at fn (path:12:4)`, or a plain `path.py:18`. Frames are resolved by path and by the line falling inside a symbol's range, and they get lighter the further out from the innermost one they are;
-* the trailing `SomeError:` line of a traceback, matched against the exception classes in the repository;
+* a **stack trace** in any of five shapes — CPython's `File "pyapp/orders.py", line 18, in place`, V8's `at fn (path:12:4)`, a Go panic's two lines per frame (`example.com/goapp/orders.(*Service).Place(...)` then a tab-indented `service.go:18 +0x34`), a .NET frame (`at CsApp.Orders.OrderService.Place(Order o) in OrderService.cs:line 18`), a Rust `thread 'main' panicked at rsapp/src/orders.rs:20:19` and the numbered pairs a `RUST_BACKTRACE=1` backtrace adds — or a plain `path.py:18`. Frames are resolved by path and by the line falling inside a symbol's range, and they get lighter the further out from the innermost one they are;
+* the trailing `SomeError:` line of a CPython traceback, or .NET's `Unhandled exception. Some.Namespace.Error:` header, matched against the exception classes in the repository. Go's `panic:` header yields nothing, because Go has no exceptions for it to name;
 * a **fenced block**, tokenised the same way, and a **unified diff**, whose hunks map to the symbols whose lines they touch.
 
 A word that matches more than ten symbols seeds nothing at all and is recorded as ambiguous — better than silently picking eight arbitrary ones. A word that matches three splits its weight three ways.
@@ -225,7 +225,7 @@ Some questions do not want an answer written for them — they want a fact a cal
 | Which commits touched this? | `hippo history SYMBOL [--limit N]` | `hippo_history` |
 
 ```console
-$ hippo path OrderService.place billing.total
+$ hippo path pyapp.orders.OrderService.place pyapp.billing.total
 How pyapp.orders.OrderService.place reaches pyapp.billing.total:
 pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total
 ```
@@ -235,12 +235,15 @@ The `0.90` is how sure the resolver is and `via_import` is the rule that earned 
 Name a symbol however you like — fully qualified (`pyapp.orders.OrderService.place`), module-relative (`OrderService.place`) or bare (`place`) — as long as it picks out one. If it does not, nothing is guessed: you get the candidates and an exit code of 2.
 
 ```console
-$ hippo blast log
-error: 'log' could mean any of: pyapp.orders.OrderService.log, pyapp.store.Base.log, tsapp.models.base.Base.log
-  pyapp.orders.OrderService.log
-  pyapp.store.Base.log
-  tsapp.models.base.Base.log
+$ hippo blast place
+error: 'place' could mean any of: csapp.Orders.OrderService.OrderService.Place, goapp.orders.service.Service.Place, pyapp.orders.OrderService.place, rsapp.src.orders.OrderService.place
+  csapp.Orders.OrderService.OrderService.Place
+  goapp.orders.service.Service.Place
+  pyapp.orders.OrderService.place
+  rsapp.src.orders.OrderService.place
 ```
+
+The match is case-blind, which is what puts C#'s `Place` and Go's `Place` beside Python's `place` there. In a polyglot repository that makes the fully-qualified form the one to reach for.
 
 Over HTTP the same four live under `/api/code` (plus `/api/code/symbols?q=` to search names), where an unknown name is a 404, an ambiguous one a 409 carrying `candidates`, and a blank argument a 400. Every answer also carries `lines`: the same thing already rendered for a person to read. `docs/MCP.md` has a request and response for each.
 
@@ -268,6 +271,13 @@ One thing to plan for: the depth is fixed when the repository is **cloned**, not
 * **Symbol seeds are not badged on the Graph page.** Type a question there and the light-up animation heats the symbols it seeded like any other activated node, but only *entity* seeds get the seed badge — the endpoint behind it reports entity seeds alone. The symbols are all in the Analyze page's seed table; the badge is phase 2.
 * **You can see how many calls did not resolve, not which.** `unresolved_calls` is a count per file. The leaderboard that would name them — so you could write a binding rule for the ones that matter — is phase 2.
 * **The tests cannot show the noise improvement.** The fake model the test suite uses barely produces triples from code at all, so the tests prove the *number* of model calls fell, not that the facts got cleaner. That one you have to see on a real model.
+* **Go has no exceptions, so it has no `RAISES` and no `CATCHES`.** An `error` return is a value and `panic(...)` is an ordinary unresolved call, so a Go error type is a symbol nothing points at and "what does `Save` return on failure?" is not a question the graph can answer for Go. Go's other difference goes the other way: a call to a sibling file of the same package is `same_scope` at 1.00, and the package hippo uses is the **directory**, so `cmd/main.go` and `tools/build.go` stay two scopes although both say `package main`.
+* **C# resolves a field's declared type, and little else that a framework adds.** Extension methods, EF Core `DbSet` properties (`_db.Orders`) and a dotted construction (`new A.B.C().M()`) each resolve to nothing. Properties, fields and events are not symbols: an accessor with a body is still walked, but its calls and its SQL are credited to the class that declares it. `throw new InvalidOperationException` is recorded on the symbol and produces no edge, the type being outside the repository — `Symbol.raises` is a superset of the `RAISES` edges. When two files declare the same namespace, a `using` of it resolves to the file with the smallest path, so the graph does not depend on the order the files were read in.
+* **A call inside a Rust macro is invisible.** `assert_eq!(s.place(), 1)` is flat tokens to the grammar, so the commonest Rust test shape earns `TESTED_BY` 0.60 `test_mention` instead of 0.85 `test_import`; writing the call as its own statement is what earns the stronger edge. Rust's `RAISES` is a claim made by the signature, not by the body — anything returning `-> Result<_, E>` raises `E` whether or not it ever does — there is no `CATCHES` at all, and Rust has no scope above the file, so `same_scope` can never fire and every resolved cross-file call is 0.90 `via_import`.
+* **A doc comment written above its declaration is read but not shown.** Go, TypeScript and Rust put a doc comment outside the thing it documents, so the symbol's own passage does not print it — the enclosing header passage does. The model still sees it either way: `extract_text` carries it to OpenIE. A Python docstring is inside the function and is unaffected.
+* **`go.mod` is prose.** It is recognised by whole name rather than by extension, so it becomes one ordinary prose passage, costs one more model call, and never shows up in `files_skipped` — and it is what lets an import path like `example.com/goapp/billing` resolve exactly instead of by a directory-name guess.
+* **Some verbs are too common to guess from.** The bare-name fallback that earns a 0.50 `fuzzy_name` edge refuses a stoplist of seventy-five ordinary method names — `get`, `close`, `write`, `log`, `main` — and the match is case-blind, so Go's `Close` and C#'s `Write` are refused exactly as Python's `close` and `write` are. Those calls are counted as unresolved rather than guessed at.
+* **A name that means nine things seeds eight of them.** A word in a question splits its seed weight by the *true* number of symbols it matches, and then only the first eight of them are seeded — so a name past that cap under-spends its weight rather than redistributing it: nine matches means eight seeds of a ninth each. One repository written in five languages is enough to reach that. In hippo's own test fixture `log` matches nine symbols.
 
 ## Evaluate and dig in
 
@@ -382,6 +392,8 @@ src/hippo/
     anchors.py      what a question says about code: identifiers, stack frames, exceptions, fences, diffs
     paths.py        deterministic walks over the code graph: call paths, blast radius, the answer block
   codegraph/        the parser: tree-sitter + sqlglot -> symbols, data objects and typed edges (no model, no store)
+    languages.py    RULES[lang]: a language is a registration, not a branch
+    python.py       one walker per language, beside typescript.py, go.py, csharp.py and rust.py
   ingest/           readers (txt, md, pdf, docx, epub, html, code), chunker, git repos, the indexing job
   evals/            metrics, the LLM judge, question generation, the run runner
   analysis/         explain a result, simulate changes, save/apply changesets
