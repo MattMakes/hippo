@@ -580,9 +580,11 @@ def test_a_call_inside_a_collision_files_member_still_comes_from_the_member():
 
 def test_tested_by_survives_a_test_module_named_after_its_own_test_case():
     """
-    `resolve_tested_by` names both ends of an INVOKES edge out of `index.symbols`, so a
-    collision file left a symbol it could not name and the edge was skipped. Root
-    `test_run.py` holding a `def test_run` is that file; its 0.85 `test_import` row stands.
+    A guard, not a repair. `resolve_tested_by` names both ends of an INVOKES edge out of
+    `index.symbols`, which a collision file left one symbol short -- but this shape came out
+    right anyway, because the symbol it lost was the module and the edge is the member's.
+    Root `test_run.py` holding a `def test_run` is that file, and what is pinned here is that
+    re-keying the index does not cost it the 0.85 `test_import` row it always had.
     """
     graph = graph_of(
         {

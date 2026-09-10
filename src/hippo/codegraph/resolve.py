@@ -357,7 +357,9 @@ def declared(index: SourceIndex, facts: FileFacts, qualname: str) -> Symbol | No
     `foo.py`'s `def foo` still owns the nested function inside it rather than losing it to
     the module. The fallback is for Rust's inline `mod tests { }`, which is a container of
     kind `module`; a file's own module symbol can never be reached this way, because its
-    qualname is a path form and no member's qualname is prefixed with it.
+    qualname is a path form and no member's qualname is prefixed with it. `expected.json`
+    pins the fallback: `rsapp/src/orders.rs` has a `mod tests`, and without it that mod's
+    CONTAINS to `tests.place_totals` disappears from the golden file.
     """
     for path in RULES[facts.lang].member_paths(index, qualname, facts.path):
         found = index.symbol(path, qualname) or index.symbol(path, qualname, "module")
@@ -824,9 +826,9 @@ def resolve_tested_by(index: SourceIndex, invokes: list[CodeEdge]) -> list[CodeE
     (`test_import`, 0.85), a test file named after a module (`test_filename`, 0.75), and a
     test function naming a symbol it never calls (`test_mention`, 0.60).
 
-    `by_id` is every symbol of the source because `index.symbols` is: a collision file used
-    to drop its module symbol out of that index, and an INVOKES edge with an end nobody could
-    name was skipped here rather than becoming the TESTED_BY it had earned (E2F-b).
+    `by_id` is every symbol of the source because `index.symbols` is. Keyed `(path, qualname)`
+    that index was one symbol short in a collision file -- the module -- so an INVOKES edge
+    with a module at either end had no name here and was skipped (E2F-b).
     """
     edges: list[CodeEdge] = []
     by_id = {symbol.id: symbol for symbol in index.symbols.values()}
