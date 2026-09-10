@@ -76,7 +76,7 @@ def walk(path: str, root: Node, source_id: str) -> FileFacts:
     facts = FileFacts(path=path, lang="typescript", module=module)
 
     module_symbol = Symbol(
-        id=symbol_id(source_id, path, module),
+        id=symbol_id(source_id, path, module, "module"),
         source_id=source_id,
         name=module.rpartition(".")[2] or module,
         qualname=module,
@@ -126,12 +126,13 @@ def _declarations(
                 continue
             qualname = f"{prefix}{name}"
             is_class = definition.type in ("class_declaration", "abstract_class_declaration")
+            kind = "class" if is_class else ("method" if prefix else "function")
             symbol = Symbol(
-                id=symbol_id(source_id, facts.path, qualname),
+                id=symbol_id(source_id, facts.path, qualname, kind),
                 source_id=source_id,
                 name=name,
                 qualname=qualname,
-                kind="class" if is_class else ("method" if prefix else "function"),
+                kind=kind,
                 lang="typescript",
                 path=facts.path,
                 line_start=line_of(outer),

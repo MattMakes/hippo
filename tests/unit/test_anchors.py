@@ -527,7 +527,7 @@ def test_a_scoped_index_never_surfaces_a_hidden_symbol(mixed_index) -> None:
     assert find_anchors("what does `place` do?", full)
 
     scoped = full.scoped({prose_source_id})
-    assert symbol_id(code_source_id, "pyapp/orders.py", "OrderService.place") not in scoped.idx_of
+    assert symbol_id(code_source_id, "pyapp/orders.py", "OrderService.place", "method") not in scoped.idx_of
     assert find_anchors("what does `place` do?", scoped) == []
 
 

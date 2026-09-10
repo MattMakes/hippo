@@ -520,25 +520,25 @@ def test_every_passage_defines_its_symbol_and_the_data_objects_it_names(code_gra
     defines = {c.title: c.defines for c in chunks_of(ORDERS, code_graph)}
     orders_table = data_id(FIXTURE_SOURCE, "table", "orders")
     assert defines["pyapp/orders.py :: pyapp.orders (lines 1-8)"] == [
-        symbol_id(FIXTURE_SOURCE, ORDERS, "pyapp.orders")
+        symbol_id(FIXTURE_SOURCE, ORDERS, "pyapp.orders", "module")
     ]
     # `__tablename__ = "orders"` sits on line 14, inside the class header, not inside a method.
     assert defines["pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)"] == [
-        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService"),
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService", "class"),
         orders_table,
     ]
     assert defines["pyapp/orders.py :: pyapp.orders.OrderService.list_open (lines 27-28)"] == [
-        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.list_open"),
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.list_open", "method"),
         orders_table,
     ]
     assert defines["pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)"] == [
-        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.archive"),
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.archive", "method"),
         data_id(FIXTURE_SOURCE, "collection", "archive_orders"),
     ]
     # Data ids follow the symbol in a stable (kind, qualname) order, so a passage's `defines`
     # never depends on the order the extractor happened to see the literals in.
     assert defines["pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"] == [
-        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.graph"),
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.graph", "method"),
         data_id(FIXTURE_SOURCE, "label", "Customer"),
         data_id(FIXTURE_SOURCE, "label", "Order"),
         data_id(FIXTURE_SOURCE, "rel_type", "PLACED_BY"),
@@ -604,8 +604,8 @@ def test_a_file_that_opens_with_a_class_has_no_header_passage(code_graph) -> Non
     # The module symbol still needs a passage of its own: a code node no visible passage
     # reaches is invisible to a scoped graph (S2.5). The top of the file is that passage.
     assert chunks[0].defines == [
-        symbol_id(FIXTURE_SOURCE, "pyapp/store.py", "pyapp.store"),
-        symbol_id(FIXTURE_SOURCE, "pyapp/store.py", "Base"),
+        symbol_id(FIXTURE_SOURCE, "pyapp/store.py", "pyapp.store", "module"),
+        symbol_id(FIXTURE_SOURCE, "pyapp/store.py", "Base", "class"),
     ]
 
 
@@ -640,11 +640,22 @@ def test_an_oversized_body_splits_at_statement_starts_with_only_part_one_extract
     graph = extract_code([doc], FIXTURE_SOURCE)
     chunks = chunk_document(doc, size_chars=500, overlap_chars=0, code=graph)
 
+    from hippo.codegraph.model import symbol_id
+
+    # `big.py` holding a `def big` is E2 defect 1's Python shape: the file's module symbol and
+    # its top-level function are two nodes with two ids now, not one node with one. Only the
+    # first part carries the module's own declaration line; the function is defined by all of
+    # them, which is what "DEFINED_IN from every part" was always about.
+    module = symbol_id(FIXTURE_SOURCE, "big.py", "big", "module")
+    function = symbol_id(FIXTURE_SOURCE, "big.py", "big", "function")
+    assert module != function
+
     assert len(chunks) > 3
     assert chunks[0].title.startswith("big.py :: big.big (lines 1-")
     assert chunks[0].title.endswith("(part 1)")
     assert [c.extract_text != "" for c in chunks] == [True] + [False] * (len(chunks) - 1)
-    assert all(c.defines == chunks[0].defines for c in chunks)  # DEFINED_IN from every part
+    assert chunks[0].defines == [module, function]
+    assert [c.defines for c in chunks[1:]] == [[function]] * (len(chunks) - 1)
 
     covered: list[int] = []
     for chunk in chunks:

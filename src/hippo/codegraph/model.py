@@ -80,10 +80,29 @@ ARG_BINDING_MAX_CHARS = 60  # an argument expression longer than this is truncat
 # ------------------------------------------------------------------- ids
 
 
-def symbol_id(source_id: str, path: str, qualname: str) -> str:
-    """Id of a symbol. Namespaced by source *and path*, so two same-named symbols in
-    different files do not collide (D4)."""
-    return make_id("symbol-", f"{source_id}:{path}:{qualname}")
+def symbol_key(path: str, qualname: str, kind: str) -> str:
+    """
+    What names a symbol *inside one source*: its path, its qualname, and a `module:` marker
+    in front of a module's qualname.
+
+    The marker is the whole point. Without it a file's own module symbol and a same-named
+    top-level member of that file are the same `(path, qualname)` pair -- `main.go`'s package
+    `main` and its `func main`, `foo.py`'s module `foo` and its `def foo` at the repo root --
+    so they hash to one id and the store keeps whichever row was written last (E2 defect 1:
+    the extractor counted 230 symbols and the store held 229, and the survivor carried two
+    DEFINED_IN edges and no CONTAINS). Only a file's own module symbol is kind `module`; an
+    inline module -- Rust's `mod tests` -- is an ordinary container like a class.
+
+    `git_history` maps a hunk back to a HEAD symbol by this same key, so the id and the
+    history agree by construction rather than by convention.
+    """
+    return f"{path}:module:{qualname}" if kind == "module" else f"{path}:{qualname}"
+
+
+def symbol_id(source_id: str, path: str, qualname: str, kind: str) -> str:
+    """Id of a symbol. Namespaced by source *and* `symbol_key`, so two same-named symbols in
+    different files -- or a module and its same-named member -- do not collide (D4)."""
+    return make_id("symbol-", f"{source_id}:{symbol_key(path, qualname, kind)}")
 
 
 def data_id(source_id: str, kind: str, qualname: str) -> str:

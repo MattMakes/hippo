@@ -88,7 +88,9 @@ def write_commit_history(ctx, source_id: str) -> list[str]:
         modifies.append(
             {
                 "commit_id": node_id,
-                "symbol_id": symbol_id(source_id, path, qualname),
+                # `OrderService` is the class, the other two are its methods. Only a *module's*
+                # kind changes the id, so what matters here is that none of these is one.
+                "symbol_id": symbol_id(source_id, path, qualname, "method" if "." in qualname else "class"),
                 "omega": 1.0,
                 "hunk": {"file": path, "old_range": [1, 0], "new_range": [16, 8], "churn": 8},
             }
@@ -119,7 +121,7 @@ def many_symbols(ctx, source_id: str, name: str, how_many: int) -> list[str]:
         path = f"pkg/mod{i}.py"
         rows.append(
             {
-                "id": symbol_id(source_id, path, name),
+                "id": symbol_id(source_id, path, name, "function"),
                 "source_id": source_id,
                 "name": name,
                 "qualname": name,
@@ -140,6 +142,46 @@ def many_symbols(ctx, source_id: str, name: str, how_many: int) -> list[str]:
     )
     ctx.invalidate_graph()
     return [row["id"] for row in rows]
+
+
+def module_and_its_namesake(ctx, source_id: str) -> dict[str, str]:
+    """
+    A repo-root `main.go`: the package `main` and its `func main`, E2 defect 1's shape.
+
+    The fixture tree cannot hold it -- its Go entry point is `goapp/cmd/main.go`, whose module is
+    `goapp.cmd.main` and collides with nothing -- but the shape is the commonest file in the
+    language, so the read side has to name the two apart. Written straight through the store like
+    `many_symbols`, one passage and one `DEFINED_IN` each. Returns the ids keyed `module` /
+    `function`. Call `ctx.invalidate_graph()` afterwards -- this does it for you.
+    """
+    path = "main.go"
+    rows = [
+        {
+            "id": symbol_id(source_id, path, "main", kind),
+            "source_id": source_id,
+            "name": "main",
+            "qualname": "main",
+            "kind": kind,
+            "lang": "go",
+            "path": path,
+            "line_start": start,
+            "line_end": end,
+        }
+        for kind, start, end in (("module", 1, 7), ("function", 5, 7))
+    ]
+    # 1000 is past every other helper's block (600 polyglot, 700 hub, 800 many_symbols,
+    # 900 commits), so a test may call this one alongside any of them on the same source.
+    chunks = [
+        Chunk(1000, f"{path} :: main (lines 1-4)", 'package main\n\nimport "fmt"\n'),
+        Chunk(1001, f"{path} :: main.main (lines 5-7)", 'func main() {\n\tfmt.Println("hi")\n}\n'),
+    ]
+    ctx.store.add_symbols(rows)
+    index_source(ctx.store, ctx.ollama, source_id, chunks)
+    ctx.store.link_definitions(
+        [(row["id"], passage_id(source_id, chunk)) for row, chunk in zip(rows, chunks, strict=True)]
+    )
+    ctx.invalidate_graph()
+    return {row["kind"]: row["id"] for row in rows}
 
 
 # (lang, path, qualname, kind, line_start, line_end) - the shape `add_symbols` rows take. The paths
@@ -179,7 +221,7 @@ def polyglot_symbols(ctx, source_id: str) -> dict[str, str]:
     for ordinal, (lang, path, qualname, kind, start, end) in enumerate(POLYGLOT):
         rows.append(
             {
-                "id": symbol_id(source_id, path, qualname),
+                "id": symbol_id(source_id, path, qualname, kind),
                 "source_id": source_id,
                 "name": qualname.rsplit(".", 1)[-1],
                 "qualname": qualname,
@@ -235,7 +277,7 @@ def call_hub(ctx, source_id: str) -> dict[str, str]:
     for ordinal, (key, (path, qualname)) in enumerate(names.items()):
         rows.append(
             {
-                "id": symbol_id(source_id, path, qualname),
+                "id": symbol_id(source_id, path, qualname, "function"),
                 "source_id": source_id,
                 "name": qualname.rsplit(".", 1)[-1],
                 "qualname": qualname,

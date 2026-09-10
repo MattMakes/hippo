@@ -50,6 +50,7 @@ from hippo.codegraph.model import (
     merge_edges,
     name_text,
     symbol_id,
+    symbol_key,
 )
 from hippo.codegraph.python import is_test_path, module_qualname
 from hippo.codegraph.python import walk as python_walk
@@ -498,11 +499,23 @@ def test_jsx_and_fragments_parse():
 
 def test_symbol_ids_are_namespaced_by_source_and_path():
     """D4: two same-named symbols in different files must not collide."""
-    a = symbol_id("src1", "a/x.py", "Thing.go")
-    assert a != symbol_id("src1", "b/x.py", "Thing.go")
-    assert a != symbol_id("src2", "a/x.py", "Thing.go")
-    assert a == symbol_id("src1", "a/x.py", "Thing.go")
+    a = symbol_id("src1", "a/x.py", "Thing.go", "method")
+    assert a != symbol_id("src1", "b/x.py", "Thing.go", "method")
+    assert a != symbol_id("src2", "a/x.py", "Thing.go", "method")
+    assert a == symbol_id("src1", "a/x.py", "Thing.go", "method")
     assert a.startswith("symbol-")
+
+
+def test_a_modules_id_is_not_its_same_named_members_id():
+    """
+    E2 defect 1: `main.go`'s package `main` and its `func main` are two symbols, and hashing
+    only `(source, path, qualname)` gave them one id -- so the store kept whichever row was
+    written last and the other was silently destroyed. The kind only ever changes a *module's*
+    id, so every other symbol's id is exactly what it was before.
+    """
+    assert symbol_id("src1", "main.go", "main", "module") != symbol_id("src1", "main.go", "main", "function")
+    assert symbol_key("main.go", "main", "module") != symbol_key("main.go", "main", "function")
+    assert symbol_key("a/x.py", "Thing.go", "method") == symbol_key("a/x.py", "Thing.go", "class")
 
 
 def test_name_text_puts_the_split_tokens_first():

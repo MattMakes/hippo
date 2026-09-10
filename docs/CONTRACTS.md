@@ -185,8 +185,15 @@ model.py         Symbol, DataObject, CodeEdge(a, b, kind, omega, provenance, ext
                      scopes), a C# namespace. None for Python, TypeScript and Rust.
                  AssignFact.chain -- the call's own text with its arguments, e.g. `db.collection("orders")`, so a
                      local bound to a collection chain resolves to the collection (provenance `mongo_chain`)
-                 symbol_id(source_id, path, qualname); data_id(source_id, kind, qualname); commit_id(source_id, sha)
+                 symbol_id(source_id, path, qualname, kind); data_id(source_id, kind, qualname); commit_id(source_id, sha)
                      -- prefixed md5s through make_id, so they cannot collide with entity-/fact-/passage- ids
+                 symbol_key(path, qualname, kind) -> `path:module:qualname` for a module, `path:qualname` otherwise.
+                     The ONE spelling of a symbol's in-source name: symbol_id hashes it and git_history._head_index
+                     is keyed by it. `kind` is REQUIRED on symbol_id and has no default -- forgetting it is exactly
+                     the bug the marker exists for: without it a file's module symbol and a same-named top-level
+                     member of it (Go `main.go`/`func main`, root-level `foo.py`/`def foo`) share one id, one row
+                     survives the store write, and the CONTAINS between them is dropped as a self-loop. Every
+                     non-module id is byte-identical to what it was before the marker.
                  name_text(name) -> the text we embed for a symbol or data object (split tokens, then the name)
                  lang_of(name) -> 'python'|'typescript'|'go'|'csharp'|'rust'|'sql'|None. ingest/readers.py holds the
                      same table on the ingest side of the dependency line; codegraph may not import ingest, so the two
@@ -276,6 +283,13 @@ git_history.py   read_history(checkout, symbols, source_id, *, depth, timeout_s,
                      churn summed. The ranges are the symbol's AT THAT COMMIT -- each touched file is re-parsed at
                      each commit -- because a HEAD-range shortcut would make the commit eval measure its own drift.
                      A module whose only content is one class therefore never appears: the class encloses the line.
+                 RENAMES ARE FOLLOWED: DIFF_OPTIONS carries `-M`, so a content-preserving rename is a
+                     `rename from`/`rename to` pair with no hunks (that commit modifies nothing) rather than a
+                     whole-file delete plus add (which modified every symbol in the file). Walking newest -> oldest,
+                     each commit's renames are recorded in an alias map of "path here" -> "path at HEAD"; a touched
+                     file is then READ at the path it had at that commit and NAMED by its HEAD path, so its symbols
+                     -- the module symbol included, whose qualname IS its path -- key straight into the HEAD index
+                     via model.symbol_key. `hunk["file"]` stays the path git printed, i.e. the path at that commit.
                  `skipped` counts a commit a BUDGET cost us -- timed out, or its diff exceeded MAX_DIFF_BYTES
                      (a commit that vendors a binary tree, read as bytes via `_git_capped` and killed past the
                      cap rather than fully buffered) -- plus, as defence in depth, any commit whose diff could
@@ -390,6 +404,10 @@ src/hippo/hipporag/anchors.py   what a question says about code. Pure: no store,
 
 src/hippo/hipporag/paths.py     deterministic walks over the code graph. No model anywhere in this file.
                  resolve_symbol(index, name) -> node id, raising UnknownSymbol or AmbiguousSymbol(candidates)
+                     Four tiers, tried in order: the node id, the DISPLAY name, the module-relative qualname, a
+                     dotted suffix of either, a bare name. Display and qualname are SEPARATE tiers: `main.go`'s
+                     package is displayed `main` and its `func main` has the qualname `main`, so one tier for both
+                     made every `main` in the tree a candidate and neither half of that file nameable (E2 defect 1).
                  shortest_code_path(index, a, b, *, theta, max_hops=MAX_HOPS) -- over code_out, skipping
                      NOT_A_STEP ("DEFINED_IN", "PRECEDES", "REFERS_TO", "MODIFIES") and any edge below theta,
                      with an undirected second pass when the directed one finds nothing
@@ -407,7 +425,9 @@ src/hippo/hipporag/paths.py     deterministic walks over the code graph. No mode
                  render_triples(rows) -> "a -[KIND 0.90 provenance in_branch await]-> b", the fixed grammar
                      test_ask.py pins exactly; render_blast; block_lines; cut_to; render_block(index, trace, *,
                      header, max_chars) cuts on a LINE boundary and appends MORE_LINE
-                 display_of / display_at -> the fully-qualified display name (pyapp.orders.OrderService.place)
+                 display_of / display_at -> the fully-qualified display name (pyapp.orders.OrderService.place).
+                     A qualname equal to its own module is printed alone ONLY when the node is the module
+                     (code_kind == 'module'); `main.go`'s `func main` is `main.main`, the name its passage carries.
                  community_labels(index) -> the label a person reads: the smallest DISPLAY name in each community.
                      Not GraphIndex.community_name, which uses module-relative qualnames and would label two
                      different subsystems "Base".

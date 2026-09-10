@@ -85,6 +85,12 @@ def display_of(node: CodeNode | None) -> str:
     `Symbol.qualname` is module-relative (S2.6), so a symbol's display name is its module's
     qualname joined to it. This is the form `resolve_symbol` accepts, the path tools print and the
     answer block uses.
+
+    A module's qualname already *is* its module, so it is printed alone -- but only a module's is
+    (E2 defect 1). `main.go`'s `func main` has qualname `main` too, and collapsing that one as
+    well printed both nodes as `main`: `resolve_symbol("main")` then raised `AmbiguousSymbol` with
+    two identical candidates, and `main.main` -- the name the function's own passage is titled
+    with -- resolved to nothing. The function is `main.main` and the package is `main`.
     """
     if node is None:
         return ""
@@ -94,7 +100,8 @@ def display_of(node: CodeNode | None) -> str:
         return f"{node.code_kind} {node.qualname or node.name}".strip()
     module = module_of(node.path)
     qualname = node.qualname or node.name
-    if not module or qualname == module or qualname.startswith(module + "."):
+    collapsed = qualname == module and node.code_kind == "module"
+    if not module or collapsed or qualname.startswith(module + "."):
         return qualname
     return f"{module}.{qualname}"
 
@@ -120,6 +127,12 @@ def resolve_symbol(index: GraphIndex, name: str) -> str:
     (`pyapp.orders.OrderService.place`), the module-relative qualname (`OrderService.place`), a
     dotted suffix of either, or a bare name when only one node carries it. Raises
     `AmbiguousSymbol` (with the candidates) or `UnknownSymbol`.
+
+    Those are tried in that order, and the display name is its own tier above the qualname
+    rather than sharing one with it (E2 defect 1): `main.go`'s package is displayed `main` and
+    its `func main` has the *qualname* `main`, so one tier for both left the commonest file in
+    Go with no way to name either half. The more specific form wins, which is what the list
+    above has always said.
     """
     wanted = (name or "").strip().strip("`")
     if not wanted:
@@ -129,7 +142,8 @@ def resolve_symbol(index: GraphIndex, name: str) -> str:
         return wanted
 
     low = wanted.lower()
-    exact: list[CodeNode] = []
+    displayed: list[CodeNode] = []
+    qualified: list[CodeNode] = []
     suffix: list[CodeNode] = []
     bare: list[CodeNode] = []
     for node in index.code_nodes:
@@ -137,14 +151,16 @@ def resolve_symbol(index: GraphIndex, name: str) -> str:
             continue
         display = display_of(node).lower()
         qualname = (node.qualname or "").lower()
-        if low in (display, qualname):
-            exact.append(node)
+        if low == display:
+            displayed.append(node)
+        elif low == qualname:
+            qualified.append(node)
         elif display.endswith("." + low) or qualname.endswith("." + low):
             suffix.append(node)
         elif low == (node.name or "").lower():
             bare.append(node)
 
-    for group in (exact, suffix, bare):
+    for group in (displayed, qualified, suffix, bare):
         if len(group) == 1:
             return group[0].id
         if len(group) > 1:

@@ -212,7 +212,7 @@ def test_describe_resolves_symbol_data_and_commit_ids(code_index):
     """
     ctx, source_id = code_index
     write_commit_history(ctx, source_id)
-    place = symbol_id(source_id, "pyapp/orders.py", "OrderService.place")
+    place = symbol_id(source_id, "pyapp/orders.py", "OrderService.place", "method")
     orders = data_id(source_id, "table", "orders")
     commit = commit_id(source_id, "b2b2b2b")
 

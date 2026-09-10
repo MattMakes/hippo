@@ -9,8 +9,18 @@ symbol its diff landed inside, and the `PRECEDES` chain that puts the commits in
 That costs one `git show <sha>:<path>` and one tree-sitter parse per touched file per
 commit, and it is not optional: WP4's commit-localization eval uses these edges as its gold
 labels, so a HEAD-range shortcut would make the eval measure its own drift on every commit
-older than a few edits. A symbol is mapped back to HEAD by `(path, qualname)`; one that no
-longer exists at HEAD produces no edge.
+older than a few edits. A symbol is mapped back to HEAD by `model.symbol_key` -- the same
+key its id is hashed from -- and one that no longer exists at HEAD produces no edge.
+
+**Renames are followed** (E2 defect 3). Every diff is read with `-M`, so a content-preserving
+rename is a `rename from` / `rename to` pair with no `@@` hunks at all rather than a whole-file
+delete plus a whole-file add: the rename commit stops being attributed as MODIFIES to every
+symbol in the file. The walk is newest -> oldest, so a rename seen at commit C tells us what
+the *older* commits' paths are called at HEAD; `read_history` carries that map down the walk, and the
+file a hunk landed in is read at its own path but *named* by its HEAD path, so the symbols
+parsed out of it -- the module symbol included, whose qualname is its path -- key straight into
+the HEAD index. The stored `hunk["file"]` stays as git printed it: the path the file had at that
+commit, which is what S2.9's "at that commit" means everywhere else in this module.
 
 Four things about git that this module is built around, each verified on a real repository
 rather than assumed:
@@ -59,7 +69,7 @@ from pathlib import Path
 
 from .extract import _walk
 from .languages import PARSED_LANGS
-from .model import Symbol, commit_id, lang_of
+from .model import Symbol, commit_id, lang_of, symbol_key
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +85,7 @@ HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 # Passed to every diff so that nothing in the user's config can change what we parse.
 DIFF_OPTIONS = (
     "-U0",
-    "--no-renames",  # -M off: history before a rename is ignored in phase 1
+    "-M",  # rename detection ON: a rename is a rename, not a delete plus an add (E2 defect 3)
     "--no-color",
     "--no-ext-diff",
     "--no-textconv",
@@ -166,6 +176,19 @@ class _Hunk:
         }
 
 
+@dataclass
+class _Diff:
+    """
+    One commit's diff: where it landed, and which files it renamed.
+
+    A rename-only commit has `renames` and no `hunks` at all -- which is exactly the point of
+    `-M`, and why such a commit now modifies nothing instead of every symbol in the file.
+    """
+
+    hunks: list[_Hunk] = field(default_factory=list)
+    renames: list[tuple[str, str]] = field(default_factory=list)  # (path before, path after)
+
+
 def read_history(
     checkout: Path,
     symbols: list[Symbol],
@@ -198,6 +221,7 @@ def read_history(
 
     history = History()
     kept: list[str] = []
+    alias: dict[str, str] = {}  # a path as it was at this point in the walk -> its path at HEAD
     for position, entry in enumerate(entries):
         if should_stop is not None and should_stop():
             history.truncated = True  # cancellation, not a budget: nothing to report as skipped
@@ -208,10 +232,14 @@ def read_history(
             break
         node_id = commit_id(source_id, entry["sha"])
         try:
-            hunks = (
-                [] if entry["sha"] in boundary else _hunks(checkout, entry["sha"], entry["parent"], timeout_s)
+            diff = (
+                _Diff()
+                if entry["sha"] in boundary
+                else _hunks(checkout, entry["sha"], entry["parent"], timeout_s)
             )
-            rows = _modifies(checkout, entry["sha"], node_id, hunks, head, source_id, parsers, timeout_s)
+            rows = _modifies(
+                checkout, entry["sha"], node_id, diff.hunks, head, alias, source_id, parsers, timeout_s
+            )
         except _DiffTooLarge as err:
             log.debug("commit %s diff too large, skipping (%s)", entry["sha"], err)
             history.skipped += 1
@@ -234,6 +262,11 @@ def read_history(
         )
         history.modifies.extend(rows)
         kept.append(node_id)
+        # This commit's own hunks were read under the map as it stood *above* the rename; every
+        # commit from here down sees the old path instead. Every target is resolved against that
+        # same map and the results applied together, so no rename in one commit can be read
+        # through another rename of the same commit.
+        alias.update({old: alias.get(new, new) for old, new in diff.renames})
 
     history.precedes = list(zip(kept, kept[1:], strict=False))  # newer -> older, over what we kept
     return history
@@ -301,9 +334,9 @@ def _log(checkout: Path, depth: int, timeout_s: int) -> list[dict]:
 # -------------------------------------------------------------- the diff
 
 
-def _hunks(checkout: Path, sha: str, parent: str, timeout_s: int) -> list[_Hunk]:
+def _hunks(checkout: Path, sha: str, parent: str, timeout_s: int) -> _Diff:
     """
-    Every `@@` header in this commit's diff, with the file it belongs to.
+    Every `@@` header in this commit's diff, with the file it belongs to, and every rename.
 
     Against the first parent when there is one, so a merge reports what it brought in
     instead of the empty combined diff `git show` prints for it. Read as bytes and decoded
@@ -316,12 +349,24 @@ def _hunks(checkout: Path, sha: str, parent: str, timeout_s: int) -> list[_Hunk]
     command = ["diff", *DIFF_OPTIONS, parent, sha] if parent else ["show", *DIFF_OPTIONS, "--format=", sha]
     raw = _git_capped(checkout, command, timeout_s, MAX_DIFF_BYTES)
     if raw is None:
-        return []  # an unreadable commit is a commit with no edges, not a broken index run
+        return _Diff()  # an unreadable commit is a commit with no edges, not a broken index run
     text = raw.decode("utf-8", errors="replace")
 
     hunks: list[_Hunk] = []
+    renames: list[tuple[str, str]] = []
+    moved_from = ""
     path = ""
     for line in text.splitlines():
+        # `rename from`/`rename to` carry the bare paths -- git prints no `a/`/`b/` prefix on
+        # them whatever `--src-prefix` says -- and always in that order, one pair per file. A
+        # `+`/`-` body line could never be mistaken for one: it would start with its own sign.
+        if line.startswith("rename from "):
+            moved_from = line[len("rename from ") :]
+            continue
+        if line.startswith("rename to ") and moved_from:
+            renames.append((moved_from, line[len("rename to ") :]))
+            moved_from = ""
+            continue
         if line.startswith("+++ "):
             target = line[4:]
             # `/dev/null` is a deletion: no new side, so nothing to intersect against.
@@ -342,7 +387,7 @@ def _hunks(checkout: Path, sha: str, parent: str, timeout_s: int) -> list[_Hunk]
                 new_count=1 if new_count is None else int(new_count),
             )
         )
-    return hunks
+    return _Diff(hunks=hunks, renames=renames)
 
 
 # ------------------------------------------------------- hunks to symbols
@@ -353,7 +398,8 @@ def _modifies(
     sha: str,
     node_id: str,
     hunks: list[_Hunk],
-    head: dict[tuple[str, str], str],
+    head: dict[str, str],
+    alias: dict[str, str],
     source_id: str,
     parsers: dict,
     timeout_s: int,
@@ -362,28 +408,35 @@ def _modifies(
     One `add_modifies` row per symbol this commit's hunks landed inside.
 
     Grouped by file so each file is fetched and parsed once per commit, however many hunks
-    touched it. Rows come back sorted by `(path, qualname)` -- the key S2.17 says
-    `expected.json` uses -- so two runs, and two machines, agree on the order.
+    touched it. Rows come back sorted by `(path, qualname, kind)` -- `expected.json`'s
+    `(path, qualname)` key (S2.17) with the module/member tie broken -- so two runs, and two
+    machines, agree on the order.
+
+    `alias` says what a path at this commit is called at HEAD (see the module docstring): the
+    blob is read at the path it had here, the symbols are *named* by the HEAD path, and the
+    lookup is then the ordinary one. A file whose HEAD name has no grammar is skipped, because
+    HEAD is where the symbol this could point at would have to live.
     """
     by_file: dict[str, list[_Hunk]] = {}
     for hunk in hunks:
-        if lang_of(hunk.file) in PARSED_LANGS:
+        if lang_of(alias.get(hunk.file, hunk.file)) in PARSED_LANGS:
             by_file.setdefault(hunk.file, []).append(hunk)
 
     rows: dict[str, dict] = {}
-    keys: dict[str, tuple[str, str]] = {}
+    keys: dict[str, tuple[str, str, str]] = {}
     for path, file_hunks in sorted(by_file.items()):
-        ranges = _own_ranges(_symbols_at(checkout, sha, path, source_id, parsers, timeout_s))
+        head_path = alias.get(path, path)
+        ranges = _own_ranges(_symbols_at(checkout, sha, path, head_path, source_id, parsers, timeout_s))
         for hunk in file_hunks:
             for symbol, own in ranges:
                 if not _overlaps(hunk.touched, own):
                     continue
-                symbol_id = head.get((symbol.path, symbol.qualname))
+                symbol_id = head.get(symbol_key(symbol.path, symbol.qualname, symbol.kind))
                 if symbol_id is None:
                     continue  # gone at HEAD: S2.9 says no edge rather than a dangling one
                 seen = rows.get(symbol_id)
                 if seen is None:
-                    keys[symbol_id] = (symbol.path, symbol.qualname)
+                    keys[symbol_id] = (symbol.path, symbol.qualname, symbol.kind)
                     rows[symbol_id] = {
                         "commit_id": node_id,
                         "symbol_id": symbol_id,
@@ -398,13 +451,23 @@ def _modifies(
 
 
 def _symbols_at(
-    checkout: Path, sha: str, path: str, source_id: str, parsers: dict, timeout_s: int
+    checkout: Path, sha: str, path: str, head_path: str, source_id: str, parsers: dict, timeout_s: int
 ) -> list[Symbol]:
-    """The symbols of one file as it was at one commit. An unreadable blob yields none."""
+    """
+    The symbols of one file as it was at one commit. An unreadable blob yields none.
+
+    The blob is fetched at `path` -- what the file was called at that commit -- and walked
+    under `head_path`, what it is called now. Only the *naming* moves: line ranges are still
+    the ranges at that commit, which is what S2.9 asks for. Naming by the HEAD path is what
+    lets a symbol be found again across a rename, and it is the only thing that works for the
+    module symbol, whose qualname *is* its path (`datagen.mgodatagen` before the rename,
+    `datagen.generate` after) and which `(path, qualname)` alone could never match.
+    """
     result = _git(checkout, ["show", f"{sha}:{path}"], timeout_s, text=False)
     if result.returncode != 0:
         return []
-    facts = _walk(path, result.stdout.decode("utf-8", errors="replace"), lang_of(path), source_id, parsers)
+    text = result.stdout.decode("utf-8", errors="replace")
+    facts = _walk(head_path, text, lang_of(head_path), source_id, parsers)
     return [] if facts is None else facts.symbols
 
 
@@ -447,9 +510,15 @@ def _overlaps(touched: tuple[int, int], ranges: list[tuple[int, int]]) -> bool:
     return any(low <= touched[1] and touched[0] <= high for low, high in ranges)
 
 
-def _head_index(symbols: list[Symbol]) -> dict[tuple[str, str], str]:
-    """`(path, qualname)` -> the HEAD symbol's id. Keyed the way `expected.json` is (S2.17)."""
-    return {(s.path, s.qualname): s.id for s in symbols}
+def _head_index(symbols: list[Symbol]) -> dict[str, str]:
+    """
+    `model.symbol_key` -> the HEAD symbol's id.
+
+    The same key the id is hashed from, so a file's module symbol and a same-named top-level
+    member of it stay two entries here instead of one overwriting the other (E2 defect 1).
+    That is `expected.json`'s `(path, qualname)` key (S2.17) plus the module marker.
+    """
+    return {symbol_key(s.path, s.qualname, s.kind): s.id for s in symbols}
 
 
 # ------------------------------------------------------------------ plumbing

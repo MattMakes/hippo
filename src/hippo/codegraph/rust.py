@@ -109,7 +109,7 @@ def walk(path: str, root: Node, source_id: str) -> FileFacts:
     facts = FileFacts(path=path, lang="rust", module=module)
 
     module_symbol = Symbol(
-        id=symbol_id(source_id, path, module),
+        id=symbol_id(source_id, path, module, "module"),
         source_id=source_id,
         name=module.rpartition(".")[2] or module,
         qualname=module,
@@ -245,7 +245,7 @@ def _symbol(facts: FileFacts, node: Node, prefix: str, source_id: str, is_test: 
     qualname = f"{prefix}{name}"
     body = node.child_by_field_name("body")
     symbol = Symbol(
-        id=symbol_id(source_id, facts.path, qualname),
+        id=symbol_id(source_id, facts.path, qualname, kind),
         source_id=source_id,
         name=name,
         qualname=qualname,

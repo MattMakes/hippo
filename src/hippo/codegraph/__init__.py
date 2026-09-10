@@ -35,6 +35,7 @@ from .model import (
     data_id,
     name_text,
     symbol_id,
+    symbol_key,
 )
 
 __all__ = [
@@ -55,4 +56,5 @@ __all__ = [
     "name_text",
     "read_history",
     "symbol_id",
+    "symbol_key",
 ]
