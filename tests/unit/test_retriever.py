@@ -431,7 +431,7 @@ def mixed(ctx):
 
 
 def place_id(index: GraphIndex, source_id: str) -> str:
-    return symbol_id(source_id, "pyapp/orders.py", "OrderService.place")
+    return symbol_id(source_id, "pyapp/orders.py", "OrderService.place", "method")
 
 
 # ------------------------------------------------------- a mixed memory (V2.5)
@@ -570,7 +570,7 @@ def test_naming_the_rust_symbol_seeds_the_rust_one_and_lifts_its_passage(
     the test above says at length.
     """
     index = code_retriever.index
-    rust_place = symbol_id(code_source, "rsapp/src/orders.rs", "OrderService.place")
+    rust_place = symbol_id(code_source, "rsapp/src/orders.rs", "OrderService.place", "method")
     passage_id = index.node_ids[index.defining_passages(index.idx_of[rust_place])[0]]
     question = "What does rsapp.src.orders.OrderService.place do?"
 
@@ -604,7 +604,7 @@ def test_naming_the_go_symbol_seeds_the_go_one_and_lifts_its_passage(
     position is the embedder's.
     """
     index = code_retriever.index
-    go_place = symbol_id(code_source, "goapp/orders/service.go", "Service.Place")
+    go_place = symbol_id(code_source, "goapp/orders/service.go", "Service.Place", "method")
     passage_id = index.node_ids[index.defining_passages(index.idx_of[go_place])[0]]
     question = "What does goapp.orders.service.Service.Place do?"
 
@@ -639,7 +639,7 @@ def test_naming_the_csharp_symbol_seeds_the_csharp_one_and_lifts_its_passage(
     the `csapp` test module among them. Only the lift is pinned there.
     """
     index = code_retriever.index
-    cs_place = symbol_id(code_source, "csapp/Orders/OrderService.cs", "OrderService.Place")
+    cs_place = symbol_id(code_source, "csapp/Orders/OrderService.cs", "OrderService.Place", "method")
     passage_id = index.node_ids[index.defining_passages(index.idx_of[cs_place])[0]]
     question = "What does csapp.Orders.OrderService.OrderService.Place do?"
 

@@ -82,7 +82,7 @@ def walk(path: str, root: Node, source_id: str) -> FileFacts:
     facts = FileFacts(path=path, lang="python", module=module)
 
     module_symbol = Symbol(
-        id=symbol_id(source_id, path, module),
+        id=symbol_id(source_id, path, module, "module"),
         source_id=source_id,
         name=module.rpartition(".")[2] or module,
         qualname=module,
@@ -133,12 +133,13 @@ def _definitions(
         qualname = f"{prefix}{name}"
         body = node.child_by_field_name("body")
         is_class = node.type == "class_definition"
+        kind = "class" if is_class else ("method" if prefix else "function")
         symbol = Symbol(
-            id=symbol_id(source_id, facts.path, qualname),
+            id=symbol_id(source_id, facts.path, qualname, kind),
             source_id=source_id,
             name=name,
             qualname=qualname,
-            kind="class" if is_class else ("method" if prefix else "function"),
+            kind=kind,
             lang="python",
             path=facts.path,
             # The *decorated* node, so `@app.route(...)` sits inside the symbol's passage

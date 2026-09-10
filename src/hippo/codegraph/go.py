@@ -81,7 +81,7 @@ def walk(path: str, root: Node, source_id: str) -> FileFacts:
 
     package = next((c for c in root.children if c.type == "package_clause"), None)
     module_symbol = Symbol(
-        id=symbol_id(source_id, path, module),
+        id=symbol_id(source_id, path, module, "module"),
         source_id=source_id,
         name=module.rpartition(".")[2] or module,
         qualname=module,
@@ -158,12 +158,13 @@ def _function(
     if not name:
         return
     qualname = f"{receiver}.{name}" if receiver else name
+    kind = "method" if receiver else "function"
     symbol = Symbol(
-        id=symbol_id(source_id, facts.path, qualname),
+        id=symbol_id(source_id, facts.path, qualname, kind),
         source_id=source_id,
         name=name,
         qualname=qualname,
-        kind="method" if receiver else "function",
+        kind=kind,
         lang="go",
         path=facts.path,
         line_start=line_of(node),
@@ -203,7 +204,7 @@ def _types(facts: FileFacts, node: Node, source_id: str, is_test: bool, owned: s
         fields = _field_list(inner)
         members = fields if fields is not None else inner
         symbol = Symbol(
-            id=symbol_id(source_id, facts.path, name),
+            id=symbol_id(source_id, facts.path, name, "class"),
             source_id=source_id,
             name=name,
             qualname=name,

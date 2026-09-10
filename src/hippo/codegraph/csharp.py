@@ -116,7 +116,7 @@ def walk(path: str, root: Node, source_id: str) -> FileFacts:
     facts = FileFacts(path=path, lang=LANG, module=module, scope=_namespace_of(root))
 
     module_symbol = Symbol(
-        id=symbol_id(source_id, path, module),
+        id=symbol_id(source_id, path, module, "module"),
         source_id=source_id,
         name=module.rpartition(".")[2] or module,
         qualname=module,
@@ -172,13 +172,14 @@ def _declarations(
             continue
         qualname = f"{prefix}{name}"
         is_type = node.type in TYPE_DECLARATIONS
+        kind = "class" if is_type else "method"
         body = node.child_by_field_name("body")
         symbol = Symbol(
-            id=symbol_id(source_id, facts.path, qualname),
+            id=symbol_id(source_id, facts.path, qualname, kind),
             source_id=source_id,
             name=name,
             qualname=qualname,
-            kind="class" if is_type else "method",
+            kind=kind,
             lang=LANG,
             path=facts.path,
             line_start=line_of(node),

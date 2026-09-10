@@ -471,11 +471,75 @@ def test_every_passage_is_linked_to_what_it_defines(store, ollama, code_source, 
     graph, chunks = code_chunks
     index_source(store, ollama, code_source, chunks, code=graph)
     defined = {(row["node_id"], row["passage_id"]) for row in store.load_definitions()}
-    place = symbol_id(code_source, "pyapp/orders.py", "OrderService.place")
+    place = symbol_id(code_source, "pyapp/orders.py", "OrderService.place", "method")
     (place_chunk,) = [c for c in chunks if place in c.defines]
     assert (place, passage_id(code_source, place_chunk)) in defined
     # Every DEFINED_IN pair the chunker asked for was written, and nothing else.
     assert defined == {(node, passage_id(code_source, c)) for c in chunks for node in c.defines}
+
+
+def test_a_module_and_its_same_named_member_are_two_nodes_all_the_way_to_the_store(
+    store, ollama, code_source
+):
+    """
+    E2 defect 1, both shapes that trip it, end to end.
+
+    `symbol_id` used to hash only `(source, path, qualname)`, so a file whose own base name is
+    also one of its top-level declarations gave the module symbol and that member ONE id. Go's
+    `main.go` holding `func main` is the commonest file in the language and Python's root-level
+    `foo.py` holding `def foo` is the same collision. Three things went wrong at once and all
+    three are asserted here: the store kept one row of the two (the extractor counted 230 and
+    the store held 229 on `mgodatagen`), `merge_edges` dropped the module -> member CONTAINS
+    edge as an `a == b` self-loop, and the surviving node collected a DEFINED_IN from both the
+    module-header passage and the member's own.
+    """
+    from hippo.ingest.readers import Document
+
+    docs = [
+        Document(
+            title="main.go",
+            text='package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("hi")\n}\n',
+            path="main.go",
+            is_code=True,
+        ),
+        Document(
+            title="foo.py", text='"""Foo."""\n\n\ndef foo():\n    return 1\n', path="foo.py", is_code=True
+        ),
+    ]
+    graph = extract_code(docs, code_source)
+    chunks = chunk_documents(docs, 1500, 150, code=graph)
+    index_source(store, ollama, code_source, chunks, code=graph)
+
+    ids = {
+        (path, kind): symbol_id(code_source, path, qualname, kind)
+        for path, qualname in (("main.go", "main"), ("foo.py", "foo"))
+        for kind in ("module", "function")
+    }
+    assert len(set(ids.values())) == 4  # four ids for four symbols, not two
+
+    # The extractor's count and the store's agree -- the number the defect was found by.
+    assert len(graph.symbols) == 4
+    assert store.stats()["symbols"] == 4
+    assert {s.id for s in graph.symbols} == set(ids.values())
+
+    contains = {(e["a"], e["b"]) for e in store.load_code_edges() if e["kind"] == "CONTAINS"}
+    assert contains == {
+        (ids[("main.go", "module")], ids[("main.go", "function")]),
+        (ids[("foo.py", "module")], ids[("foo.py", "function")]),
+    }
+
+    # One passage per symbol, one DEFINED_IN each: the module's is the file header, the
+    # function's is its own body.
+    defined: dict[str, list[str]] = {}
+    titles = {passage_id(code_source, c): c.title for c in chunks}
+    for row in store.load_definitions():
+        defined.setdefault(row["node_id"], []).append(titles[row["passage_id"]])
+    assert defined == {
+        ids[("main.go", "module")]: ["main.go :: main (lines 1-4)"],
+        ids[("main.go", "function")]: ["main.go :: main.main (lines 5-7)"],
+        ids[("foo.py", "module")]: ["foo.py :: foo (lines 1-3)"],
+        ids[("foo.py", "function")]: ["foo.py :: foo.foo (lines 4-5)"],
+    }
 
 
 def test_re_indexing_a_code_source_changes_nothing(store, ollama, code_source, code_chunks):
@@ -532,8 +596,8 @@ def test_prose_passages_refer_to_the_symbols_they_name(store, ollama, code_sourc
     index_source(store, ollama, code_source, chunks, code=graph)
     readme = next(c for c in chunks if c.title.startswith("Code sample"))
     rows = {row["node_id"]: row for row in store.load_refers_to()}
-    place = symbol_id(code_source, "pyapp/orders.py", "OrderService.place")
-    service = symbol_id(code_source, "pyapp/orders.py", "OrderService")
+    place = symbol_id(code_source, "pyapp/orders.py", "OrderService.place", "method")
+    service = symbol_id(code_source, "pyapp/orders.py", "OrderService", "class")
     assert rows[place]["omega"] == 0.85 and rows[place]["token"] == "OrderService.place"
     assert rows[service]["omega"] == 0.60 and rows[service]["token"] == "order service"
     assert {row["passage_id"] for row in rows.values()} == {passage_id(code_source, readme)}
@@ -543,7 +607,7 @@ def test_symbols_and_prose_entities_become_synonyms_in_both_directions(
     store, ollama, code_source, code_chunks, sample_text
 ):
     graph, chunks = code_chunks
-    service = symbol_id(code_source, "pyapp/orders.py", "OrderService")
+    service = symbol_id(code_source, "pyapp/orders.py", "OrderService", "class")
     order_service = entity_id("order service")
     # The symbol arrives first and the entity second: the symbol is a key, the entity a query.
     index_source(store, ollama, code_source, chunks, code=graph)
@@ -560,7 +624,7 @@ def test_a_one_token_symbol_is_kept_out_of_the_cross_kind_synonym_search(store, 
     """
     source = store.create_source("archive", "tiny")
     one = Symbol(
-        id=symbol_id(source, "a.py", "boulder"),
+        id=symbol_id(source, "a.py", "boulder", "function"),
         source_id=source,
         name="boulder",
         qualname="boulder",
@@ -571,7 +635,7 @@ def test_a_one_token_symbol_is_kept_out_of_the_cross_kind_synonym_search(store, 
         line_end=1,
     )
     two = Symbol(
-        id=symbol_id(source, "a.py", "BoulderOffice"),
+        id=symbol_id(source, "a.py", "BoulderOffice", "class"),
         source_id=source,
         name="BoulderOffice",
         qualname="BoulderOffice",
@@ -875,7 +939,7 @@ def test_a_prose_entity_indexed_first_still_finds_the_symbol(store, ollama, code
 
     index_source(store, ollama, code_source, chunks, code=graph)
 
-    service = symbol_id(code_source, "pyapp/orders.py", "OrderService")
+    service = symbol_id(code_source, "pyapp/orders.py", "OrderService", "class")
     assert {entity_id("order service"), service} in [{r["a"], r["b"]} for r in store.load_synonyms()]
 
 

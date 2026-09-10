@@ -57,7 +57,7 @@ def code_history(code_index):
         [
             {
                 "commit_id": commit_id(source_id, sha),
-                "symbol_id": symbol_id(source_id, path, qualname),
+                "symbol_id": symbol_id(source_id, path, qualname, "function"),
                 "omega": 1.0,
                 "hunk": {"file": path, "old_range": [1, 0], "new_range": [1, 1], "churn": 1},
             }

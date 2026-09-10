@@ -88,7 +88,9 @@ def write_commit_history(ctx, source_id: str) -> list[str]:
         modifies.append(
             {
                 "commit_id": node_id,
-                "symbol_id": symbol_id(source_id, path, qualname),
+                # `OrderService` is the class, the other two are its methods. Only a *module's*
+                # kind changes the id, so what matters here is that none of these is one.
+                "symbol_id": symbol_id(source_id, path, qualname, "method" if "." in qualname else "class"),
                 "omega": 1.0,
                 "hunk": {"file": path, "old_range": [1, 0], "new_range": [16, 8], "churn": 8},
             }
@@ -119,7 +121,7 @@ def many_symbols(ctx, source_id: str, name: str, how_many: int) -> list[str]:
         path = f"pkg/mod{i}.py"
         rows.append(
             {
-                "id": symbol_id(source_id, path, name),
+                "id": symbol_id(source_id, path, name, "function"),
                 "source_id": source_id,
                 "name": name,
                 "qualname": name,
@@ -179,7 +181,7 @@ def polyglot_symbols(ctx, source_id: str) -> dict[str, str]:
     for ordinal, (lang, path, qualname, kind, start, end) in enumerate(POLYGLOT):
         rows.append(
             {
-                "id": symbol_id(source_id, path, qualname),
+                "id": symbol_id(source_id, path, qualname, kind),
                 "source_id": source_id,
                 "name": qualname.rsplit(".", 1)[-1],
                 "qualname": qualname,
@@ -235,7 +237,7 @@ def call_hub(ctx, source_id: str) -> dict[str, str]:
     for ordinal, (key, (path, qualname)) in enumerate(names.items()):
         rows.append(
             {
-                "id": symbol_id(source_id, path, qualname),
+                "id": symbol_id(source_id, path, qualname, "function"),
                 "source_id": source_id,
                 "name": qualname.rsplit(".", 1)[-1],
                 "qualname": qualname,
