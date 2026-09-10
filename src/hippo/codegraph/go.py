@@ -11,7 +11,9 @@ three things Go does differently:
 * **A type's methods live outside it.** `func (s *Service) Place(...)` is a top-level
   declaration whose qualname is `Service.Place`, so the resolver's member table finds it
   exactly as it finds a Python method -- but a Go type declaration has no members *inside*
-  it, and its header passage is the whole declaration.
+  it, so `header_end` is `line_end`: there is nothing in the declaration to stop before. The
+  chunker groups by owner rather than by position, so the type's header passage is those lines
+  plus one placeholder per method, wherever below the type that method is written.
 * **There are no exceptions.** `panic("x")` is an ordinary unresolved call and `error` is a
   return value, so a Go file records no `RaiseFact` at all and gets no RAISES/CATCHES edge
   (add_langs.md "Decisions taken here").

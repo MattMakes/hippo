@@ -311,7 +311,8 @@ How one symbol reaches another: the shortest chain of calls, imports and inherit
 Answers "how does this end up calling that?".
 
 ```json
-{"name": "hippo_explain_path", "arguments": {"a": "OrderService.place", "b": "billing.total"}}
+{"name": "hippo_explain_path",
+ "arguments": {"a": "pyapp.orders.OrderService.place", "b": "pyapp.billing.total"}}
 ```
 
 ```json
@@ -368,7 +369,7 @@ What a change here could break: everything that depends on this symbol, level by
 `depth` is clamped to 1–4.
 
 ```json
-{"name": "hippo_blast_radius", "arguments": {"symbol": "OrderService.log", "depth": 2}}
+{"name": "hippo_blast_radius", "arguments": {"symbol": "pyapp.orders.OrderService.log", "depth": 2}}
 ```
 
 ```json
@@ -398,7 +399,8 @@ How a function reaches an exception class: the chain of calls ending in whatever
 "where can this error actually come from?".
 
 ```json
-{"name": "hippo_exception_path", "arguments": {"symbol": "OrderService.save", "exception": "OrderError"}}
+{"name": "hippo_exception_path",
+ "arguments": {"symbol": "pyapp.orders.OrderService.save", "exception": "pyapp.store.OrderError"}}
 ```
 
 ```json
@@ -426,7 +428,7 @@ The commits that touched this symbol, newest first. Needs a source added as a **
 zip or a folder has no history to read — and returns an empty `commits` list otherwise.
 
 ```json
-{"name": "hippo_history", "arguments": {"symbol": "OrderService.place", "limit": 3}}
+{"name": "hippo_history", "arguments": {"symbol": "pyapp.orders.OrderService.place", "limit": 3}}
 ```
 
 ```json

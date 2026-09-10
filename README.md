@@ -225,7 +225,7 @@ Some questions do not want an answer written for them — they want a fact a cal
 | Which commits touched this? | `hippo history SYMBOL [--limit N]` | `hippo_history` |
 
 ```console
-$ hippo path OrderService.place billing.total
+$ hippo path pyapp.orders.OrderService.place pyapp.billing.total
 How pyapp.orders.OrderService.place reaches pyapp.billing.total:
 pyapp.orders.OrderService.place -[INVOKES 0.90 via_import]-> pyapp.billing.total
 ```
