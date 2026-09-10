@@ -169,9 +169,11 @@ def module_and_its_namesake(ctx, source_id: str) -> dict[str, str]:
         }
         for kind, start, end in (("module", 1, 7), ("function", 5, 7))
     ]
+    # 1000 is past every other helper's block (600 polyglot, 700 hub, 800 many_symbols,
+    # 900 commits), so a test may call this one alongside any of them on the same source.
     chunks = [
-        Chunk(900, f"{path} :: main (lines 1-4)", 'package main\n\nimport "fmt"\n'),
-        Chunk(901, f"{path} :: main.main (lines 5-7)", 'func main() {\n\tfmt.Println("hi")\n}\n'),
+        Chunk(1000, f"{path} :: main (lines 1-4)", 'package main\n\nimport "fmt"\n'),
+        Chunk(1001, f"{path} :: main.main (lines 5-7)", 'func main() {\n\tfmt.Println("hi")\n}\n'),
     ]
     ctx.store.add_symbols(rows)
     index_source(ctx.store, ctx.ollama, source_id, chunks)
