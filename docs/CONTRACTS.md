@@ -185,8 +185,15 @@ model.py         Symbol, DataObject, CodeEdge(a, b, kind, omega, provenance, ext
                      scopes), a C# namespace. None for Python, TypeScript and Rust.
                  AssignFact.chain -- the call's own text with its arguments, e.g. `db.collection("orders")`, so a
                      local bound to a collection chain resolves to the collection (provenance `mongo_chain`)
-                 symbol_id(source_id, path, qualname); data_id(source_id, kind, qualname); commit_id(source_id, sha)
+                 symbol_id(source_id, path, qualname, kind); data_id(source_id, kind, qualname); commit_id(source_id, sha)
                      -- prefixed md5s through make_id, so they cannot collide with entity-/fact-/passage- ids
+                 symbol_key(path, qualname, kind) -> `path:module:qualname` for a module, `path:qualname` otherwise.
+                     The ONE spelling of a symbol's in-source name: symbol_id hashes it and git_history._head_index
+                     is keyed by it. `kind` is REQUIRED on symbol_id and has no default -- forgetting it is exactly
+                     the bug the marker exists for: without it a file's module symbol and a same-named top-level
+                     member of it (Go `main.go`/`func main`, root-level `foo.py`/`def foo`) share one id, one row
+                     survives the store write, and the CONTAINS between them is dropped as a self-loop. Every
+                     non-module id is byte-identical to what it was before the marker.
                  name_text(name) -> the text we embed for a symbol or data object (split tokens, then the name)
                  lang_of(name) -> 'python'|'typescript'|'go'|'csharp'|'rust'|'sql'|None. ingest/readers.py holds the
                      same table on the ingest side of the dependency line; codegraph may not import ingest, so the two
@@ -276,6 +283,13 @@ git_history.py   read_history(checkout, symbols, source_id, *, depth, timeout_s,
                      churn summed. The ranges are the symbol's AT THAT COMMIT -- each touched file is re-parsed at
                      each commit -- because a HEAD-range shortcut would make the commit eval measure its own drift.
                      A module whose only content is one class therefore never appears: the class encloses the line.
+                 RENAMES ARE FOLLOWED: DIFF_OPTIONS carries `-M`, so a content-preserving rename is a
+                     `rename from`/`rename to` pair with no hunks (that commit modifies nothing) rather than a
+                     whole-file delete plus add (which modified every symbol in the file). Walking newest -> oldest,
+                     each commit's renames are recorded in an alias map of "path here" -> "path at HEAD"; a touched
+                     file is then READ at the path it had at that commit and NAMED by its HEAD path, so its symbols
+                     -- the module symbol included, whose qualname IS its path -- key straight into the HEAD index
+                     via model.symbol_key. `hunk["file"]` stays the path git printed, i.e. the path at that commit.
                  `skipped` counts a commit a BUDGET cost us -- timed out, or its diff exceeded MAX_DIFF_BYTES
                      (a commit that vendors a binary tree, read as bytes via `_git_capped` and killed past the
                      cap rather than fully buffered) -- plus, as defence in depth, any commit whose diff could

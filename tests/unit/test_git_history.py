@@ -427,6 +427,90 @@ def test_a_shallow_clones_oldest_commit_does_not_claim_the_whole_tree(tmp_path: 
     assert 1 not in touched  # the boundary claims nothing, rather than claiming everything
 
 
+# ------------------------------------------------------------- E2F: renames
+
+
+def test_the_fixture_history_renames_nothing(tmp_path: Path) -> None:
+    # The premise of every `expected.json` `modifies` row: turning rename detection on cannot
+    # move a single one of them, because there is no rename in this history to detect. Asserted
+    # rather than assumed -- it is the reason the golden file did not change with `-M`.
+    checkout = make_code_checkout(tmp_path)
+    summary = git_out(checkout, "log", "--first-parent", "-M", "--summary", "--format=")
+    assert "rename " not in summary
+
+
+def test_a_rename_with_no_content_change_modifies_nothing(tmp_path: Path) -> None:
+    # E2 defect 3, half one. With `--no-renames` a content-preserving rename diffs as a delete
+    # of the whole old path plus an add of the whole new one, which is indistinguishable from a
+    # whole-file rewrite: the rename commit was credited with modifying EVERY symbol in the file,
+    # so `hippo history` returned it for `run` and `connectToDB` exactly as for `Generate`.
+    checkout = make_code_checkout(tmp_path)
+    git_out(checkout, "mv", "pyapp/orders.py", "pyapp/svc.py")
+    add_commit(checkout, "Rename orders.py to svc.py")
+
+    history, symbols = history_of(checkout)
+    assert history.commits[0]["message"].startswith("Rename orders.py")
+    assert modified(history, symbols).get(0, set()) == set()
+
+
+def test_a_rename_that_also_edits_a_function_modifies_only_that_function(tmp_path: Path) -> None:
+    # Rename detection is a similarity match, not an exact one: a rename carrying one small edit
+    # is still a rename, and only the edited function is modified by it.
+    checkout = make_code_checkout(tmp_path)
+    git_out(checkout, "mv", "pyapp/orders.py", "pyapp/svc.py")
+    svc = checkout / "pyapp" / "svc.py"
+    svc.write_text(svc.read_text().replace("        print(amount)\n", "        print(amount + 1)\n"))
+    add_commit(checkout, "Rename orders.py and tweak place")
+
+    history, symbols = history_of(checkout)
+    assert modified(history, symbols)[0] == {"OrderService.place"}
+
+
+def test_a_commit_before_a_rename_still_modifies_the_symbol_at_its_head_path(tmp_path: Path) -> None:
+    # E2 defect 3, half two, and the reason `Generate`'s real authorship commit was invisible:
+    # the commit that wrote a function diffs against the path the file had THEN, which no HEAD
+    # symbol lives at. Walking newest -> oldest, the rename says what the older path is called
+    # now, and the file is read at its old path but named by its HEAD one -- which is also the
+    # only way the module symbol can be found, its qualname being its path.
+    checkout = make_code_checkout(tmp_path)
+    git_out(checkout, "mv", "pyapp/orders.py", "pyapp/svc.py")
+    add_commit(checkout, "Rename orders.py to svc.py")
+
+    history, symbols = history_of(checkout)
+    by_path = lambda s: f"{s.path}::{s.qualname}"  # noqa: E731
+    touched = modified(history, symbols, key=by_path)
+    assert touched.get(0, set()) == set()  # the rename commit itself
+    # Ordinal 1 edited `save` and ordinal 2 edited `place`, both in `pyapp/orders.py`; those
+    # symbols are `pyapp/svc.py`'s now, and both commits are still theirs.
+    assert "pyapp/svc.py::OrderService.save" in touched[1]
+    assert touched[2] == {"pyapp/svc.py::OrderService.place"}
+    # The module symbol was `pyapp.orders` at the root commit and is `pyapp.svc` at HEAD, so
+    # keying on the qualname the old file computed could never have matched it.
+    assert "pyapp/svc.py::pyapp.svc" in touched[3]
+
+    # The stored hunk still names the path the file had at that commit: S2.9 reads everything
+    # about a commit as it was at that commit, and the `file` field is part of that.
+    ordinal = {c["id"]: c["ordinal"] for c in history.commits}
+    assert {r["hunk"]["file"] for r in history.modifies if ordinal[r["commit_id"]] == 2} == {
+        "pyapp/orders.py"
+    }
+
+
+def test_a_rename_of_a_rename_follows_all_the_way_back(tmp_path: Path) -> None:
+    # Two renames of the same file in two commits: the alias map has to compose, or the oldest
+    # commit's hunks land on a path nothing at HEAD answers to.
+    checkout = make_code_checkout(tmp_path)
+    git_out(checkout, "mv", "pyapp/orders.py", "pyapp/svc.py")
+    add_commit(checkout, "Rename orders.py to svc.py")
+    git_out(checkout, "mv", "pyapp/svc.py", "pyapp/service.py")
+    add_commit(checkout, "Rename svc.py to service.py")
+
+    history, symbols = history_of(checkout)
+    touched = modified(history, symbols, key=lambda s: f"{s.path}::{s.qualname}")
+    assert touched.get(0, set()) == set() and touched.get(1, set()) == set()  # neither modifies
+    assert touched[3] == {"pyapp/service.py::OrderService.place"}  # two renames back
+
+
 # ------------------------------------------------------------------ E1F-a
 
 
