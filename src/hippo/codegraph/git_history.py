@@ -16,7 +16,7 @@ key its id is hashed from -- and one that no longer exists at HEAD produces no e
 rename is a `rename from` / `rename to` pair with no `@@` hunks at all rather than a whole-file
 delete plus a whole-file add: the rename commit stops being attributed as MODIFIES to every
 symbol in the file. The walk is newest -> oldest, so a rename seen at commit C tells us what
-the *older* commits' paths are called at HEAD; `_alias` carries that map down the walk, and the
+the *older* commits' paths are called at HEAD; `read_history` carries that map down the walk, and the
 file a hunk landed in is read at its own path but *named* by its HEAD path, so the symbols
 parsed out of it -- the module symbol included, whose qualname is its path -- key straight into
 the HEAD index. The stored `hunk["file"]` stays as git printed it: the path the file had at that

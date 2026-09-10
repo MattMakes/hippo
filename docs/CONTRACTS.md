@@ -404,6 +404,10 @@ src/hippo/hipporag/anchors.py   what a question says about code. Pure: no store,
 
 src/hippo/hipporag/paths.py     deterministic walks over the code graph. No model anywhere in this file.
                  resolve_symbol(index, name) -> node id, raising UnknownSymbol or AmbiguousSymbol(candidates)
+                     Four tiers, tried in order: the node id, the DISPLAY name, the module-relative qualname, a
+                     dotted suffix of either, a bare name. Display and qualname are SEPARATE tiers: `main.go`'s
+                     package is displayed `main` and its `func main` has the qualname `main`, so one tier for both
+                     made every `main` in the tree a candidate and neither half of that file nameable (E2 defect 1).
                  shortest_code_path(index, a, b, *, theta, max_hops=MAX_HOPS) -- over code_out, skipping
                      NOT_A_STEP ("DEFINED_IN", "PRECEDES", "REFERS_TO", "MODIFIES") and any edge below theta,
                      with an undirected second pass when the directed one finds nothing
@@ -421,7 +425,9 @@ src/hippo/hipporag/paths.py     deterministic walks over the code graph. No mode
                  render_triples(rows) -> "a -[KIND 0.90 provenance in_branch await]-> b", the fixed grammar
                      test_ask.py pins exactly; render_blast; block_lines; cut_to; render_block(index, trace, *,
                      header, max_chars) cuts on a LINE boundary and appends MORE_LINE
-                 display_of / display_at -> the fully-qualified display name (pyapp.orders.OrderService.place)
+                 display_of / display_at -> the fully-qualified display name (pyapp.orders.OrderService.place).
+                     A qualname equal to its own module is printed alone ONLY when the node is the module
+                     (code_kind == 'module'); `main.go`'s `func main` is `main.main`, the name its passage carries.
                  community_labels(index) -> the label a person reads: the smallest DISPLAY name in each community.
                      Not GraphIndex.community_name, which uses module-relative qualnames and would label two
                      different subsystems "Base".

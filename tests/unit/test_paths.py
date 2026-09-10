@@ -34,7 +34,7 @@ from hippo.hipporag.paths import (
     shortest_code_path,
     triple_rows,
 )
-from tests.fakes.code_fixture import call_hub, write_commit_history
+from tests.fakes.code_fixture import call_hub, module_and_its_namesake, write_commit_history
 
 THETA = 0.5
 HEADER = "Relations from the code graph."
@@ -125,6 +125,49 @@ def test_an_unknown_name_raises(index: GraphIndex) -> None:
         resolve_symbol(index, "no_such_thing")
     with pytest.raises(UnknownSymbol):
         resolve_symbol(index, "")
+
+
+def test_a_module_and_its_namesake_read_as_two_different_names(ctx) -> None:
+    """
+    E2 defect 1's read side. Giving the two symbols two ids is only half the fix: `display_of`
+    collapsed any `qualname == module` to the bare qualname, so `main.go`'s package and its
+    `func main` both printed as `main`, `resolve_symbol("main")` raised `AmbiguousSymbol` with
+    two IDENTICAL candidates, and `main.main` -- the name the function's own passage is titled
+    with -- resolved to nothing at all. Only a module's qualname is collapsed now.
+
+    A memory holding just the one file, because in the fixture tree `main` is a name seven
+    symbols answer to and the ambiguity being pinned here is the one *inside* a single file.
+    """
+    source_id = ctx.store.create_source("archive", "goapp")
+    ids = module_and_its_namesake(ctx, source_id)
+    index = ctx.graph()
+
+    assert display_of(index.code_node_by_id(ids["module"])) == "main"
+    assert display_of(index.code_node_by_id(ids["function"])) == "main.main"
+    # Each name reaches exactly one of them, and neither raises.
+    assert resolve_symbol(index, "main") == ids["module"]
+    assert resolve_symbol(index, "main.main") == ids["function"]
+
+
+def test_a_display_name_outranks_a_qualname_that_spells_the_same_word(code_index) -> None:
+    """
+    The tier that makes the above work in a real memory. `main` is the qualname of seven symbols
+    in the fixture tree and the *display name* of exactly one -- `main.go`'s package. One tier
+    for both made every one of them a candidate and the answer an ambiguity; the display name is
+    the more specific form and the docstring always said it was tried first.
+    """
+    ctx, source_id = code_index
+    ids = module_and_its_namesake(ctx, source_id)
+    index = ctx.graph()
+
+    assert resolve_symbol(index, "main") == ids["module"]
+    assert resolve_symbol(index, "main.main") == ids["function"]
+    # The seven `main` functions are still reachable, each by its own display name.
+    assert display_of(index.code_node_by_id(resolve_symbol(index, "pyapp.cli.main"))) == "pyapp.cli.main"
+    # And a word that is nobody's display name is as ambiguous as it ever was.
+    with pytest.raises(AmbiguousSymbol) as raised:
+        resolve_symbol(index, "log")
+    assert len(raised.value.candidates) == 9
 
 
 def test_module_qualnames_come_from_the_path(index: GraphIndex) -> None:
