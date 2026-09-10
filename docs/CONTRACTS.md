@@ -219,14 +219,15 @@ languages.py     RULES: dict[str, LanguageRules], filled by register(<lang>_walk
                  today's line windows and OpenIE and is counted in files_skipped as 'unsupported'.
                  LanguageRules (DEFINED in model.py, re-exported here; frozen; only name and line_comment required):
                      name; line_comment ('#' or '//')
-                     walk(path, root_node, source_id) -> FileFacts | None
+                     walk(path, root_node, source_id) -> FileFacts, or None for a language with no walker
                      resolve_module(index, facts, spec) -> FileFacts | Resolution | None -- a Resolution when the
                          import names a SCOPE rather than a file (a C# `using`, a Rust `use` of a module path)
                      scope_defines(index, facts) -> {name: Symbol} -- what this file sees with no import at all
                      module_qualname(path); is_test_path(path); test_stem(path) -> str | None (the stem is taken from
                          module_qualname(path), not from the file name, so a TS `.spec`/`.test` invents no edge)
                      is_test_function(symbol) -> bool -- which symbols of a test file are cases (Go's TestX, C#'s
-                         [Fact] method, every fn in Rust test code; the shared default is a lowercase `test` prefix)
+                         [Fact] method, every fn in Rust test code; the shared default is a `test` name prefix, which
+                         is Python's and TypeScript's convention and nobody else's)
                      member_paths(index, qualname, path) -> [path] -- which files may hold a member of qualname; the
                          default is [path], Rust's is every file with an `impl` for the type
                      self_names / super_names: frozenset -- PER LANGUAGE. 'Self' is only Rust's and 'base' only C#'s,
@@ -259,7 +260,7 @@ resolve.py       the second pass over every file at once: build_index(files) -> 
                  declared(index, facts, qualname) -> the symbol a fact in this file is ABOUT, looked up through
                      RULES[lang].member_paths -- Rust's `impl Base for OrderService` says something about a struct in
                      another file, and resolve_bases / resolve_overrides / extract._contains all ask this way.
-                 FUZZY_STOPLIST: the ~80 ordinary method names the 0.50 `fuzzy_name` guess refuses, matched in LOWER
+                 FUZZY_STOPLIST: the 75 ordinary method names the 0.50 `fuzzy_name` guess refuses, matched in LOWER
                      CASE, so Go's Close and C#'s Write are refused exactly as Python's close and write are.
 data_access.py   READS/WRITES against the tables, collections and graph labels the repo's own files name:
                  classify_literal(text), sql_tables (sqlglot, errors ignored), cypher_objects, mongo_hit,
@@ -383,7 +384,7 @@ src/hippo/hipporag/anchors.py   what a question says about code. Pure: no store,
                      place falls back to the LAST TWO dotted segments only, preferring symbols in the frame's own
                      file, never split. The full name misses (a C# display name repeats the type) and the bare last
                      segment would seed every `save` in the repository.
-                 CODE_SUFFIXES gained cs and rs (and go), which reaches past frames: a bare `orders.rs:20` written in
+                 CODE_SUFFIXES gained cs and rs (go was already there), which reaches past frames: a bare `orders.rs:20` in
                      prose now anchors through _PATH_LINE, and a line holding `.cs:N` / `.rs:N` routes to the code
                      half through _STACK_ISH.
 
