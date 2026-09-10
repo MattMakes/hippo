@@ -309,7 +309,13 @@ def _field_bindings(facts: FileFacts, fields: list[tuple[str, str, str]]) -> Non
         for method in methods:
             if method.qualname.rpartition(".")[0] == cls:
                 facts.assignments.append(
-                    AssignFact(scope=method.qualname, target=target, value=declared, line=method.line_start)
+                    AssignFact(
+                        scope=method.qualname,
+                        scope_kind=method.kind,
+                        target=target,
+                        value=declared,
+                        line=method.line_start,
+                    )
                 )
 
 
@@ -393,30 +399,40 @@ def _walk_body(facts: FileFacts, symbol: Symbol, body: Node, file_is_test: bool)
 
 def _record(facts: FileFacts, symbol: Symbol, node: Node, file_is_test: bool) -> None:
     if node.type == "invocation_expression":
-        facts.calls.append(_call(symbol.qualname, node))
+        facts.calls.append(_call(symbol, node))
     elif node.type == "object_creation_expression":
-        facts.calls.append(_new(symbol.qualname, node))
+        facts.calls.append(_new(symbol, node))
     elif node.type == "throw_statement":
         name = _thrown_name(node)
         if name:
-            facts.exceptions.append(RaiseFact(caller=symbol.qualname, name=name, line=line_of(node)))
+            facts.exceptions.append(
+                RaiseFact(caller=symbol.qualname, caller_kind=symbol.kind, name=name, line=line_of(node))
+            )
     elif node.type == "catch_declaration":
         caught = _plain_name(node.child_by_field_name("type"))
         if caught:
             facts.exceptions.append(
-                RaiseFact(caller=symbol.qualname, name=caught, line=line_of(node), kind="catch")
+                RaiseFact(
+                    caller=symbol.qualname,
+                    caller_kind=symbol.kind,
+                    name=caught,
+                    line=line_of(node),
+                    kind="catch",
+                )
             )
     elif node.type == "variable_declarator":
         _binding(facts, symbol, node)
     elif node.type in STRING_TYPES:
         content = _string_text(node)
         if content:
-            facts.literals.append(LiteralFact(caller=symbol.qualname, text=content, line=line_of(node)))
+            facts.literals.append(
+                LiteralFact(caller=symbol.qualname, caller_kind=symbol.kind, text=content, line=line_of(node))
+            )
     elif node.type == "identifier" and file_is_test and symbol.kind in ("function", "method"):
         facts.names.setdefault(text_of(node), []).append(line_of(node))
 
 
-def _call(caller: str, node: Node) -> CallFact:
+def _call(symbol: Symbol, node: Node) -> CallFact:
     """`Billing.Total(o)`, `this.Log(m)`, `coll?.InsertOne(o)`, `Total(o)`."""
     target = node.child_by_field_name("function")
     receiver, name = "", ""
@@ -430,7 +446,8 @@ def _call(caller: str, node: Node) -> CallFact:
     elif target is not None:
         name = _plain_name(target)
     return CallFact(
-        caller=caller,
+        caller=symbol.qualname,
+        caller_kind=symbol.kind,
         receiver=receiver,
         name=name,
         line=line_of(node),
@@ -440,13 +457,14 @@ def _call(caller: str, node: Node) -> CallFact:
     )
 
 
-def _new(caller: str, node: Node) -> CallFact:
+def _new(symbol: Symbol, node: Node) -> CallFact:
     """`new Order()` is a call to the class -- 2.2b's "INVOKES the constructor-bearing class"."""
     receiver, name = "", _plain_name(node.child_by_field_name("type"))
     if "." in name:
         receiver, _, name = name.rpartition(".")
     return CallFact(
-        caller=caller,
+        caller=symbol.qualname,
+        caller_kind=symbol.kind,
         receiver=receiver,
         name=name,
         line=line_of(node),
@@ -543,7 +561,13 @@ def _binding(facts: FileFacts, symbol: Symbol, node: Node) -> None:
         return
     if held:
         facts.assignments.append(
-            AssignFact(scope=symbol.qualname, target=text_of(name), value=held, line=line_of(node))
+            AssignFact(
+                scope=symbol.qualname,
+                scope_kind=symbol.kind,
+                target=text_of(name),
+                value=held,
+                line=line_of(node),
+            )
         )
 
 

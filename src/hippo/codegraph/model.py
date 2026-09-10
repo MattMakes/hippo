@@ -416,6 +416,13 @@ def merge_edges(edges: list[CodeEdge]) -> list[CodeEdge]:
 # Pass 1 (`python.walk` / `typescript.walk`) turns one file into `FileFacts`: its symbols,
 # plus every *unresolved* thing its bodies do. Pass 2 (`resolve.py`) needs the whole source
 # before it can say what `invoice(order)` or `class Order extends Base` points at.
+#
+# A fact that names the symbol it sits *inside* names it by qualname **and kind** --
+# `caller`/`caller_kind`, `scope`/`scope_kind` -- because the qualname alone is exactly as
+# ambiguous as the id used to be: in a root `foo.py` with a `def foo`, "the caller is `foo`"
+# does not say whether the call is at module level or inside the function. `symbol_key`
+# resolves it, and a kind of "" reads there as "not the file's own module", so a fact built
+# by hand in a test keeps the attribution it always had.
 
 
 @dataclass
@@ -436,6 +443,7 @@ class CallFact:
     """One call site, with the enclosing symbol and enough context for INVOKES `extra`."""
 
     caller: str = ""  # qualname of the enclosing symbol
+    caller_kind: str = ""  # ...and its kind, so `symbol_key` can tell a module from its namesake
     receiver: str = ""  # "" for a bare call; else `self`, `billing`, `os.path`, `super`
     name: str = ""
     line: int = 0
@@ -460,6 +468,7 @@ class RaiseFact:
     """A `raise X` / `throw new X` (kind `raise`) or an `except X` / `instanceof X` (kind `catch`)."""
 
     caller: str = ""
+    caller_kind: str = ""
     name: str = ""
     line: int = 0
     kind: str = "raise"
@@ -470,6 +479,7 @@ class AssignFact:
     """`service = OrderService()` -- what a later `service.place()` has to go through."""
 
     scope: str = ""  # enclosing symbol qualname
+    scope_kind: str = ""  # ...and its kind; `caller_kind`'s twin
     target: str = ""
     value: str = ""  # the constructed name, `OrderService`
     line: int = 0
@@ -481,6 +491,7 @@ class LiteralFact:
     """A string literal, with the symbol that holds it. `data_access` classifies these."""
 
     caller: str = ""
+    caller_kind: str = ""
     text: str = ""
     line: int = 0
 

@@ -337,7 +337,7 @@ def test_a_type_declared_in_another_file_still_inherits_contains_and_overrides(m
     )
     monkeypatch.setitem(RULES, "python", everywhere)
     index = resolve.build_index(facts)
-    index.bindings["impl"] = {"Base": Resolution(index.symbols[("base.py", "Base")], 1.00, "same_file")}
+    index.bindings["impl"] = {"Base": Resolution(index.symbol("base.py", "Base"), 1.00, "same_file")}
 
     inherits = resolve.resolve_bases(index)
     assert [(e.a, e.b, e.omega, e.provenance) for e in inherits] == [

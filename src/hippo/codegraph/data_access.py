@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import re
 
-from .model import LiteralFact
+from .model import LiteralFact, symbol_key
 
 # sqlglot logs a warning whenever it falls back to parsing something as an opaque command.
 # We hand it arbitrary in-repo strings on purpose, so those warnings are noise about our own
@@ -345,11 +345,16 @@ def classify_literal(text: str) -> list[Hit]:
     return hits if hits else sql_tables(text)
 
 
-def collect(literals: list[LiteralFact]) -> list[tuple[str, Hit]]:
-    """`(caller qualname, hit)` for every literal in a file that names something."""
+def collect(path: str, literals: list[LiteralFact]) -> list[tuple[str, Hit]]:
+    """
+    `(caller's symbol_key, hit)` for every literal in a file that names something.
+
+    Keyed rather than named, because a qualname on its own does not say whether the literal
+    sits at module level or in a same-named member of that module (`model.symbol_key`).
+    """
     found: list[tuple[str, Hit]] = []
     for literal in literals:
         for hit in classify_literal(literal.text):
             hit.line = literal.line
-            found.append((literal.caller, hit))
+            found.append((symbol_key(path, literal.caller, literal.caller_kind), hit))
     return found
