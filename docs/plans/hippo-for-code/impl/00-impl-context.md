@@ -100,6 +100,17 @@ Also from the research: LadybugDB free text goes through `text(x or "")` on writ
 a bare `None` breaks `decode()`; `UNWIND` writes go in batches of 5,000; `store/base.py` is the *Neo4j*
 backend's base class, not an interface — the three stores match by convention and by `test_store_*` only.
 
+## Process hygiene on a shared box (other workers are running suites at the same time)
+
+- **Never `pkill -f` by a pattern** (`pytest`, `HIPPO_TEST_STORE=neo4j`, a worktree path — the python
+  process's argv does not even contain the worktree path). Kill only by PID from
+  `ps -eo pid,command | grep '[p]ytest'` after confirming the command line is yours. Two workers have
+  already killed other workers' legs this way.
+- One unique log file per run (`> /tmp/<role>-<leg>-<n>.log 2>&1; echo EXIT $?`); a second run into
+  the same file interleaves and lies. An exit of 144 is a SIGTERM from someone's `pkill`, not a red
+  suite — rerun it.
+- Never read a leg's status from `pytest ... | tail`; that is tail's exit code.
+
 ## Code conventions
 
 - Match the surrounding style exactly: the existing store methods, row shapers (`_passage_row` in
