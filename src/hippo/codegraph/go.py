@@ -404,19 +404,21 @@ def _record(
     collections: dict[str, str],
 ) -> None:
     if node.type == "call_expression":
-        facts.calls.append(_call(symbol.qualname, node, receiver, collections))
+        facts.calls.append(_call(symbol, node, receiver, collections))
     elif node.type in ("short_var_declaration", "var_spec"):
         _binding(facts, symbol, node, collections)
     elif node.type in STRING_TYPES:
         content = "".join(text_of(c) for c in node.children if c.type in STRING_CONTENT)
         if content:
-            facts.literals.append(LiteralFact(caller=symbol.qualname, text=content, line=line_of(node)))
+            facts.literals.append(
+                LiteralFact(caller=symbol.qualname, caller_kind=symbol.kind, text=content, line=line_of(node))
+            )
     elif node.type in ("identifier", "type_identifier", "field_identifier") and is_test:
         if symbol.kind in ("function", "method"):
             facts.names.setdefault(text_of(node), []).append(line_of(node))
 
 
-def _call(caller: str, node: Node, receiver: str, collections: dict[str, str]) -> CallFact:
+def _call(symbol: Symbol, node: Node, receiver: str, collections: dict[str, str]) -> CallFact:
     """
     One call site. `go f()` and `defer f()` are calls like any other -- neither is an await,
     and both are as much a dependency of the caller as a plain call is.
@@ -430,7 +432,8 @@ def _call(caller: str, node: Node, receiver: str, collections: dict[str, str]) -
         name = _one_line(text_of(target))
     args = _arguments(node)
     return CallFact(
-        caller=caller,
+        caller=symbol.qualname,
+        caller_kind=symbol.kind,
         receiver=_normalise(holder, receiver, collections),
         name=name,
         line=line_of(node),
@@ -496,7 +499,13 @@ def _binding(facts: FileFacts, symbol: Symbol, node: Node, collections: dict[str
         constructed = _constructed(value)
         if constructed:
             facts.assignments.append(
-                AssignFact(scope=symbol.qualname, target=target, value=constructed, line=line_of(node))
+                AssignFact(
+                    scope=symbol.qualname,
+                    scope_kind=symbol.kind,
+                    target=target,
+                    value=constructed,
+                    line=line_of(node),
+                )
             )
 
 

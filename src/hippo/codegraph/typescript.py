@@ -277,30 +277,40 @@ def _walk_body(facts: FileFacts, symbol: Symbol, body: Node, is_test: bool) -> N
 
 def _record(facts: FileFacts, symbol: Symbol, node: Node, is_test: bool) -> None:
     if node.type == "call_expression":
-        facts.calls.append(_call(symbol.qualname, node))
+        facts.calls.append(_call(symbol, node))
     elif node.type == "new_expression":
-        facts.calls.append(_new(symbol.qualname, node))
+        facts.calls.append(_new(symbol, node))
     elif node.type == "throw_statement":
         name = _thrown_name(node)
         if name:
-            facts.exceptions.append(RaiseFact(caller=symbol.qualname, name=name, line=line_of(node)))
+            facts.exceptions.append(
+                RaiseFact(caller=symbol.qualname, caller_kind=symbol.kind, name=name, line=line_of(node))
+            )
     elif node.type == "catch_clause":
         for name in _caught_names(node):
             facts.exceptions.append(
-                RaiseFact(caller=symbol.qualname, name=name, line=line_of(node), kind="catch")
+                RaiseFact(
+                    caller=symbol.qualname,
+                    caller_kind=symbol.kind,
+                    name=name,
+                    line=line_of(node),
+                    kind="catch",
+                )
             )
     elif node.type == "variable_declarator":
         _binding(facts, symbol, node)
     elif node.type == "string":
         content = "".join(text_of(c) for c in node.children if c.type == "string_fragment")
         if content:
-            facts.literals.append(LiteralFact(caller=symbol.qualname, text=content, line=line_of(node)))
+            facts.literals.append(
+                LiteralFact(caller=symbol.qualname, caller_kind=symbol.kind, text=content, line=line_of(node))
+            )
     elif node.type in ("identifier", "property_identifier") and is_test:
         if symbol.kind in ("function", "method"):
             facts.names.setdefault(text_of(node), []).append(line_of(node))
 
 
-def _call(caller: str, node: Node) -> CallFact:
+def _call(symbol: Symbol, node: Node) -> CallFact:
     target = node.child_by_field_name("function")
     receiver, name = "", ""
     if target is not None and target.type == "member_expression":
@@ -310,7 +320,8 @@ def _call(caller: str, node: Node) -> CallFact:
         name = text_of(target)
     args, kwargs = _arguments(node)
     return CallFact(
-        caller=caller,
+        caller=symbol.qualname,
+        caller_kind=symbol.kind,
         receiver=receiver,
         name=name,
         line=line_of(node),
@@ -321,7 +332,7 @@ def _call(caller: str, node: Node) -> CallFact:
     )
 
 
-def _new(caller: str, node: Node) -> CallFact:
+def _new(symbol: Symbol, node: Node) -> CallFact:
     """`new Order()` is a call to the class -- 2.2b's "INVOKES the constructor-bearing class"."""
     target = node.child_by_field_name("constructor")
     receiver, name = "", _one_line(text_of(target))
@@ -329,7 +340,8 @@ def _new(caller: str, node: Node) -> CallFact:
         receiver, _, name = name.rpartition(".")
     args, kwargs = _arguments(node)
     return CallFact(
-        caller=caller,
+        caller=symbol.qualname,
+        caller_kind=symbol.kind,
         receiver=receiver,
         name=name,
         line=line_of(node),
@@ -409,6 +421,7 @@ def _binding(facts: FileFacts, symbol: Symbol, node: Node) -> None:
         facts.assignments.append(
             AssignFact(
                 scope=symbol.qualname,
+                scope_kind=symbol.kind,
                 target=text_of(name),
                 value=_one_line(text_of(value.child_by_field_name("constructor"))),
                 line=line_of(node),
@@ -427,6 +440,7 @@ def _binding(facts: FileFacts, symbol: Symbol, node: Node) -> None:
     facts.assignments.append(
         AssignFact(
             scope=symbol.qualname,
+            scope_kind=symbol.kind,
             target=text_of(name),
             value=_one_line(text_of(called)),
             line=line_of(node),

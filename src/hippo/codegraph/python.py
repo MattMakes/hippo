@@ -182,14 +182,20 @@ def _decorators(facts: FileFacts, symbol: Symbol, node: Node) -> None:
         if expression is None:
             continue
         if expression.type == "call":
-            facts.calls.append(_call(symbol.qualname, expression))
+            facts.calls.append(_call(symbol, expression))
         elif expression.type in ("identifier", "attribute"):
             receiver, name = "", text_of(expression)
             if expression.type == "attribute":
                 receiver = _one_line(text_of(expression.child_by_field_name("object")))
                 name = text_of(expression.child_by_field_name("attribute"))
             facts.calls.append(
-                CallFact(caller=symbol.qualname, receiver=receiver, name=name, line=line_of(child))
+                CallFact(
+                    caller=symbol.qualname,
+                    caller_kind=symbol.kind,
+                    receiver=receiver,
+                    name=name,
+                    line=line_of(child),
+                )
             )
 
 
@@ -300,27 +306,37 @@ def _walk_body(facts: FileFacts, symbol: Symbol, body: Node, is_test: bool) -> N
 
 def _record(facts: FileFacts, symbol: Symbol, node: Node, doc: Node | None, is_test: bool) -> None:
     if node.type == "call":
-        facts.calls.append(_call(symbol.qualname, node))
+        facts.calls.append(_call(symbol, node))
     elif node.type == "raise_statement":
         name = _exception_name(node)
         if name:
-            facts.exceptions.append(RaiseFact(caller=symbol.qualname, name=name, line=line_of(node)))
+            facts.exceptions.append(
+                RaiseFact(caller=symbol.qualname, caller_kind=symbol.kind, name=name, line=line_of(node))
+            )
     elif node.type == "except_clause":
         for name in _caught_names(node):
             facts.exceptions.append(
-                RaiseFact(caller=symbol.qualname, name=name, line=line_of(node), kind="catch")
+                RaiseFact(
+                    caller=symbol.qualname,
+                    caller_kind=symbol.kind,
+                    name=name,
+                    line=line_of(node),
+                    kind="catch",
+                )
             )
     elif node.type == "assignment":
         _assignment(facts, symbol, node)
     elif node.type == "string" and node is not doc:
         content = "".join(text_of(c) for c in node.children if c.type == "string_content")
         if content:
-            facts.literals.append(LiteralFact(caller=symbol.qualname, text=content, line=line_of(node)))
+            facts.literals.append(
+                LiteralFact(caller=symbol.qualname, caller_kind=symbol.kind, text=content, line=line_of(node))
+            )
     elif node.type == "identifier" and is_test and symbol.kind in ("function", "method"):
         facts.names.setdefault(text_of(node), []).append(line_of(node))
 
 
-def _call(caller: str, node: Node) -> CallFact:
+def _call(symbol: Symbol, node: Node) -> CallFact:
     target = node.child_by_field_name("function")
     receiver, name = "", ""
     if target is not None and target.type == "attribute":
@@ -330,7 +346,8 @@ def _call(caller: str, node: Node) -> CallFact:
         name = text_of(target)
     args, kwargs = _arguments(node)
     return CallFact(
-        caller=caller,
+        caller=symbol.qualname,
+        caller_kind=symbol.kind,
         receiver=receiver,
         name=name,
         line=line_of(node),
@@ -413,6 +430,7 @@ def _assignment(facts: FileFacts, symbol: Symbol, node: Node) -> None:
             facts.assignments.append(
                 AssignFact(
                     scope=symbol.qualname,
+                    scope_kind=symbol.kind,
                     target=text_of(left),
                     value=_one_line(text_of(called)),
                     line=line_of(node),

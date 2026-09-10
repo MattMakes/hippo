@@ -35,6 +35,7 @@ from .model import (
     Symbol,
     data_id,
     package_of,
+    symbol_key,
 )
 
 # Method names too common to guess from. A `fuzzy_name` edge on any of these would be
@@ -95,7 +96,7 @@ class SourceIndex:
 
     files: dict[str, FileFacts] = field(default_factory=dict)  # path -> facts
     modules: dict[str, FileFacts] = field(default_factory=dict)  # module qualname -> facts
-    symbols: dict[tuple[str, str], Symbol] = field(default_factory=dict)  # (path, qualname) -> symbol
+    symbols: dict[str, Symbol] = field(default_factory=dict)  # model.symbol_key -> symbol
     defines: dict[str, dict[str, Symbol]] = field(default_factory=dict)  # module -> top-level name
     members: dict[tuple[str, str], dict[str, Symbol]] = field(default_factory=dict)  # (path, class)
     by_name: dict[tuple[str, str], list[Symbol]] = field(default_factory=dict)  # (lang, name) -> symbols
@@ -131,6 +132,21 @@ class SourceIndex:
     def module_symbol(self, facts: FileFacts) -> Symbol:
         return facts.symbols[0]
 
+    def symbol(self, path: str, qualname: str, kind: str = "") -> Symbol | None:
+        """
+        One symbol of one file, by the same key its id is hashed from (`model.symbol_key`).
+
+        Keyed that way and not by `(path, qualname)` for the reason the id is: in a root
+        `foo.py` with a `def foo`, or a `main.go` with a `func main`, the module and the
+        member are one pair and the later one would overwrite the earlier -- so a fact at
+        module level would be attributed to the member, and the module symbol would be
+        missing from this index entirely (E2F-b).
+
+        `kind` matters only when it is `"module"`, so the default `""` asks for the member,
+        which is what every caller that knows it is not looking at a file's own module wants.
+        """
+        return self.symbols.get(symbol_key(path, qualname, kind))
+
 
 def build_index(files: list[FileFacts], lang_state: dict[str, Any] | None = None) -> SourceIndex:
     """One pass over every parsed file, so the second pass can look anything up by name."""
@@ -141,7 +157,7 @@ def build_index(files: list[FileFacts], lang_state: dict[str, Any] | None = None
         index.defines.setdefault(facts.module, {})
         module_symbol = facts.symbols[0] if facts.symbols else None
         for symbol in facts.symbols:
-            index.symbols[(facts.path, symbol.qualname)] = symbol
+            index.symbols[symbol_key(facts.path, symbol.qualname, symbol.kind)] = symbol
             index.by_name.setdefault((symbol.lang, symbol.name), []).append(symbol)
             # The file's *own* module symbol owns nothing above it, and its dotted qualname
             # is a path, not an owner. An inline module -- Rust's `mod tests { }` -- is an
@@ -335,9 +351,18 @@ def declared(index: SourceIndex, facts: FileFacts, qualname: str) -> Symbol | No
     `struct` is in another file, so "which files may hold a member of `OrderService`" -- the
     language's own `member_paths` answer, the one `_on_class` already asks -- is also where
     to look for the type itself. Every other language answers "this file", so nothing moves.
+
+    Always asked about a *container* -- a base class, or the owner half of a member's dotted
+    qualname -- so the member reading of the key is the right one to try first, and a root
+    `foo.py`'s `def foo` still owns the nested function inside it rather than losing it to
+    the module. The fallback is for Rust's inline `mod tests { }`, which is a container of
+    kind `module`; a file's own module symbol can never be reached this way, because its
+    qualname is a path form and no member's qualname is prefixed with it. `expected.json`
+    pins the fallback: `rsapp/src/orders.rs` has a `mod tests`, and without it that mod's
+    CONTAINS to `tests.place_totals` disappears from the golden file.
     """
     for path in RULES[facts.lang].member_paths(index, qualname, facts.path):
-        found = index.symbols.get((path, qualname))
+        found = index.symbol(path, qualname) or index.symbol(path, qualname, "module")
         if found is not None:
             return found
     return None
@@ -411,22 +436,29 @@ def resolve_calls(index: SourceIndex, facts: FileFacts) -> tuple[list[CodeEdge],
     """
     INVOKES edges, the data accesses a call chain implies, and how many calls resolved to
     nothing. A call that is really an exception constructor is left to `resolve_raises`.
+
+    The hits come back keyed by the caller's `symbol_key`, not by its qualname, because that
+    is what `resolve_data` has to look a holder up by.
     """
     edges: list[CodeEdge] = []
     hits: list[tuple[str, Hit]] = []
-    raised = {(exc.caller, exc.line, exc.name.rpartition(".")[2]) for exc in facts.exceptions}
+    raised = {
+        (symbol_key(facts.path, exc.caller, exc.caller_kind), exc.line, exc.name.rpartition(".")[2])
+        for exc in facts.exceptions
+    }
     unresolved = 0
     for call in facts.calls:
-        caller = index.symbols.get((facts.path, call.caller))
+        caller_key = symbol_key(facts.path, call.caller, call.caller_kind)
+        caller = index.symbols.get(caller_key)
         if caller is None:
             continue
-        if (call.caller, call.line, call.name) in raised:
+        if (caller_key, call.line, call.name) in raised:
             continue  # `raise OrderError(...)` is a RAISES edge, not also a call to the class
         if not call.receiver and call.name in LANGUAGE_CALLS:
             continue  # `super()` is the language's own machinery, not a reference to resolve
         hit = _data_call(index, facts, call)
         if hit is not None:
-            hits.append((call.caller, hit))
+            hits.append((caller_key, hit))
             continue
         found = _call_target(index, facts, call)
         if found is None:
@@ -483,8 +515,11 @@ def _receiver_type(index: SourceIndex, facts: FileFacts, call, receiver: str) ->
     found = _lookup_name(index, facts, receiver)
     if found is not None and (found.is_module or found.scope is not None or found.symbol.kind == "class"):
         return found
+    scope = symbol_key(facts.path, call.caller, call.caller_kind)
     for assignment in facts.assignments:
-        if assignment.scope != call.caller or assignment.target != receiver:
+        if symbol_key(facts.path, assignment.scope, assignment.scope_kind) != scope:
+            continue
+        if assignment.target != receiver:
             continue
         if assignment.line > call.line:
             continue
@@ -633,7 +668,7 @@ def resolve_raises(index: SourceIndex, facts: FileFacts) -> list[CodeEdge]:
     """
     edges: list[CodeEdge] = []
     for exception in facts.exceptions:
-        caller = index.symbols.get((facts.path, exception.caller))
+        caller = index.symbol(facts.path, exception.caller, exception.caller_kind)
         if caller is None:
             continue
         name = exception.name.rpartition(".")[2]
@@ -660,13 +695,17 @@ def resolve_data(
     Turn the literals and call chains of one file into data objects and READS/WRITES edges.
     `__tablename__ = "orders"` names a table without parsing anything, so it is the
     `bare_identifier` row: it links the class to the table at 0.60.
+
+    Every hit arrives paired with the `symbol_key` of the symbol that holds it -- `collect`
+    builds one, `resolve_calls` already did, and `table_names` is always a class's.
     """
     objects: list[DataObject] = []
     edges: list[CodeEdge] = []
     source_id = facts.symbols[0].source_id
-    found = collect(facts.literals) + list(hits)
+    found = collect(facts.path, facts.literals) + list(hits)
     for cls, name, line in facts.table_names:
-        found.append((cls, Hit("table", name, "sql", "READS", "bare_identifier", line)))
+        key = symbol_key(facts.path, cls, "class")
+        found.append((key, Hit("table", name, "sql", "READS", "bare_identifier", line)))
     # `mongoose.model("Order", ...)` declares the collection without touching it. No edge --
     # but the node and this mention site must exist, or S2.5 would let the collection vanish
     # the moment the file that reads it is hidden.
@@ -682,7 +721,7 @@ def resolve_data(
                 mentions=[(facts.path, line)],
             )
         )
-    for caller, hit in found:
+    for caller_key, hit in found:
         target = DataObject(
             id=data_id(source_id, hit.kind, hit.qualname),
             source_id=source_id,
@@ -693,7 +732,7 @@ def resolve_data(
             mentions=[(facts.path, hit.line)],
         )
         objects.append(target)
-        holder = index.symbols.get((facts.path, caller))
+        holder = index.symbols.get(caller_key)
         if holder is None:
             continue
         omega = 0.60 if hit.provenance == "bare_identifier" else 0.85
@@ -747,8 +786,11 @@ def _bound_mongo_hit(facts: FileFacts, call) -> Hit | None:
     """`col` in `const col = db.collection("orders"); col.updateOne(...)` -- read the
     collection off the assignment's own call chain, the same way `mongo_hit` reads it off a
     direct `db.collection("orders").updateOne(...)` chain."""
+    scope = symbol_key(facts.path, call.caller, call.caller_kind)
     for assignment in facts.assignments:
-        if assignment.scope != call.caller or assignment.target != call.receiver:
+        if symbol_key(facts.path, assignment.scope, assignment.scope_kind) != scope:
+            continue
+        if assignment.target != call.receiver:
             continue
         if assignment.line > call.line or not assignment.chain:
             continue
@@ -783,6 +825,10 @@ def resolve_tested_by(index: SourceIndex, invokes: list[CodeEdge]) -> list[CodeE
     TESTED_BY, all three provenances (the ω table): a resolved call from a test function
     (`test_import`, 0.85), a test file named after a module (`test_filename`, 0.75), and a
     test function naming a symbol it never calls (`test_mention`, 0.60).
+
+    `by_id` is every symbol of the source because `index.symbols` is. Keyed `(path, qualname)`
+    that index was one symbol short in a collision file -- the module -- so an INVOKES edge
+    with a module at either end had no name here and was skipped (E2F-b).
     """
     edges: list[CodeEdge] = []
     by_id = {symbol.id: symbol for symbol in index.symbols.values()}

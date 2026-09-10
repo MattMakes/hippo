@@ -185,12 +185,15 @@ model.py         Symbol, DataObject, CodeEdge(a, b, kind, omega, provenance, ext
                      scopes), a C# namespace. None for Python, TypeScript and Rust.
                  AssignFact.chain -- the call's own text with its arguments, e.g. `db.collection("orders")`, so a
                      local bound to a collection chain resolves to the collection (provenance `mongo_chain`)
+                 CallFact.caller_kind / RaiseFact.caller_kind / LiteralFact.caller_kind / AssignFact.scope_kind --
+                     the kind of the symbol the fact sits INSIDE, so `symbol_key` can tell a file's module from a
+                     same-named member of it. Every walker emits it; the default "" reads as "not this file's module"
                  symbol_id(source_id, path, qualname, kind); data_id(source_id, kind, qualname); commit_id(source_id, sha)
                      -- prefixed md5s through make_id, so they cannot collide with entity-/fact-/passage- ids
                  symbol_key(path, qualname, kind) -> `path:module:qualname` for a module, `path:qualname` otherwise.
-                     The ONE spelling of a symbol's in-source name: symbol_id hashes it and git_history._head_index
-                     is keyed by it. `kind` is REQUIRED on symbol_id and has no default -- forgetting it is exactly
-                     the bug the marker exists for: without it a file's module symbol and a same-named top-level
+                     The ONE spelling of a symbol's in-source name: symbol_id hashes it, git_history._head_index
+                     is keyed by it, and so is SourceIndex.symbols. `kind` is REQUIRED on symbol_id and has no
+                     default -- forgetting it is exactly the bug the marker exists for: without it a file's module symbol and a same-named top-level
                      member of it (Go `main.go`/`func main`, root-level `foo.py`/`def foo`) share one id, one row
                      survives the store write, and the CONTAINS between them is dropped as a self-loop. Every
                      non-module id is byte-identical to what it was before the marker.
@@ -264,6 +267,10 @@ resolve.py       the second pass over every file at once: build_index(files) -> 
                      facts, candidate) -- 1.00 same_file for this file, 1.00 same_scope for a sibling of the same
                      package/namespace, 0.90 via_import for anything else. facts.scope is None for Python,
                      TypeScript and Rust, so the middle row is unreachable for them; None == None is not enough.
+                 SourceIndex.symbols is keyed by model.symbol_key, NOT by (path, qualname) -- keyed by the pair, a
+                     collision file's member overwrote its module, so a module-level fact was attributed to the
+                     member and the module was missing from the index. SourceIndex.symbol(path, qualname, kind="")
+                     is the one way in; "" asks for the member, which is what every non-module caller wants.
                  declared(index, facts, qualname) -> the symbol a fact in this file is ABOUT, looked up through
                      RULES[lang].member_paths -- Rust's `impl Base for OrderService` says something about a struct in
                      another file, and resolve_bases / resolve_overrides / extract._contains all ask this way.
@@ -271,8 +278,9 @@ resolve.py       the second pass over every file at once: build_index(files) -> 
                      CASE, so Go's Close and C#'s Write are refused exactly as Python's close and write are.
 data_access.py   READS/WRITES against the tables, collections and graph labels the repo's own files name:
                  classify_literal(text), sql_tables (sqlglot, errors ignored), cypher_objects, mongo_hit,
-                 mongoose_hit, read_sql_file, collect(literals). Cypher is tried BEFORE SQL, because
-                 `MERGE (s:Settings ...)` starts with a SQL keyword.
+                 mongoose_hit, read_sql_file, collect(path, literals) -> [(caller's symbol_key, Hit)] -- keyed,
+                 not named, because a qualname alone cannot tell a module from its namesake member. Cypher is tried
+                 BEFORE SQL, because `MERGE (s:Settings ...)` starts with a SQL keyword.
 git_history.py   read_history(checkout, symbols, source_id, *, depth, timeout_s, total_s, should_stop=None)
                      -> History(commits, modifies, precedes, skipped, truncated)
                  `source_id` is POSITIONAL: commit ids are namespaced per source, so the reader cannot build

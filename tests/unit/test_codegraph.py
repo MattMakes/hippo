@@ -43,6 +43,7 @@ from hippo.codegraph.model import (
     CODE_MAX_FILE_BYTES,
     LANG_BY_SUFFIX,
     BaseFact,
+    CallFact,
     CodeEdge,
     FileFacts,
     LanguageRules,
@@ -337,7 +338,7 @@ def test_a_type_declared_in_another_file_still_inherits_contains_and_overrides(m
     )
     monkeypatch.setitem(RULES, "python", everywhere)
     index = resolve.build_index(facts)
-    index.bindings["impl"] = {"Base": Resolution(index.symbols[("base.py", "Base")], 1.00, "same_file")}
+    index.bindings["impl"] = {"Base": Resolution(index.symbol("base.py", "Base"), 1.00, "same_file")}
 
     inherits = resolve.resolve_bases(index)
     assert [(e.a, e.b, e.omega, e.provenance) for e in inherits] == [
@@ -516,6 +517,94 @@ def test_a_modules_id_is_not_its_same_named_members_id():
     assert symbol_id("src1", "main.go", "main", "module") != symbol_id("src1", "main.go", "main", "function")
     assert symbol_key("main.go", "main", "module") != symbol_key("main.go", "main", "function")
     assert symbol_key("a/x.py", "Thing.go", "method") == symbol_key("a/x.py", "Thing.go", "class")
+
+
+# ------------------------------------------- E2F-b: the resolver's own index
+#
+# E2F fixed the ids; `SourceIndex.symbols` was still keyed `(path, qualname)`, which is the
+# very pair those ids stopped being hashed from. A collision file needs its module and its
+# namesake member at the *root*, where a module's qualname is a bare stem -- `goapp/cmd/
+# main.go` is the module `goapp.cmd.main`, so the fixture tree has no such file (asserted
+# below) and every case here is an inline tree.
+
+
+def symbol_of(graph, path: str, qualname: str, kind: str):
+    """
+    The one symbol with that path, qualname *and* kind.
+
+    `by_qualname` cannot be used in this section and neither can `edges_of`: both name a
+    symbol `path::qualname`, which is exactly the name a module shares with its namesake.
+    """
+    found = [s for s in graph.symbols if (s.path, s.qualname, s.kind) == (path, qualname, kind)]
+    assert len(found) == 1, f"expected exactly one {kind} {path}::{qualname}, found {found}"
+    return found[0]
+
+
+def test_a_module_level_call_in_a_collision_file_comes_from_the_module():
+    """
+    A root `foo.py` with a `def foo` and a module-level `foo()`. The member overwrote the
+    module in the resolver's index, so the call was attributed to the function -- an edge
+    from `foo` to `foo`, which `merge_edges` drops as a self-loop, so the call simply
+    vanished and was not even counted unresolved. It is the module's edge.
+    """
+    graph = graph_of({"foo.py": "def foo():\n    return 1\n\n\nfoo()\n"})
+    module = symbol_of(graph, "foo.py", "foo", "module")
+    function = symbol_of(graph, "foo.py", "foo", "function")
+    invokes = [e for e in graph.edges if e.kind == "INVOKES"]
+    assert [(e.a, e.b, e.omega, e.provenance) for e in invokes] == [
+        (module.id, function.id, 1.00, "same_file")
+    ]
+    # A fact built by hand names no kind, and "" reads as "not this file's module" -- the
+    # attribution every hand-built fact had before there was a kind to name.
+    assert symbol_key("foo.py", "foo", CallFact().caller_kind) == symbol_key("foo.py", "foo", "function")
+
+
+def test_a_call_inside_a_collision_files_member_still_comes_from_the_member():
+    """
+    The other half, and the one that was right only by luck: `main.go`'s `func main` calling
+    `run()` is the function's edge, not the package's. It survived because the member was
+    written into the index after the module, not because anything said which one it was.
+    """
+    source = "package main\n\nfunc run() int {\n\treturn 1\n}\n\nfunc main() {\n\trun()\n}\n"
+    graph = graph_of({"main.go": source})
+    module = symbol_of(graph, "main.go", "main", "module")
+    main = symbol_of(graph, "main.go", "main", "function")
+    run = symbol_of(graph, "main.go", "run", "function")
+    assert [(e.a, e.b) for e in graph.edges if e.kind == "INVOKES"] == [(main.id, run.id)]
+    # ...and the module is still in the index, so it still owns both of them.
+    assert {(e.a, e.b) for e in graph.edges if e.kind == "CONTAINS"} == {
+        (module.id, main.id),
+        (module.id, run.id),
+    }
+
+
+def test_tested_by_survives_a_test_module_named_after_its_own_test_case():
+    """
+    A guard, not a repair. `resolve_tested_by` names both ends of an INVOKES edge out of
+    `index.symbols`, which a collision file left one symbol short -- but this shape came out
+    right anyway, because the symbol it lost was the module and the edge is the member's.
+    Root `test_run.py` holding a `def test_run` is that file, and what is pinned here is that
+    re-keying the index does not cost it the 0.85 `test_import` row it always had.
+    """
+    graph = graph_of(
+        {
+            "svc.py": "def place():\n    return 1\n",
+            "test_run.py": "from svc import place\n\n\ndef test_run():\n    return place()\n",
+        }
+    )
+    assert edges_of(graph, "TESTED_BY") == {
+        ("TESTED_BY", 0.85, "test_import", "svc.py::place", "test_run.py::test_run")
+    }
+
+
+def test_the_fixture_has_no_module_and_namesake_member(fixture_graph):
+    """
+    Why `expected.json` did not move: re-keying the resolver's index can only change a file
+    whose module and one of its symbols share a qualname, and the frozen tree has none.
+    Asserted rather than assumed, the way E2F asserted its history renames nothing.
+    """
+    pairs = [(s.path, s.qualname) for s in fixture_graph.symbols]
+    assert len(set(pairs)) == len(pairs)
 
 
 def test_name_text_puts_the_split_tokens_first():

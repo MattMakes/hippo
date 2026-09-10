@@ -453,13 +453,15 @@ def _walk_body(facts: FileFacts, symbol: Symbol, body: Node, depth: int) -> None
 
 def _record(facts: FileFacts, symbol: Symbol, node: Node, depth: int) -> None:
     if node.type == "call_expression":
-        call = _call(symbol.qualname, node, depth)
+        call = _call(symbol, node, depth)
         if call is not None:
             facts.calls.append(call)
     elif node.type in ("string_literal", "raw_string_literal"):
         content = "".join(text_of(c) for c in node.children if c.type == "string_content")
         if content:
-            facts.literals.append(LiteralFact(caller=symbol.qualname, text=content, line=line_of(node)))
+            facts.literals.append(
+                LiteralFact(caller=symbol.qualname, caller_kind=symbol.kind, text=content, line=line_of(node))
+            )
     elif node.type == "let_declaration":
         _binding(facts, symbol, node)
     elif node.type in ("identifier", "type_identifier") and symbol.is_test:
@@ -467,7 +469,7 @@ def _record(facts: FileFacts, symbol: Symbol, node: Node, depth: int) -> None:
             facts.names.setdefault(text_of(node), []).append(line_of(node))
 
 
-def _call(caller: str, node: Node, depth: int) -> CallFact | None:
+def _call(symbol: Symbol, node: Node, depth: int) -> CallFact | None:
     """
     One call site. `println!(...)` is not one: a macro invocation is not a call node at all,
     and 2.2b's "no edge for what we cannot resolve" would drop it anyway.
@@ -490,7 +492,8 @@ def _call(caller: str, node: Node, depth: int) -> CallFact | None:
     else:
         return None  # a call on an expression: `(f)(x)`, `handlers[0]()`
     return CallFact(
-        caller=caller,
+        caller=symbol.qualname,
+        caller_kind=symbol.kind,
         receiver=receiver,
         name=name,
         line=line_of(node),
@@ -574,7 +577,13 @@ def _binding(facts: FileFacts, symbol: Symbol, node: Node) -> None:
                 built = text_of(called.child_by_field_name("path")).rpartition("::")[2]
     if built:
         facts.assignments.append(
-            AssignFact(scope=symbol.qualname, target=text_of(pattern), value=built, line=line_of(node))
+            AssignFact(
+                scope=symbol.qualname,
+                scope_kind=symbol.kind,
+                target=text_of(pattern),
+                value=built,
+                line=line_of(node),
+            )
         )
 
 
@@ -596,7 +605,9 @@ def _raises(facts: FileFacts, symbol: Symbol, node: Node) -> None:
         return
     name = text_of(named[1]).rpartition("::")[2]
     if name:
-        facts.exceptions.append(RaiseFact(caller=symbol.qualname, name=name, line=line_of(node)))
+        facts.exceptions.append(
+            RaiseFact(caller=symbol.qualname, caller_kind=symbol.kind, name=name, line=line_of(node))
+        )
 
 
 # ------------------------------------------------------------- the imports
@@ -833,9 +844,12 @@ def _impls_by_type(index: SourceIndex) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for owner_path, owner in sorted(index.members):
         found.setdefault(owner, []).append(owner_path)
-    for owner_path, owner in sorted(index.symbols):
-        if index.symbols[(owner_path, owner)].lang == "rust" and owner_path not in found.get(owner, ()):
-            found.setdefault(owner, []).append(owner_path)
+    # Sorted by (path, qualname) and not by the index's own keys: those carry a `module:`
+    # marker (`model.symbol_key`) that would sort a module in among the wrong neighbours,
+    # and this order decides which file `member_paths` offers first.
+    for symbol in sorted(index.symbols.values(), key=lambda s: (s.path, s.qualname)):
+        if symbol.lang == "rust" and symbol.path not in found.get(symbol.qualname, ()):
+            found.setdefault(symbol.qualname, []).append(symbol.path)
     _IMPLS = (weakref.ref(index), found)
     return found
 
