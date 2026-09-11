@@ -23,6 +23,29 @@ def test_complete_required_record_catalog_exists():
     assert set(required[:-6]) <= set(m.RECORD_TYPES)
 
 
+@pytest.mark.parametrize(
+    "name", ["LinkGeneration", "HistoryManifest", "QuerySnapshot", "DerivedRecord", "IndexEvent"]
+)
+def test_empty_membership_records_require_an_explicit_identity_namespace(name):
+    record_type = model().RECORD_TYPES[name]
+    values = {key: value for key, value in record_values()[name].items() if key != "workspace_id"}
+    for field in (
+        "assertion_version_ids",
+        "revision_ids",
+        "link_generation_ids",
+        "input_revision_ids",
+        "sources",
+    ):
+        if field in values:
+            values[field] = ()
+    with pytest.raises(ValidationError, match="workspace_id"):
+        record_type(**values)
+    first = record_type(**values, workspace_id="workspace-a")
+    second = record_type(**values, workspace_id="workspace-b")
+    assert first.id != second.id
+    assert "workspace_id" in first.identity_fields
+
+
 def test_ids_are_derived_and_records_are_deeply_immutable():
     m = model()
     policy = m.AccessPolicy(workspace_id="w", mode="restricted", allow_users=("u",), verified_at=NOW)
@@ -354,9 +377,14 @@ def record_values():
             ready=False,
         ),
         "LinkGeneration": dict(
-            input_manifest_hash="h", linker_version="v1", assertion_version_ids=("a",), created_at=NOW
+            workspace_id="w",
+            input_manifest_hash="h",
+            linker_version="v1",
+            assertion_version_ids=("a",),
+            created_at=NOW,
         ),
         "HistoryManifest": dict(
+            workspace_id="w",
             revision_ids=("r",),
             assertion_version_ids=("a",),
             link_generation_ids=("l",),
@@ -364,6 +392,7 @@ def record_values():
             temporal_selector_json='{"mode":"current"}',
         ),
         "DerivedRecord": dict(
+            workspace_id="w",
             view_kind="summary",
             rule_version="r",
             input_revision_ids=("r",),
@@ -397,7 +426,9 @@ def record_values():
             audit_code="user-request",
             created_at=NOW,
         ),
-        "IndexEvent": dict(kind="published", aggregate_id="s", sequence=1, dedupe_key="k", created_at=NOW),
+        "IndexEvent": dict(
+            workspace_id="w", kind="published", aggregate_id="s", sequence=1, dedupe_key="k", created_at=NOW
+        ),
         "ConsumerAck": dict(event_id="e", consumer_id="lexical", state="pending"),
         "RetrievalView": dict(
             span_id="s",
@@ -433,6 +464,7 @@ def record_values():
             status="explicit",
         ),
         "QuerySnapshot": dict(
+            workspace_id="w",
             sources=(),
             knowledge_cutoff=NOW,
             temporal={"mode": "current"},

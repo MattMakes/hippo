@@ -730,15 +730,17 @@ class IndexManifest(Record):
 
 
 class LinkGeneration(Record):
+    workspace_id: Text
     input_manifest_hash: Text
     linker_version: Text
     assertion_version_ids: tuple[Text, ...]
     coverage_json: Json = "{}"
     created_at: Instant
-    identity_fields = ("input_manifest_hash", "linker_version", "assertion_version_ids")
+    identity_fields = ("workspace_id", "input_manifest_hash", "linker_version", "assertion_version_ids")
 
 
 class HistoryManifest(Record):
+    workspace_id: Text
     revision_ids: tuple[Text, ...]
     assertion_version_ids: tuple[Text, ...]
     link_generation_ids: tuple[Text, ...]
@@ -747,6 +749,7 @@ class HistoryManifest(Record):
     coverage_json: Json = "{}"
     retention_gaps: tuple[Text, ...] = ()
     identity_fields = (
+        "workspace_id",
         "revision_ids",
         "assertion_version_ids",
         "link_generation_ids",
@@ -793,6 +796,7 @@ ViewKind = Literal[
 
 
 class DerivedRecord(Record):
+    workspace_id: Text
     view_kind: ViewKind
     rule_version: Text
     model_version: Text | None = None
@@ -801,6 +805,7 @@ class DerivedRecord(Record):
     dependency_fingerprint: Text
     state: Literal["dirty", "ready", "retired"]
     identity_fields = (
+        "workspace_id",
         "view_kind",
         "rule_version",
         "model_version",
@@ -897,6 +902,7 @@ class PurgeJob(Record):
 
 
 class IndexEvent(Record):
+    workspace_id: Text
     generation_id: Text | None = None
     kind: Literal["published", "invalidated", "suppressed", "purged", "policy_changed", "restored"]
     payload_json: Json = "{}"
@@ -905,7 +911,7 @@ class IndexEvent(Record):
     sequence: Positive
     dedupe_key: Text
     created_at: Instant
-    identity_fields = ("aggregate_id", "sequence", "dedupe_key")
+    identity_fields = ("workspace_id", "aggregate_id", "sequence", "dedupe_key")
 
 
 class ConsumerAck(Record):
@@ -1154,6 +1160,7 @@ class SnapshotSource(Contract):
 
 
 class QuerySnapshot(Record):
+    workspace_id: Text
     sources: tuple[SnapshotSource, ...]
     history_manifest_ids: tuple[Text, ...] = ()
     link_generation_id: Text | None = None
@@ -1165,6 +1172,7 @@ class QuerySnapshot(Record):
     suppression_epoch: Nonnegative
     created_at: Instant
     identity_fields = (
+        "workspace_id",
         "sources",
         "history_manifest_ids",
         "link_generation_id",

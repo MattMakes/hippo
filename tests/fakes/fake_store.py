@@ -10,6 +10,9 @@ step. If you add a query to the real store, add it here too.
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
+from copy import deepcopy
 from typing import Any
 
 from hippo.access import (
@@ -39,6 +42,9 @@ from hippo.store.code import (
     refers_to_write_rows,
     symbol_write_row,
 )
+from hippo.store.generations import GenerationQueries
+from hippo.store.knowledge import KnowledgeQueries
+from hippo.store.migrations import DEFAULT_WORKSPACE_ID
 from hippo.store.users import clean_capabilities, clean_rank, clean_username, slug
 
 
@@ -47,8 +53,18 @@ def _boost(entity: dict[str, Any]) -> float:
     return 1.0 if entity.get("boost") is None else float(entity["boost"])
 
 
-class FakeStore:
+class FakeStore(KnowledgeQueries, GenerationQueries):
+    knowledge_backend = "fake"
+
     def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._knowledge_data = {}
+        self._schema_row = None
+        self._schema_history = {}
+        self._migration_blocked = False
+        self._migrating = False
+        self._transaction_depth = 0
+        self._transaction_failed = False
         self.sources: dict[str, dict[str, Any]] = {}
         self.passages: dict[str, dict[str, Any]] = {}
         self.entities: dict[str, dict[str, Any]] = {}
@@ -93,9 +109,52 @@ class FakeStore:
         return True
 
     def ensure_schema(self) -> None:
-        pass
+        from hippo.store.migrations import migrate_store
+
+        migrate_store(self)
+
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            if not getattr(self, "_schema_checked", False) and not self._migrating:
+                self.ensure_schema()
+            if self._migration_blocked and not self._migrating:
+                raise RuntimeError("Store migration is incomplete; transaction refused")
+            outer = self._transaction_depth == 0
+            transient = {
+                "_lock",
+                "_transaction_depth",
+                "_transaction_failed",
+                "_migrating",
+                "_migration_blocked",
+                "_schema_checked",
+                "_bootstrapped",
+            }
+            snapshot = (
+                deepcopy({name: value for name, value in vars(self).items() if name not in transient})
+                if outer
+                else None
+            )
+            if outer:
+                self._transaction_failed = False
+            self._transaction_depth += 1
+            try:
+                yield self
+                if outer and self._transaction_failed:
+                    raise RuntimeError("Nested transaction failed; outer transaction must roll back")
+            except BaseException:
+                self._transaction_failed = True
+                if snapshot is not None:
+                    for name, value in snapshot.items():
+                        setattr(self, name, value)
+                raise
+            finally:
+                self._transaction_depth -= 1
+                if outer:
+                    self._transaction_failed = False
 
     def get_settings(self) -> dict[str, Any]:
+        self._ensure_knowledge_ready()
         return {k: self.settings.get(k, d) for k, d in DEFAULT_SETTINGS.items()}
 
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
@@ -149,6 +208,9 @@ class FakeStore:
         self.sources[sid] = {
             "id": sid,
             "kind": kind,
+            "workspace_id": DEFAULT_WORKSPACE_ID,
+            "active_generation_id": None,
+            "generation_version": 0,
             "name": name,
             "status": "queued",
             "stage": "queued",

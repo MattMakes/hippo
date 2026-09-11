@@ -21,6 +21,7 @@ from typing import Any
 from ..access import ACCESS_WHERE, Access, access_params
 from .base import Neo4jBase, new_id, now_iso, with_defaults
 from .code import SYNONYM_LABELS, grouped_by_labels
+from .migrations import DEFAULT_WORKSPACE_ID
 
 BATCH = 200  # rows per write query; keeps transactions small and progress visible
 
@@ -64,6 +65,12 @@ class MemoryQueries(Neo4jBase):
             owner_id=owner_id,
             access_role_id=access_role_id,
         )
+        if getattr(self, "_schema_checked", False):
+            self.run(
+                "MATCH (s:Source {id:$id}) SET s.workspace_id=$workspace, s.generation_version=0",
+                id=source_id,
+                workspace=DEFAULT_WORKSPACE_ID,
+            )
         return source_id
 
     def update_source(self, source_id: str, **fields: Any) -> None:
@@ -478,6 +485,9 @@ SOURCE_DEFAULTS: dict[str, Any] = {
     "created_at": "",
     "updated_at": "",
     "owner_id": None,
+    "workspace_id": DEFAULT_WORKSPACE_ID,
+    "active_generation_id": None,
+    "generation_version": 0,
     "access_role_id": None,
     "min_rank": 0,
 }

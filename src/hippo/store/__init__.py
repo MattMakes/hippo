@@ -48,6 +48,8 @@ from .base import Neo4jBase
 from .changesets import ChangesetQueries
 from .code import CodeQueries
 from .evals import EvalQueries
+from .generations import GenerationQueries
+from .knowledge import KnowledgeQueries
 from .ladybug import LadybugStore, StoreLockedError
 from .memory import MemoryQueries
 from .users import UserQueries
@@ -58,7 +60,16 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class Store(MemoryQueries, CodeQueries, EvalQueries, ChangesetQueries, UserQueries, Neo4jBase):
+class Store(
+    KnowledgeQueries,
+    GenerationQueries,
+    MemoryQueries,
+    CodeQueries,
+    EvalQueries,
+    ChangesetQueries,
+    UserQueries,
+    Neo4jBase,
+):
     """All of hippo's Neo4j queries behind one object."""
 
     def on_first_connection(self) -> None:

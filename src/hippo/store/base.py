@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
@@ -138,6 +140,8 @@ def now_iso() -> str:
 
 
 class Neo4jBase:
+    knowledge_backend = "neo4j"
+
     def __init__(self, uri: str, user: str, password: str, database: str = "neo4j"):
         try:
             from neo4j import GraphDatabase  # optional dependency: `pip install 'hippo[neo4j]'`
@@ -156,6 +160,11 @@ class Neo4jBase:
             notifications_min_severity="OFF",
         )
         self.database = database
+        self._lock = threading.RLock()
+        self._transaction = None
+        self._schema_checked = False
+        self._migration_blocked = False
+        self._migrating = False
         self._bootstrapped = False  # schema created and interrupted jobs cleaned, once per process
 
     def close(self) -> None:
@@ -165,8 +174,21 @@ class Neo4jBase:
 
     def run(self, query: str, **params: Any) -> list[dict[str, Any]]:
         """Run one Cypher query in its own transaction and return the rows as dicts."""
-        result = self.driver.execute_query(query, parameters_=params, database_=self.database)
-        return [record.data() for record in result.records]
+        with self._lock:
+            if not self._schema_checked and not self._migrating:
+                self.ensure_schema()
+            if self._migration_blocked and not self._migrating:
+                raise RuntimeError("Store migration is incomplete; application access is disabled")
+            if self._transaction is not None:
+                if self._transaction_failed:
+                    raise RuntimeError("Transaction failed; roll back before issuing another statement")
+                try:
+                    return [record.data() for record in self._transaction.run(query, params)]
+                except BaseException:
+                    self._transaction_failed = True
+                    raise
+            result = self.driver.execute_query(query, parameters_=params, database_=self.database)
+            return [record.data() for record in result.records]
 
     def run_one(self, query: str, **params: Any) -> dict[str, Any] | None:
         rows = self.run(query, **params)
@@ -198,7 +220,45 @@ class Neo4jBase:
 
     # ------------------------------------------------------------- schema
 
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            if not self._schema_checked and not self._migrating:
+                self.ensure_schema()
+            if self._migration_blocked and not self._migrating:
+                raise RuntimeError("Store migration is incomplete; transaction refused")
+            if self._transaction is not None:
+                try:
+                    yield self
+                except BaseException:
+                    self._transaction_failed = True
+                    raise
+                return
+            with self.driver.session(database=self.database) as session:
+                with session.begin_transaction() as transaction:
+                    self._transaction = transaction
+                    self._transaction_failed = False
+                    try:
+                        yield self
+                        if self._transaction_failed:
+                            raise RuntimeError("Nested transaction failed; outer transaction must roll back")
+                        transaction.commit()
+                    except BaseException:
+                        try:
+                            transaction.rollback()
+                        except Exception:
+                            log.error("Neo4j rollback failed while handling a transaction error")
+                        raise
+                    finally:
+                        self._transaction = None
+                        self._transaction_failed = False
+
     def ensure_schema(self) -> None:
+        from .migrations import migrate_store
+
+        migrate_store(self)
+
+    def _ensure_legacy_schema(self) -> None:
         """Create constraints/indexes and the global Settings node. Safe to call on every start."""
         for statement in CONSTRAINTS:
             self.run(statement)

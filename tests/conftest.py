@@ -195,7 +195,10 @@ def store(tmp_path):
             os.environ.get("NEO4J_USER", "neo4j"),
             os.environ.get("NEO4J_PASSWORD", "hippo-password"),
         )
-        real.run("MATCH (n) DETACH DELETE n")
+        # Fixture reset intentionally precedes application bootstrapping. Migration
+        # tests may leave an unsupported version behind; normal Store.run must
+        # refuse that database, but the next disposable test still needs isolation.
+        real.driver.execute_query("MATCH (n) DETACH DELETE n", database_=real.database)
         real.ensure_schema()
         yield real
         real.close()

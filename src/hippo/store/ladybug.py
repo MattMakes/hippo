@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -79,7 +80,10 @@ from .code import (
     symbol_write_row,
 )
 from .evals import _result_row, _run_row, _set_row
+from .generations import GenerationQueries
+from .knowledge import KnowledgeQueries
 from .memory import _passage_row, _source_row
+from .migrations import DEFAULT_WORKSPACE_ID
 from .users import _role_row, _user_row, clean_capabilities, clean_rank, clean_username, slug
 
 log = logging.getLogger(__name__)
@@ -236,7 +240,8 @@ def _by_label_pairs(
     return grouped
 
 
-class LadybugStore:
+class LadybugStore(KnowledgeQueries, GenerationQueries):
+    knowledge_backend = "ladybug"
     """All of hippo's queries against an embedded LadybugDB file. Same interface as `Store`."""
 
     def __init__(self, path: str | Path):
@@ -260,7 +265,14 @@ class LadybugStore:
         self._conn = lb.Connection(self._db)
         self._lock = threading.RLock()
         self._bootstrapped = False
-        self.ensure_schema()
+        self._transaction_depth = 0
+        self._migration_blocked = False
+        self._migrating = False
+        try:
+            self.ensure_schema()
+        except BaseException:
+            self.close()
+            raise
 
     def _locked_message(self) -> str:
         return (
@@ -312,13 +324,28 @@ class LadybugStore:
     def run(self, query: str, **params: Any) -> list[dict[str, Any]]:
         """Run one Cypher statement (auto-committed) and return the rows as dicts keyed by column alias."""
         with self._lock:
-            result = self._conn.execute(query, params) if params else self._conn.execute(query)
-            columns = result.get_column_names()
-            rows = []
-            while result.has_next():
-                rows.append(dict(zip(columns, result.get_next(), strict=True)))
-            result.close()
-            return rows
+            if self._migration_blocked and not self._migrating:
+                raise RuntimeError("Store migration is incomplete; application access is disabled")
+            if self._transaction_depth and self._transaction_failed and query.strip().upper() != "ROLLBACK":
+                raise RuntimeError("Transaction failed; roll back before issuing another statement")
+            result = None
+            try:
+                try:
+                    result = self._conn.execute(query, params) if params else self._conn.execute(query)
+                    columns = result.get_column_names()
+                    rows = []
+                    while result.has_next():
+                        rows.append(dict(zip(columns, result.get_next(), strict=True)))
+                    return rows
+                finally:
+                    if result is not None:
+                        result.close()
+            except BaseException:
+                # Ladybug can auto-abort a failed statement. Without poisoning
+                # the enclosing scope, its next write would silently autocommit.
+                if self._transaction_depth:
+                    self._transaction_failed = True
+                raise
 
     def run_one(self, query: str, **params: Any) -> dict[str, Any] | None:
         rows = self.run(query, **params)
@@ -341,6 +368,38 @@ class LadybugStore:
     # ------------------------------------------------------------- schema
 
     def ensure_schema(self) -> None:
+        from .migrations import migrate_store
+
+        migrate_store(self)
+
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            outer = self._transaction_depth == 0
+            if outer:
+                self.run("BEGIN TRANSACTION")
+                self._transaction_failed = False
+            self._transaction_depth += 1
+            try:
+                yield self
+                if outer:
+                    if self._transaction_failed:
+                        raise RuntimeError("Nested transaction failed; outer transaction must roll back")
+                    self.run("COMMIT")
+            except BaseException:
+                self._transaction_failed = True
+                if outer:
+                    try:
+                        self.run("ROLLBACK")
+                    except Exception:
+                        pass  # Driver errors may already have aborted; preserve the cause.
+                raise
+            finally:
+                self._transaction_depth -= 1
+                if outer:
+                    self._transaction_failed = False
+
+    def _ensure_legacy_schema(self) -> None:
         """
         Create the tables and the Settings row. Safe to call on every start.
 
@@ -518,6 +577,12 @@ class LadybugStore:
                 owner_id=owner_id,
                 access_role_id=role["id"] if role else None,
                 min_rank=int(role["rank"]) if role else EVERYONE_RANK,
+            )
+        if getattr(self, "_schema_checked", False):
+            self.run(
+                "MATCH (s:Source {id:$id}) SET s.workspace_id=$workspace, s.generation_version=0",
+                id=source_id,
+                workspace=DEFAULT_WORKSPACE_ID,
             )
         return source_id
 

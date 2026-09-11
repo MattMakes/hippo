@@ -949,7 +949,7 @@ Implement `publish_generation(expected_parent, new_generation, event)` as a back
 4. Assign legacy sources to the default workspace and preserve their current permissions. Preserve old IDs and stored traces in legacy mode. Backfill artifact/span metadata only when it can be derived; mark missing original locators/revisions as `legacy_unknown`.
 5. Reindex selected sources into managed generations. Retain an explicit old-to-new mapping where known; old saved passage IDs are not silently rewritten to a different document.
 6. Enable hybrid mode for the selected pilot sources after equivalence and authorization gates. Do not rewrite existing graph tuning into a new identity without a validated mapping.
-7. Roll back content by publishing a new generation that reuses retained compatible artifacts and records its rollback lineage, rather than rewriting old publication history. Set retrieval mode to legacy where supported. Reapply current policies, suppressions and purge barriers before activation. Old application binaries must refuse unknown schema versions; restoring the pre-upgrade backup is the rollback for an incompatible binary downgrade, followed by current deletion-ledger enforcement.
+7. Roll back content by publishing a new generation that reuses retained compatible artifacts and records its rollback lineage, rather than rewriting old publication history. Set retrieval mode to legacy where supported. Reapply current policies, suppressions and purge barriers before activation. This migration-aware release and subsequent binaries must refuse unknown schema versions before mutation. Previously released v1 binaries have no such guard and cannot be made version-aware retroactively: never launch an unmodified v1 binary against an upgraded store. An incompatible binary downgrade requires restoring the pre-upgrade backup to an isolated path, followed by current deletion-ledger enforcement.
 
 Garbage collection removes only unreachable staged/retired records after retention and snapshot checks. Source deletion tombstones identity immediately, suppresses current results, retires dependent assertions, invalidates all projections, and then deletes raw/derived data according to retention policy. Independently supported facts and unrelated sources survive. Historical retention never bypasses current access restrictions.
 
@@ -1198,7 +1198,7 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 
 ### Task 2 — Evidence identities and typed contracts
 
-- [x] Implemented and verified; see `ai_docs/gates/rag-it-all/task-2/GATES.md`. All 35 required persisted record types have version-1 round trips; 119 tests and independent specification/quality reviews pass.
+- [x] Implemented and verified; see `ai_docs/gates/rag-it-all/task-2/GATES.md`. All 35 required persisted record types have version-1 round trips; 124 tests and independent specification/quality reviews pass after the explicit empty-record workspace correction in Task 3.
 
 **Depends on:** Task 1. **Gates:** G2.
 
@@ -1215,17 +1215,19 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 
 ### Task 3 — Persistence and tested schema migration
 
+- [x] Implemented and verified; see `ai_docs/gates/rag-it-all/task-3/GATES.md`. Final 142-case store regression set passes on FakeStore, LadybugDB and disposable Neo4j, with only backend-specific skips. Native search capability falls back explicitly; managed authorization and lifecycle execution remain later tasks.
+
 **Depends on:** Task 2. **Gates:** G3.
 
 **Create:** `src/hippo/store/{knowledge,generations,migrations}.py`, `tests/unit/test_store_knowledge.py`, `tests/unit/test_store_migrations.py`, `scripts/rag_store_capabilities.py`.
 
-**Modify:** `src/hippo/store/{base,ladybug,__init__}.py`, `tests/fakes/fake_store.py`.
+**Modify:** `src/hippo/store/{base,ladybug,__init__,memory}.py`, `tests/fakes/fake_store.py`, `tests/conftest.py`. Disposable Neo4j fixture reset must precede application compatibility checks so a deliberate future-version test cannot contaminate the next test.
 
 **Steps:**
 
 1. Write a populated v1 database fixture through current store methods, containing prose, code, source roles, a trace and an eval result. Include enabled/disabled users, their password hashes/bearer tokens, role assignments and the browser signing secret; verify login/session/token continuity after migrate/reopen and continued denial for disabled users.
 2. Implement migrations with version/checksum records. Check schema compatibility before new schema declarations or interrupted-job cleanup can mutate a database. Add primary keys/constraints, explicit endpoint relations and typed columns on both backends.
-3. Implement create/read methods for artifacts, revisions, spans, observations, assertion versions, support groups, generation/index/link manifests and section 5.6 durable records; include workspace and access inputs in read contracts from the beginning.
+3. Implement create/read methods for artifacts, revisions, spans, observations, assertion versions, support groups, generation/index/link manifests and section 5.6 durable records; include workspace and access inputs in read contracts from the beginning. LinkGeneration, HistoryManifest, QuerySnapshot, DerivedRecord and IndexEvent require their own workspace identity, including when member/input lists are empty or an event has no generation. Never infer a default namespace for these records.
 4. Add transaction/CAS publication methods and durable invalidation records. Keep external I/O outside database transactions.
    Implement explicit backend transactions; add failure injection between pointer/version/event writes to prove they roll back together.
    Backend-specific migration boundary: LadybugDB supports schema and data writes in one explicit transaction. The verified Neo4j 5.26 backend rejects mixed schema/data transactions. On Neo4j, use idempotent schema steps with a durable migration journal and a compatibility/readiness guard; commit data transformations and the completion version together only after schema validation. Do not serve application work while a migration is incomplete. Test recovery after each schema step as well as atomic rollback of data/publication writes; do not claim whole-migration DDL rollback on Neo4j.
@@ -1239,9 +1241,11 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 
 **Depends on:** Task 3. **Gates:** G4.
 
+Step 5 (HTTP/stdio credential separation) is implemented and independently reviewed; see `ai_docs/gates/rag-it-all/task-4-mcp/GATES.md` (38 passing tests including real standalone HTTP). It uses the existing transport/authentication interfaces and was implemented independently alongside Task 3. The managed authorization, projection and publication integration still depends on the completed persistence contracts.
+
 **Create:** `src/hippo/knowledge/access.py`, `tests/unit/test_evidence_access.py`, `tests/unit/test_rag_replay_access.py`.
 
-**Modify:** `src/hippo/access.py`, `context.py`, `status.py`, `mcp_server.py`, `store/{knowledge,evals,ladybug}.py`, `web/routes/{api,evals,analyze,graph}.py`, relevant store fakes.
+**Modify:** `src/hippo/access.py`, `context.py`, `status.py`, `mcp_server.py`, `store/{knowledge,evals,ladybug}.py`, `web/routes/{api,evals,analyze,graph,pages}.py`, `web/{app,auth,render,adhoc}.py`, `analysis/simulate.py`, `hipporag/graph_index.py`, relevant store fakes. Page status, cached ad-hoc answers and simulation comparisons must use the same audience-safe view as the API.
 
 **Steps:**
 
