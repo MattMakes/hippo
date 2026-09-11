@@ -36,12 +36,16 @@ from .model import (
     lang_of,
     merge_edges,
 )
+from .syntax_cache import SyntaxCache, cache_key
 from .treesitter import grammar_for, new_parser
 
 # Every registered language that has a walker. A language may be registered without one --
 # for its suffix, grammar and comment style -- and its files are then skipped as
 # `unsupported`, keeping today's line windows and OpenIE.
 WALKERS = {name: rules.walk for name, rules in RULES.items() if rules.walk is not None}
+# The manual walker version describes these implementations only. Runtime replacements
+# still extract normally, but cannot read or overwrite their versioned syntax entries.
+_CACHEABLE_WALKERS = WALKERS.copy()
 
 
 def extract_code(
@@ -50,6 +54,7 @@ def extract_code(
     *,
     should_stop: Callable[[], bool] | None = None,
     node_namespace: str | None = None,
+    syntax_cache: SyntaxCache | None = None,
 ) -> CodeGraph:
     """
     The code graph of one source. `docs` is what `ingest.readers.read_source` produced; only
@@ -62,6 +67,9 @@ def extract_code(
 
     `node_namespace` changes native IDs while every node keeps the logical `source_id`.
     Omit it for legacy IDs; managed callers supply their generation's namespace.
+
+    `syntax_cache` optionally reuses unresolved file facts. Every invocation still
+    rebuilds language setup and resolves names across all current source files.
     """
     graph = CodeGraph(source_id=source_id, node_namespace=node_namespace)
     parsers: dict[str, object] = {}
@@ -95,7 +103,32 @@ def extract_code(
         if len(files) >= CODE_MAX_FILES:
             graph.truncated = True
             break
-        facts = _walk(path, text, lang, source_id, parsers, node_namespace=node_namespace)
+        key = (
+            cache_key(path, text, lang)
+            if syntax_cache is not None and WALKERS.get(lang) is _CACHEABLE_WALKERS.get(lang)
+            else None
+        )
+        if key is not None:
+            try:
+                grammar = grammar_for(path, lang)
+                if grammar != key.grammar:
+                    key = None
+                elif grammar not in parsers:
+                    # Installed metadata alone does not prove the runtime can load.
+                    # Build once per grammar, without parsing, and reuse it on misses.
+                    parsers[grammar] = new_parser(grammar)
+            except Exception:  # noqa: BLE001 - preserve _walk's per-file parse_error fallback
+                key = None
+        facts = (
+            syntax_cache.get(key, source_id, node_namespace=node_namespace)
+            if syntax_cache is not None and key is not None
+            else None
+        )
+        if facts is None:
+            facts = _walk(path, text, lang, source_id, parsers, node_namespace=node_namespace)
+            # Capture the unresolved syntax before source-wide resolution mutates it.
+            if facts is not None and syntax_cache is not None and key is not None:
+                syntax_cache.put(key, facts)
         if facts is None:
             graph.files_skipped[path] = "parse_error"
             continue
