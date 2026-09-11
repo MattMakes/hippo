@@ -10,6 +10,7 @@ from __future__ import annotations
 import random
 import threading
 import time
+from datetime import datetime
 
 import numpy as np
 import pytest
@@ -965,7 +966,8 @@ def checked_in_history() -> dict[str, list]:
     document = json.loads((CODE_SAMPLE_PATH / "expected.json").read_text())
     return {
         "commits": sorted(
-            (c["ordinal"], c["subject"], c["message"], c["author"], c["date"]) for c in document["commits"]
+            (c["ordinal"], c["subject"], c["message"], c["author"], datetime.fromisoformat(c["date"]))
+            for c in document["commits"]
         ),
         "modifies": sorted(
             (m["ordinal"], m["path"], m["qualname"], _json(m["hunk"])) for m in document["modifies"]
@@ -983,7 +985,7 @@ def indexed_history(store, source_id: str) -> dict[str, list]:
                 (c["message"].splitlines() or [""])[0],
                 c["message"],
                 c["author"],
-                c["date"],
+                datetime.fromisoformat(c["date"]),
             )
             for c in commits.values()
         ),

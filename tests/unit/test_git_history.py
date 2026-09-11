@@ -14,6 +14,7 @@ every machine and HEAD is the fixture byte for byte.
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -117,7 +118,10 @@ def test_make_code_checkout_pins_dates_so_shas_are_reproducible(tmp_path: Path) 
     one = make_code_checkout(tmp_path / "one")
     two = make_code_checkout(tmp_path / "two")
     assert git_out(one, "log", "--format=%H") == git_out(two, "log", "--format=%H")
-    assert git_out(one, "log", "--format=%aI").split("\n")[:3] == list(reversed(CODE_CHECKOUT_DATES))
+    # Git versions render UTC as either Z or +00:00; the pinned instants are identical.
+    assert [
+        datetime.fromisoformat(value) for value in git_out(one, "log", "--format=%aI").splitlines()[:3]
+    ] == [datetime.fromisoformat(value) for value in reversed(CODE_CHECKOUT_DATES)]
 
 
 # ------------------------------------------------------------- reading it
@@ -158,7 +162,9 @@ def test_reads_the_three_commits_newest_first(tmp_path: Path) -> None:
     assert [c["ordinal"] for c in history.commits] == [0, 1, 2]
     assert history.truncated is False  # the whole first-parent line, start to finish
     assert [c["message"].strip() for c in history.commits] == list(reversed(CODE_CHECKOUT_SUBJECTS))
-    assert [c["date"] for c in history.commits] == list(reversed(CODE_CHECKOUT_DATES))
+    assert [datetime.fromisoformat(c["date"]) for c in history.commits] == [
+        datetime.fromisoformat(value) for value in reversed(CODE_CHECKOUT_DATES)
+    ]
     assert {c["author"] for c in history.commits} == {"Hippo Fixture"}
     assert {c["source_id"] for c in history.commits} == {SOURCE_ID}
     assert all(len(c["sha"]) == 40 for c in history.commits)

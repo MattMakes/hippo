@@ -42,3 +42,15 @@ The repository's only PR was #1, `ladybugdb`, already merged. Nothing was closed
 No delivery estimates or timing-based prioritization. Architecture follows the documented capability/correctness requirements. Source chronology and runtime lifecycle safeguards remain functional requirements.
 
 Do not touch the existing `data/` store. Runtime fixtures and experiments use isolated directories or temporary databases. Do not run Neo4j tests against an existing/shared database: the inherited fixture deletes all nodes.
+
+## Disposable Neo4j preparation
+
+A newly created container `hippo-rag-test-b780ab5` runs the existing `neo4j:5.26-community` image (runtime 5.26.30), with no existing data mount. Bolt is bound only to `127.0.0.1:32774`. The 98 inherited store/code/eval/graph/row-shape tests passed against it, exit 0; log `/tmp/hippo-rag-baseline-neo4j-store.log`. This establishes the disposable backend before managed persistence work; it does not prove the future migration contracts.
+
+## Inherited CI portability fix
+
+Baseline CI run `34629977683` failed three history assertions because its Git renders ISO UTC as `Z`, while the checked-in expectations spell the same instants `+00:00`. The fix compares parsed aware timestamps in `test_git_history.py` and the history comparison helpers in `test_indexer.py`; application date text and golden fixtures remain unchanged. The affected two modules passed all 71 tests locally; independent review passed. CI must verify the runner-specific form after publication. Log: `/tmp/hippo-rag-git-date-fix.log`.
+
+## Persistence probe findings for Task 3
+
+Temporary-only probe `/tmp/hippo_rag_ladybug_probe.py` confirmed that Ladybug 0.15.3 rolls back node/relationship DDL, ALTER and multiple writes together, and supports catalog-first version guards and conditional-update CAS. Database errors can auto-abort: rollback cleanup must preserve the original exception when no transaction remains. Free-text lists require byte elements and `list_transform(CAST($names AS BLOB[]), x -> decode(x))`, including empty/null lists. Validate integer contracts before writing: FLOAT to INT64 otherwise truncates. No persistence implementation is claimed yet.
