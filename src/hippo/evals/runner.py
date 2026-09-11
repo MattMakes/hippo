@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from contextlib import nullcontext
 from statistics import mean
 from typing import Any
 
@@ -32,8 +33,9 @@ from ..ask import answer_from_trace, search
 from ..context import AppContext
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.eval_access import EvalAccess, EvalAccessDenied
-from ..knowledge.query_access import AuthorizedModel, current_access
+from ..knowledge.query_access import AuthorizedModel, QuerySession, current_access, query_session
 from ..knowledge.replay import view_fingerprint
+from ..knowledge.saved_snapshots import save_evaluation_result
 from ..store.base import now_iso
 from . import metrics
 from .judge import judge
@@ -90,9 +92,11 @@ def _run_all(
     try:
         evaluation.require_set(set_id)
         for done, question in enumerate(evaluation.list_questions(set_id), start=1):
-            result = run_question(ctx, question, settings, access)
-            evaluation.require_set(set_id)
-            store.add_result(run_id, question["id"], result)
+            with query_session(ctx, access, settings=settings) as session:
+                selected = EvalAccess(ctx, access, session=session)
+                result = run_question(ctx, question, settings, access, session=session)
+                selected.require_set(set_id)
+                save_evaluation_result(store, run_id, question["id"], result, session=session)
             results.append(result)
             store.update_run(run_id, progress_done=done)
         store.update_run(
@@ -109,7 +113,12 @@ def _run_all(
 
 
 def run_question(
-    ctx: AppContext, question_row: dict[str, Any], settings: dict[str, Any], access: Access | None = None
+    ctx: AppContext,
+    question_row: dict[str, Any],
+    settings: dict[str, Any],
+    access: Access | None = None,
+    *,
+    session: QuerySession | None = None,
 ) -> Result:
     """
     Search, answer, judge and score one question. Never raises: trouble lands in `error`.
@@ -128,62 +137,66 @@ def run_question(
     result = _empty_result()
     started = time.time()
     try:
-        evaluation = EvalAccess(ctx, access)
-        access = current_access(ctx.store, access)
-        if access is not None and access.audience_kind != "internal":
-            question_row = evaluation.get_question(question_row.get("id", ""))
-            if question_row is None:
-                raise EvalAccessDenied("unknown question or access denied")
-        text = question_row["text"]
-        expected = (question_row.get("expected_answer") or "").strip()
-        gold_ids = list(question_row.get("gold_passage_ids") or [])
-        epoch = ctx.store.authorization_epoch()
-        fingerprint = None
+        manager = (
+            nullcontext(session) if session is not None else query_session(ctx, access, settings=settings)
+        )
+        with manager as query:
+            evaluation = EvalAccess(ctx, access, session=query)
+            access = current_access(ctx.store, access)
+            if access is not None and access.audience_kind != "internal":
+                question_row = evaluation.get_question(question_row.get("id", ""))
+                if question_row is None:
+                    raise EvalAccessDenied("unknown question or access denied")
+            text = question_row["text"]
+            expected = (question_row.get("expected_answer") or "").strip()
+            gold_ids = list(question_row.get("gold_passage_ids") or [])
+            epoch = ctx.store.authorization_epoch()
+            fingerprint = None
 
-        def validate():
-            current_access(ctx.store, access)
-            if ctx.store.authorization_epoch() != epoch:
-                raise AuthorizationChanged("Evaluation permissions changed during the question")
-            if (
-                access is not None
-                and access.audience_kind != "internal"
-                and evaluation.get_question(question_row["id"]) is None
-            ):
-                raise EvalAccessDenied("unknown question or access denied")
-            if fingerprint is not None and fingerprint != view_fingerprint(evaluation.graph()):
-                raise AuthorizationChanged("Evaluation evidence changed during the question")
+            def validate():
+                current_access(ctx.store, access)
+                if ctx.store.authorization_epoch() != epoch:
+                    raise AuthorizationChanged("Evaluation permissions changed during the question")
+                if (
+                    access is not None
+                    and access.audience_kind != "internal"
+                    and evaluation.get_question(question_row["id"]) is None
+                ):
+                    raise EvalAccessDenied("unknown question or access denied")
+                if fingerprint is not None and fingerprint != view_fingerprint(evaluation.graph()):
+                    raise AuthorizationChanged("Evaluation evidence changed during the question")
 
-        validate()
-        trace = search(ctx, text, settings, access, authorization_check=validate)
-        fingerprint = trace.evidence_fingerprint
-        if not fingerprint:
-            raise AuthorizationChanged("Evaluation retrieval has no input evidence proof")
-        validate()
-        result["trace"] = trace.to_dict()
-        # Stored as its own property too: the run table lists results without their (big) traces.
-        result["used_dpr_fallback"] = trace.used_dpr_fallback
-        ranked_ids = trace.passage_ids()
-        result["recall"] = metrics.recall_at_k(gold_ids, ranked_ids)
-        result["recall"]["code_seeded"] = 1.0 if trace.used_code_seeds else 0.0
-        if question_row.get("kind") == "commit" and len(gold_ids) > 1:
-            touched = metrics.recall_at_k(gold_ids[1:], ranked_ids, ks=(GOLD_TOP,))
-            result["recall"]["path_fidelity"] = touched[f"recall@{GOLD_TOP}"]
-        result["gold_rank"] = metrics.gold_rank(gold_ids, ranked_ids)
+            validate()
+            trace = search(ctx, text, settings, access, authorization_check=validate, session=query)
+            fingerprint = trace.evidence_fingerprint
+            if not fingerprint:
+                raise AuthorizationChanged("Evaluation retrieval has no input evidence proof")
+            validate()
+            result["trace"] = trace.to_dict()
+            # Stored as its own property too: the run table lists results without their (big) traces.
+            result["used_dpr_fallback"] = trace.used_dpr_fallback
+            ranked_ids = trace.passage_ids()
+            result["recall"] = metrics.recall_at_k(gold_ids, ranked_ids)
+            result["recall"]["code_seeded"] = 1.0 if trace.used_code_seeds else 0.0
+            if question_row.get("kind") == "commit" and len(gold_ids) > 1:
+                touched = metrics.recall_at_k(gold_ids[1:], ranked_ids, ks=(GOLD_TOP,))
+                result["recall"]["path_fidelity"] = touched[f"recall@{GOLD_TOP}"]
+            result["gold_rank"] = metrics.gold_rank(gold_ids, ranked_ids)
 
-        answer = answer_from_trace(ctx, trace, access, authorization_check=validate)
-        validate()
-        # Latency is what a user would wait for: search plus answer, not the grading.
-        result["latency_ms"] = round((time.time() - started) * 1000, 1)
-        result["answer"] = answer.answer
-        result["thought"] = answer.thought
+            answer = answer_from_trace(ctx, trace, access, authorization_check=validate, session=query)
+            validate()
+            # Latency is what a user would wait for: search plus answer, not the grading.
+            result["latency_ms"] = round((time.time() - started) * 1000, 1)
+            result["answer"] = answer.answer
+            result["thought"] = answer.thought
 
-        if expected:
-            result.update(
-                _grade(ctx, text, expected, answer.answer, model=AuthorizedModel(ctx.ollama, validate))
-            )
-        else:
-            result["judge_reason"] = "no expected answer to compare with"
-        validate()
+            if expected:
+                result.update(
+                    _grade(ctx, text, expected, answer.answer, model=AuthorizedModel(query.model, validate))
+                )
+            else:
+                result["judge_reason"] = "no expected answer to compare with"
+            validate()
     except Exception as exc:  # noqa: BLE001 - one broken question must not end the run
         log.exception("Question %r failed", text)
         if isinstance(exc, (AuthorizationChanged, EvalAccessDenied)):

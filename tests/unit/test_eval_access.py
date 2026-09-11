@@ -338,7 +338,7 @@ def test_collection_rechecks_earlier_rows_before_releasing_the_complete_list(ctx
             raise AuthorizationChanged("expired during collection")
 
     graph.authorization_check = validate
-    monkeypatch.setattr(ctx, "graph_for", lambda access: graph)
+    monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: graph)
     original = service.get_question_set
 
     def revoked_after_first(identity):
@@ -360,7 +360,7 @@ def test_runner_never_releases_partial_output_after_its_input_proof_changes(ctx,
 
     api()
     alice, _ = readers(ctx)
-    source_id = source(ctx)
+    source(ctx)
     service, _, question_id = owned(ctx, alice)
     graph = service.graph()
     trace = Trace(
@@ -373,19 +373,9 @@ def test_runner_never_releases_partial_output_after_its_input_proof_changes(ctx,
 
     def answer(*args, **kwargs):
         if change == "answer_view":
-            ctx.store.add_passages(
-                [
-                    dict(
-                        id="new-p",
-                        source_id=source_id,
-                        title="new",
-                        text="new",
-                        ordinal=1,
-                        embedding=[0.0, 1.0],
-                    )
-                ]
-            )
-            ctx.store.bump_graph_version()
+            # A new published graph is allowed while this query keeps its old
+            # view. Mutating the actual held input must still invalidate it.
+            kwargs["session"].graph.passages[0].text = "changed held evidence"
         return SimpleNamespace(answer="generated secret", thought="private thought")
 
     def judge(*args, **kwargs):
@@ -411,7 +401,7 @@ def test_generated_names_and_source_labels_come_from_visible_evidence(ctx, monke
     graph = ctx.graph_for(alice)
     graph.authorization_check = None  # fixed projected inventory for this source-label unit test
     original = ctx.store._knowledge_rows
-    monkeypatch.setattr(ctx, "graph_for", lambda access: graph)
+    monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: graph)
     monkeypatch.setattr(
         ctx.store,
         "_knowledge_rows",

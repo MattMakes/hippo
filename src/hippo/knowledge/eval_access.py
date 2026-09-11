@@ -19,8 +19,9 @@ from hippo.store.migrations import DEFAULT_WORKSPACE_ID
 
 from .access import AuthorizationChanged
 from .identity import canonical_json
-from .query_access import current_access
+from .query_access import QuerySession, current_access, query_session
 from .replay import reconstruct_trace, view_fingerprint
+from .saved_snapshots import release_saved_evaluations
 
 
 class EvalAccessDenied(ValueError):
@@ -39,8 +40,9 @@ def _guarded_collection(function):
 
 
 class EvalAccess:
-    def __init__(self, ctx, access: Access | None):
+    def __init__(self, ctx, access: Access | None, *, session: QuerySession | None = None):
         self.ctx, self.store, self.access = ctx, ctx.store, access
+        self._session = session
 
     def _open(self):
         return self.store.count_users() == 0 and not self.store.get_meta("has_had_users")
@@ -55,6 +57,10 @@ class EvalAccess:
         return access
 
     def graph(self):
+        if self._session is not None:
+            self._current()
+            self._session.validate()
+            return self._session.graph
         graph = self.ctx.graph_for(self._current())
         graph.validate_authorization()
         return graph
@@ -63,7 +69,7 @@ class EvalAccess:
         """Resolve source presentation exclusively from the current audience view."""
         from hippo.status import source_view
 
-        view = source_view(self.ctx, self._current())
+        view = source_view(self.ctx, self._current(), session=self._session)
         row = next((row for row in view.sources if row["id"] == source_id), None)
         view.validate()
         return deepcopy(row)
@@ -71,11 +77,22 @@ class EvalAccess:
     @contextmanager
     def read_scope(self):
         """Bracket complete response assembly across several authorized reads."""
+        if self._session is None:
+            with query_session(self.ctx, self._current()) as session:
+                self._session = session
+                try:
+                    with self.read_scope():
+                        yield self
+                finally:
+                    self._session = None
+            return
         epoch = self.store.authorization_epoch()
-        graph = self.graph()
-        yield self
-        graph.validate_authorization()
-        self._boundary(epoch)
+        self.graph()
+        try:
+            yield self
+        finally:
+            self._session.validate()
+            self._boundary(epoch)
 
     def _boundary(self, epoch):
         self._current()
@@ -128,7 +145,7 @@ class EvalAccess:
             return False
         return data
 
-    def _authorized(self, set_id):
+    def _authorized(self, set_id, *, for_deletion=False):
         try:
             epoch = self.store.authorization_epoch()
             access = self._current()
@@ -159,9 +176,9 @@ class EvalAccess:
                 source = self.store.get_source(source_id, access)
                 if source is None or (metadata and source.get("workspace_id") != metadata["workspace_id"]):
                     return None
-                if self.get_source(source_id) is None:
+                if not for_deletion and self.get_source(source_id) is None:
                     return None
-            if metadata and metadata["origin"] == "generated":
+            if not for_deletion and metadata and metadata["origin"] == "generated":
                 if not metadata["evidence_fingerprint"] or metadata[
                     "evidence_fingerprint"
                 ] != view_fingerprint(self.graph()):
@@ -176,6 +193,13 @@ class EvalAccess:
         if authorized is None:
             raise EvalAccessDenied("unknown question set or access denied")
         return authorized[1]
+
+    def _require_deletion(self, set_id):
+        # Deletion exercises current ownership/source administration authority;
+        # it does not disclose the old question, gold evidence or answer. A stale
+        # content fingerprint must not prevent releasing its retained inputs.
+        if self._authorized(set_id, for_deletion=True) is None:
+            raise EvalAccessDenied("unknown question set or access denied")
 
     def require_generation_target(self, set_id, source_id):
         authorized = self._authorized(set_id)
@@ -433,7 +457,13 @@ class EvalAccess:
     def delete_question_set(self, set_id):
         with self.store.transaction():
             lock_authorization(self.store)
-            self.require_set(set_id)
+            self._require_deletion(set_id)
+            result_ids = [
+                result_id
+                for run_id in self._ids("runs", parent=set_id)
+                for result_id in self._ids("results", parent=run_id)
+            ]
+            release_saved_evaluations(self.store, result_ids)
             self.store.delete_question_set(set_id)
             self.store.set_meta("eval_owner:" + set_id, None)
             self.store._bump_authorization_epoch()
@@ -441,8 +471,11 @@ class EvalAccess:
     def delete_question(self, question_id):
         with self.store.transaction():
             lock_authorization(self.store)
-            if self.get_question(question_id) is None:
+            refs = self._refs("question", question_id)
+            if refs is None:
                 raise EvalAccessDenied("unknown question or access denied")
+            self._require_deletion(refs["set_id"])
+            release_saved_evaluations(self.store, self._ids("question_results", parent=question_id))
             self.store.delete_question(question_id)
 
     def delete_run(self, run_id):
@@ -451,7 +484,8 @@ class EvalAccess:
             refs = self._refs("run", run_id)
             if refs is None:
                 raise EvalAccessDenied("unknown run or access denied")
-            self.require_set(refs["set_id"])
+            self._require_deletion(refs["set_id"])
+            release_saved_evaluations(self.store, self._ids("results", parent=run_id))
             self.store.delete_run(run_id)
 
     def create_run(self, set_id, name, settings):

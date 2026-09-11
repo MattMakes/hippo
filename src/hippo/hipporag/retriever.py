@@ -199,6 +199,7 @@ class Trace:
     select: dict[str, Any] = field(default_factory=dict)  # {"keep", "drop", "expand", "raw", "error"}
     expansions: list[dict[str, Any]] = field(default_factory=list)
     evidence_fingerprint: str = ""  # exact authorized input view; empty on older saved traces
+    snapshot_ids: tuple[str, ...] = ()  # selected managed inputs; IDs alone never grant access
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -816,6 +817,7 @@ def trace_from_dict(data: dict[str, Any]) -> Trace:
         select=dict(data.get("select", {})),
         expansions=list(data.get("expansions", [])),
         evidence_fingerprint=data.get("evidence_fingerprint", ""),
+        snapshot_ids=tuple(data.get("snapshot_ids", ())),
     )
     trace.fact_candidates = [FactCandidate(**c) for c in data.get("fact_candidates", [])]
     trace.seed_entities = [SeedEntity(**s) for s in data.get("seed_entities", [])]

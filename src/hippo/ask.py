@@ -78,6 +78,7 @@ def _search(ctx, graph, model, question, settings, *, effective_settings=None):
     # still only runs when the question named code (`code_select` and `used_code_seeds`).
     trace = retriever.retrieve(question, merged, select_fn=retriever.llm_select)
     trace.evidence_fingerprint = view_fingerprint(graph)
+    trace.snapshot_ids = tuple(getattr(graph, "snapshot_ids", ()))
     return trace
 
 

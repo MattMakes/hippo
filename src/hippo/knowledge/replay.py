@@ -44,7 +44,10 @@ def reconstruct_trace(graph, original: Trace, *, question: str) -> Trace:
     """Saved IDs select evidence; saved prose and scores never authorize it."""
     graph.validate_authorization()
     trace = Trace(
-        question=question, settings=validate_settings(original.settings), graph_version=graph.version
+        question=question,
+        settings=validate_settings(original.settings),
+        graph_version=graph.version,
+        snapshot_ids=tuple(getattr(graph, "snapshot_ids", ())),
     )
     for row in original.passages:
         passage = graph.passage_by_id(row.passage_id)
