@@ -1266,6 +1266,8 @@ The authorization foundation is implemented and reviewed separately in `ai_docs/
 
 ### Task 5 — Staged generations and pinned query snapshots
 
+Generation input identity and extraction namespace propagation are implemented and independently reviewed in `ai_docs/gates/rag-it-all/task-5-namespace/GATES.md`: unchanged legacy IDs, separate logical source ownership, and consistent walker/resolver/Git/chunk references. The full task remains open for writer validation, syntax/embedding reuse, staged publication, exact evidence membership, snapshot leases and managed lifecycle dispatch.
+
 **Depends on:** Tasks 3–4. **Gates:** G5.
 
 **Create:** `src/hippo/knowledge/{snapshots,lifecycle}.py`, `tests/unit/test_generations.py`, `tests/unit/test_query_snapshots.py`.

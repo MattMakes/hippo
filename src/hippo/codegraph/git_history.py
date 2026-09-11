@@ -69,7 +69,7 @@ from pathlib import Path
 
 from .extract import _walk
 from .languages import PARSED_LANGS
-from .model import Symbol, commit_id, lang_of, symbol_key
+from .model import Symbol, commit_id, lang_of, symbol_key, validate_node_namespace
 
 log = logging.getLogger(__name__)
 
@@ -198,6 +198,7 @@ def read_history(
     timeout_s: int,
     total_s: int,
     should_stop: Callable[[], bool] | None = None,
+    node_namespace: str | None = None,
 ) -> History:
     """
     The last `depth` first-parent commits of `checkout`, as commits, MODIFIES and PRECEDES.
@@ -207,9 +208,13 @@ def read_history(
     `symbols[0]`: a repository whose files hippo cannot parse still has a history worth
     reading, and it has no symbols to read an id from.
 
+    Managed callers pass the same `node_namespace` used to extract `symbols`. It scopes
+    both commit IDs and historical file walks without changing logical source ownership.
+
     Raises `HistoryError` if the history cannot be read at all. Budgets, by contrast, are
     not errors: they return what was read, with `skipped` saying how much was not.
     """
+    validate_node_namespace(node_namespace)
     if depth <= 0:
         return History()  # `code_history_depth = 0` disables history; do not even run git
 
@@ -230,7 +235,7 @@ def read_history(
             history.skipped += len(entries) - position
             history.truncated = True
             break
-        node_id = commit_id(source_id, entry["sha"])
+        node_id = commit_id(source_id, entry["sha"], node_namespace=node_namespace)
         try:
             diff = (
                 _Diff()
@@ -238,7 +243,16 @@ def read_history(
                 else _hunks(checkout, entry["sha"], entry["parent"], timeout_s)
             )
             rows = _modifies(
-                checkout, entry["sha"], node_id, diff.hunks, head, alias, source_id, parsers, timeout_s
+                checkout,
+                entry["sha"],
+                node_id,
+                diff.hunks,
+                head,
+                alias,
+                source_id,
+                parsers,
+                timeout_s,
+                node_namespace=node_namespace,
             )
         except _DiffTooLarge as err:
             log.debug("commit %s diff too large, skipping (%s)", entry["sha"], err)
@@ -403,6 +417,8 @@ def _modifies(
     source_id: str,
     parsers: dict,
     timeout_s: int,
+    *,
+    node_namespace: str | None = None,
 ) -> list[dict]:
     """
     One `add_modifies` row per symbol this commit's hunks landed inside.
@@ -426,7 +442,11 @@ def _modifies(
     keys: dict[str, tuple[str, str, str]] = {}
     for path, file_hunks in sorted(by_file.items()):
         head_path = alias.get(path, path)
-        ranges = _own_ranges(_symbols_at(checkout, sha, path, head_path, source_id, parsers, timeout_s))
+        ranges = _own_ranges(
+            _symbols_at(
+                checkout, sha, path, head_path, source_id, parsers, timeout_s, node_namespace=node_namespace
+            )
+        )
         for hunk in file_hunks:
             for symbol, own in ranges:
                 if not _overlaps(hunk.touched, own):
@@ -451,7 +471,15 @@ def _modifies(
 
 
 def _symbols_at(
-    checkout: Path, sha: str, path: str, head_path: str, source_id: str, parsers: dict, timeout_s: int
+    checkout: Path,
+    sha: str,
+    path: str,
+    head_path: str,
+    source_id: str,
+    parsers: dict,
+    timeout_s: int,
+    *,
+    node_namespace: str | None = None,
 ) -> list[Symbol]:
     """
     The symbols of one file as it was at one commit. An unreadable blob yields none.
@@ -467,7 +495,7 @@ def _symbols_at(
     if result.returncode != 0:
         return []
     text = result.stdout.decode("utf-8", errors="replace")
-    facts = _walk(head_path, text, lang_of(head_path), source_id, parsers)
+    facts = _walk(head_path, text, lang_of(head_path), source_id, parsers, node_namespace=node_namespace)
     return [] if facts is None else facts.symbols
 
 

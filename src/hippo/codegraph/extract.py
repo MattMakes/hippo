@@ -44,7 +44,13 @@ from .treesitter import grammar_for, new_parser
 WALKERS = {name: rules.walk for name, rules in RULES.items() if rules.walk is not None}
 
 
-def extract_code(docs, source_id: str, *, should_stop: Callable[[], bool] | None = None) -> CodeGraph:
+def extract_code(
+    docs,
+    source_id: str,
+    *,
+    should_stop: Callable[[], bool] | None = None,
+    node_namespace: str | None = None,
+) -> CodeGraph:
     """
     The code graph of one source. `docs` is what `ingest.readers.read_source` produced; only
     `title` (the repo-relative path), `text` and `is_code` are read, so this never imports
@@ -53,8 +59,11 @@ def extract_code(docs, source_id: str, *, should_stop: Callable[[], bool] | None
     `should_stop` is checked between files, so cancelling a large repo does not have to wait
     for the whole tree (2.2c). A cancelled or over-budget run returns what it had, with
     `stats()["truncated"]` set.
+
+    `node_namespace` changes native IDs while every node keeps the logical `source_id`.
+    Omit it for legacy IDs; managed callers supply their generation's namespace.
     """
-    graph = CodeGraph(source_id=source_id)
+    graph = CodeGraph(source_id=source_id, node_namespace=node_namespace)
     parsers: dict[str, object] = {}
     files: list[FileFacts] = []
     sql: list[tuple[str, str]] = []
@@ -86,7 +95,7 @@ def extract_code(docs, source_id: str, *, should_stop: Callable[[], bool] | None
         if len(files) >= CODE_MAX_FILES:
             graph.truncated = True
             break
-        facts = _walk(path, text, lang, source_id, parsers)
+        facts = _walk(path, text, lang, source_id, parsers, node_namespace=node_namespace)
         if facts is None:
             graph.files_skipped[path] = "parse_error"
             continue
@@ -115,7 +124,9 @@ def _source_state(docs: list, files: list[FileFacts]) -> dict[str, Any]:
     return state
 
 
-def _walk(path: str, text: str, lang: str, source_id: str, parsers: dict) -> FileFacts | None:
+def _walk(
+    path: str, text: str, lang: str, source_id: str, parsers: dict, *, node_namespace: str | None = None
+) -> FileFacts | None:
     """
     One file, in its own `try`. A parser is built once per grammar per call (not thread-safe).
 
@@ -130,7 +141,10 @@ def _walk(path: str, text: str, lang: str, source_id: str, parsers: dict) -> Fil
         if parser is None:
             parser = parsers[grammar] = new_parser(grammar)
         tree = parser.parse(text.encode("utf-8", errors="replace"))
-        facts = WALKERS[lang](path, tree.root_node, source_id)
+        if node_namespace is None:
+            facts = WALKERS[lang](path, tree.root_node, source_id)
+        else:
+            facts = WALKERS[lang](path, tree.root_node, source_id, node_namespace=node_namespace)
         if tree.root_node.has_error and len(facts.symbols) <= 1:
             return None
         return facts
@@ -169,7 +183,9 @@ def _resolve(
     edges.extend(resolve.resolve_tested_by(index, invokes))
 
     for path, text in sql:
-        found, sql_edges = resolve.sql_file_objects(source_id, path, text)
+        found, sql_edges = resolve.sql_file_objects(
+            source_id, path, text, node_namespace=graph.node_namespace
+        )
         objects.extend(found)
         edges.extend(sql_edges)
 

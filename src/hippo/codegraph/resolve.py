@@ -36,6 +36,7 @@ from .model import (
     data_id,
     package_of,
     symbol_key,
+    validate_node_namespace,
 )
 
 # Method names too common to guess from. A `fuzzy_name` edge on any of these would be
@@ -712,7 +713,7 @@ def resolve_data(
     for _binding, collection, line in facts.models:
         objects.append(
             DataObject(
-                id=data_id(source_id, "collection", collection),
+                id=data_id(source_id, "collection", collection, node_namespace=facts.node_namespace),
                 source_id=source_id,
                 name=collection,
                 qualname=collection,
@@ -723,7 +724,7 @@ def resolve_data(
         )
     for caller_key, hit in found:
         target = DataObject(
-            id=data_id(source_id, hit.kind, hit.qualname),
+            id=data_id(source_id, hit.kind, hit.qualname, node_namespace=facts.node_namespace),
             source_id=source_id,
             name=hit.qualname.rpartition(".")[2],
             qualname=hit.qualname,
@@ -740,14 +741,17 @@ def resolve_data(
     return objects, edges
 
 
-def sql_file_objects(source_id: str, path: str, text: str) -> tuple[list[DataObject], list[CodeEdge]]:
+def sql_file_objects(
+    source_id: str, path: str, text: str, *, node_namespace: str | None = None
+) -> tuple[list[DataObject], list[CodeEdge]]:
     """An in-repo `.sql` file: its tables, their columns, and CONTAINS between them."""
+    validate_node_namespace(node_namespace)
     objects: list[DataObject] = []
     edges: list[CodeEdge] = []
     tables: dict[str, DataObject] = {}
     for hit in read_sql_file(text):
         target = DataObject(
-            id=data_id(source_id, hit.kind, hit.qualname),
+            id=data_id(source_id, hit.kind, hit.qualname, node_namespace=node_namespace),
             source_id=source_id,
             name=hit.qualname.rpartition(".")[2],
             qualname=hit.qualname,

@@ -109,14 +109,16 @@ XML_TAG = re.compile(r"<[^>]+>")
 SUMMARY = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
 
 
-def walk(path: str, root: Node, source_id: str) -> FileFacts:
+def walk(path: str, root: Node, source_id: str, *, node_namespace: str | None = None) -> FileFacts:
     """Turn one parsed C# file into the facts resolve.py needs."""
     module = module_qualname(path)
     file_is_test = is_test_path(path)
-    facts = FileFacts(path=path, lang=LANG, module=module, scope=_namespace_of(root))
+    facts = FileFacts(
+        path=path, lang=LANG, module=module, scope=_namespace_of(root), node_namespace=node_namespace
+    )
 
     module_symbol = Symbol(
-        id=symbol_id(source_id, path, module, "module"),
+        id=symbol_id(source_id, path, module, "module", node_namespace=node_namespace),
         source_id=source_id,
         name=module.rpartition(".")[2] or module,
         qualname=module,
@@ -175,7 +177,7 @@ def _declarations(
         kind = "class" if is_type else "method"
         body = node.child_by_field_name("body")
         symbol = Symbol(
-            id=symbol_id(source_id, facts.path, qualname, kind),
+            id=symbol_id(source_id, facts.path, qualname, kind, node_namespace=facts.node_namespace),
             source_id=source_id,
             name=name,
             qualname=qualname,

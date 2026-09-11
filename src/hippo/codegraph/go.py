@@ -73,15 +73,17 @@ STRING_CONTENT = ("interpreted_string_literal_content", "raw_string_literal_cont
 TEST_PREFIXES = ("Test", "Benchmark", "Example")
 
 
-def walk(path: str, root: Node, source_id: str) -> FileFacts:
+def walk(path: str, root: Node, source_id: str, *, node_namespace: str | None = None) -> FileFacts:
     """Turn one parsed Go file into the facts resolve.py needs."""
     module = module_qualname(path)
     is_test = is_test_path(path)
-    facts = FileFacts(path=path, lang="go", module=module, scope=package_dir(path))
+    facts = FileFacts(
+        path=path, lang="go", module=module, scope=package_dir(path), node_namespace=node_namespace
+    )
 
     package = next((c for c in root.children if c.type == "package_clause"), None)
     module_symbol = Symbol(
-        id=symbol_id(source_id, path, module, "module"),
+        id=symbol_id(source_id, path, module, "module", node_namespace=node_namespace),
         source_id=source_id,
         name=module.rpartition(".")[2] or module,
         qualname=module,
@@ -160,7 +162,7 @@ def _function(
     qualname = f"{receiver}.{name}" if receiver else name
     kind = "method" if receiver else "function"
     symbol = Symbol(
-        id=symbol_id(source_id, facts.path, qualname, kind),
+        id=symbol_id(source_id, facts.path, qualname, kind, node_namespace=facts.node_namespace),
         source_id=source_id,
         name=name,
         qualname=qualname,
@@ -204,7 +206,7 @@ def _types(facts: FileFacts, node: Node, source_id: str, is_test: bool, owned: s
         fields = _field_list(inner)
         members = fields if fields is not None else inner
         symbol = Symbol(
-            id=symbol_id(source_id, facts.path, name, "class"),
+            id=symbol_id(source_id, facts.path, name, "class", node_namespace=facts.node_namespace),
             source_id=source_id,
             name=name,
             qualname=name,

@@ -7,20 +7,22 @@ Three kinds of node: a `Symbol` (a module, class, function or method), a `DataOb
 them. `CodeGraph` is everything one source produced.
 
 Ids are computed here and nowhere else; the store is handed ids, it never derives them.
-They are `make_id` prefixed md5s, so `symbol-`/`data-`/`commit-` are disjoint from the
-`entity-`/`fact-`/`passage-` namespaces `hipporag.text` already uses (D4, S2.2).
+Legacy IDs are `make_id` prefixed md5s; managed IDs hash canonical arrays with SHA-256.
+Both retain `symbol-`/`data-`/`commit-`, disjoint from the `entity-`/`fact-`/`passage-`
+namespaces `hipporag.text` already uses (D4, S2.2).
 
-This module imports stdlib and `hipporag.text` only -- `ingest.chunker` imports it, and
-`ingest` may not pull tree-sitter in just to build a chunk.
+Identity helpers have no parser dependencies -- `ingest.chunker` imports this module,
+and `ingest` may not pull tree-sitter in just to build a chunk.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..hipporag.text import make_id, split_identifier
+from ..knowledge.identity import make_identity
 
 if TYPE_CHECKING:  # types the language rules mention; none of them is needed at run time
     from tree_sitter import Node
@@ -99,19 +101,37 @@ def symbol_key(path: str, qualname: str, kind: str) -> str:
     return f"{path}:module:{qualname}" if kind == "module" else f"{path}:{qualname}"
 
 
-def symbol_id(source_id: str, path: str, qualname: str, kind: str) -> str:
+def validate_node_namespace(node_namespace: str | None) -> None:
+    """Only omission selects legacy IDs; an explicitly empty namespace is invalid."""
+    if node_namespace == "":
+        raise ValueError("node_namespace must not be empty")
+
+
+def symbol_id(
+    source_id: str, path: str, qualname: str, kind: str, *, node_namespace: str | None = None
+) -> str:
     """Id of a symbol. Namespaced by source *and* `symbol_key`, so two same-named symbols in
     different files -- or a module and its same-named member -- do not collide (D4)."""
+    validate_node_namespace(node_namespace)
+    if node_namespace is not None:
+        name = f"module:{qualname}" if kind == "module" else qualname
+        return make_identity("symbol", [source_id, node_namespace, path, name])
     return make_id("symbol-", f"{source_id}:{symbol_key(path, qualname, kind)}")
 
 
-def data_id(source_id: str, kind: str, qualname: str) -> str:
+def data_id(source_id: str, kind: str, qualname: str, *, node_namespace: str | None = None) -> str:
     """Id of a data object. Keyed on kind too: a table `orders` and a label `orders` differ."""
+    validate_node_namespace(node_namespace)
+    if node_namespace is not None:
+        return make_identity("data", [source_id, node_namespace, kind, qualname])
     return make_id("data-", f"{source_id}:{kind}:{qualname}")
 
 
-def commit_id(source_id: str, sha: str) -> str:
+def commit_id(source_id: str, sha: str, *, node_namespace: str | None = None) -> str:
     """Id of a commit node (written by WP2b's git history pass)."""
+    validate_node_namespace(node_namespace)
+    if node_namespace is not None:
+        return make_identity("commit", [source_id, node_namespace, sha])
     return make_id("commit-", f"{source_id}:{sha}")
 
 
@@ -224,6 +244,14 @@ SELF_NAMES = frozenset({"self", "cls", "this"})
 SUPER_NAMES = frozenset({"super", "super()"})
 
 
+class FileWalker(Protocol):
+    """A parser walk with logical ownership separate from optional generation identity."""
+
+    def __call__(
+        self, path: str, root: Node, source_id: str, *, node_namespace: str | None = None
+    ) -> FileFacts: ...
+
+
 @dataclass(frozen=True)
 class LanguageRules:
     """
@@ -241,7 +269,7 @@ class LanguageRules:
 
     name: str
     line_comment: str
-    walk: Callable[[str, Node, str], FileFacts] | None = None
+    walk: FileWalker | None = None
     # An import spec -> the file it names, or -- for a language whose imports name a *scope*
     # (a C# `using`, a Rust `use` of a module path) -- a `Resolution` carrying that scope's
     # names in `Resolution.scope`.
@@ -520,6 +548,9 @@ class FileFacts:
     names: dict[str, list[int]] = field(default_factory=dict)  # bare identifier -> lines (TESTED_BY)
     reexports: list[ImportFact] = field(default_factory=list)  # TS `export ... from "./x"`
     default_export: str = ""  # TS `export default class X` -> "X"
+    # Walker output already contains native IDs. A syntax cache must rematerialize these
+    # for each generation before source-wide resolution, rather than reuse resolved IDs.
+    node_namespace: str | None = field(default=None, kw_only=True)
 
 
 @dataclass
@@ -558,6 +589,10 @@ class CodeGraph:
     modifies: list[dict] = field(default_factory=list)
     precedes: list[tuple[str, str]] = field(default_factory=list)
     history_skipped: int = 0  # commits a budget cost us; 0 means "the history is all here"
+    node_namespace: str | None = field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        validate_node_namespace(self.node_namespace)
 
     def by_path(self, path: str) -> list[Symbol]:
         """The symbols of one file, in source order. What the chunker asks for."""

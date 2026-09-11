@@ -69,14 +69,14 @@ DECLARATIONS = {
 ARROWS = {"arrow_function", "function_expression"}
 
 
-def walk(path: str, root: Node, source_id: str) -> FileFacts:
+def walk(path: str, root: Node, source_id: str, *, node_namespace: str | None = None) -> FileFacts:
     """Turn one parsed TypeScript/JavaScript file into the facts resolve.py needs."""
     module = module_qualname(path)
     is_test = is_test_path(path)
-    facts = FileFacts(path=path, lang="typescript", module=module)
+    facts = FileFacts(path=path, lang="typescript", module=module, node_namespace=node_namespace)
 
     module_symbol = Symbol(
-        id=symbol_id(source_id, path, module, "module"),
+        id=symbol_id(source_id, path, module, "module", node_namespace=node_namespace),
         source_id=source_id,
         name=module.rpartition(".")[2] or module,
         qualname=module,
@@ -128,7 +128,7 @@ def _declarations(
             is_class = definition.type in ("class_declaration", "abstract_class_declaration")
             kind = "class" if is_class else ("method" if prefix else "function")
             symbol = Symbol(
-                id=symbol_id(source_id, facts.path, qualname, kind),
+                id=symbol_id(source_id, facts.path, qualname, kind, node_namespace=facts.node_namespace),
                 source_id=source_id,
                 name=name,
                 qualname=qualname,
