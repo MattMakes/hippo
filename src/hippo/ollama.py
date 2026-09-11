@@ -124,10 +124,17 @@ class Ollama:
     # -------------------------------------------------------------------- chat
 
     def chat_text(
-        self, messages: list[dict[str, str]], *, max_tokens: int | None = None, temperature: float = 0.0
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float = 0.0,
+        request_guard: Callable[[], None] | None = None,
     ) -> str:
         """Send a chat conversation and get the assistant's reply as plain text."""
-        return self._chat(messages, schema=None, max_tokens=max_tokens, temperature=temperature)
+        return self._chat(
+            messages, schema=None, max_tokens=max_tokens, temperature=temperature, request_guard=request_guard
+        )
 
     def chat_json(
         self,
@@ -136,6 +143,7 @@ class Ollama:
         *,
         max_tokens: int | None = None,
         temperature: float = 0.0,
+        request_guard: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """
         Send a chat conversation and get back a JSON object matching `schema`.
@@ -144,10 +152,16 @@ class Ollama:
         so parsing almost always succeeds. If the model still produces something
         odd we try to rescue the first JSON object in the text.
         """
-        raw = self._chat(messages, schema=schema, max_tokens=max_tokens, temperature=temperature)
+        raw = self._chat(
+            messages,
+            schema=schema,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            request_guard=request_guard,
+        )
         return parse_json_object(raw)
 
-    def _chat(self, messages, *, schema, max_tokens, temperature) -> str:
+    def _chat(self, messages, *, schema, max_tokens, temperature, request_guard=None) -> str:
         body: dict[str, Any] = {
             "model": self.llm_model,
             "messages": messages,
@@ -159,13 +173,60 @@ class Ollama:
             body["options"]["num_predict"] = max_tokens
         if schema is not None:
             body["format"] = schema
-        if "thinking" in self._model_capabilities(self.llm_model):
+        if "thinking" in self._model_capabilities(self.llm_model, request_guard=request_guard):
             body["think"] = False  # qwen3 & friends: skip the long "<think>" monologue, we want the answer
-        data = self._request("POST", "/api/chat", json=body).json()
+        data = self._request("POST", "/api/chat", json=body, request_guard=request_guard).json()
         content = data.get("message", {}).get("content", "")
         return _THINK_BLOCK.sub("", content).strip()
 
     # --------------------------------------------------------------- embeddings
+
+    def embedding_models_metadata(self) -> dict:
+        """Fresh installed-model metadata for explicit managed profile resolution."""
+        return self._embedding_metadata_request("GET", "/api/tags")
+
+    def embedding_model_details(self, model: str) -> dict:
+        """Fresh details; unlike chat capability detection, failures are not hidden."""
+        return self._embedding_metadata_request("POST", "/api/show", {"model": model})
+
+    def embed_explicit(
+        self, model: str, inputs: list[str], *, options: dict, dimensions: int | None, truncate: bool
+    ) -> dict:
+        """Raw embedding request with caller-captured semantics; no prefixing or normalization."""
+        body = {
+            "model": model,
+            "input": inputs,
+            "options": options,
+            "truncate": truncate,
+            "keep_alive": "15m",
+        }
+        if dimensions is not None:
+            body["dimensions"] = dimensions
+        return self._embedding_metadata_request("POST", "/api/embed", body)
+
+    def _embedding_metadata_request(self, method: str, path: str, body=None) -> dict:
+        # Managed callers guard each dispatch. Hidden retries would resend inputs
+        # before they can recheck authorization and the captured model identity.
+        response = self._request(method, path, json=body, attempts=1)
+
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate JSON key")
+                result[key] = value
+            return result
+
+        def invalid_constant(value):
+            raise ValueError("nonfinite JSON value")
+
+        try:
+            result = json.loads(response.content, object_pairs_hook=unique, parse_constant=invalid_constant)
+            if not isinstance(result, dict):
+                raise ValueError("expected JSON object")
+            return result
+        except (ValueError, RecursionError) as exc:
+            raise OllamaError("Ollama returned invalid embedding metadata or output") from exc
 
     def embed(self, texts: list[str], kind: str = "document", batch_size: int = 32) -> np.ndarray:
         """
@@ -203,16 +264,28 @@ class Ollama:
 
     # ----------------------------------------------------------------- helpers
 
-    def _model_capabilities(self, name: str) -> set[str]:
+    def _model_capabilities(self, name: str, *, request_guard=None) -> set[str]:
         if name not in self._capabilities:
             try:
-                data = self._request("POST", "/api/show", json={"model": name}).json()
+                data = self._request(
+                    "POST", "/api/show", json={"model": name}, request_guard=request_guard
+                ).json()
                 self._capabilities[name] = set(data.get("capabilities", []))
             except OllamaError:
+                if request_guard is not None:
+                    raise  # Guard failures (including identity errors) must not become a capability miss.
                 self._capabilities[name] = set()
         return self._capabilities[name]
 
-    def _request(self, method: str, path: str, *, json: Any = None, attempts: int = 3) -> httpx.Response:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Any = None,
+        attempts: int = 3,
+        request_guard: Callable[[], None] | None = None,
+    ) -> httpx.Response:
         """
         One HTTP call with a little patience: network hiccups and 5xx replies are retried.
 
@@ -221,20 +294,29 @@ class Ollama:
         """
         last_error: Exception | None = None
         for attempt in range(attempts):
+            if request_guard is not None:
+                request_guard()
+            transport_error = None
             try:
-                resp = self.client.request(method, path, json=json)
-            except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:
+                try:
+                    resp = self.client.request(method, path, json=json)
+                except httpx.HTTPError as exc:
+                    transport_error = exc
+            finally:
+                if request_guard is not None:
+                    request_guard()
+            if isinstance(transport_error, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
                 raise OllamaError(
                     f"Ollama did not answer {method} {path} within {self.timeout_seconds:.0f}s; "
                     "raise HIPPO_LLM_TIMEOUT or use a smaller model"
-                ) from exc
-            except httpx.HTTPError as exc:  # connection refused/reset, ConnectTimeout: worth another go
-                last_error = exc
+                ) from transport_error
+            if transport_error is not None:  # connection refused/reset, ConnectTimeout: worth another go
+                last_error = transport_error
                 log.warning(
                     "Ollama request %s %s failed (%s), attempt %d/%d",
                     method,
                     path,
-                    exc,
+                    transport_error,
                     attempt + 1,
                     attempts,
                 )
