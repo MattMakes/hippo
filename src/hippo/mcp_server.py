@@ -22,7 +22,7 @@ ToolError listing them, because a tool's error message is the only thing an MCP
 client is shown.
 
 Who is calling (hippo/access.py): every tool works on the caller's slice of
-the memory. Over HTTP the caller is identified by `Authorization: Bearer
+the memory. Over HTTP the caller is identified by a session cookie or `Authorization: Bearer
 <token>` (each user's token is on their Account page; the web app's gate
 already refused requests without one once users exist). Over stdio there are
 no headers, so the token comes from the HIPPO_TOKEN environment variable. Until
@@ -52,20 +52,21 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.datastructures import Headers
 
 from .access import Access, Principal
 from .ask import ask, code_block, code_fields, search
 from .context import AppContext
 from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
-from .web.auth import StoreDown, principal_from_bearer
+from .web.auth import StoreDown, principal_from_bearer, resolve_principal
 from .web.routes.code import (
     DEFAULT_DEPTH,
     DEFAULT_HISTORY_LIMIT,
@@ -96,42 +97,68 @@ TOKEN_ENV = "HIPPO_TOKEN"
 # ---------------------------------------------------------- the caller
 
 
-def caller(ctx: AppContext, mcp_ctx: Context | None) -> Principal:
-    """
-    Who is calling, from the request's Authorization header (HTTP) or HIPPO_TOKEN (stdio).
-    Raises ToolError, which the client sees verbatim, when users exist and no valid token came.
-    """
-    headers: Mapping[str, str] | None = None
-    if mcp_ctx is not None:
-        try:
-            headers = mcp_ctx.headers
-        except ValueError:  # no request (stdio, or a direct call in tests)
-            headers = None
-    token = None
-    if headers is not None:
-        auth = headers.get("authorization") or headers.get("Authorization") or ""
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-    if not token:
-        token = os.environ.get(TOKEN_ENV) or None
+CredentialTransport = Literal["http", "stdio"]
+
+
+def caller(ctx: AppContext, mcp_ctx: Context | None, *, transport: CredentialTransport = "http") -> Principal:
+    """Resolve only credentials belonging to the explicitly selected transport."""
+    if transport not in ("http", "stdio"):
+        raise ValueError("Unknown credential transport")
     try:
-        principal = principal_from_bearer(ctx, token)
+        if not ctx.store.ping():
+            raise StoreDown()
+        if transport == "stdio":
+            principal = principal_from_bearer(ctx, os.environ.get(TOKEN_ENV) or None, require_online=True)
+        else:
+            headers = None
+            if mcp_ctx is not None:
+                try:
+                    headers = mcp_ctx.headers
+                except ValueError:  # No HTTP request; never substitute process credentials.
+                    pass
+            principal = resolve_principal(ctx, Headers(headers or {}), require_online=True)
     except StoreDown as exc:
-        raise ToolError("hippo cannot reach Neo4j, so nobody can be signed in right now") from exc
+        raise ToolError("hippo cannot reach its database, so nobody can be signed in right now") from exc
     if principal is None:
         raise ToolError(
-            "sign in required: users exist, so hippo needs your token. Over HTTP send "
-            "'Authorization: Bearer <token>'; over stdio set HIPPO_TOKEN. Your token is on the Account page."
+            "sign in required: HTTP needs your bearer token or session cookie; "
+            "stdio needs HIPPO_TOKEN. Your token is on the Account page."
         )
     return principal
+
+
+class TransportBoundServer(MCPServer):
+    """Prevent a server carrying process credentials from being served over HTTP."""
+
+    def __init__(self, *, credential_transport: CredentialTransport) -> None:
+        if credential_transport not in ("http", "stdio"):
+            raise ValueError("Unknown credential transport")
+        super().__init__(name="hippo", instructions=INSTRUCTIONS)
+        self._credential_transport = credential_transport
+
+    def _require_transport(self, expected: CredentialTransport) -> None:
+        if self._credential_transport != expected:
+            raise ValueError(f"Server credential transport must be {expected}")
+
+    def streamable_http_app(self, **kwargs):
+        self._require_transport("http")
+        return super().streamable_http_app(**kwargs)
+
+    def sse_app(self, **kwargs):
+        self._require_transport("http")
+        return super().sse_app(**kwargs)
+
+    async def run_stdio_async(self) -> None:
+        self._require_transport("stdio")
+        await super().run_stdio_async()
 
 
 # --------------------------------------------------------------- building
 
 
-def build_server(ctx: AppContext) -> MCPServer:
+def build_server(ctx: AppContext, *, transport: CredentialTransport = "http") -> MCPServer:
     """Create the MCP server with the nine hippo tools bound to this AppContext."""
-    server = MCPServer(name="hippo", instructions=INSTRUCTIONS)
+    server = TransportBoundServer(credential_transport=transport)
 
     @server.tool(
         description=(
@@ -144,7 +171,7 @@ def build_server(ctx: AppContext) -> MCPServer:
     def hippo_search(
         question: str, top_k: int = DEFAULT_TOP_K, mcp_ctx: Context | None = None
     ) -> dict[str, Any]:
-        return search_tool(ctx, question, top_k, principal=caller(ctx, mcp_ctx))
+        return search_tool(ctx, question, top_k, principal=caller(ctx, mcp_ctx, transport=transport))
 
     @server.tool(
         description=(
@@ -153,7 +180,7 @@ def build_server(ctx: AppContext) -> MCPServer:
         )
     )
     def hippo_ask(question: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
-        return ask_tool(ctx, question, principal=caller(ctx, mcp_ctx))
+        return ask_tool(ctx, question, principal=caller(ctx, mcp_ctx, transport=transport))
 
     @server.tool(
         description=(
@@ -166,7 +193,9 @@ def build_server(ctx: AppContext) -> MCPServer:
     def hippo_remember(
         name: str, text: str, visibility: str | None = None, mcp_ctx: Context | None = None
     ) -> dict[str, Any]:
-        return remember_tool(ctx, name, text, visibility=visibility, principal=caller(ctx, mcp_ctx))
+        return remember_tool(
+            ctx, name, text, visibility=visibility, principal=caller(ctx, mcp_ctx, transport=transport)
+        )
 
     @server.tool(
         description=(
@@ -175,7 +204,7 @@ def build_server(ctx: AppContext) -> MCPServer:
         )
     )
     def hippo_sources(mcp_ctx: Context | None = None) -> list[dict[str, Any]]:
-        return sources_tool(ctx, principal=caller(ctx, mcp_ctx))
+        return sources_tool(ctx, principal=caller(ctx, mcp_ctx, transport=transport))
 
     @server.tool(
         description=(
@@ -184,7 +213,7 @@ def build_server(ctx: AppContext) -> MCPServer:
         )
     )
     def hippo_whoami(mcp_ctx: Context | None = None) -> dict[str, Any]:
-        return whoami_tool(ctx, principal=caller(ctx, mcp_ctx))
+        return whoami_tool(ctx, principal=caller(ctx, mcp_ctx, transport=transport))
 
     @server.tool(
         description=(
@@ -195,7 +224,7 @@ def build_server(ctx: AppContext) -> MCPServer:
         )
     )
     def hippo_explain_path(a: str, b: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
-        return explain_path_tool(ctx, a, b, principal=caller(ctx, mcp_ctx))
+        return explain_path_tool(ctx, a, b, principal=caller(ctx, mcp_ctx, transport=transport))
 
     @server.tool(
         description=(
@@ -207,7 +236,7 @@ def build_server(ctx: AppContext) -> MCPServer:
     def hippo_blast_radius(
         symbol: str, depth: int = DEFAULT_DEPTH, mcp_ctx: Context | None = None
     ) -> dict[str, Any]:
-        return blast_radius_tool(ctx, symbol, depth, principal=caller(ctx, mcp_ctx))
+        return blast_radius_tool(ctx, symbol, depth, principal=caller(ctx, mcp_ctx, transport=transport))
 
     @server.tool(
         description=(
@@ -216,7 +245,9 @@ def build_server(ctx: AppContext) -> MCPServer:
         )
     )
     def hippo_exception_path(symbol: str, exception: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
-        return exception_path_tool(ctx, symbol, exception, principal=caller(ctx, mcp_ctx))
+        return exception_path_tool(
+            ctx, symbol, exception, principal=caller(ctx, mcp_ctx, transport=transport)
+        )
 
     @server.tool(
         description=(
@@ -227,7 +258,7 @@ def build_server(ctx: AppContext) -> MCPServer:
     def hippo_history(
         symbol: str, limit: int = DEFAULT_HISTORY_LIMIT, mcp_ctx: Context | None = None
     ) -> dict[str, Any]:
-        return history_tool(ctx, symbol, limit, principal=caller(ctx, mcp_ctx))
+        return history_tool(ctx, symbol, limit, principal=caller(ctx, mcp_ctx, transport=transport))
 
     return server
 
@@ -493,4 +524,4 @@ def _wrap_lifespan(app: FastAPI, server: MCPServer) -> None:
 
 def run_stdio(ctx: AppContext) -> None:
     """Run the MCP server over stdin/stdout (for `hippo mcp`). Blocks until the client disconnects."""
-    build_server(ctx).run(transport="stdio")
+    build_server(ctx, transport="stdio").run(transport="stdio")

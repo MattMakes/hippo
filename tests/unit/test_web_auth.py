@@ -430,7 +430,7 @@ def test_mcp_tools_take_the_caller_from_the_bearer_token(client, app_ctx):
 
 def test_mcp_stdio_uses_the_environment_token(app_ctx, monkeypatch):
     tokens = make_users(app_ctx)
-    server = mcp_server.build_server(app_ctx)
+    server = mcp_server.build_server(app_ctx, transport="stdio")
     monkeypatch.delenv(mcp_server.TOKEN_ENV, raising=False)
     with pytest.raises(ToolError, match="sign in required"):
         asyncio.run(server.call_tool("hippo_sources", {}))

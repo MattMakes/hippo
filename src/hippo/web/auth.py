@@ -131,7 +131,7 @@ def _gated(ctx: AppContext) -> bool | None:
     return True
 
 
-def resolve_principal(ctx: AppContext, headers: Headers) -> Principal | None:
+def resolve_principal(ctx: AppContext, headers: Headers, *, require_online: bool = False) -> Principal | None:
     """
     The Principal for a request, or None when users exist and the request carries no valid
     credential. Open mode (no users) always yields the open principal. Raises StoreDown when
@@ -139,6 +139,8 @@ def resolve_principal(ctx: AppContext, headers: Headers) -> Principal | None:
     """
     gated = _gated(ctx)
     if gated is None:
+        if require_online:
+            raise StoreDown()
         # Nothing can be read while Neo4j is down and no user was ever seen; the pages only show
         # status. Treat as open so the header and the Settings page still say what is wrong.
         return Principal.open()
@@ -158,10 +160,14 @@ def resolve_principal(ctx: AppContext, headers: Headers) -> Principal | None:
     return _principal_for(ctx, user)
 
 
-def principal_from_bearer(ctx: AppContext, token: str | None) -> Principal | None:
+def principal_from_bearer(
+    ctx: AppContext, token: str | None, *, require_online: bool = False
+) -> Principal | None:
     """The Principal behind a bearer token (MCP, scripts). Same open-mode and outage rules as above."""
     gated = _gated(ctx)
     if gated is None:
+        if require_online:
+            raise StoreDown()
         return Principal.open()
     if gated is False:
         return Principal.open(top_role(ctx.store.list_roles()))
