@@ -67,15 +67,13 @@ def status_partial(request: Request):
 
 
 def scope_note(ctx, principal) -> dict:
-    """How much of the memory this caller searches: 'N of M sources, as <role>' for the Ask page."""
-    if not ctx.store.ping():
-        return {"visible": 0, "total": 0, "role": principal.role_name, "open": principal.is_open}
-    visible = ctx.store.list_sources(principal.access)
-    total = ctx.store.list_sources() if not principal.is_open else visible
+    """Describe only the evidence inventory this caller may search."""
+    stats = system_status(ctx, access=principal.access)["stats"]
+    visible = stats.get("sources", 0)
     return {
-        "visible": len(visible),
-        "total": len(total),
-        "passages": sum(int(s.get("passages") or 0) for s in visible),
+        "visible": visible,
+        "total": visible,
+        "passages": stats.get("passages", 0),
         "role": principal.role_name,
         "open": principal.is_open,
     }
@@ -85,7 +83,17 @@ def scope_note(ctx, principal) -> dict:
 def ask_page(request: Request, q: str = ""):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    return render(request, "ask.html", nav="ask", question=q, scope=scope_note(ctx, principal))
+    from ...knowledge.query_access import query_access
+
+    validate = query_access(ctx, principal.access)[2] if ctx.store.ping() else None
+    return render(
+        request,
+        "ask.html",
+        nav="ask",
+        question=q,
+        scope=scope_note(ctx, principal),
+        authorization_check=validate,
+    )
 
 
 @router.post("/ask")
@@ -96,6 +104,9 @@ def ask_submit(request: Request, question: str = Form("")):
     if not question:
         return render(request, "partials/answer.html", error="Type a question first.")
     try:
+        from ...knowledge.query_access import query_access
+
+        _, _, validate = query_access(ctx, principal.access)
         trace, answer = ask_service.ask(ctx, question, access=principal.access)
         graph = ctx.graph_for(principal.access)
     except OllamaError as exc:
@@ -119,6 +130,7 @@ def ask_submit(request: Request, question: str = Form("")):
         answer=answer,
         passages=passages,
         trace_key=trace_key,
+        authorization_check=validate,
     )
 
 
@@ -136,7 +148,7 @@ def settings_page(request: Request, saved: int = 0):
         help=SETTING_HELP,
         rules=SETTING_RULES,
         saved=bool(saved),
-        status=system_status(ctx, fresh=True),
+        status=system_status(ctx, fresh=True, access=principal_of(request).access),
         can_edit=principal_of(request).can("edit_graph"),
     )
 
@@ -158,7 +170,7 @@ async def settings_submit(request: Request):
             rules=SETTING_RULES,
             saved=False,
             error=str(exc),
-            status=system_status(ctx, fresh=True),
+            status=system_status(ctx, fresh=True, access=principal_of(request).access),
             can_edit=True,
             status_code=400,
         )

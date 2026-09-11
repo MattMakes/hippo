@@ -33,7 +33,8 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 import igraph as ig
@@ -215,6 +216,12 @@ class GraphIndex:
     _scaled: dict[float, ig.Graph] = field(default_factory=dict, repr=False, compare=False)
     # vertex -> its display name, filled by `paths.display_at`; a walk asks for it per edge.
     display_cache: dict[int, str] = field(default_factory=dict, repr=False, compare=False)
+    authorization_check: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+
+    def validate_authorization(self) -> None:
+        """Reject output from an expired audience view before model calls or release."""
+        if self.authorization_check is not None:
+            self.authorization_check()
 
     @property
     def entity_passage_count(self) -> np.ndarray:
@@ -555,9 +562,6 @@ class GraphIndex:
         """
         visible = set(visible_sources)
         keep_passages = [p for p in self.passages if p.source_id in visible]
-        if len(keep_passages) == len(self.passages):
-            return self  # nothing hidden: share the full index (and its cache)
-
         keep_passage_ids = {p.id for p in keep_passages}
         old_passage_vertices = {
             int(self.passage_vertices[i]) for i, p in enumerate(self.passages) if p.id in keep_passage_ids
@@ -583,6 +587,14 @@ class GraphIndex:
             for i, node in enumerate(self.code_nodes)
             if any(dst in old_passage_vertices for dst in self.defining_passages(int(self.code_vertices[i])))
         ]
+        if (
+            len(keep_passages) == len(self.passages)
+            and len(keep_entity_vertices) == len(self.entity_names)
+            and len(keep_code) == len(self.code_nodes)
+            and all(fact.passage_ids and set(fact.passage_ids) <= keep_passage_ids for fact in self.facts)
+        ):
+            # Staged nodes/facts can lack passage support; visible passages alone cannot authorize them.
+            return self
         code_vertices_old = [int(self.code_vertices[i]) for i, _node in keep_code]
 
         entity_vertices = sorted(keep_entity_vertices)
@@ -654,6 +666,19 @@ class GraphIndex:
             e = edges.setdefault((min(a, b), max(a, b)), Edge())
             e.fact_count += len(f.passage_ids)
 
+        # Hidden-only facts may leave an inert copied pair. It must not change the visible
+        # fingerprint, while an explicit tuned=0 edit still belongs to the visible graph.
+        edges = {
+            pair: edge
+            for pair, edge in edges.items()
+            if edge.fact_count
+            or edge.mention
+            or edge.synonym_score
+            or edge.tuned is not None
+            or edge.omega
+            or edge.code_kinds
+        }
+
         # The directed code relations, renumbered, and the specificity recomputed from the ones
         # that survived: a symbol whose only caller is hidden is more specific here, not less.
         code_out: dict[int, list[DirectedEdge]] = {}
@@ -671,6 +696,9 @@ class GraphIndex:
                     in_degree[dst] = in_degree.get(dst, 0) + 1
         for new_v in (idx_of[node_id] for node_id in code_ids):
             passage_count[new_v] = float(in_degree.get(new_v, 0) + 1)
+        # Public node metadata must describe the same scoped relations as specificity.
+        # Copy each node so this view cannot mutate the shared, unrestricted graph.
+        code_nodes = [replace(node, in_degree=in_degree.get(idx_of[node.id], 0)) for node in code_nodes]
 
         return GraphIndex(
             version=self.version,
@@ -696,7 +724,7 @@ class GraphIndex:
             # so a hidden symbol can be named here and still never be reached.
             name_index=self.name_index,
             path_index=self.path_index,
-            communities=self.communities,
+            communities=_community_labels(code_nodes),
         )
 
     # ---------------------------------------------------- what-if edits

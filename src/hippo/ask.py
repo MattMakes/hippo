@@ -11,6 +11,7 @@ nor read by the model. None means unrestricted (open mode, the CLI, tests).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from . import prompts
@@ -19,33 +20,82 @@ from .context import AppContext
 from .hipporag import paths
 from .hipporag.answerer import Answer, answer_question
 from .hipporag.retriever import Retriever, Trace
+from .knowledge.query_access import AuthorizedModel, query_access
+from .knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from .store.base import validate_settings
 
 
 def search(
-    ctx: AppContext, question: str, settings: dict[str, Any] | None = None, access: Access | None = None
+    ctx: AppContext,
+    question: str,
+    settings: dict[str, Any] | None = None,
+    access: Access | None = None,
+    *,
+    authorization_check: Callable[[], None] | None = None,
 ) -> Trace:
-    """Rank passages for a question using the graph `access` may see, and the current settings."""
+    """Rank visible passages, retaining any saved-input guard at every model boundary."""
+    graph, model, validate = _query_access(ctx, access, authorization_check)
+    trace = _search(ctx, graph, model, question, settings)
+    validate()
+    return trace
+
+
+def _query_access(ctx, access, authorization_check):
+    if authorization_check is not None:
+        authorization_check()
+    graph, model, query_check = query_access(ctx, access)
+    if authorization_check is None:
+        return graph, model, query_check
+
+    def validate():
+        authorization_check()
+        query_check()
+
+    validate()
+    return graph, AuthorizedModel(model, validate), validate
+
+
+def _search(ctx, graph, model, question, settings):
     merged = ctx.store.get_settings()
     merged.update(validate_settings(settings or {}))  # raises ValueError on junk, before any model call
-    retriever = Retriever(ctx.graph_for(access), ctx.ollama)
+    retriever = Retriever(graph, model)
     # The LLM keep/drop/expand pass is installed here rather than inside `retrieve`, so a unit test
     # or a replayed simulation that calls `retrieve` directly never makes a second model call. It
     # still only runs when the question named code (`code_select` and `used_code_seeds`).
-    return retriever.retrieve(question, merged, select_fn=retriever.llm_select)
+    trace = retriever.retrieve(question, merged, select_fn=retriever.llm_select)
+    trace.evidence_fingerprint = view_fingerprint(graph)
+    return trace
 
 
 def ask(
     ctx: AppContext, question: str, settings: dict[str, Any] | None = None, access: Access | None = None
 ) -> tuple[Trace, Answer]:
     """Retrieve, then let the LLM read the top `qa_top_k` passages and answer."""
-    trace = search(ctx, question, settings, access)
-    return trace, answer_from_trace(ctx, trace, access)
+    graph, model, validate = query_access(ctx, access)
+    trace = _search(ctx, graph, model, question, settings)
+    validate()
+    answer = _answer_from_trace(graph, model, trace)
+    validate()
+    return trace, answer
 
 
-def answer_from_trace(ctx: AppContext, trace: Trace, access: Access | None = None) -> Answer:
-    """Answer using the passages a trace already ranked (used by simulations to re-answer)."""
-    graph = ctx.graph_for(access)
+def answer_from_trace(
+    ctx: AppContext,
+    trace: Trace,
+    access: Access | None = None,
+    *,
+    authorization_check: Callable[[], None] | None = None,
+) -> Answer:
+    """Answer from ranked passages while preserving the caller's saved-input authorization."""
+    graph, model, validate = _query_access(ctx, access, authorization_check)
+    if not can_reuse_answer(graph, trace.evidence_fingerprint):
+        trace = reconstruct_trace(graph, trace, question=trace.question)
+    answer = _answer_from_trace(graph, model, trace)
+    validate()
+    return answer
+
+
+def _answer_from_trace(graph, model, trace):
     qa_top_k = int(trace.settings.get("qa_top_k", 5))
     passages = []
     # Passages the select pass fetched by "expand" are summarised inside the code block instead;
@@ -58,7 +108,7 @@ def answer_from_trace(ctx: AppContext, trace: Trace, access: Access | None = Non
         return Answer(
             answer="I have nothing in memory to answer that yet.", thought="", raw="", passage_ids=[]
         )
-    return answer_question(ctx.ollama, trace.question, passages, context_block=code_block(graph, trace))
+    return answer_question(model, trace.question, passages, context_block=code_block(graph, trace))
 
 
 def code_fields(trace: Trace, block: str) -> dict[str, Any]:

@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ...access import CAPABILITIES, Principal, top_role
+from ...status import source_view
 from ..auth import principal_of, public_user, require, set_session_cookie
 from ..render import ctx_of, render
 
@@ -67,13 +68,28 @@ def check_user_manageable(principal: Principal, user: dict[str, Any], roles: lis
         raise HTTPException(403, f"'{user['username']}' ({user.get('role_name')}) does not rank below you")
 
 
-def ladder(ctx, principal: Principal) -> list[dict[str, Any]]:
-    """Roles top first, each with what that tier can see: every tier at or below it."""
-    roles = ctx.store.list_roles()
-    sources = ctx.store.list_sources()
+def _role_rows(ctx, sources) -> list[dict[str, Any]]:
+    return [
+        {**role, "sources": sum(source.get("access_role_id") == role["id"] for source in sources)}
+        for role in ctx.store.list_roles()
+    ]
+
+
+def _user_row(user, sources) -> dict[str, Any]:
+    row = public_user(user) or {}
+    row["sources"] = sum(source.get("owner_id") == row.get("id") for source in sources)
+    return row
+
+
+def ladder(ctx, principal: Principal, *, view=None) -> list[dict[str, Any]]:
+    """Tier estimates intersect the caller's inventory; managed ACLs cannot be inferred from a tier."""
+    view = view or source_view(ctx, principal.access)
+    roles = _role_rows(ctx, view.sources)
     rows = []
     for role in roles:
-        visible = [s for s in sources if int(s.get("min_rank") or 0) <= role["rank"]]
+        visible = [
+            s for s in view.sources if not s.get("managed") and int(s.get("min_rank") or 0) <= role["rank"]
+        ]
         rows.append(
             {
                 **role,
@@ -84,6 +100,7 @@ def ladder(ctx, principal: Principal) -> list[dict[str, Any]]:
                 "is_mine": role["id"] == principal.role_id,
             }
         )
+    view.validate()
     return rows
 
 
@@ -96,22 +113,25 @@ def users_page(request: Request, error: str = "", saved: str = "", show_token: s
     if not (principal.can("manage_users") or principal.can("manage_roles")):
         raise HTTPException(403, "your role may neither manage users nor roles")
     ctx = ctx_of(request)
-    roles = ctx.store.list_roles()
+    view = source_view(ctx, principal.access)
+    roles = _role_rows(ctx, view.sources)
     users = []
     for user in ctx.store.list_users():
-        row = public_user(user) or {}
+        row = _user_row(user, view.sources)
         row["manageable"] = principal.user_id != user["id"] and may_touch_rank(principal, user["rank"], roles)
         row["is_me"] = principal.user_id == user["id"]
         if show_token == user["id"] and row["manageable"]:
             row["token"] = user.get("token")
         users.append(row)
-    total_sources = len(ctx.store.list_sources())
-    open_sources = sum(1 for s in ctx.store.list_sources() if not s.get("access_role_id"))
+    total_sources = len(view.sources)
+    open_sources = sum(not s.get("managed") and not s.get("access_role_id") for s in view.sources)
+    tier_rows = ladder(ctx, principal, view=view)
+    view.validate()
     return render(
         request,
         "users.html",
         nav="users",
-        ladder=ladder(ctx, principal),
+        ladder=tier_rows,
         users=users,
         roles=roles,
         assignable=assignable_roles(principal, roles),
@@ -123,6 +143,7 @@ def users_page(request: Request, error: str = "", saved: str = "", show_token: s
         open_sources=open_sources,
         error=error,
         saved=saved,
+        authorization_check=view.validate,
     )
 
 
@@ -256,14 +277,22 @@ class RolePatch(BaseModel):
 
 @api.get("/users")
 def list_users(request: Request):
-    require(request, "manage_users")
-    return [public_user(u) for u in ctx_of(request).store.list_users()]
+    principal = require(request, "manage_users")
+    ctx = ctx_of(request)
+    view = source_view(ctx, principal.access)
+    rows = [_user_row(user, view.sources) for user in ctx.store.list_users()]
+    view.validate()
+    return rows
 
 
 @api.get("/roles")
 def list_roles(request: Request):
-    principal_of(request)  # any signed-in user may read the ladder: it explains what they see
-    return ctx_of(request).store.list_roles()
+    principal = principal_of(request)
+    ctx = ctx_of(request)
+    view = source_view(ctx, principal.access)
+    rows = _role_rows(ctx, view.sources)
+    view.validate()
+    return rows
 
 
 @api.post("/users")
@@ -323,7 +352,10 @@ def patch_user(request: Request, user_id: str, body: UserPatch) -> dict[str, Any
         updated = ctx.store.update_user(user_id, **changes) if changes else user
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return public_user(updated) or {}
+    view = source_view(ctx, principal.access)
+    row = _user_row(updated, view.sources)
+    view.validate()
+    return row
 
 
 @api.post("/users/{user_id}/token")
@@ -386,9 +418,14 @@ def patch_role(request: Request, role_id: str, body: RolePatch) -> dict[str, Any
             raise HTTPException(400, "you cannot take 'manage_roles' away from your own role")
         changes["capabilities"] = body.capabilities
     try:
-        return ctx.store.update_role(role_id, **changes) if changes else role
+        if changes:
+            ctx.store.update_role(role_id, **changes)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    view = source_view(ctx, principal.access)
+    updated = next(row for row in _role_rows(ctx, view.sources) if row["id"] == role_id)
+    view.validate()
+    return updated
 
 
 @api.delete("/roles/{role_id}")

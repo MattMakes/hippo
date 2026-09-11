@@ -24,14 +24,15 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ... import ask as ask_service
-from ...analysis.changesets import apply as apply_changeset_ops
 from ...analysis.changesets import describe as describe_ops
-from ...analysis.changesets import save as save_changeset_ops
 from ...analysis.explain import explain
 from ...analysis.simulate import Overrides
 from ...analysis.simulate import simulate as run_simulation
 from ...hipporag.paths import render_triples
 from ...hipporag.retriever import Trace, trace_from_dict
+from ...knowledge.changeset_access import ChangesetAccess, ChangesetUnavailable
+from ...knowledge.eval_access import EvalAccess
+from ...knowledge.query_access import query_access
 from ...ollama import OllamaError
 from ...store.base import SETTING_RULES
 from ..adhoc import ADHOC_LIMIT, recall_adhoc, remember_adhoc
@@ -48,7 +49,9 @@ api = APIRouter(prefix="/api")
 @router.get("/analyze")
 def analyze_adhoc(request: Request, question: str = "", key: str = ""):
     """Show the analysis cached under `key` (from the Ask page). Never runs the model: see analyze_submit."""
-    cached = recall_adhoc(key, principal_of(request).user_id) if key else None
+    principal = principal_of(request)
+    index, _, validate = query_access(ctx_of(request), principal.access)
+    cached = recall_adhoc(key, principal.user_id, graph=index) if key else None
     if cached is None:
         question = question.strip()
         if not question:
@@ -63,7 +66,16 @@ def analyze_adhoc(request: Request, question: str = "", key: str = ""):
             status_code=404,
         )
     trace = trace_from_dict(cached["trace"])
-    return _render_analysis(request, trace, result=None, answer=cached["answer"], history=[], trace_key=key)
+    return _render_analysis(
+        request,
+        trace,
+        result=None,
+        answer=cached["answer"],
+        history=[],
+        trace_key=key,
+        index=index,
+        authorization_check=validate,
+    )
 
 
 @router.post("/analyze")
@@ -87,23 +99,37 @@ def analyze_submit(request: Request, question: str = Form("")):
 def analyze_result(request: Request, result_id: str):
     require(request, "run_evals")  # stored results belong to the Evals section
     ctx = ctx_of(request)
-    result = ctx.store.get_result(result_id)
+    principal = principal_of(request)
+    index, _, validate = query_access(ctx, principal.access)
+    evaluation = EvalAccess(ctx, principal.access)
+    result = evaluation.get_result(result_id)
     if result is None:
         raise HTTPException(404, "no such result")
     trace = trace_from_dict(result.get("trace") or {})
     if not trace.question:
         trace.question = result["question"]
-    history = ctx.store.results_for_question(result["question_id"])
+    history = evaluation.results_for_question(result["question_id"])
     answer = {"answer": result.get("answer", ""), "thought": result.get("thought", "")}
-    return _render_analysis(request, trace, result=result, answer=answer, history=history, trace_key="")
+    return _render_analysis(
+        request,
+        trace,
+        result=result,
+        answer=answer,
+        history=history,
+        trace_key="",
+        index=index,
+        authorization_check=validate,
+    )
 
 
-def _render_analysis(request: Request, trace: Trace, *, result, answer, history, trace_key: str):
+def _render_analysis(
+    request: Request, trace: Trace, *, result, answer, history, trace_key: str, index, authorization_check
+):
     ctx = ctx_of(request)
     principal = principal_of(request)
     # Explained on the caller's own slice of the graph: a stored eval trace may name passages
     # that this caller may not see; they simply go unexplained, with no text shown (below).
-    index = ctx.graph_for(principal.access)
+    authorization_check()
     explanation = explain(index, trace)
     gold_ids = set((result or {}).get("gold_passage_ids") or [])
     # Text for exactly the passages the explanation covers, so the two can never disagree.
@@ -137,6 +163,7 @@ def _render_analysis(request: Request, trace: Trace, *, result, answer, history,
         trace_key=trace_key,
         graph_changed=trace.graph_version != index.version,
         current_settings=ctx.store.get_settings(),
+        authorization_check=authorization_check,
         ask_url=f"/ask?q={quote(trace.question)}",
         can_edit=principal.can("edit_graph"),
     )
@@ -163,10 +190,18 @@ def _seed_symbol_sources(index, trace: Trace) -> dict[str, str]:
 def changesets_page(request: Request, open: str = ""):
     require(request, "edit_graph")
     ctx = ctx_of(request)
-    items = ctx.store.list_changesets()
+    view = ChangesetAccess(ctx, principal_of(request).access)
+    items = view.list()
     for item in items:
-        item["described"] = describe_ops(ctx, item["ops"])
-    return render(request, "changesets.html", nav="changesets", changesets=items, open_id=open)
+        item["described"] = describe_ops(ctx, item["ops"], index=view.graph)
+    return render(
+        request,
+        "changesets.html",
+        nav="changesets",
+        changesets=items,
+        open_id=open,
+        authorization_check=view.validate,
+    )
 
 
 # ------------------------------------------------------------------ JSON
@@ -190,17 +225,18 @@ class ChangesetBody(BaseModel):
 def simulate(request: Request, body: SimulateBody):
     ctx = ctx_of(request)
     principal = principal_of(request)
+    index, _, validate = query_access(ctx, principal.access)
     baseline: Trace | None = None
     if body.result_id:
         require(request, "run_evals")
-        stored = ctx.store.get_result(body.result_id)
+        stored = EvalAccess(ctx, principal.access).get_result(body.result_id)
         if stored is None:
             raise HTTPException(404, "no such result")
         baseline = trace_from_dict(stored.get("trace") or {})
         if not baseline.question:
             baseline.question = stored["question"]
     elif body.trace_key:
-        cached = recall_adhoc(body.trace_key, principal.user_id)
+        cached = recall_adhoc(body.trace_key, principal.user_id, graph=index)
         if cached is None:
             raise HTTPException(404, "that analysis has expired; analyze the question again")
         baseline = trace_from_dict(cached["trace"])
@@ -212,11 +248,13 @@ def simulate(request: Request, body: SimulateBody):
     except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(400, f"bad overrides: {exc}") from exc
     try:
-        outcome = run_simulation(ctx, question, overrides, baseline, access=principal.access)
+        outcome = run_simulation(
+            ctx, question, overrides, baseline, access=principal.access, authorization_check=validate
+        )
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
-    index = ctx.graph_for(principal.access)
     explanation = explain(index, outcome.trace)
+    validate()
     return {
         "trace": outcome.trace.to_dict(),
         "diff": outcome.diff,
@@ -231,7 +269,7 @@ def simulate(request: Request, body: SimulateBody):
 @api.get("/changesets")
 def list_changesets(request: Request):
     require(request, "edit_graph")
-    return ctx_of(request).store.list_changesets()
+    return ChangesetAccess(ctx_of(request), principal_of(request).access).list()
 
 
 @api.post("/changesets")
@@ -239,8 +277,8 @@ def create_changeset(request: Request, body: ChangesetBody):
     require(request, "edit_graph")
     ctx = ctx_of(request)
     try:
-        changeset_id = save_changeset_ops(
-            ctx, body.name, body.ops, from_result_id=body.from_result_id, note=body.note
+        changeset_id = ChangesetAccess(ctx, principal_of(request).access).save(
+            body.name, body.ops, from_result_id=body.from_result_id, note=body.note
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -251,10 +289,10 @@ def create_changeset(request: Request, body: ChangesetBody):
 def apply_changeset(request: Request, changeset_id: str):
     require(request, "edit_graph")
     ctx = ctx_of(request)
-    if ctx.store.get_changeset(changeset_id) is None:
-        raise HTTPException(404, "no such changeset")
     try:
-        return apply_changeset_ops(ctx, changeset_id)
+        return ChangesetAccess(ctx, principal_of(request).access).apply(changeset_id)
+    except ChangesetUnavailable as exc:
+        raise HTTPException(404, "no such changeset") from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -262,5 +300,8 @@ def apply_changeset(request: Request, changeset_id: str):
 @api.delete("/changesets/{changeset_id}")
 def delete_changeset(request: Request, changeset_id: str):
     require(request, "edit_graph")
-    ctx_of(request).store.delete_changeset(changeset_id)
+    try:
+        ChangesetAccess(ctx_of(request), principal_of(request).access).delete(changeset_id)
+    except ChangesetUnavailable as exc:
+        raise HTTPException(404, "no such changeset") from exc
     return {"deleted": changeset_id}

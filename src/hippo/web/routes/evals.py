@@ -5,13 +5,14 @@ Pages render the tables; forms post here and redirect; the /api/evals/*
 endpoints return JSON. The work itself (generating questions, running a set)
 lives in hippo.evals and runs in background jobs.
 
-Every route here needs the `run_evals` capability (hippo/access.py): runs read
-and answer from the whole memory, so this section is for roles trusted with it.
+Every route requires the `run_evals` capability and evaluation ownership.
+Source labels, question inputs and saved output use current evidence permissions.
 """
 
 from __future__ import annotations
 
 import json
+from functools import wraps
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -19,11 +20,35 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ...evals import question_maker, runner
+from ...knowledge.eval_access import EvalAccess, EvalAccessDenied
 from ...store.base import validate_settings
 from ..auth import principal_of, require_capability
 from ..render import STOP_POLLING, ctx_of, render
 
 router = APIRouter(dependencies=[Depends(require_capability("run_evals"))])
+
+
+def _service(request: Request) -> EvalAccess:
+    if not hasattr(request.state, "evaluation_access"):
+        request.state.evaluation_access = EvalAccess(ctx_of(request), principal_of(request).access)
+    return request.state.evaluation_access
+
+
+def _read_response(function):
+    @wraps(function)
+    def guarded(request: Request, *args, **kwargs):
+        with _service(request).read_scope():
+            return function(request, *args, **kwargs)
+
+    return guarded
+
+
+def _write(request: Request, method: str, *args, **kwargs):
+    try:
+        return getattr(_service(request), method)(*args, **kwargs)
+    except EvalAccessDenied as exc:
+        raise HTTPException(404, "no such evaluation") from exc
+
 
 SUMMARY_CARDS = [
     ("accuracy", "Accuracy", "mean judge score: correct 1, partial ½, incorrect 0"),
@@ -43,9 +68,9 @@ SUMMARY_CARDS = [
 
 
 @router.get("/evals")
+@_read_response
 def evals_page(request: Request, source: str = "", error: str = ""):
-    ctx = ctx_of(request)
-    sets = ctx.store.list_question_sets()
+    sets = _service(request).list_question_sets()
     if source:
         sets = [qs for qs in sets if qs.get("source_id") == source]
     return render(
@@ -53,18 +78,18 @@ def evals_page(request: Request, source: str = "", error: str = ""):
         "evals.html",
         nav="evals",
         sets=sets,
-        runs=ctx.store.list_runs(),
+        runs=_service(request).list_runs(),
         error=error,
         cards=SUMMARY_CARDS,
     )
 
 
 @router.get("/partials/evals/tables")
+@_read_response
 def evals_tables_partial(request: Request):
     """Both tables, polled by the Evals page while questions are being written or a run is going."""
-    ctx = ctx_of(request)
-    sets = ctx.store.list_question_sets()
-    runs = ctx.store.list_runs()
+    sets = _service(request).list_question_sets()
+    runs = _service(request).list_runs()
     busy = any(qs["status"] == "generating" for qs in sets) or any(r["status"] == "running" for r in runs)
     return render(
         request, "partials/evals_tables.html", sets=sets, runs=runs, status_code=200 if busy else STOP_POLLING
@@ -72,9 +97,9 @@ def evals_tables_partial(request: Request):
 
 
 @router.get("/evals/sets/{set_id}")
+@_read_response
 def set_page(request: Request, set_id: str, error: str = ""):
-    ctx = ctx_of(request)
-    question_set = ctx.store.get_question_set(set_id)
+    question_set = _service(request).get_question_set(set_id)
     if question_set is None:
         raise HTTPException(404, "no such question set")
     return render(
@@ -82,21 +107,21 @@ def set_page(request: Request, set_id: str, error: str = ""):
         "eval_set.html",
         nav="evals",
         question_set=question_set,
-        questions=ctx.store.list_questions(set_id),
-        runs=ctx.store.list_runs(set_id),
+        questions=_service(request).list_questions(set_id),
+        runs=_service(request).list_runs(set_id),
         error=error,
     )
 
 
 @router.get("/evals/runs/{run_id}")
+@_read_response
 def run_page(request: Request, run_id: str, compare: str = ""):
-    ctx = ctx_of(request)
-    run = ctx.store.get_run(run_id)
+    run = _service(request).get_run(run_id)
     if run is None:
         raise HTTPException(404, "no such run")
-    results = ctx.store.list_results(run_id)
-    siblings = [r for r in ctx.store.list_runs(run["set_id"]) if r["id"] != run_id]
-    other = ctx.store.get_run(compare) if compare else None
+    results = _service(request).list_results(run_id)
+    siblings = [r for r in _service(request).list_runs(run["set_id"]) if r["id"] != run_id]
+    other = _service(request).get_run(compare) if compare else None
     return render(
         request,
         "eval_run.html",
@@ -110,19 +135,19 @@ def run_page(request: Request, run_id: str, compare: str = ""):
 
 
 @router.get("/partials/runs/{run_id}")
+@_read_response
 def run_partial(request: Request, run_id: str, compare: str = ""):
     """The run page body, polled while the run is going; answers 286 once it is over so polling stops."""
-    ctx = ctx_of(request)
-    run = ctx.store.get_run(run_id)
+    run = _service(request).get_run(run_id)
     if run is None:
         raise HTTPException(404, "no such run")
     return render(
         request,
         "partials/run_body.html",
         run=run,
-        results=ctx.store.list_results(run_id),
+        results=_service(request).list_results(run_id),
         cards=SUMMARY_CARDS,
-        other=ctx.store.get_run(compare) if compare else None,
+        other=_service(request).get_run(compare) if compare else None,
         status_code=200 if run["status"] == "running" else STOP_POLLING,
     )
 
@@ -137,9 +162,8 @@ def create_set_form(request: Request, name: str = Form(""), questions: str = For
         return RedirectResponse(
             "/evals?error=Add+at+least+one+question+line+like+%27question+%7C+answer%27", status_code=303
         )
-    ctx = ctx_of(request)
-    set_id = ctx.store.create_question_set(name.strip() or "My questions")
-    ctx.store.add_questions(set_id, rows)
+    set_id = _write(request, "create_question_set", name.strip() or "My questions")
+    _write(request, "add_questions", set_id, rows)
     return RedirectResponse(f"/evals/sets/{set_id}", status_code=303)
 
 
@@ -153,8 +177,11 @@ def add_question_form(
 ):
     if not text.strip():
         return RedirectResponse(f"/evals/sets/{set_id}?error=Type+a+question", status_code=303)
-    ctx_of(request).store.add_questions(
-        set_id, [{"text": text.strip(), "expected_answer": expected_answer.strip(), "kind": kind}]
+    _write(
+        request,
+        "add_questions",
+        set_id,
+        [{"text": text.strip(), "expected_answer": expected_answer.strip(), "kind": kind}],
     )
     return RedirectResponse(f"/evals/sets/{set_id}", status_code=303)
 
@@ -162,7 +189,8 @@ def add_question_form(
 @router.post("/evals/sets/{set_id}/run")
 def run_form(request: Request, set_id: str, name: str = Form("")):
     ctx = ctx_of(request)
-    if not ctx.store.list_questions(set_id):
+    _write(request, "require_set", set_id)
+    if not _service(request).list_questions(set_id):
         return RedirectResponse(f"/evals/sets/{set_id}?error=This+set+has+no+questions+yet", status_code=303)
     run_id = runner.start_run(ctx, set_id, name.strip() or None, access=principal_of(request).access)
     return RedirectResponse(f"/evals/runs/{run_id}", status_code=303)
@@ -235,44 +263,48 @@ class RunBody(BaseModel):
 
 
 @api.get("/evals/sets")
+@_read_response
 def list_sets(request: Request):
-    return ctx_of(request).store.list_question_sets()
+    return _service(request).list_question_sets()
 
 
 @api.post("/evals/sets")
 def create_set(request: Request, body: SetBody):
-    ctx = ctx_of(request)
-    set_id = ctx.store.create_question_set(body.name)
-    ids = ctx.store.add_questions(set_id, [q.model_dump() for q in body.questions]) if body.questions else []
+    set_id = _write(request, "create_question_set", body.name)
+    ids = (
+        _write(request, "add_questions", set_id, [q.model_dump() for q in body.questions])
+        if body.questions
+        else []
+    )
     return {"set_id": set_id, "question_ids": ids}
 
 
 @api.get("/evals/sets/{set_id}")
+@_read_response
 def get_set(request: Request, set_id: str):
-    ctx = ctx_of(request)
-    question_set = ctx.store.get_question_set(set_id)
+    question_set = _service(request).get_question_set(set_id)
     if question_set is None:
         raise HTTPException(404, "no such question set")
-    question_set["questions"] = ctx.store.list_questions(set_id)
+    question_set["questions"] = _service(request).list_questions(set_id)
     return question_set
 
 
 @api.delete("/evals/sets/{set_id}")
 def delete_set(request: Request, set_id: str):
-    ctx_of(request).store.delete_question_set(set_id)
+    _write(request, "delete_question_set", set_id)
     return {"deleted": set_id}
 
 
 @api.post("/evals/sets/{set_id}/questions")
 def add_questions(request: Request, set_id: str, body: QuestionsBody):
     return {
-        "question_ids": ctx_of(request).store.add_questions(set_id, [q.model_dump() for q in body.questions])
+        "question_ids": _write(request, "add_questions", set_id, [q.model_dump() for q in body.questions])
     }
 
 
 @api.delete("/evals/questions/{question_id}")
 def delete_question(request: Request, question_id: str):
-    ctx_of(request).store.delete_question(question_id)
+    _write(request, "delete_question", question_id)
     return {"deleted": question_id}
 
 
@@ -280,20 +312,23 @@ def delete_question(request: Request, question_id: str):
 def generate_questions(request: Request, source_id: str, body: GenerateBody | None = None):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    source = ctx.store.get_source(source_id, principal.access)  # a hidden source looks like a missing one
+    source = _service(request).get_source(source_id)
     if source is None:
         raise HTTPException(404, "no such source")
     if source["status"] != "ready":
         return JSONResponse({"error": "wait until this source has finished indexing"}, status_code=409)
     body = body or GenerateBody()
-    set_id = question_maker.start_generation_job(
-        ctx,
-        source_id,
-        max_single=body.max_single,
-        max_multihop=body.max_multihop,
-        name=body.name,
-        access=principal.access,
-    )
+    try:
+        set_id = question_maker.start_generation_job(
+            ctx,
+            source_id,
+            max_single=body.max_single,
+            max_multihop=body.max_multihop,
+            name=body.name,
+            access=principal.access,
+        )
+    except EvalAccessDenied as exc:
+        raise HTTPException(404, "no such source") from exc
     return {"set_id": set_id}
 
 
@@ -315,21 +350,22 @@ def start_run(request: Request, set_id: str, body: RunBody | None = None):
 
 
 @api.get("/evals/runs")
+@_read_response
 def list_runs(request: Request, set_id: str | None = None):
-    return ctx_of(request).store.list_runs(set_id)
+    return _service(request).list_runs(set_id)
 
 
 @api.get("/evals/runs/{run_id}")
+@_read_response
 def get_run(request: Request, run_id: str):
-    ctx = ctx_of(request)
-    run = ctx.store.get_run(run_id)
+    run = _service(request).get_run(run_id)
     if run is None:
         raise HTTPException(404, "no such run")
-    run["results"] = ctx.store.list_results(run_id)
+    run["results"] = _service(request).list_results(run_id)
     return run
 
 
 @api.delete("/evals/runs/{run_id}")
 def delete_run(request: Request, run_id: str):
-    ctx_of(request).store.delete_run(run_id)
+    _write(request, "delete_run", run_id)
     return {"deleted": run_id}

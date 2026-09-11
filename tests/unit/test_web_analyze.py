@@ -150,4 +150,7 @@ def test_analysis_of_an_old_result_survives_the_graph_changing(client, ctx, resu
     assert client.delete(f"/api/sources/{extra}").status_code == 200
     page = client.get(f"/analyze/{result_id}")
     assert page.status_code == 200
-    assert "graph has changed" in page.text
+    # Replay now reconstructs vertex references from current evidence IDs. A
+    # transient global version bump with unchanged visible evidence is not a
+    # reason to expose a corpus-change notification.
+    assert "graph has changed" not in page.text

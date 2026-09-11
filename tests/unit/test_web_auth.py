@@ -160,11 +160,12 @@ def test_an_individual_sees_only_open_sources_everywhere(client, app_ctx):
     sign_in(client, "ivy", "secret1")
     library = client.get("/")
     assert "Open half" in library.text and "Restricted half" not in library.text
-    assert "1 of 2" in library.text and "Individual" in library.text
+    assert "1 visible to you" in library.text and "Individual" in library.text
+    assert "1 of 2" not in library.text
     assert client.get(f"/sources/{app_ctx.restricted_id}").status_code == 404
     assert client.get(f"/sources/{app_ctx.open_id}").status_code == 200
     ask = client.get("/ask")
-    assert "Searching <b>1</b> of 2 sources" in ask.text
+    assert "Searching <b>1</b> of 1 sources" in ask.text
 
 
 def test_search_and_ask_over_the_api_stay_inside_the_callers_slice(client, app_ctx):
@@ -407,7 +408,7 @@ def test_mcp_tools_take_the_caller_from_the_bearer_token(client, app_ctx):
 
     who = call(tokens["ivy"], "hippo_whoami", {})
     data = who["structuredContent"]
-    assert data["user"]["username"] == "ivy" and data["sources_visible"] == 1 and data["sources_total"] == 2
+    assert data["user"]["username"] == "ivy" and data["sources_visible"] == 1 and data["sources_total"] == 1
     assert data["visibility_you_may_use"] == ["everyone", "individual"]
     found = call(tokens["ivy"], "hippo_search", {"question": "Who designed the Orion arm?"})[
         "structuredContent"

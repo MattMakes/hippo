@@ -166,6 +166,8 @@ def test_reindex_everything_endpoint_reindexes_each_source(ctx):
     with TestClient(
         create_app(ctx), base_url="http://localhost"
     ) as client:  # the app closes the store on shutdown, so assert inside
-        assert client.post("/api/sources/reindex-all").json()["started"] == 2
+        assert client.post("/api/sources/reindex-all").json() == {"accepted": True}
         ctx.jobs.wait_all()
-        assert all(s["status"] == "ready" for s in ctx.store.list_sources())
+        sources = ctx.store.list_sources()
+        assert len(sources) == 2
+        assert all(s["status"] == "ready" for s in sources)

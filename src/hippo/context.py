@@ -15,9 +15,9 @@ from __future__ import annotations
 import logging
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from .access import Access
+from .access import Access, Principal
 from .config import Config, load_config
 from .hipporag.graph_index import GraphIndex
 from .jobs import Jobs
@@ -41,6 +41,8 @@ class AppContext:
     # (graph version, visible source ids) -> scoped GraphIndex; small, because cutting one is cheap
     _scoped: OrderedDict[tuple[int, frozenset[str]], GraphIndex] = field(default_factory=OrderedDict)
     _scoped_lock: threading.Lock = field(default_factory=threading.Lock)
+    _managed_scoped: OrderedDict[tuple, GraphIndex] = field(default_factory=OrderedDict)
+    _legacy_authorized: OrderedDict[tuple, tuple[GraphIndex, GraphIndex]] = field(default_factory=OrderedDict)
 
     @classmethod
     def from_env(cls, ollama: Ollama | None = None) -> AppContext:
@@ -109,7 +111,47 @@ class AppContext:
         gets the full graph; anyone else gets an induced subgraph over their visible sources,
         so a search can neither rank a hidden passage nor spread activation through one.
         """
+        epoch = self.store.authorization_epoch()
+        from .knowledge.query_access import current_access
+
+        access = current_access(self.store, access)
+        graph = self._graph_for(access, epoch)
+        from .knowledge.access import AuthorizationChanged
+
+        if self.store.authorization_epoch() != epoch:
+            raise AuthorizationChanged("Authorization changed while loading graph scope")
+        if access is not None and access.audience_kind != "internal" and graph.authorization_check is None:
+            graph = self._authorize_legacy(graph, epoch)
+        graph.validate_authorization()
+        return graph
+
+    def _authorize_legacy(self, graph: GraphIndex, epoch: int) -> GraphIndex:
+        from .knowledge.access import AuthorizationChanged
+        from .knowledge.replay import view_fingerprint
+
+        def validate():
+            if self.store.authorization_epoch() != epoch:
+                raise AuthorizationChanged("Authorization changed during graph use")
+
+        key = (id(graph), epoch)
+        with self._scoped_lock:
+            cached = self._legacy_authorized.get(key)
+            if cached is not None:
+                self._legacy_authorized.move_to_end(key)
+                return cached[1]
+            view = replace(graph, version=int(view_fingerprint(graph)[:12], 16), authorization_check=validate)
+            # Retain the original too, so its Python id cannot be reused as a cache key.
+            self._legacy_authorized[key] = (graph, view)
+            while len(self._legacy_authorized) > self.SCOPED_CACHE_SIZE:
+                self._legacy_authorized.popitem(last=False)
+            return view
+
+    def _graph_for(self, access: Access | None, epoch: int) -> GraphIndex:
         full = self.graph()
+        managed_sources = {record.source_id for record in self.store._knowledge_rows("Artifact")}
+        managed_sources.update(record.source_id for record in self.store._knowledge_rows("Generation"))
+        if managed_sources:
+            return self._managed_graph_for(full, access or Principal.open().access, managed_sources, epoch)
         if access is None or access.unrestricted:
             return full
         # The store applies the access predicate itself, so this is the Cypher-checked list.
@@ -127,6 +169,73 @@ class AppContext:
                 self._scoped.popitem(last=False)
         return scoped
 
+    def _managed_graph_for(self, full, access, managed_sources, epoch):
+        from .knowledge.access import AuthorizationChanged, EvidenceSelection
+        from .knowledge.projection import compose_graphs, project_managed_graph
+
+        profile = self.ollama.embed_model
+        sources = self.store.list_sources(access)
+        legacy_ids = frozenset(row["id"] for row in sources if row["id"] not in managed_sources)
+        proofs = []
+        for workspace_id in sorted({row["workspace_id"] for row in sources if row["id"] in managed_sources}):
+            generations = frozenset(
+                row["active_generation_id"]
+                for row in sources
+                if row["workspace_id"] == workspace_id
+                and row["id"] in managed_sources
+                and row.get("active_generation_id")
+            )
+            proofs.append(
+                self.store._reader_proof(
+                    workspace_id,
+                    access,
+                    expected_epoch=epoch,
+                    selection=EvidenceSelection(generation_ids=generations),
+                )
+            )
+
+        def validate():
+            if self.ollama.embed_model != profile:
+                raise AuthorizationChanged("Retrieval profile changed during graph use")
+            if self.store.authorization_epoch() != epoch:
+                raise AuthorizationChanged("Authorization changed during graph use")
+            for engine, proof in proofs:
+                engine.validate_current(proof)
+            if self.ollama.embed_model != profile:
+                raise AuthorizationChanged("Retrieval profile changed during graph use")
+            if self.store.authorization_epoch() != epoch:
+                raise AuthorizationChanged("Authorization changed during graph use")
+
+        validate()
+        key = (
+            full.version,
+            legacy_ids,
+            tuple(proof.policy_fingerprint for _, proof in proofs),
+            epoch,
+            profile,
+        )
+        with self._scoped_lock:
+            cached = self._managed_scoped.get(key)
+            if cached is not None:
+                cached.validate_authorization()
+                self._managed_scoped.move_to_end(key)
+                return cached
+        projections = [
+            project_managed_graph(full, self.store, proof, embedding_profile=profile) for _, proof in proofs
+        ]
+        scoped = compose_graphs(full.scoped(legacy_ids), *projections)
+        scoped.authorization_check = validate
+        if access.audience_kind != "internal":
+            from .knowledge.replay import view_fingerprint
+
+            scoped.version = int(view_fingerprint(scoped)[:12], 16)
+        validate()
+        with self._scoped_lock:
+            self._managed_scoped[key] = scoped
+            while len(self._managed_scoped) > self.SCOPED_CACHE_SIZE:
+                self._managed_scoped.popitem(last=False)
+        return scoped
+
     def invalidate_graph(self) -> None:
         with self._graph_lock:
             self._graph = None
@@ -136,6 +245,8 @@ class AppContext:
         """Forget the per-viewer graphs (after a source's visibility changed; the full graph is unchanged)."""
         with self._scoped_lock:
             self._scoped.clear()
+            self._managed_scoped.clear()
+            self._legacy_authorized.clear()
 
     def close(self) -> None:
         """

@@ -8,6 +8,7 @@ header, the active nav item, and the config.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,9 @@ from fastapi import Request
 from fastapi.templating import Jinja2Templates
 from jinja2 import Undefined
 
+from ..access import Access
 from ..context import AppContext
+from ..knowledge.query_access import query_access
 from ..status import system_status
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -63,9 +66,33 @@ def ctx_of(request: Request) -> AppContext:
     return request.app.state.ctx
 
 
-def render(request: Request, template: str, nav: str = "", status_code: int = 200, **context: Any):
+def render(
+    request: Request,
+    template: str,
+    nav: str = "",
+    status_code: int = 200,
+    authorization_check: Callable[[], None] | None = None,
+    **context: Any,
+):
+    if authorization_check is not None:
+        authorization_check()
     ctx = ctx_of(request)
     # `me` is who is signed in (hippo/access.py); the header shows it and templates gate buttons on it.
     context.setdefault("me", getattr(request.state, "principal", None))
-    context.update(nav=nav, status=system_status(ctx), config=ctx.config)
-    return templates.TemplateResponse(request, template, context, status_code=status_code)
+    principal = context["me"]
+    access = principal.access if principal is not None else Access(audience_kind="preview")
+    store_online = ctx.store.ping()
+    # Every signed-in page includes scoped status, even when its own content has
+    # no evidence callback (for example Settings or the status partial).
+    status_check = (
+        query_access(ctx, access)[2] if store_online and access.audience_kind != "preview" else None
+    )
+    context.update(
+        nav=nav, status=system_status(ctx, access=access, fresh=not store_online), config=ctx.config
+    )
+    response = templates.TemplateResponse(request, template, context, status_code=status_code)
+    if authorization_check is not None:
+        authorization_check()
+    if status_check is not None:
+        status_check()
+    return response

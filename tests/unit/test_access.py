@@ -426,6 +426,72 @@ def test_scoped_recomputes_code_specificity_from_what_survived(ctx: AppContext) 
     assert scoped.specificity[scoped.idx_of[ids["open_symbol"]]] == 1
 
 
+def test_private_caller_cannot_change_scoped_code_degree_or_reader_version(ctx: AppContext) -> None:
+    _open_id, _hidden_id, ids = index_code(ctx)
+    before = ctx.graph_for(INDIVIDUAL)
+    ctx.store.add_code_edges(
+        [{"a": ids["hidden_symbol"], "b": ids["open_symbol"], "kind": "INVOKES", "omega": 0.9}]
+    )
+    ctx.store.bump_graph_version()
+    after = ctx.graph_for(INDIVIDUAL)
+    assert after.code_node_by_id(ids["open_symbol"]).in_degree == 0
+    assert after.code_node_by_id(ids["open_data"]).in_degree == 1
+    assert before.version == after.version
+    assert before.node_ids == after.node_ids
+    assert before.specificity.tolist() == after.specificity.tolist()
+    # A scoped correction must not rewrite the cached full graph's statistics.
+    assert ctx.graph().code_node_by_id(ids["open_symbol"]).in_degree == 1
+
+
+def test_scoped_community_labels_do_not_change_when_private_corpus_changes(ctx: AppContext) -> None:
+    ctx.store.ping()
+
+    def add_member(qualname: str, *, hidden: bool) -> tuple[str, str]:
+        source_id = ctx.store.create_source(
+            "repo", qualname, access_role_id="local-admin" if hidden else None
+        )
+        passage_id = make_id("passage-", source_id)
+        symbol_id = make_id("symbol-", source_id)
+        ctx.store.add_passages(
+            [
+                {
+                    "id": passage_id,
+                    "source_id": source_id,
+                    "ordinal": 0,
+                    "title": qualname,
+                    "text": qualname,
+                    "embedding": [1.0, 0.0],
+                }
+            ]
+        )
+        ctx.store.add_symbols(
+            [{"id": symbol_id, "source_id": source_id, "name": qualname, "qualname": qualname}]
+        )
+        ctx.store.link_definitions([(symbol_id, passage_id)])
+        ctx.store.set_symbol_communities({symbol_id: 7})
+        return source_id, symbol_id
+
+    public_id, _ = add_member("public.run", hidden=False)
+    before = GraphIndex.load(ctx.store).scoped({public_id})
+    assert before.community_name(7) == "public.run"
+
+    # Each private name sorts before the public name and would win the global label.
+    for private_name in ("aaa.secret_owner", "aab.secret_dependency"):
+        private_id, private_symbol = add_member(private_name, hidden=True)
+        full = GraphIndex.load(ctx.store)
+        assert full.community_name(7) == private_name
+        scoped = full.scoped({public_id})
+        assert private_symbol not in scoped.idx_of
+        assert scoped.community_name(7) == before.community_name(7)
+        assert scoped.communities == before.communities
+        assert full.community_name(7) == private_name  # Scoping must not mutate the global view.
+        assert full.scoped(set()).communities == {}
+
+        ctx.store.delete_source(private_id)
+        after = GraphIndex.load(ctx.store).scoped({public_id})
+        assert after.communities == before.communities
+
+
 def test_scoped_keeps_a_boost_set_on_a_symbol(ctx: AppContext) -> None:
     open_id, _hidden_id, ids = index_code(ctx)
     scoped = GraphIndex.load(ctx.store).scoped({open_id})
@@ -477,6 +543,8 @@ def test_graph_for_caches_by_visible_set_and_forgets_on_invalidate(ctx: AppConte
     assert ctx.graph_for(EVERYTHING) is full
     a = ctx.graph_for(INDIVIDUAL)
     assert a is not full and a is ctx.graph_for(Access(rank=0, user_id="another-individual"))
-    assert ctx.graph_for(LOCAL_ADMIN) is full, "sees every source, so shares the full graph"
+    admin_view = ctx.graph_for(LOCAL_ADMIN)
+    assert admin_view.node_ids == full.node_ids
+    assert admin_view.graph is full.graph, "same graph data with a revocable audience handle"
     ctx.invalidate_graph()
     assert ctx.graph_for(INDIVIDUAL) is not a

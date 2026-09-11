@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..access import Access
-from ..ask import answer_from_trace
+from ..ask import _answer_from_trace
 from ..context import AppContext
 from ..hipporag.answerer import Answer
 from ..hipporag.graph_index import EdgeEdit
@@ -30,6 +30,8 @@ from ..hipporag.retriever import (
     Trace,
     trace_from_dict,
 )
+from ..knowledge.query_access import AuthorizedModel, query_access
+from ..knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from ..store.base import validate_settings
 from .explain import TOP_PASSAGES
 
@@ -135,13 +137,25 @@ def simulate(
     overrides: Overrides,
     baseline: Trace | None = None,
     access: Access | None = None,
+    *,
+    authorization_check=None,
 ) -> Simulation:
     """
     Run the search again with `overrides` and diff it against `baseline` (or a fresh plain search).
     `access` keeps the simulation inside the caller's slice of the graph (hippo/access.py).
     """
-    index = ctx.graph_for(access)
-    retriever = Retriever(index, ctx.ollama)
+    index, model, validate_query = query_access(ctx, access)
+
+    def validate():
+        if authorization_check is not None:
+            authorization_check()
+        validate_query()
+
+    validate()
+    model = AuthorizedModel(model, validate)
+    if baseline is not None and not can_reuse_answer(index, baseline.evidence_fingerprint):
+        baseline = reconstruct_trace(index, baseline, question=question)
+    retriever = Retriever(index, model)
 
     base_settings = dict(baseline.settings) if baseline is not None else ctx.store.get_settings()
     settings = {**base_settings, **overrides.settings}
@@ -173,8 +187,12 @@ def simulate(
         node_boosts=dict(overrides.node_boosts) or None,
         graph=graph,
     )
-    answer = answer_from_trace(ctx, trace, access) if overrides.reanswer else None
-    return Simulation(trace=trace, answer=answer, diff=diff_traces(baseline, trace), baseline=baseline)
+    trace.evidence_fingerprint = view_fingerprint(index)
+    validate()
+    answer = _answer_from_trace(index, model, trace) if overrides.reanswer else None
+    outcome = Simulation(trace=trace, answer=answer, diff=diff_traces(baseline, trace), baseline=baseline)
+    validate()
+    return outcome
 
 
 def replay_filter(baseline: Trace) -> FactFilter:

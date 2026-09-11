@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
+from copy import deepcopy
 from typing import Any
 
-from ..hipporag.retriever import Trace
+from ..hipporag.retriever import Trace, trace_from_dict
+from ..knowledge.replay import can_reuse_answer, reconstruct_trace
 from ..store.base import new_id
 
 ADHOC_LIMIT = 50
@@ -39,10 +41,17 @@ def remember_adhoc(trace: Trace, answer: dict[str, Any] | None, owner: str | Non
     return key
 
 
-def recall_adhoc(key: str, owner: str | None = None) -> dict[str, Any] | None:
+def recall_adhoc(key: str, owner: str | None = None, *, graph) -> dict[str, Any] | None:
     """The entry under `key`, if it belongs to `owner` (None matches only open-mode entries)."""
     with _ADHOC_LOCK:
         entry = _ADHOC.get(key)
     if entry is None or entry.get("owner") != owner:
         return None
+    entry = deepcopy(entry)
+    trace = trace_from_dict(entry["trace"])
+    if can_reuse_answer(graph, trace.evidence_fingerprint):
+        return entry
+    entry["trace"] = reconstruct_trace(graph, trace, question=trace.question).to_dict()
+    entry["answer"] = {"answer": "Evidence access changed; ask again for a current answer.", "thought": ""}
+    graph.validate_authorization()
     return entry

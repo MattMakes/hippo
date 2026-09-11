@@ -30,6 +30,10 @@ from typing import Any
 from ..access import Access
 from ..ask import answer_from_trace, search
 from ..context import AppContext
+from ..knowledge.access import AuthorizationChanged
+from ..knowledge.eval_access import EvalAccess, EvalAccessDenied
+from ..knowledge.query_access import AuthorizedModel, current_access
+from ..knowledge.replay import view_fingerprint
 from ..store.base import now_iso
 from . import metrics
 from .judge import judge
@@ -67,13 +71,12 @@ def start_run(
     `access` is the runner's (hippo/access.py): every question is searched and answered on their
     slice of the memory, so a run can never read a passage the person who started it cannot.
     """
-    question_set = ctx.store.get_question_set(set_id)
-    if question_set is None:
-        raise ValueError(f"unknown question set {set_id}")
+    evaluation = EvalAccess(ctx, access)
+    question_set = evaluation.require_set(set_id)
     merged = ctx.store.get_settings()
     merged.update(settings or {})
     run_name = name or f"{question_set['name']} @ {now_iso()}"
-    run_id = ctx.store.create_run(set_id, run_name, merged)
+    run_id = evaluation.create_run(set_id, run_name, merged)
     ctx.jobs.start(f"run:{run_id}", lambda: _run_all(ctx, run_id, set_id, merged, access))
     return run_id
 
@@ -82,10 +85,13 @@ def _run_all(
     ctx: AppContext, run_id: str, set_id: str, settings: dict[str, Any], access: Access | None = None
 ) -> None:
     store = ctx.store
+    evaluation = EvalAccess(ctx, access)
     results: list[Result] = []
     try:
-        for done, question in enumerate(store.list_questions(set_id), start=1):
+        evaluation.require_set(set_id)
+        for done, question in enumerate(evaluation.list_questions(set_id), start=1):
             result = run_question(ctx, question, settings, access)
+            evaluation.require_set(set_id)
             store.add_result(run_id, question["id"], result)
             results.append(result)
             store.update_run(run_id, progress_done=done)
@@ -118,13 +124,41 @@ def run_question(
       positionally, on the contract `question_maker.commit_questions` writes: the commit's own
       message passage first, the modified symbols' passages after it.
     """
-    text = question_row["text"]
-    expected = (question_row.get("expected_answer") or "").strip()
-    gold_ids = list(question_row.get("gold_passage_ids") or [])
+    text = "<unavailable evaluation question>"
     result = _empty_result()
     started = time.time()
     try:
-        trace = search(ctx, text, settings, access)
+        evaluation = EvalAccess(ctx, access)
+        access = current_access(ctx.store, access)
+        if access is not None and access.audience_kind != "internal":
+            question_row = evaluation.get_question(question_row.get("id", ""))
+            if question_row is None:
+                raise EvalAccessDenied("unknown question or access denied")
+        text = question_row["text"]
+        expected = (question_row.get("expected_answer") or "").strip()
+        gold_ids = list(question_row.get("gold_passage_ids") or [])
+        epoch = ctx.store.authorization_epoch()
+        fingerprint = None
+
+        def validate():
+            current_access(ctx.store, access)
+            if ctx.store.authorization_epoch() != epoch:
+                raise AuthorizationChanged("Evaluation permissions changed during the question")
+            if (
+                access is not None
+                and access.audience_kind != "internal"
+                and evaluation.get_question(question_row["id"]) is None
+            ):
+                raise EvalAccessDenied("unknown question or access denied")
+            if fingerprint is not None and fingerprint != view_fingerprint(evaluation.graph()):
+                raise AuthorizationChanged("Evaluation evidence changed during the question")
+
+        validate()
+        trace = search(ctx, text, settings, access, authorization_check=validate)
+        fingerprint = trace.evidence_fingerprint
+        if not fingerprint:
+            raise AuthorizationChanged("Evaluation retrieval has no input evidence proof")
+        validate()
         result["trace"] = trace.to_dict()
         # Stored as its own property too: the run table lists results without their (big) traces.
         result["used_dpr_fallback"] = trace.used_dpr_fallback
@@ -136,26 +170,32 @@ def run_question(
             result["recall"]["path_fidelity"] = touched[f"recall@{GOLD_TOP}"]
         result["gold_rank"] = metrics.gold_rank(gold_ids, ranked_ids)
 
-        answer = answer_from_trace(ctx, trace, access)
+        answer = answer_from_trace(ctx, trace, access, authorization_check=validate)
+        validate()
         # Latency is what a user would wait for: search plus answer, not the grading.
         result["latency_ms"] = round((time.time() - started) * 1000, 1)
         result["answer"] = answer.answer
         result["thought"] = answer.thought
 
         if expected:
-            result.update(_grade(ctx, text, expected, answer.answer))
+            result.update(
+                _grade(ctx, text, expected, answer.answer, model=AuthorizedModel(ctx.ollama, validate))
+            )
         else:
             result["judge_reason"] = "no expected answer to compare with"
+        validate()
     except Exception as exc:  # noqa: BLE001 - one broken question must not end the run
         log.exception("Question %r failed", text)
+        if isinstance(exc, (AuthorizationChanged, EvalAccessDenied)):
+            result = _empty_result()
         result["error"] = f"{type(exc).__name__}: {exc}"
         if result["latency_ms"] is None:
             result["latency_ms"] = round((time.time() - started) * 1000, 1)
     return result
 
 
-def _grade(ctx: AppContext, question: str, expected: str, actual: str) -> dict[str, Any]:
-    verdict = judge(ctx.ollama, question, expected, actual)
+def _grade(ctx: AppContext, question: str, expected: str, actual: str, *, model=None) -> dict[str, Any]:
+    verdict = judge(model or ctx.ollama, question, expected, actual)
     return {
         "verdict": verdict.verdict,
         "judge_score": verdict.score,
@@ -256,11 +296,13 @@ def compare_with_baseline(
     Nothing is stored. This is deliberately not a pair of `start_run` calls: a comparison is a
     measurement someone takes, not history to keep beside the runs a user actually made.
     """
-    if ctx.store.get_question_set(set_id) is None:
-        raise ValueError(f"unknown question set {set_id}")
-    merged = ctx.store.get_settings()
-    merged.update(settings or {})
-    questions = ctx.store.list_questions(set_id)
-    with_code = summarize([run_question(ctx, q, merged, access) for q in questions])
-    baseline = summarize([run_question(ctx, q, merged | BASELINE_SETTINGS, access) for q in questions])
+    evaluation = EvalAccess(ctx, access)
+    with evaluation.read_scope():
+        evaluation.require_set(set_id)
+        merged = ctx.store.get_settings()
+        merged.update(settings or {})
+        questions = evaluation.list_questions(set_id)
+        with_code = summarize([run_question(ctx, q, merged, access) for q in questions])
+        baseline = summarize([run_question(ctx, q, merged | BASELINE_SETTINGS, access) for q in questions])
+        evaluation.require_set(set_id)
     return with_code, baseline

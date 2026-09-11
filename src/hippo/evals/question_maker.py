@@ -39,6 +39,8 @@ from ..access import Access
 from ..context import AppContext
 from ..hipporag.graph_index import COMMIT, ENTITY, SYMBOL, GraphIndex, Passage
 from ..hipporag.paths import display_at, display_of
+from ..knowledge.eval_access import EvalAccess
+from ..knowledge.query_access import AuthorizedModel
 from ..ollama import OllamaError
 
 log = logging.getLogger(__name__)
@@ -62,7 +64,7 @@ MIN_COMMIT_SYMBOLS = 2  # one symbol is a rename, not a localization question
 
 def start_generation_job(ctx: AppContext, source_id: str, **kw: Any) -> str:
     """Create the QuestionSet now, fill it in the background. Returns the set id straight away."""
-    set_id = _create_set(ctx, source_id, kw.pop("name", None))
+    set_id = _create_set(ctx, source_id, kw.pop("name", None), kw.get("access"))
     ctx.jobs.start(f"generate:{set_id}", lambda: generate_questions(ctx, source_id, set_id=set_id, **kw))
     return set_id
 
@@ -87,10 +89,18 @@ def generate_questions(
     `max_code` and `max_commits` bound the two graph-built kinds; a source with no code graph
     simply produces none of them.
     """
-    set_id = set_id or _create_set(ctx, source_id, name)
+    set_id = set_id or _create_set(ctx, source_id, name, access)
     store = ctx.store
+    evaluation = EvalAccess(ctx, access)
+    evaluation.require_generation_target(set_id, source_id)
     try:
-        index = ctx.graph_for(access)
+        index = evaluation.graph()
+
+        def validate():
+            evaluation.require_generation_target(set_id, source_id)
+            index.validate_authorization()
+
+        model = AuthorizedModel(ctx.ollama, validate)
         passages = _passages_of(index, source_id)
         if not passages:
             raise ValueError("this source has no indexed passages yet; index it first")
@@ -108,15 +118,18 @@ def generate_questions(
             set_id, stage="writing single-hop questions", progress_done=0, progress_total=total
         )
 
-        rows = _single_hop_questions(ctx, set_id, singles, per_passage, total)
-        store.add_questions(set_id, rows)
+        rows = _single_hop_questions(ctx, set_id, singles, per_passage, total, model=model)
+        evaluation.add_questions(set_id, rows)
 
         store.update_question_set(set_id, stage="writing multi-hop questions", progress_done=len(singles))
-        rows = _multihop_questions(ctx, set_id, pairs, max_multihop, done=len(singles), total=total)
-        store.add_questions(set_id, rows)
+        rows = _multihop_questions(
+            ctx, set_id, pairs, max_multihop, done=len(singles), total=total, model=model
+        )
+        evaluation.add_questions(set_id, rows)
 
         store.update_question_set(set_id, stage="writing code questions")
-        store.add_questions(set_id, graph_rows)
+        evaluation.add_questions(set_id, graph_rows)
+        validate()
 
         store.update_question_set(
             set_id, status="ready", stage="done", progress_done=total, progress_total=total
@@ -132,12 +145,12 @@ def generate_questions(
 
 
 def _single_hop_questions(
-    ctx: AppContext, set_id: str, passages: list[Passage], per_passage: int, total: int
+    ctx: AppContext, set_id: str, passages: list[Passage], per_passage: int, total: int, *, model=None
 ) -> list[QuestionRow]:
     rows: list[QuestionRow] = []
     for done, passage in enumerate(passages, start=1):
         try:
-            reply = ctx.ollama.chat_json(
+            reply = (model or ctx.ollama).chat_json(
                 prompts.question_gen_messages(passage.title, passage.text, per_passage),
                 prompts.QUESTION_GEN_SCHEMA,
                 max_tokens=GEN_MAX_TOKENS,
@@ -184,6 +197,7 @@ def _multihop_questions(
     *,
     done: int,
     total: int,
+    model=None,
 ) -> list[QuestionRow]:
     rows: list[QuestionRow] = []
     seen_texts: set[str] = set()
@@ -193,7 +207,7 @@ def _multihop_questions(
         # The chain can run either way (A tells us about the entity, B continues from it), so
         # give the model both orders before giving up on this pair.
         for a, b in ((first, second), (second, first)):
-            row = _ask_multihop(ctx, entity_name, a, b)
+            row = _ask_multihop(ctx, entity_name, a, b, model=model)
             if row and row["text"] not in seen_texts:
                 seen_texts.add(row["text"])
                 rows.append(row)
@@ -203,9 +217,11 @@ def _multihop_questions(
     return rows
 
 
-def _ask_multihop(ctx: AppContext, entity_name: str, a: Passage, b: Passage) -> QuestionRow | None:
+def _ask_multihop(
+    ctx: AppContext, entity_name: str, a: Passage, b: Passage, *, model=None
+) -> QuestionRow | None:
     try:
-        reply = ctx.ollama.chat_json(
+        reply = (model or ctx.ollama).chat_json(
             prompts.multihop_gen_messages(entity_name, (a.title, a.text), (b.title, b.text)),
             prompts.MULTIHOP_GEN_SCHEMA,
             max_tokens=GEN_MAX_TOKENS,
@@ -397,12 +413,8 @@ def _passages_of(index: GraphIndex, source_id: str) -> list[Passage]:
     return sorted((p for p in index.passages if p.source_id == source_id), key=lambda p: p.ordinal)
 
 
-def _create_set(ctx: AppContext, source_id: str, name: str | None) -> str:
-    source = ctx.store.get_source(source_id)
-    if source is None:
-        raise ValueError(f"unknown source {source_id}")
-    set_id = ctx.store.create_question_set(
-        name or f"Sample questions: {source['name']}", source_id, "generated"
-    )
+def _create_set(ctx: AppContext, source_id: str, name: str | None, access: Access | None = None) -> str:
+    evaluation = EvalAccess(ctx, access)
+    set_id = evaluation.create_question_set(name, source_id, "generated")
     ctx.store.update_question_set(set_id, status="generating", stage="starting")
     return set_id

@@ -1239,11 +1239,13 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 
 ### Task 4 — Managed evidence authorization and transport separation
 
+- [x] Implemented and verified; see `ai_docs/gates/rag-it-all/task-4/GATES.md`. Managed graph projection, owned evaluation/changeset replay, scoped aggregates and model-dispatch/release guards pass the 195-case integration gate, real Ladybug/Neo4j checks and independent reviews.
+
 **Depends on:** Task 3. **Gates:** G4.
 
-Step 5 (HTTP/stdio credential separation) is implemented and independently reviewed; see `ai_docs/gates/rag-it-all/task-4-mcp/GATES.md` (38 passing tests including real standalone HTTP). It uses the existing transport/authentication interfaces and was implemented independently alongside Task 3. The managed authorization, projection and publication integration still depends on the completed persistence contracts.
+Step 5 (HTTP/stdio credential separation) is implemented and independently reviewed; see `ai_docs/gates/rag-it-all/task-4-mcp/GATES.md` (38 passing tests including real standalone HTTP). It uses the existing transport/authentication interfaces and was implemented independently alongside Task 3. The reader integration uses the completed persistence contracts and evidence authorization foundation.
 
-The authorization foundation is implemented and reviewed separately in `ai_docs/gates/rag-it-all/task-4-foundation/GATES.md`: scoped policy identities and schema 3 recovery, live reviewed membership, complete support groups, durable atomic revocation epochs, typed evidence reads and open-mode connector guards. Full Task 4 remains open until graph, replay and all read surfaces use these boundaries.
+The authorization foundation is implemented and reviewed separately in `ai_docs/gates/rag-it-all/task-4-foundation/GATES.md`: scoped policy identities and schema 3 recovery, live reviewed membership, complete support groups, durable atomic revocation epochs, typed evidence reads and open-mode connector guards. Graph, replay and reader surfaces now use these boundaries; the full integration evidence is recorded in the Task 4 ledger.
 
 **Create:** `src/hippo/knowledge/access.py`, `tests/unit/test_evidence_access.py`, `tests/unit/test_rag_replay_access.py`.
 

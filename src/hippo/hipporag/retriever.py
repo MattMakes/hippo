@@ -198,6 +198,7 @@ class Trace:
     history: list[dict[str, Any]] = field(default_factory=list)
     select: dict[str, Any] = field(default_factory=dict)  # {"keep", "drop", "expand", "raw", "error"}
     expansions: list[dict[str, Any]] = field(default_factory=list)
+    evidence_fingerprint: str = ""  # exact authorized input view; empty on older saved traces
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -814,6 +815,7 @@ def trace_from_dict(data: dict[str, Any]) -> Trace:
         history=list(data.get("history", [])),
         select=dict(data.get("select", {})),
         expansions=list(data.get("expansions", [])),
+        evidence_fingerprint=data.get("evidence_fingerprint", ""),
     )
     trace.fact_candidates = [FactCandidate(**c) for c in data.get("fact_candidates", [])]
     trace.seed_entities = [SeedEntity(**s) for s in data.get("seed_entities", [])]

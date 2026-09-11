@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ... import ask as ask_service
+from ...knowledge.query_access import query_access
 from ...ollama import OllamaError
 from ...status import system_status
 from ..auth import principal_of, require
@@ -31,12 +32,7 @@ class QuestionBody(BaseModel):
 
 @router.get("/status")
 def status(request: Request):
-    out = dict(system_status(ctx_of(request), fresh=True))
-    principal = principal_of(request)
-    if not principal.access.unrestricted:
-        # Job keys name source ids ("index:<id>"); a restricted caller only learns how many are running.
-        out["jobs"] = [key.split(":", 1)[0] for key in out.get("jobs", [])]
-    return out
+    return system_status(ctx_of(request), fresh=True, access=principal_of(request).access)
 
 
 @router.get("/settings")
@@ -77,33 +73,43 @@ def pull_models(request: Request):
 def ask(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     access = principal_of(request).access
+    _graph, _model, validate = query_access(ctx, access)
     try:
         trace, answer = ask_service.ask(ctx, body.question.strip(), body.settings, access=access)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
-    return {
+    finally:
+        validate()
+    payload = {
         "answer": answer.answer,
         "thought": answer.thought,
         "passage_ids": answer.passage_ids,
         "trace": trace.to_dict(),
         **ask_service.code_fields(trace, answer.context_block),
     }
+    validate()
+    return payload
 
 
 @router.post("/search")
 def search(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     access = principal_of(request).access
+    graph, _model, validate = query_access(ctx, access)
     try:
         trace = ask_service.search(ctx, body.question.strip(), body.settings, access=access)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
-    block = ask_service.code_block(ctx.graph_for(access), trace)
-    return {"trace": trace.to_dict(), **ask_service.code_fields(trace, block)}
+    finally:
+        validate()
+    block = ask_service.code_block(graph, trace)
+    payload = {"trace": trace.to_dict(), **ask_service.code_fields(trace, block)}
+    validate()
+    return payload
 
 
 # ------------------------------------------------------------- graph lookups
@@ -113,9 +119,21 @@ def search(request: Request, body: QuestionBody):
 def entities(request: Request, q: str = "", limit: int = 20):
     if not q.strip():
         return []
-    return ctx_of(request).store.search_entities(
-        q.strip(), limit=min(limit, 100), access=principal_of(request).access
-    )
+    index = ctx_of(request).graph_for(principal_of(request).access)
+    needle = q.strip().lower()
+    rows = [
+        {
+            "id": identity,
+            "name": name,
+            "passage_count": int(index.entity_passage_count[index.idx_of[identity]]),
+        }
+        for identity, name in index.entity_names.items()
+        if needle in name.lower()
+    ]
+    rows.sort(key=lambda row: (-row["passage_count"], row["name"]))
+    payload = rows[: max(0, min(limit, 100))]
+    index.validate_authorization()
+    return payload
 
 
 @router.get("/graph/neighborhood")
@@ -149,4 +167,6 @@ def neighborhood(request: Request, node_id: str, depth: int = 1, limit: int = 60
                         "kinds": e.kinds if e else [],
                     }
                 )
-    return {"nodes": nodes, "edges": edges}
+    payload = {"nodes": nodes, "edges": edges}
+    index.validate_authorization()
+    return payload

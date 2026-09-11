@@ -66,6 +66,7 @@ from .access import Access, Principal
 from .ask import ask, code_block, code_fields, search
 from .context import AppContext
 from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
+from .knowledge.query_access import query_access
 from .web.auth import StoreDown, principal_from_bearer, resolve_principal
 from .web.routes.code import (
     DEFAULT_DEPTH,
@@ -273,34 +274,46 @@ def search_tool(
     question = _clean_question(question)
     top_k = max(1, min(int(top_k), MAX_TOP_K))
     access = principal.access if principal else None
-    trace = search(ctx, question, access=access)
-    graph = ctx.graph_for(access)
+    graph, _model, validate = query_access(ctx, access)
+    try:
+        trace = search(ctx, question, access=access)
+    finally:
+        validate()
     passages = []
     for ranked in trace.passages[:top_k]:
         passage = graph.passage_by_id(ranked.passage_id)
+        if passage is None:
+            continue
         passages.append(
             {
                 "passage_id": ranked.passage_id,
                 "title": ranked.title,
                 "source": ranked.source_name,
-                "text": passage.text if passage else ranked.preview,
+                "text": passage.text,
                 "score": round(ranked.score, 6),
                 "rank": ranked.rank,
             }
         )
     kept_facts = [c.triple for c in trace.fact_candidates if c.kept]
-    return {
+    payload = {
         "question": question,
         "passages": passages,
         "kept_facts": kept_facts,
         "used_dpr_fallback": trace.used_dpr_fallback,
         **code_fields(trace, code_block(graph, trace)),
     }
+    validate()
+    return payload
 
 
 def ask_tool(ctx: AppContext, question: str, principal: Principal | None = None) -> dict[str, Any]:
     question = _clean_question(question)
-    trace, answer = ask(ctx, question, access=principal.access if principal else None)
+    access = principal.access if principal else None
+    _graph, _model, validate = query_access(ctx, access)
+    try:
+        trace, answer = ask(ctx, question, access=access)
+    finally:
+        validate()
     # Only the passages the LLM actually read count as "sources" of the answer.
     read = set(answer.passage_ids)
     sources = [
@@ -314,12 +327,14 @@ def ask_tool(ctx: AppContext, question: str, principal: Principal | None = None)
         for p in trace.passages
         if p.passage_id in read
     ]
-    return {
+    payload = {
         "answer": answer.answer,
         "thought": answer.thought,
         "sources": sources,
         **code_fields(trace, answer.context_block),
     }
+    validate()
+    return payload
 
 
 # ------------------------------------------------------- the code graph tools
@@ -332,34 +347,41 @@ def _code_graph(ctx: AppContext, principal: Principal | None) -> tuple[Any, floa
     return ctx.graph_for(access), float(ctx.store.get_settings().get("code_theta", 0.5))
 
 
-def _code_answer(build: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+def _code_answer(build: Callable[[], dict[str, Any]], validate: Callable[[], None]) -> dict[str, Any]:
     """
     ToolError is the one exception an MCP client is shown verbatim, so everything a caller could
     act on has to be inside its message - the candidates of an ambiguous name above all.
     """
+    validate()
     try:
         return build()
     except (AmbiguousSymbol, UnknownSymbol, ValueError) as exc:
         raise ToolError(str(exc)) from exc
+    finally:
+        validate()
 
 
 def explain_path_tool(ctx: AppContext, a: str, b: str, principal: Principal | None = None) -> dict[str, Any]:
     index, theta = _code_graph(ctx, principal)
-    return _code_answer(lambda: path_payload(index, a, b, theta=theta))
+    return _code_answer(lambda: path_payload(index, a, b, theta=theta), index.validate_authorization)
 
 
 def blast_radius_tool(
     ctx: AppContext, symbol: str, depth: int = DEFAULT_DEPTH, principal: Principal | None = None
 ) -> dict[str, Any]:
     index, theta = _code_graph(ctx, principal)
-    return _code_answer(lambda: blast_payload(index, symbol, theta=theta, depth=depth))
+    return _code_answer(
+        lambda: blast_payload(index, symbol, theta=theta, depth=depth), index.validate_authorization
+    )
 
 
 def exception_path_tool(
     ctx: AppContext, symbol: str, exception: str, principal: Principal | None = None
 ) -> dict[str, Any]:
     index, theta = _code_graph(ctx, principal)
-    return _code_answer(lambda: exception_payload(index, symbol, exception, theta=theta))
+    return _code_answer(
+        lambda: exception_payload(index, symbol, exception, theta=theta), index.validate_authorization
+    )
 
 
 def history_tool(
@@ -369,7 +391,7 @@ def history_tool(
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     index, _theta = _code_graph(ctx, principal)
-    return _code_answer(lambda: history_payload(index, symbol, limit=limit))
+    return _code_answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)
 
 
 def remember_tool(
@@ -408,6 +430,9 @@ def remember_tool(
 
 
 def sources_tool(ctx: AppContext, principal: Principal | None = None) -> list[dict[str, Any]]:
+    from .status import source_view
+
+    view = source_view(ctx, (principal or Principal.open()).access)
     return [
         {
             "id": row["id"],
@@ -423,15 +448,16 @@ def sources_tool(ctx: AppContext, principal: Principal | None = None) -> list[di
             "error": row.get("error"),
             "created_at": row.get("created_at"),
         }
-        for row in ctx.store.list_sources(principal.access if principal else None)
+        for row in view.sources
     ]
 
 
 def whoami_tool(ctx: AppContext, principal: Principal | None = None) -> dict[str, Any]:
+    from .status import visible_source_count
+
     principal = principal or Principal.open()
     roles = ctx.store.list_roles()
-    visible = ctx.store.list_sources(principal.access)
-    total = len(ctx.store.list_sources()) if not principal.is_open else len(visible)
+    visible = visible_source_count(ctx, principal.access)
     return {
         "open_mode": principal.is_open,
         "user": None
@@ -443,8 +469,8 @@ def whoami_tool(ctx: AppContext, principal: Principal | None = None) -> dict[str
         },
         "role": {"id": principal.role_id, "name": principal.role_name, "rank": principal.rank},
         "can": sorted(c for c in principal.role.get("capabilities") or []),
-        "sources_visible": len(visible),
-        "sources_total": total,
+        "sources_visible": visible,
+        "sources_total": visible,
         "ladder": [{"id": r["id"], "name": r["name"], "rank": r["rank"]} for r in roles],
         "visibility_you_may_use": ["everyone"] + [r["id"] for r in roles if principal.may_assign_role(r)],
     }

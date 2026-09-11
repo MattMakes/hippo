@@ -17,6 +17,7 @@ others can pick a role and see the graph as that tier would.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -28,7 +29,10 @@ from ...access import EVERYONE_RANK, Principal
 from ...analysis.explain import explain
 from ...hipporag import paths as path_tools
 from ...hipporag.graph_index import CODE_KINDS, DATA, ENTITY, PASSAGE, SYMBOL, GraphIndex
+from ...knowledge.access import AuthorizationChanged
+from ...knowledge.query_access import AuthorizedModel, current_access, query_access
 from ...ollama import OllamaError
+from ...status import source_view
 from ..auth import principal_of
 from ..render import ctx_of, render
 
@@ -43,22 +47,40 @@ EVERYONE_TIER = {"id": "", "name": "Everyone", "rank": EVERYONE_RANK}
 # ------------------------------------------------------------ the viewer
 
 
-def viewer(request: Request, as_role: str | None) -> tuple[Principal, dict[str, Any] | None]:
+def viewer(
+    request: Request, as_role: str | None
+) -> tuple[Principal, dict[str, Any] | None, Callable[[], None]]:
     """
     The principal the picture is drawn for. `as_role` previews another tier (a role id) and is
     only honoured for callers who manage users or roles: it is a way to check what a tier sees.
     """
+    ctx = ctx_of(request)
+    epoch = ctx.store.authorization_epoch()
     principal = principal_of(request)
+
+    def validate():
+        if ctx.store.authorization_epoch() != epoch:
+            raise AuthorizationChanged("The graph viewer's permissions changed")
+
+    access = current_access(ctx.store, principal.access)
+    if principal.user is not None:
+        user = ctx.store.get_user(principal.user_id)
+        role = ctx.store.get_role(user.get("role_id")) if user else None
+        if not user or user.get("disabled") or not role:
+            raise AuthorizationChanged("The graph viewer is no longer available")
+        principal = Principal(user=user, role={**role, "rank": access.rank}, access=access)
+    validate()
     if not as_role:
-        return principal, None
+        return principal, None, validate
     if not (principal.can("manage_users") or principal.can("manage_roles")):
         raise HTTPException(403, "previewing another role needs 'manage_users' or 'manage_roles'")
-    role = ctx_of(request).store.get_role(as_role)
+    role = ctx.store.get_role(as_role)
     if role is None:
         raise HTTPException(400, "no such role")
     if not principal.is_open and role["rank"] > principal.rank:
         raise HTTPException(403, "you can only preview tiers at or below your own")
-    return principal.as_role(role), role
+    validate()
+    return principal.as_role(role), role, validate
 
 
 def label_at(index: GraphIndex, vertex: int) -> str:
@@ -75,7 +97,7 @@ def label_at(index: GraphIndex, vertex: int) -> str:
     return index.name_of(vertex)
 
 
-def tiers_of(ctx, index: GraphIndex, access) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+def tiers_of(ctx, index: GraphIndex, sources) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     """
     Per source: its tier {id, name, rank}. Per node id: the most permissive tier it is visible from
     (a passage's or code node's source tier; for an entity, the lowest tier among the visible
@@ -83,7 +105,7 @@ def tiers_of(ctx, index: GraphIndex, access) -> tuple[dict[str, dict[str, Any]],
     """
     roles = {r["id"]: r for r in ctx.store.list_roles()}
     source_tier: dict[str, dict[str, Any]] = {}
-    for source in ctx.store.list_sources(access):
+    for source in sources:
         role = roles.get(source.get("access_role_id") or "")
         source_tier[source["id"]] = (
             {"id": role["id"], "name": role["name"], "rank": role["rank"]} if role else dict(EVERYONE_TIER)
@@ -114,11 +136,21 @@ def tiers_of(ctx, index: GraphIndex, access) -> tuple[dict[str, dict[str, Any]],
 @router.get("/graph")
 def graph_page(request: Request, as_role: str = "", q: str = ""):
     ctx = ctx_of(request)
-    principal, preview = viewer(request, as_role or None)
+    actor, _, validate_actor = viewer(request, None)
+    principal, preview, validate_viewer = (
+        viewer(request, as_role) if as_role else (actor, None, validate_actor)
+    )
+    view = source_view(ctx, principal.access) if ctx.store.ping() else None
+
+    def validate():
+        validate_actor()
+        validate_viewer()
+        if view:
+            view.validate()
+
     roles = ctx.store.list_roles() if ctx.store.ping() else []
-    can_preview = principal_of(request).can("manage_users") or principal_of(request).can("manage_roles")
-    me = principal_of(request)
-    previewable = [r for r in roles if me.is_open or r["rank"] <= me.rank] if can_preview else []
+    can_preview = actor.can("manage_users") or actor.can("manage_roles")
+    previewable = [r for r in roles if actor.is_open or r["rank"] <= actor.rank] if can_preview else []
     return render(
         request,
         "graph.html",
@@ -126,7 +158,8 @@ def graph_page(request: Request, as_role: str = "", q: str = ""):
         principal=principal,
         preview_role=preview,
         previewable=previewable,
-        sources=ctx.store.list_sources(principal.access) if ctx.store.ping() else [],
+        sources=view.sources if view else [],
+        authorization_check=validate,
         roles=roles,
         initial_query=q,
         default_limit=DEFAULT_LIMIT,
@@ -147,9 +180,10 @@ def full_graph(
     as_role: str = "",
 ):
     ctx = ctx_of(request)
-    principal, preview = viewer(request, as_role or None)
-    index = ctx.graph_for(principal.access)
-    source_tier, node_tier = tiers_of(ctx, index, principal.access)
+    principal, preview, validate_viewer = viewer(request, as_role or None)
+    view = source_view(ctx, principal.access)
+    index = view.graph
+    source_tier, node_tier = tiers_of(ctx, index, view.sources)
     limit = max(10, min(int(limit), MAX_LIMIT))
 
     degree = index.graph.degree() if index.num_nodes else []
@@ -240,7 +274,7 @@ def full_graph(
         + [dict(EVERYONE_TIER)],
         key=lambda t: -t["rank"],
     )
-    return {
+    payload = {
         "nodes": nodes,
         "edges": edges,
         "total_nodes": index.num_nodes,
@@ -257,6 +291,9 @@ def full_graph(
             {"id": sid, "tier": tier["name"], "tier_rank": tier["rank"]} for sid, tier in source_tier.items()
         ],
     }
+    view.validate()
+    validate_viewer()
+    return payload
 
 
 # ------------------------------------------------------------- light up
@@ -276,17 +313,23 @@ def light_up(request: Request, body: LightUpBody):
     generated (that costs another model call); the Ask page does that.
     """
     ctx = ctx_of(request)
-    principal, _preview = viewer(request, body.as_role or None)
+    principal, _preview, validate_viewer = viewer(request, body.as_role or None)
+    index, model, validate = query_access(ctx, principal.access)
     try:
-        trace = ask_service.search(ctx, body.question.strip(), body.settings, access=principal.access)
+        trace = ask_service._search(
+            ctx, index, AuthorizedModel(model, validate_viewer), body.question.strip(), body.settings
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
-    index = ctx.graph_for(principal.access)
+    finally:
+        validate()
+        validate_viewer()
     top = max(1, min(int(body.top_passages), 50))
     explanation = explain(index, trace, top_passages=top)
-    _source_tier, node_tier = tiers_of(ctx, index, principal.access)
+    view = source_view(ctx, principal.access)
+    _source_tier, node_tier = tiers_of(ctx, index, view.sources)
 
     seeds = [
         {"id": s.entity_id, "name": s.name, "weight": round(s.weight, 5), "passage_count": s.passage_count}
@@ -302,7 +345,7 @@ def light_up(request: Request, body: LightUpBody):
     for node in explanation.subgraph["nodes"]:
         node["tier"] = node_tier.get(node["id"], EVERYONE_TIER)["name"]
         node["tier_rank"] = node_tier.get(node["id"], EVERYONE_TIER)["rank"]
-    return {
+    payload = {
         "question": trace.question,
         "used_dpr_fallback": trace.used_dpr_fallback,
         "fallback_reason": trace.fallback_reason,
@@ -337,6 +380,10 @@ def light_up(request: Request, body: LightUpBody):
         "paths": paths,
         "subgraph": explanation.subgraph,
     }
+    view.validate()
+    validate()
+    validate_viewer()
+    return payload
 
 
 # ------------------------------------------------------------ one node
@@ -345,12 +392,13 @@ def light_up(request: Request, body: LightUpBody):
 @api.get("/node/{node_id}")
 def node_details(request: Request, node_id: str, as_role: str = ""):
     ctx = ctx_of(request)
-    principal, _preview = viewer(request, as_role or None)
-    index = ctx.graph_for(principal.access)
+    principal, _preview, validate_viewer = viewer(request, as_role or None)
+    view = source_view(ctx, principal.access)
+    index = view.graph
     vertex = index.idx_of.get(node_id)
     if vertex is None:
         raise HTTPException(404, "unknown node")
-    _source_tier, node_tier = tiers_of(ctx, index, principal.access)
+    _source_tier, node_tier = tiers_of(ctx, index, view.sources)
     neighbours = sorted(index.neighbors(vertex), key=lambda t: -t[1])
     kind = index.node_kind[vertex]
     out: dict[str, Any] = {
@@ -399,6 +447,8 @@ def node_details(request: Request, node_id: str, as_role: str = ""):
                 if index.node_kind[o] == PASSAGE
             ][:40],
         )
+    view.validate()
+    validate_viewer()
     return out
 
 

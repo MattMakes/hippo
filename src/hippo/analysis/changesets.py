@@ -158,9 +158,17 @@ def apply(ctx: AppContext, changeset_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------- describe
 
 
-def describe(ctx: AppContext, ops: list[dict[str, Any]]) -> list[str]:
+def describe(ctx: AppContext, ops: list[dict[str, Any]], *, index=None) -> list[str]:
     """One readable line per op, with node ids replaced by names where the store knows them."""
-    names = _node_names(ctx, ops)
+    names = (
+        (
+            lambda identity: (
+                index.name_of(index.idx_of[identity]) if identity in index.idx_of else str(identity)
+            )
+        )
+        if index is not None
+        else _node_names(ctx, ops)
+    )
     lines = []
     for op in ops:
         kind = op.get("op")

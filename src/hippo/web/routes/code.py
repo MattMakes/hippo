@@ -181,8 +181,9 @@ def _graph(request: Request) -> tuple[GraphIndex, float]:
     return index, float(ctx.store.get_settings().get("code_theta", 0.5))
 
 
-def _answer(build: Callable[[], Any]) -> Any:
+def _answer(build: Callable[[], Any], validate: Callable[[], None]) -> Any:
     """`analyze.py`'s mapping, plus the 409 that carries what the caller could have meant."""
+    validate()
     try:
         return build()
     except AmbiguousSymbol as exc:
@@ -191,33 +192,39 @@ def _answer(build: Callable[[], Any]) -> Any:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    finally:
+        validate()
 
 
 @api.get("/symbols")
 def symbols(request: Request, q: str = "", limit: int = DEFAULT_SYMBOL_LIMIT):
     index, _theta = _graph(request)
-    return _answer(lambda: symbol_rows(index, q, limit))
+    return _answer(lambda: symbol_rows(index, q, limit), index.validate_authorization)
 
 
 @api.get("/path")
 def code_path(request: Request, a: str, b: str):
     index, theta = _graph(request)
-    return _answer(lambda: path_payload(index, a, b, theta=theta))
+    return _answer(lambda: path_payload(index, a, b, theta=theta), index.validate_authorization)
 
 
 @api.get("/blast-radius")
 def blast(request: Request, symbol: str, depth: int = DEFAULT_DEPTH):
     index, theta = _graph(request)
-    return _answer(lambda: blast_payload(index, symbol, theta=theta, depth=depth))
+    return _answer(
+        lambda: blast_payload(index, symbol, theta=theta, depth=depth), index.validate_authorization
+    )
 
 
 @api.get("/exception-path")
 def raises(request: Request, symbol: str, exception: str):
     index, theta = _graph(request)
-    return _answer(lambda: exception_payload(index, symbol, exception, theta=theta))
+    return _answer(
+        lambda: exception_payload(index, symbol, exception, theta=theta), index.validate_authorization
+    )
 
 
 @api.get("/history")
 def commits(request: Request, symbol: str, limit: int = DEFAULT_HISTORY_LIMIT):
     index, _theta = _graph(request)
-    return _answer(lambda: history_payload(index, symbol, limit=limit))
+    return _answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)

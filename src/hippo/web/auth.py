@@ -38,6 +38,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..access import CAPABILITIES, Principal, top_role
 from ..context import AppContext
+from ..status import source_view
 from .render import ctx_of, render
 
 log = logging.getLogger(__name__)
@@ -326,18 +327,20 @@ def logout(request: Request):
 def account_page(request: Request, saved: str = "", error: str = ""):
     principal = principal_of(request)
     ctx = ctx_of(request)
+    view = source_view(ctx, principal.access)
     user = ctx.store.get_user(principal.user_id) if principal.user_id else None
     return render(
         request,
         "account.html",
         nav="account",
-        user=public_user(user) if user else None,
+        user=public_user(user, sources=view.sources) if user else None,
         token=(user or {}).get("token"),
         role=principal.role,
         capabilities=CAPABILITIES,
         saved=saved,
         error=error,
         mcp_url=str(request.base_url).rstrip("/") + "/mcp",
+        authorization_check=view.validate,
     )
 
 
@@ -375,19 +378,27 @@ def rotate_own_token(request: Request):
 def me(request: Request) -> dict[str, Any]:
     """Who am I, as the API sees it: role, rank, capabilities, and whether hippo is still open."""
     principal = principal_of(request)
-    return {
+    view = source_view(ctx_of(request), principal.access)
+    result = {
         "open_mode": principal.is_open,
-        "user": public_user(principal.user) if principal.user else None,
+        "user": public_user(principal.user, sources=view.sources) if principal.user else None,
         "role": {k: principal.role.get(k) for k in ("id", "name", "rank", "capabilities")},
         "capabilities": sorted(c for c in CAPABILITIES if principal.can(c)),
     }
+    view.validate()
+    return result
 
 
-def public_user(user: dict[str, Any] | None) -> dict[str, Any] | None:
-    """A user row without its secrets (the password hash never leaves the store; tokens only via /account)."""
+def public_user(
+    user: dict[str, Any] | None, *, sources: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
+    """Remove secrets and raw inventory; ownership counts require authorized source DTOs."""
     if user is None:
         return None
-    return {k: v for k, v in user.items() if k not in ("password_hash", "token")}
+    row = {k: v for k, v in user.items() if k not in ("password_hash", "token", "sources")}
+    if sources is not None:
+        row["sources"] = sum(source.get("owner_id") == user["id"] for source in sources)
+    return row
 
 
 __all__ = [

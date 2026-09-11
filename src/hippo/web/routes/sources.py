@@ -24,6 +24,8 @@ from ...hipporag import paths
 from ...ingest import pipeline
 from ...ingest.pipeline import Busy
 from ...ingest.repos import RepoError
+from ...knowledge.eval_access import EvalAccess
+from ...status import source_view
 from ..auth import principal_of, require
 from ..render import STOP_POLLING, ctx_of, render
 from . import graph as graph_routes
@@ -61,19 +63,21 @@ def with_manage_flags(sources: list[dict[str, Any]], principal: Principal) -> li
 def library(request: Request, error: str = ""):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    sources = ctx.store.list_sources(principal.access) if ctx.store.ping() else []
+    view = source_view(ctx, principal.access) if ctx.store.ping() else None
+    sources = view.sources if view else []
     return render(
         request,
         "library.html",
         nav="library",
         sources=with_manage_flags(sources, principal),
         error=error,
-        busy_ids=busy_source_ids(ctx),
+        busy_ids=busy_source_ids(ctx, view),
         principal=principal,
         can_add=principal.can("add_sources"),
         visibility_choices=visibility_choices(ctx, principal),
         default_visibility=default_visibility(principal),
-        total_sources=len(ctx.store.list_sources()) if ctx.store.ping() and not principal.is_open else None,
+        total_sources=len(sources),
+        authorization_check=view.validate if view else None,
     )
 
 
@@ -82,27 +86,34 @@ def sources_partial(request: Request):
     """The sources table, polled by the Library page while something is being indexed."""
     ctx = ctx_of(request)
     principal = principal_of(request)
-    sources = ctx.store.list_sources(principal.access)
+    view = source_view(ctx, principal.access)
+    sources = view.sources
     busy = any(s["status"] in BUSY_STATUSES for s in sources)
     return render(
         request,
         "partials/source_rows.html",
         sources=with_manage_flags(sources, principal),
-        busy_ids=busy_source_ids(ctx),
+        busy_ids=busy_source_ids(ctx, view),
         principal=principal,
         visibility_choices=visibility_choices(ctx, principal),
         status_code=200 if busy else STOP_POLLING,
+        authorization_check=view.validate,
     )
 
 
-def busy_source_ids(ctx) -> set[str]:
-    """Ids of sources whose index job is running right now (their Delete/Reindex buttons are disabled)."""
-    return {key.split(":", 1)[1] for key in ctx.jobs.running_keys() if key.startswith("index:")}
+def busy_source_ids(ctx, view) -> set[str]:
+    """Only legacy source jobs have an audience-safe source-level status."""
+    ids = {key[6:] for key in ctx.jobs.running_keys() if key.startswith("index:")}
+    if view is None:
+        return set()
+    view.validate()
+    return ids & view.legacy_ids
 
 
 def visible_source(request: Request, source_id: str) -> dict[str, Any]:
     """The source, if the caller may see it; a hidden source looks exactly like a missing one."""
-    source = ctx_of(request).store.get_source(source_id, principal_of(request).access)
+    view = source_view(ctx_of(request), principal_of(request).access)
+    source = next((row for row in view.sources if row["id"] == source_id), None)
     if source is None:
         raise HTTPException(404, "no such source")
     return source
@@ -122,31 +133,57 @@ def manageable_source(request: Request, source_id: str) -> dict[str, Any]:
 def source_page(request: Request, source_id: str, page: int = 1):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    source = visible_source(request, source_id)
+    view = source_view(ctx, principal.access)
+    source = next((row for row in view.sources if row["id"] == source_id), None)
+    if source is None:
+        raise HTTPException(404, "no such source")
     page = max(1, page)
-    passages = ctx.store.passages_for_source(
-        source_id, limit=PASSAGES_PER_PAGE, offset=(page - 1) * PASSAGES_PER_PAGE, access=principal.access
-    )
+    if source.get("managed"):
+        passages = [
+            {
+                "id": passage.id,
+                "title": passage.title,
+                "text": passage.text,
+                "ordinal": passage.ordinal,
+                "triples": [],
+                "entities": [],
+                "extraction_error": "",
+            }
+            for passage in view.graph.passages
+            if passage.source_id == source_id
+        ][(page - 1) * PASSAGES_PER_PAGE : page * PASSAGES_PER_PAGE]
+    else:
+        passages = ctx.store.passages_for_source(
+            source_id, limit=PASSAGES_PER_PAGE, offset=(page - 1) * PASSAGES_PER_PAGE, access=principal.access
+        )
     question_sets = (
-        [qs for qs in ctx.store.list_question_sets() if qs.get("source_id") == source_id]
+        [
+            qs
+            for qs in EvalAccess(ctx, principal.access).list_question_sets()
+            if qs.get("source_id") == source_id
+        ]
         if principal.can("run_evals")
         else []
     )
     pages = max(1, -(-source["passages"] // PASSAGES_PER_PAGE))
+    code_details = code_details_for(ctx, principal, passages)
+    busy = source_id in busy_source_ids(ctx, view)
+    view.validate()
     return render(
         request,
         "source.html",
         nav="library",
         source=with_manage_flags([source], principal)[0],
         passages=passages,
-        code_details=code_details_for(ctx, principal, passages),
+        code_details=code_details,
         question_sets=question_sets,
         page=page,
         pages=pages,
-        busy=ctx.jobs.is_running(f"index:{source_id}"),
+        busy=busy,
         principal=principal,
         visibility_choices=visibility_choices(ctx, principal),
         can_evals=principal.can("run_evals"),
+        authorization_check=view.validate,
     )
 
 
@@ -213,10 +250,17 @@ def code_details_for(ctx, principal: Principal, passages: list[dict[str, Any]]) 
 
 @router.get("/partials/sources/{source_id}/status")
 def source_status_partial(request: Request, source_id: str):
-    source = visible_source(request, source_id)
+    view = source_view(ctx_of(request), principal_of(request).access)
+    source = next((row for row in view.sources if row["id"] == source_id), None)
+    if source is None:
+        raise HTTPException(404, "no such source")
     busy = source["status"] in BUSY_STATUSES
     return render(
-        request, "partials/source_status.html", source=source, status_code=200 if busy else STOP_POLLING
+        request,
+        "partials/source_status.html",
+        source=source,
+        status_code=200 if busy else STOP_POLLING,
+        authorization_check=view.validate,
     )
 
 
@@ -353,7 +397,7 @@ class AccessBody(BaseModel):
 
 @api.get("")
 def list_sources(request: Request) -> list[dict[str, Any]]:
-    return ctx_of(request).store.list_sources(principal_of(request).access)
+    return source_view(ctx_of(request), principal_of(request).access).sources
 
 
 @api.post("/text")
@@ -395,11 +439,18 @@ def add_sample(request: Request, visibility: str | None = None):
 @api.post("/reindex-all")
 def reindex_all(request: Request):
     """Re-index every source with the current embedding model (the fix for a changed HIPPO_EMBED_MODEL)."""
-    require(request, "edit_graph")  # touches every source, including ones the caller may not see
+    principal = require(request, "edit_graph")  # retains the existing global operation permission
+    ctx = ctx_of(request)
+    view = source_view(ctx, principal.access)
     try:
-        return {"started": pipeline.reindex_all(ctx_of(request))}
+        pipeline.reindex_all(ctx)
     except Busy as exc:
         return JSONResponse({"error": str(exc)}, status_code=409)
+    view.validate()
+    source_view(ctx, principal.access).validate()
+    # The pipeline reports only a global count, without per-source outcomes.
+    # Acknowledge acceptance without claiming which visible jobs started.
+    return {"accepted": True}
 
 
 @api.get("/{source_id}")

@@ -527,7 +527,8 @@ def test_a_pair_keeps_the_best_omega_of_its_relations_and_names_them_all(
     assert edge.omega == pytest.approx(1.0)  # CONTAINS 1.0 beats INVOKES 0.9
     assert edge.synonym_score == 0.0
     assert sorted(edge.code_kinds) == ["contains", "invokes"]
-    assert edge.kinds == ["contains", "invokes"]
+    # Database relationship enumeration is unordered; both labels must survive.
+    assert sorted(edge.kinds) == ["contains", "invokes"]
     assert edge.weight == pytest.approx(1.0)
 
 

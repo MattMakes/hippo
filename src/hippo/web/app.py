@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..context import AppContext
+from ..knowledge.access import AuthorizationChanged
 from . import auth
 from .render import STATIC_DIR, render
 from .routes import analyze, api, code, evals, graph, pages, sources, users
@@ -45,6 +46,7 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
     app.add_middleware(auth.AuthGate, ctx=ctx)
     app.add_middleware(HostAndOriginGuard, allowed_hosts=ctx.config.allowed_hosts)
     app.add_exception_handler(HTTPException, forbidden_page)
+    app.add_exception_handler(AuthorizationChanged, authorization_changed)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(auth.router)
     app.include_router(users.router)
@@ -64,6 +66,10 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
     # Starlette tries routes in order, so anything added after it would never be reached.
     _mount_mcp(app, ctx)
     return app
+
+
+async def authorization_changed(request: Request, exc: AuthorizationChanged):
+    return JSONResponse({"error": "Permissions changed; repeat the query"}, status_code=409)
 
 
 async def forbidden_page(request: Request, exc: HTTPException):
