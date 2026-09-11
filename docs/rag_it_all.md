@@ -996,6 +996,7 @@ The following names are proposed connector configuration conventions. They do no
 | Existing Ollama | `OLLAMA_URL`, `HIPPO_LLM_MODEL`, `HIPPO_EMBED_MODEL`, `HIPPO_NUM_CTX` | Model readiness and matching profile; retrieval-only fallback where possible. |
 | Existing Ladybug | `HIPPO_DATA_DIR`, `HIPPO_DB_PATH` | Writable isolated path and single owning process; startup refuses incompatible schema. |
 | Existing Neo4j | `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` | Dedicated test instance for CI; no secrets in status output. |
+| Existing browser/user authentication | Stored Settings `session_secret`, User password hashes/tokens, roles and disabled state | Preserve stored values through migration/reopen; verify existing sessions/tokens still work and disabled users remain denied. Never move these credentials into checked-in configuration. |
 | Existing Hippo caller | Browser session or `HIPPO_TOKEN` for CLI/stdio; per-request bearer token for HTTP | Verify caller identity and policy on each request. |
 | GitHub | `credential_ref` to a read-only installation/user token provider; env option `HIPPO_GITHUB_TOKEN` for pilot | Record host and API capabilities; token expiry/rotation does not change artifact identity. |
 | GitLab | `credential_ref`, env option `HIPPO_GITLAB_TOKEN` | Validate read scope against configured projects; preserve self-hosted base URL. |
@@ -1134,6 +1135,8 @@ Implementation order follows technical dependencies, correctness and acceptance 
 
 ### Task 0 — Isolated local development and baseline smoke test
 
+- [x] Implemented and verified; see `ai_docs/gates/rag-it-all/task-0/GATES.md` and the execution checkpoint for baseline limitations.
+
 **Depends on:** none. **Gates:** G0.
 
 **Read:** `pyproject.toml`, `src/hippo/config.py`, `tests/conftest.py`, `.github/workflows/ci.yml`.
@@ -1214,8 +1217,8 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 
 **Steps:**
 
-1. Write a populated v1 database fixture through current store methods, containing prose, code, source roles, a trace and an eval result.
-2. Implement migrations with version/checksum records. Add primary keys/constraints, explicit endpoint relations and typed columns on both backends.
+1. Write a populated v1 database fixture through current store methods, containing prose, code, source roles, a trace and an eval result. Include enabled/disabled users, their password hashes/bearer tokens, role assignments and the browser signing secret; verify login/session/token continuity after migrate/reopen and continued denial for disabled users.
+2. Implement migrations with version/checksum records. Check schema compatibility before new schema declarations or interrupted-job cleanup can mutate a database. Add primary keys/constraints, explicit endpoint relations and typed columns on both backends.
 3. Implement create/read methods for artifacts, revisions, spans, observations, assertion versions, support groups, generation/index/link manifests and section 5.6 durable records; include workspace and access inputs in read contracts from the beginning.
 4. Add transaction/CAS publication methods and durable invalidation records. Keep external I/O outside database transactions.
    Implement explicit backend transactions; add failure injection between pointer/version/event writes to prove they roll back together.
@@ -1264,6 +1267,7 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 4. Publish ready generation/index manifests by expected-parent CAS with fencing/suppression checks. Test failure before publish, process restart, duplicate publish and concurrent refresh; incomplete mandatory indexes cannot become active.
 5. Acquire one snapshot in `ask.py` and pass it through search, code context, evidence packing and answering. Update `web/routes/api.py` and all CLI/MCP callers that independently reload a graph for `code_block`; a second `ctx.graph_for()` must not replace the pinned view. Recheck ACL epoch independently of content version.
 6. Define garbage-collection references for active queries and retained snapshots.
+7. Dispatch existing source delete, reindex and bulk-reindex entry points by managed/legacy mode. Managed paths cannot use source-wide cleanup or remove blob directories still referenced by retained history.
 
 **Check:** `.venv/bin/python -m pytest tests/unit/test_generations.py tests/unit/test_query_snapshots.py tests/unit/test_ingest_concurrency.py tests/unit/test_core_context.py -q`.
 
