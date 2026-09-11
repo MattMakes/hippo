@@ -13,7 +13,8 @@ it. Re-generating the answer is also opt-in, because it costs an LLM call.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from contextlib import nullcontext
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..access import Access
@@ -30,7 +31,7 @@ from ..hipporag.retriever import (
     Trace,
     trace_from_dict,
 )
-from ..knowledge.query_access import AuthorizedModel, query_access
+from ..knowledge.query_access import AuthorizedModel, QuerySession, query_session
 from ..knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from ..store.base import validate_settings
 from .explain import TOP_PASSAGES
@@ -139,12 +140,19 @@ def simulate(
     access: Access | None = None,
     *,
     authorization_check=None,
+    session: QuerySession | None = None,
 ) -> Simulation:
     """
     Run the search again with `overrides` and diff it against `baseline` (or a fresh plain search).
     `access` keeps the simulation inside the caller's slice of the graph (hippo/access.py).
     """
-    index, model, validate_query = query_access(ctx, access)
+    manager = nullcontext(session) if session is not None else query_session(ctx, access)
+    with manager as query:
+        return _simulate(question, overrides, baseline, query, authorization_check)
+
+
+def _simulate(question, overrides, baseline, query, authorization_check):
+    index, model, validate_query = query.graph, query.model, query.validate
 
     def validate():
         if authorization_check is not None:
@@ -155,15 +163,19 @@ def simulate(
     model = AuthorizedModel(model, validate)
     if baseline is not None and not can_reuse_answer(index, baseline.evidence_fingerprint):
         baseline = reconstruct_trace(index, baseline, question=question)
+    elif baseline is not None and baseline.snapshot_ids != tuple(getattr(index, "snapshot_ids", ())):
+        baseline = replace(baseline, snapshot_ids=tuple(getattr(index, "snapshot_ids", ())))
     retriever = Retriever(index, model)
 
-    base_settings = dict(baseline.settings) if baseline is not None else ctx.store.get_settings()
+    base_settings = dict(baseline.settings) if baseline is not None else dict(query.settings)
     settings = {**base_settings, **overrides.settings}
 
     # No baseline (ad-hoc question)? Run the real filter once so we have something to replay and diff.
     # With rerun_filter the simulated search runs the LLM itself, so we skip the extra call.
     if baseline is None and not overrides.rerun_filter:
         baseline = retriever.retrieve(question, base_settings, select_fn=retriever.llm_select)
+        baseline.evidence_fingerprint = view_fingerprint(index)
+        baseline.snapshot_ids = tuple(getattr(index, "snapshot_ids", ()))
 
     replaying = not overrides.rerun_filter and baseline is not None
     fact_filter = replay_filter(baseline) if replaying else None
@@ -188,6 +200,7 @@ def simulate(
         graph=graph,
     )
     trace.evidence_fingerprint = view_fingerprint(index)
+    trace.snapshot_ids = tuple(getattr(index, "snapshot_ids", ()))
     validate()
     answer = _answer_from_trace(index, model, trace) if overrides.reanswer else None
     outcome = Simulation(trace=trace, answer=answer, diff=diff_traces(baseline, trace), baseline=baseline)

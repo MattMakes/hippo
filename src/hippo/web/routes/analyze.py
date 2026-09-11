@@ -30,9 +30,10 @@ from ...analysis.simulate import Overrides
 from ...analysis.simulate import simulate as run_simulation
 from ...hipporag.paths import render_triples
 from ...hipporag.retriever import Trace, trace_from_dict
+from ...knowledge.access import AuthorizationChanged
 from ...knowledge.changeset_access import ChangesetAccess, ChangesetUnavailable
 from ...knowledge.eval_access import EvalAccess
-from ...knowledge.query_access import query_access
+from ...knowledge.query_access import query_session
 from ...ollama import OllamaError
 from ...store.base import SETTING_RULES
 from ..adhoc import ADHOC_LIMIT, recall_adhoc, remember_adhoc
@@ -50,32 +51,35 @@ api = APIRouter(prefix="/api")
 def analyze_adhoc(request: Request, question: str = "", key: str = ""):
     """Show the analysis cached under `key` (from the Ask page). Never runs the model: see analyze_submit."""
     principal = principal_of(request)
-    index, _, validate = query_access(ctx_of(request), principal.access)
-    cached = recall_adhoc(key, principal.user_id, graph=index) if key else None
-    if cached is None:
-        question = question.strip()
-        if not question:
-            return RedirectResponse("/ask", status_code=303)
-        return render(
+    with query_session(ctx_of(request), principal.access) as session:
+        index, validate = session.graph, session.validate
+        cached = recall_adhoc(key, principal.user_id, graph=index) if key else None
+        if cached is None:
+            question = question.strip()
+            if not question:
+                return RedirectResponse("/ask", status_code=303)
+            return render(
+                request,
+                "analyze.html",
+                nav="ask",
+                error=f"That analysis is no longer in memory (hippo keeps the last {ADHOC_LIMIT}, until it restarts).",
+                question=question,
+                retry_question=question,
+                status_code=404,
+                session=session,
+            )
+        trace = trace_from_dict(cached["trace"])
+        return _render_analysis(
             request,
-            "analyze.html",
-            nav="ask",
-            error=f"That analysis is no longer in memory (hippo keeps the last {ADHOC_LIMIT}, until it restarts).",
-            question=question,
-            retry_question=question,
-            status_code=404,
+            trace,
+            result=None,
+            answer=cached["answer"],
+            history=[],
+            trace_key=key,
+            index=index,
+            authorization_check=validate,
+            session=session,
         )
-    trace = trace_from_dict(cached["trace"])
-    return _render_analysis(
-        request,
-        trace,
-        result=None,
-        answer=cached["answer"],
-        history=[],
-        trace_key=key,
-        index=index,
-        authorization_check=validate,
-    )
 
 
 @router.post("/analyze")
@@ -100,32 +104,54 @@ def analyze_result(request: Request, result_id: str):
     require(request, "run_evals")  # stored results belong to the Evals section
     ctx = ctx_of(request)
     principal = principal_of(request)
-    index, _, validate = query_access(ctx, principal.access)
-    evaluation = EvalAccess(ctx, principal.access)
-    result = evaluation.get_result(result_id)
-    if result is None:
-        raise HTTPException(404, "no such result")
-    trace = trace_from_dict(result.get("trace") or {})
-    if not trace.question:
-        trace.question = result["question"]
-    history = evaluation.results_for_question(result["question_id"])
-    answer = {"answer": result.get("answer", ""), "thought": result.get("thought", "")}
-    return _render_analysis(
-        request,
-        trace,
-        result=result,
-        answer=answer,
-        history=history,
-        trace_key="",
-        index=index,
-        authorization_check=validate,
-    )
+    with query_session(ctx, principal.access) as session:
+        index, validate = session.graph, session.validate
+        evaluation = EvalAccess(ctx, principal.access, session=session)
+        result = evaluation.get_result(result_id)
+        if result is None:
+            raise HTTPException(404, "no such result")
+        validate = _saved_result_check(session, evaluation, result_id)
+        trace = trace_from_dict(result.get("trace") or {})
+        if not trace.question:
+            trace.question = result["question"]
+        history = evaluation.results_for_question(result["question_id"])
+        answer = {"answer": result.get("answer", ""), "thought": result.get("thought", "")}
+        return _render_analysis(
+            request,
+            trace,
+            result=result,
+            answer=answer,
+            history=history,
+            trace_key="",
+            index=index,
+            authorization_check=validate,
+            session=session,
+        )
+
+
+def _saved_result_check(session, evaluation, result_id):
+    """Saved questions retain their current ownership and existence checks."""
+
+    def validate():
+        session.validate()
+        if evaluation.get_result(result_id) is None:
+            raise AuthorizationChanged("Evaluation result is no longer available")
+
+    return validate
 
 
 def _render_analysis(
-    request: Request, trace: Trace, *, result, answer, history, trace_key: str, index, authorization_check
+    request: Request,
+    trace: Trace,
+    *,
+    result,
+    answer,
+    history,
+    trace_key: str,
+    index,
+    authorization_check,
+    session,
 ):
-    ctx = ctx_of(request)
     principal = principal_of(request)
     # Explained on the caller's own slice of the graph: a stored eval trace may name passages
     # that this caller may not see; they simply go unexplained, with no text shown (below).
@@ -162,8 +188,9 @@ def _render_analysis(
         rules=SETTING_RULES,
         trace_key=trace_key,
         graph_changed=trace.graph_version != index.version,
-        current_settings=ctx.store.get_settings(),
+        current_settings=dict(session.settings),
         authorization_check=authorization_check,
+        session=session,
         ask_url=f"/ask?q={quote(trace.question)}",
         can_edit=principal.can("edit_graph"),
     )
@@ -225,45 +252,57 @@ class ChangesetBody(BaseModel):
 def simulate(request: Request, body: SimulateBody):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    index, _, validate = query_access(ctx, principal.access)
-    baseline: Trace | None = None
-    if body.result_id:
-        require(request, "run_evals")
-        stored = EvalAccess(ctx, principal.access).get_result(body.result_id)
-        if stored is None:
-            raise HTTPException(404, "no such result")
-        baseline = trace_from_dict(stored.get("trace") or {})
-        if not baseline.question:
-            baseline.question = stored["question"]
-    elif body.trace_key:
-        cached = recall_adhoc(body.trace_key, principal.user_id, graph=index)
-        if cached is None:
-            raise HTTPException(404, "that analysis has expired; analyze the question again")
-        baseline = trace_from_dict(cached["trace"])
-    question = (baseline.question if baseline else body.question).strip()
-    if not question:
-        raise HTTPException(400, "question is required")
-    try:
-        overrides = Overrides.from_dict(body.overrides)
-    except (ValueError, TypeError, KeyError) as exc:
-        raise HTTPException(400, f"bad overrides: {exc}") from exc
-    try:
-        outcome = run_simulation(
-            ctx, question, overrides, baseline, access=principal.access, authorization_check=validate
-        )
-    except OllamaError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
-    explanation = explain(index, outcome.trace)
-    validate()
-    return {
-        "trace": outcome.trace.to_dict(),
-        "diff": outcome.diff,
-        "answer": {"answer": outcome.answer.answer, "thought": outcome.answer.thought}
-        if outcome.answer
-        else None,
-        "explanation": explanation.to_dict(),
-        "ops": overrides.to_ops(),
-    }
+    with query_session(ctx, principal.access) as session:
+        index, validate = session.graph, session.validate
+        baseline: Trace | None = None
+        if body.result_id:
+            require(request, "run_evals")
+            evaluation = EvalAccess(ctx, principal.access, session=session)
+            stored = evaluation.get_result(body.result_id)
+            if stored is None:
+                raise HTTPException(404, "no such result")
+            validate = _saved_result_check(session, evaluation, body.result_id)
+            baseline = trace_from_dict(stored.get("trace") or {})
+            if not baseline.question:
+                baseline.question = stored["question"]
+        elif body.trace_key:
+            cached = recall_adhoc(body.trace_key, principal.user_id, graph=index)
+            if cached is None:
+                raise HTTPException(404, "that analysis has expired; analyze the question again")
+            baseline = trace_from_dict(cached["trace"])
+        question = (baseline.question if baseline else body.question).strip()
+        if not question:
+            raise HTTPException(400, "question is required")
+        try:
+            overrides = Overrides.from_dict(body.overrides)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(400, f"bad overrides: {exc}") from exc
+        try:
+            outcome = run_simulation(
+                ctx,
+                question,
+                overrides,
+                baseline,
+                access=principal.access,
+                authorization_check=validate,
+                session=session,
+            )
+        except OllamaError as exc:
+            response = JSONResponse({"error": str(exc)}, status_code=502)
+            validate()
+            return response
+        explanation = explain(index, outcome.trace)
+        response = {
+            "trace": outcome.trace.to_dict(),
+            "diff": outcome.diff,
+            "answer": {"answer": outcome.answer.answer, "thought": outcome.answer.thought}
+            if outcome.answer
+            else None,
+            "explanation": explanation.to_dict(),
+            "ops": overrides.to_ops(),
+        }
+        validate()
+        return response
 
 
 @api.get("/changesets")

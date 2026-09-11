@@ -324,7 +324,7 @@ def test_managed_source_surfaces_render_only_projected_evidence(ctx, monkeypatch
     sid = ctx.store.create_source("repo", "SECRET container", meta={"code": {"languages": ["SECRET"]}})
     ctx.store.update_source(sid, status="failed", error="SECRET error", progress_total=100, progress_done=99)
     projected = graph([], [Passage("allowed-span", "Allowed title", "Allowed body", sid, "", 0)])
-    monkeypatch.setattr(ctx, "graph_for", lambda access: projected)
+    monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: projected)
     original = ctx.store._knowledge_rows
     monkeypatch.setattr(
         ctx.store,
@@ -354,7 +354,7 @@ def test_managed_source_surfaces_render_only_projected_evidence(ctx, monkeypatch
         row = client.get(f"/api/sources/{sid}").json()
         assert row["passages"] == 1 and row["progress_total"] == 0 and row["status"] == "ready"
         assert "SECRET" not in repr(sources_tool(ctx, principal))
-        monkeypatch.setattr(ctx, "graph_for", lambda access: graph([], []))
+        monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: graph([], []))
         assert client.get("/api/sources").json() == []
         assert client.get(f"/api/sources/{sid}").status_code == 404
 
@@ -399,7 +399,7 @@ def test_account_and_identity_count_only_owned_sources_with_visible_evidence(ctx
         "_knowledge_rows",
         lambda kind: [NS(source_id=hidden)] if kind == "Artifact" else original(kind),
     )
-    monkeypatch.setattr(ctx, "graph_for", lambda access: graph([], []))
+    monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: graph([], []))
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         client.headers["Authorization"] = "Bearer " + ctx.store.get_user(uid)["token"]
         assert client.get("/api/me").json()["user"]["sources"] == 1
