@@ -7,7 +7,7 @@ The reference's `rag_qa` prompt asks the model to think out loud after
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .. import prompts
 from ..ollama import Ollama
@@ -25,6 +25,7 @@ class Answer:
     raw: str
     passage_ids: list[str]
     context_block: str = ""  # the Code graph pseudo-passage, when the question named code
+    retrieval_passage_ids: list[str] = field(default_factory=list)
 
 
 def answer_question(

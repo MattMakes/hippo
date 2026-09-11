@@ -80,10 +80,11 @@
   {% for p in passages %}
   <article class="passage">
     <header>
-      <span class="rank">#{{ p.ranked.rank }}</span>
-      <b>{{ p.ranked.title }}</b>
-      <span class="muted">{{ p.ranked.source_name }} · score {{ p.ranked.score | fmt(4) }} · embedding rank {{ p.ranked.dpr_rank }}</span>
+      <span class="rank">#{{ p.rank }}</span>
+      <b>{{ p.title }}</b>
+      <span class="muted">{{ p.source }} · score {{ p.score | fmt(4) }} · embedding rank {{ p.dpr_rank }}</span>
     </header>
+    {% if p.location %}<p class="muted small mono">{{ p.location }}</p>{% endif %}
     <p class="pre">{{ p.text }}</p>
   </article>
   {% endfor %}

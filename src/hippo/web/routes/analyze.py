@@ -31,6 +31,7 @@ from ...analysis.simulate import simulate as run_simulation
 from ...hipporag.paths import render_triples
 from ...hipporag.retriever import Trace, trace_from_dict
 from ...knowledge.access import AuthorizationChanged
+from ...knowledge.answer_evidence import retrieval_fields
 from ...knowledge.changeset_access import ChangesetAccess, ChangesetUnavailable
 from ...knowledge.eval_access import EvalAccess
 from ...knowledge.query_access import query_session
@@ -169,6 +170,17 @@ def _render_analysis(
             passage_text[explained.passage_id] = previews.get(explained.passage_id, "")
         else:
             passage_text[explained.passage_id] = "(not visible to you)"
+    evidence = retrieval_fields(
+        index, [identity for identity in passage_text if index.passage_by_id(identity) is not None]
+    )
+    originals = {citation["id"]: citation for citation in evidence["citations"]}
+    passage_evidence = {
+        item["passage_id"]: {
+            "is_derived": item["is_derived"],
+            "originals": [originals[identity] for identity in item["citation_ids"]],
+        }
+        for item in evidence["retrieval_evidence"]
+    }
     return render(
         request,
         "analyze.html",
@@ -181,6 +193,7 @@ def _render_analysis(
         explanation=explanation,
         gold_ids=gold_ids,
         passage_text=passage_text,
+        passage_evidence=passage_evidence,
         # The S2.15 grammar is rendered here, by the same function the answer block uses, so the
         # page and the block can never drift into two spellings of one relation.
         path_lines=render_triples(trace.paths),
@@ -294,6 +307,7 @@ def simulate(request: Request, body: SimulateBody):
         explanation = explain(index, outcome.trace)
         response = {
             "trace": outcome.trace.to_dict(),
+            **retrieval_fields(index, [row.passage_id for row in outcome.trace.passages]),
             "diff": outcome.diff,
             "answer": {"answer": outcome.answer.answer, "thought": outcome.answer.thought}
             if outcome.answer

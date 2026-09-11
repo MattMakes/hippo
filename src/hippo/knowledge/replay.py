@@ -12,6 +12,7 @@ from hippo.hipporag import paths
 from hippo.hipporag.retriever import Trace
 from hippo.store.base import validate_settings
 
+from .citations import provenance_payload
 from .identity import canonical_json
 
 
@@ -31,6 +32,8 @@ def view_fingerprint(graph) -> str:
         [(list(pair), asdict(edge)) for pair, edge in sorted(graph.edges.items())],
         [asdict(edge) for _, arrows in sorted(graph.code_out.items()) for edge in arrows],
     ]
+    if extension := provenance_payload(graph):
+        payload.append(extension)
     fingerprint = hashlib.sha256(canonical_json(payload).encode()).hexdigest()
     graph.validate_authorization()
     return fingerprint

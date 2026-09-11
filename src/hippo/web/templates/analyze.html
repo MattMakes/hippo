@@ -166,7 +166,17 @@
       <span class="muted small">score {{ p.score | fmt(4) }} · embedding rank {{ p.dpr_rank }}</span>
     </header>
     <p class="why">{{ p.why }}</p>
-    <details><summary class="small">Show text</summary><p class="pre small">{{ passage_text.get(p.passage_id, '') }}</p></details>
+    {% set evidence = passage_evidence.get(p.passage_id, {}) %}
+    <details><summary class="small">{{ 'Derived retrieval text' if evidence.get('is_derived') else 'Show text' }}</summary><p class="pre small">{{ passage_text.get(p.passage_id, '') }}</p></details>
+    {% if evidence.get('is_derived') %}
+    <details><summary class="small">Original evidence</summary>
+      {% for original in evidence.originals %}
+      <b>{{ original.title }}</b>
+      {% if original.location %}<p class="muted small mono">{{ original.location }}</p>{% endif %}
+      <p class="pre small">{{ original.text }}</p>
+      {% endfor %}
+    </details>
+    {% endif %}
   </article>
   {% endfor %}
 </section>

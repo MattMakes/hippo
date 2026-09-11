@@ -66,6 +66,7 @@ from .access import Access, Principal
 from .ask import ask, code_block, code_fields, search
 from .context import AppContext
 from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
+from .knowledge.answer_evidence import answer_sources, retrieval_fields
 from .knowledge.query_access import query_session
 from .web.auth import StoreDown, principal_from_bearer, resolve_principal
 from .web.routes.code import (
@@ -291,10 +292,16 @@ def search_tool(
                     "rank": ranked.rank,
                 }
             )
+        evidence = retrieval_fields(session.graph, [row["passage_id"] for row in passages])
+        by_id = {item["passage_id"]: item for item in evidence["retrieval_evidence"]}
+        for row in passages:
+            item = by_id[row["passage_id"]]
+            row.update(is_derived=item["is_derived"], citation_ids=item["citation_ids"])
         kept_facts = [c.triple for c in trace.fact_candidates if c.kept]
         payload = {
             "question": question,
             "passages": passages,
+            **evidence,
             "kept_facts": kept_facts,
             "used_dpr_fallback": trace.used_dpr_fallback,
             **code_fields(trace, code_block(session.graph, trace)),
@@ -308,23 +315,13 @@ def ask_tool(ctx: AppContext, question: str, principal: Principal | None = None)
     access = principal.access if principal else None
     with query_session(ctx, access) as session:
         trace, answer = ask(ctx, question, access=access, session=session)
-        # Only the passages the LLM actually read count as "sources" of the answer.
-        read = set(answer.passage_ids)
-        sources = [
-            {
-                "passage_id": p.passage_id,
-                "title": p.title,
-                "source": p.source_name,
-                "rank": p.rank,
-                "score": round(p.score, 6),
-            }
-            for p in trace.passages
-            if p.passage_id in read
-        ]
+        sources = answer_sources(session.graph, trace, answer)
         payload = {
             "answer": answer.answer,
             "thought": answer.thought,
             "sources": sources,
+            "passage_ids": answer.passage_ids,
+            "retrieval_passage_ids": answer.retrieval_passage_ids,
             **code_fields(trace, answer.context_block),
         }
         session.validate()

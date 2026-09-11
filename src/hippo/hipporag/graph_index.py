@@ -40,6 +40,7 @@ from typing import Literal
 import igraph as ig
 import numpy as np
 
+from ..knowledge.citations import OriginalCitation, ProseProvenance, RetrievalEvidence, scoped_provenance
 from ..store.code import SPECIFICITY_KINDS
 from .text import split_identifier
 
@@ -212,6 +213,10 @@ class GraphIndex:
     name_index: dict[str, list[str]] = field(default_factory=dict)  # lowercase name/token -> node ids
     path_index: dict[str, list[str]] = field(default_factory=dict)  # file basename -> symbol ids
     communities: dict[int, str] = field(default_factory=dict)  # community -> its canonical label
+    retrieval_evidence: tuple[RetrievalEvidence, ...] = ()
+    original_citations: tuple[OriginalCitation, ...] = ()
+    prose_provenance: tuple[ProseProvenance, ...] = ()
+    managed_passage_ids: frozenset[str] = frozenset()
     # One rebuilt igraph per non-default code_structural_scale; see graph_for_scale.
     _scaled: dict[float, ig.Graph] = field(default_factory=dict, repr=False, compare=False)
     # vertex -> its display name, filled by `paths.display_at`; a walk asks for it per edge.
@@ -725,6 +730,8 @@ class GraphIndex:
             name_index=self.name_index,
             path_index=self.path_index,
             communities=_community_labels(code_nodes),
+            authorization_check=self.authorization_check,
+            **scoped_provenance(self, keep_passage_ids, set(fact_index_of)),
         )
 
     # ---------------------------------------------------- what-if edits

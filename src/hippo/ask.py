@@ -22,6 +22,7 @@ from .context import AppContext
 from .hipporag import paths
 from .hipporag.answerer import Answer, answer_question
 from .hipporag.retriever import Retriever, Trace
+from .knowledge.citations import resolve_citations
 from .knowledge.query_access import AuthorizedModel, QuerySession, query_session
 from .knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from .store.base import validate_settings
@@ -120,18 +121,22 @@ def answer_from_trace(
 
 def _answer_from_trace(graph, model, trace):
     qa_top_k = int(trace.settings.get("qa_top_k", 5))
-    passages = []
+    retrieval_ids = []
     # Passages the select pass fetched by "expand" are summarised inside the code block instead;
     # this slice *is* the citation list, so letting them in would cite a neighbour as a source.
     for ranked in [p for p in trace.passages if not p.via_expand][:qa_top_k]:
         passage = graph.passage_by_id(ranked.passage_id)
         if passage is not None:
-            passages.append((passage.id, passage.title, passage.text))
-    if not passages:
+            retrieval_ids.append(passage.id)
+    if not retrieval_ids:
         return Answer(
             answer="I have nothing in memory to answer that yet.", thought="", raw="", passage_ids=[]
         )
-    return answer_question(model, trace.question, passages, context_block=code_block(graph, trace))
+    bundle = resolve_citations(graph, tuple(retrieval_ids))
+    passages = [(citation.id, citation.title, citation.text) for citation in bundle.citations]
+    answer = answer_question(model, trace.question, passages, context_block=code_block(graph, trace))
+    answer.retrieval_passage_ids = list(bundle.retrieval_passage_ids)
+    return answer
 
 
 def code_fields(trace: Trace, block: str) -> dict[str, Any]:

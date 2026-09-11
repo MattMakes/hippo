@@ -39,8 +39,9 @@ from ..access import Access
 from ..context import AppContext
 from ..hipporag.graph_index import COMMIT, ENTITY, SYMBOL, GraphIndex, Passage
 from ..hipporag.paths import display_at, display_of
+from ..knowledge.citations import resolve_citations
 from ..knowledge.eval_access import EvalAccess
-from ..knowledge.query_access import AuthorizedModel
+from ..knowledge.query_access import AuthorizedModel, query_session
 from ..ollama import OllamaError
 
 log = logging.getLogger(__name__)
@@ -90,68 +91,76 @@ def generate_questions(
     simply produces none of them.
     """
     set_id = set_id or _create_set(ctx, source_id, name, access)
-    store = ctx.store
-    evaluation = EvalAccess(ctx, access)
-    evaluation.require_generation_target(set_id, source_id)
-    try:
-        index = evaluation.graph()
+    with query_session(ctx, access) as session:
+        store = ctx.store
+        evaluation = EvalAccess(ctx, access, session=session)
+        evaluation.require_generation_target(set_id, source_id)
+        try:
+            index = session.graph
 
-        def validate():
-            evaluation.require_generation_target(set_id, source_id)
-            index.validate_authorization()
+            def validate():
+                evaluation.require_generation_target(set_id, source_id)
+                index.validate_authorization()
 
-        model = AuthorizedModel(ctx.ollama, validate)
-        passages = _passages_of(index, source_id)
-        if not passages:
-            raise ValueError("this source has no indexed passages yet; index it first")
+            model = AuthorizedModel(session.model, validate)
+            passages = _passages_of(index, source_id)
+            if not passages:
+                raise ValueError("this source has no indexed passages yet; index it first")
 
-        singles = _spread(passages, max_single)
-        pairs = shared_entity_pairs(index, passages)
-        # Built up front because they are pure: no model call, so they cannot fail halfway and they
-        # only need counting into `total`. Without them a set of nothing but code questions would
-        # report progress 0 of 0.
-        graph_rows = code_questions(index, source_id, max_code)
-        graph_rows += commit_questions(index, source_id, max_commits)
-        # Every pair may cost up to two LLM calls (both orders), but we stop at max_multihop questions.
-        total = len(singles) + min(max_multihop, len(pairs)) + len(graph_rows)
-        store.update_question_set(
-            set_id, stage="writing single-hop questions", progress_done=0, progress_total=total
-        )
+            singles = _spread(passages, max_single)
+            pairs = shared_entity_pairs(index, passages)
+            # Built up front because they are pure: no model call, so they cannot fail halfway and they
+            # only need counting into `total`. Without them a set of nothing but code questions would
+            # report progress 0 of 0.
+            graph_rows = code_questions(index, source_id, max_code)
+            graph_rows += commit_questions(index, source_id, max_commits)
+            # Every pair may cost up to two LLM calls (both orders), but we stop at max_multihop questions.
+            total = len(singles) + min(max_multihop, len(pairs)) + len(graph_rows)
+            store.update_question_set(
+                set_id, stage="writing single-hop questions", progress_done=0, progress_total=total
+            )
 
-        rows = _single_hop_questions(ctx, set_id, singles, per_passage, total, model=model)
-        evaluation.add_questions(set_id, rows)
+            rows = _single_hop_questions(ctx, set_id, singles, per_passage, total, model=model, index=index)
+            evaluation.add_questions(set_id, rows)
 
-        store.update_question_set(set_id, stage="writing multi-hop questions", progress_done=len(singles))
-        rows = _multihop_questions(
-            ctx, set_id, pairs, max_multihop, done=len(singles), total=total, model=model
-        )
-        evaluation.add_questions(set_id, rows)
+            store.update_question_set(set_id, stage="writing multi-hop questions", progress_done=len(singles))
+            rows = _multihop_questions(
+                ctx, set_id, pairs, max_multihop, done=len(singles), total=total, model=model, index=index
+            )
+            evaluation.add_questions(set_id, rows)
 
-        store.update_question_set(set_id, stage="writing code questions")
-        evaluation.add_questions(set_id, graph_rows)
-        validate()
+            store.update_question_set(set_id, stage="writing code questions")
+            evaluation.add_questions(set_id, graph_rows)
+            validate()
 
-        store.update_question_set(
-            set_id, status="ready", stage="done", progress_done=total, progress_total=total
-        )
-    except Exception as exc:
-        log.exception("Question generation for source %s failed", source_id)
-        store.update_question_set(set_id, status="failed", stage="failed", error=str(exc))
-        raise
-    return set_id
+            store.update_question_set(
+                set_id, status="ready", stage="done", progress_done=total, progress_total=total
+            )
+        except Exception as exc:
+            log.exception("Question generation for source %s failed", source_id)
+            store.update_question_set(set_id, status="failed", stage="failed", error=str(exc))
+            raise
+        return set_id
 
 
 # ---------------------------------------------------------------- single-hop
 
 
 def _single_hop_questions(
-    ctx: AppContext, set_id: str, passages: list[Passage], per_passage: int, total: int, *, model=None
+    ctx: AppContext,
+    set_id: str,
+    passages: list[Passage],
+    per_passage: int,
+    total: int,
+    *,
+    model=None,
+    index=None,
 ) -> list[QuestionRow]:
     rows: list[QuestionRow] = []
     for done, passage in enumerate(passages, start=1):
         try:
             reply = (model or ctx.ollama).chat_json(
-                prompts.question_gen_messages(passage.title, passage.text, per_passage),
+                prompts.question_gen_messages(*_original_context(index, passage), per_passage),
                 prompts.QUESTION_GEN_SCHEMA,
                 max_tokens=GEN_MAX_TOKENS,
             )
@@ -198,6 +207,7 @@ def _multihop_questions(
     done: int,
     total: int,
     model=None,
+    index=None,
 ) -> list[QuestionRow]:
     rows: list[QuestionRow] = []
     seen_texts: set[str] = set()
@@ -207,7 +217,7 @@ def _multihop_questions(
         # The chain can run either way (A tells us about the entity, B continues from it), so
         # give the model both orders before giving up on this pair.
         for a, b in ((first, second), (second, first)):
-            row = _ask_multihop(ctx, entity_name, a, b, model=model)
+            row = _ask_multihop(ctx, entity_name, a, b, model=model, index=index)
             if row and row["text"] not in seen_texts:
                 seen_texts.add(row["text"])
                 rows.append(row)
@@ -218,11 +228,24 @@ def _multihop_questions(
 
 
 def _ask_multihop(
-    ctx: AppContext, entity_name: str, a: Passage, b: Passage, *, model=None
+    ctx: AppContext, entity_name: str, a: Passage, b: Passage, *, model=None, index=None
 ) -> QuestionRow | None:
+    if index is None:
+        contexts = ((a.title, a.text), (b.title, b.text))
+    else:
+        bundle = resolve_citations(index, (a.id, b.id))
+        inputs = {item.passage_id: item.citation_ids for item in bundle.items}
+        left, right = set(inputs[a.id]), set(inputs[b.id])
+        if not left - right or not right - left:
+            return None  # Two retrieval views do not imply two independent evidence inputs.
+        originals = {citation.id: citation for citation in bundle.citations}
+        contexts = (
+            _citation_context([originals[identity] for identity in inputs[a.id]]),
+            _citation_context([originals[identity] for identity in inputs[b.id] if identity not in left]),
+        )
     try:
         reply = (model or ctx.ollama).chat_json(
-            prompts.multihop_gen_messages(entity_name, (a.title, a.text), (b.title, b.text)),
+            prompts.multihop_gen_messages(entity_name, *contexts),
             prompts.MULTIHOP_GEN_SCHEMA,
             max_tokens=GEN_MAX_TOKENS,
         )
@@ -407,6 +430,22 @@ def _mentions_by_entity(index: GraphIndex, passages: list[Passage]) -> dict[int,
 
 
 # ------------------------------------------------------------------- helpers
+
+
+def _original_context(index, passage):
+    if index is None:
+        return passage.title, passage.text
+    bundle = resolve_citations(index, (passage.id,))
+    return _citation_context(bundle.citations)
+
+
+def _citation_context(citations):
+    if len(citations) == 1:
+        original = citations[0]
+        return original.title, original.text
+    return "Original source excerpts", "\n\n".join(
+        f"Title: {original.title}\n{original.text}" for original in citations
+    )
 
 
 def _passages_of(index: GraphIndex, source_id: str) -> list[Passage]:

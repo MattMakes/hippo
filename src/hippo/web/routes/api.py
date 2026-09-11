@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ... import ask as ask_service
+from ...knowledge.answer_evidence import answer_sources, retrieval_fields
 from ...knowledge.query_access import query_session
 from ...ollama import OllamaError
 from ...status import system_status
@@ -82,6 +83,8 @@ def ask(request: Request, body: QuestionBody):
                 "answer": answer.answer,
                 "thought": answer.thought,
                 "passage_ids": answer.passage_ids,
+                "retrieval_passage_ids": answer.retrieval_passage_ids,
+                "sources": answer_sources(session.graph, trace, answer),
                 "trace": trace.to_dict(),
                 **ask_service.code_fields(trace, answer.context_block),
             }
@@ -103,7 +106,11 @@ def search(request: Request, body: QuestionBody):
                 ctx, body.question.strip(), body.settings, access=access, session=session
             )
             block = ask_service.code_block(session.graph, trace)
-            payload = {"trace": trace.to_dict(), **ask_service.code_fields(trace, block)}
+            payload = {
+                "trace": trace.to_dict(),
+                **retrieval_fields(session.graph, [row.passage_id for row in trace.passages]),
+                **ask_service.code_fields(trace, block),
+            }
             session.validate()
             return payload
     except ValueError as exc:

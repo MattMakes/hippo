@@ -16,6 +16,7 @@ from fastapi.responses import RedirectResponse
 
 from ... import ask as ask_service
 from ...knowledge.access import AuthorizationChanged
+from ...knowledge.answer_evidence import answer_sources
 from ...knowledge.query_access import QuerySession, query_session
 from ...ollama import OllamaError
 from ...status import system_status
@@ -119,10 +120,7 @@ def ask_submit(request: Request, question: str = Form("")):
                 return render(
                     request, "partials/answer.html", error=f"{type(exc).__name__}: {exc}", session=session
                 )
-            passages = []
-            for ranked in trace.passages[: int(trace.settings.get("qa_top_k", 5))]:
-                passage = session.graph.passage_by_id(ranked.passage_id)
-                passages.append({"ranked": ranked, "text": passage.text if passage else ranked.preview})
+            passages = answer_sources(session.graph, trace, answer)
             session.validate()
             # Keep the trace so "Analyze this question" explains this answer without asking again.
             trace_key = remember_adhoc(

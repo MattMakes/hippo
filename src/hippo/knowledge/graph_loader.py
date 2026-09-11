@@ -53,6 +53,10 @@ def load_generation_graph(
     rows = {}
     for name in ("passages", "symbols", "data_objects", "commits"):
         rows[f"load_{name}"] = [dict(row) for row in getattr(store, f"load_{name}")() if selected(row)]
+    for row in rows["load_passages"]:
+        # View-aware native IDs remain independent candidates even when their
+        # original span is shared. Only authorized projection resolves lineage.
+        row.setdefault("retrieval_view_id", None)
 
     # GraphIndex uses the majority dimension. Run its vector eligibility rule on
     # the selected passages before determining support, so rejected passages
