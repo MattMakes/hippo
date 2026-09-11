@@ -281,6 +281,8 @@ Create one identity helper using SHA-256 of canonical JSON arrays, encoded as UT
 
 Treat branch, commit and generation as versions, not equivalent identities. Explicit renames create alias/lineage records; absent provider rename evidence, report a delete/add rather than guessing equivalence. Do not merge overloaded methods or same-named modules without a discriminator.
 
+Version 1 provider instance keys accept ASCII hostnames, including explicit punycode. Unicode hostnames must be converted explicitly before configuration; rejecting them avoids the older IDNA codec silently merging distinct providers. Normalize scheme/host/default ports while preserving provider base-path case and encoded reserved separators. Typed source locators are normalized, including their default/null fields, before span hashing so equivalent paths and omitted defaults do not create duplicate evidence.
+
 Database case handling is dialect- and deployment-sensitive. Preserve original identifier spelling and quoting. Store normalized lookup components separately. PostgreSQL quoted identifiers and SQL Server collation rules must not be approximated by the prose `clean_phrase()` function.
 
 Backstage references use `kind:namespace/name`, with documented defaults resolved before storage. Prefix the reference with catalog instance and workspace so multiple catalogs do not collide. [Backstage entity references](https://backstage.io/docs/features/software-catalog/references/).
@@ -1196,6 +1198,8 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 
 ### Task 2 — Evidence identities and typed contracts
 
+- [x] Implemented and verified; see `ai_docs/gates/rag-it-all/task-2/GATES.md`. All 35 required persisted record types have version-1 round trips; 119 tests and independent specification/quality reviews pass.
+
 **Depends on:** Task 1. **Gates:** G2.
 
 **Create:** `src/hippo/knowledge/{__init__,model,identity,predicates}.py`, `tests/unit/test_knowledge_identity.py`, `tests/unit/test_knowledge_contracts.py`.
@@ -1224,6 +1228,7 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 3. Implement create/read methods for artifacts, revisions, spans, observations, assertion versions, support groups, generation/index/link manifests and section 5.6 durable records; include workspace and access inputs in read contracts from the beginning.
 4. Add transaction/CAS publication methods and durable invalidation records. Keep external I/O outside database transactions.
    Implement explicit backend transactions; add failure injection between pointer/version/event writes to prove they roll back together.
+   Backend-specific migration boundary: LadybugDB supports schema and data writes in one explicit transaction. The verified Neo4j 5.26 backend rejects mixed schema/data transactions. On Neo4j, use idempotent schema steps with a durable migration journal and a compatibility/readiness guard; commit data transformations and the completion version together only after schema validation. Do not serve application work while a migration is incomplete. Test recovery after each schema step as well as atomic rollback of data/publication writes; do not claim whole-migration DDL rollback on Neo4j.
 5. Prove migration idempotence, failed-migration recovery and v1 record preservation. Create/reopen a Ladybug file as part of the test.
 6. Run the store suite on FakeStore, LadybugDB and the CI Neo4j instance. A passing fake alone does not finish this task.
 7. Run the isolated capability probe from section 10.2. Record native search extensions as passed, unavailable or failed; select the documented fallback when they cannot meet filtering/lifecycle guarantees.
