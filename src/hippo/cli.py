@@ -217,6 +217,7 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 def cmd_ask(args: argparse.Namespace) -> int:
     from .ask import ask
+    from .knowledge.query_access import query_session
 
     ctx, remote = _context_or_running_server()
     if remote is not None:
@@ -227,20 +228,31 @@ def cmd_ask(args: argparse.Namespace) -> int:
         answer, thought, trace = reply["answer"], reply.get("thought"), reply["trace"]
         passages = trace.get("passages", [])
         fallback = trace.get("used_dpr_fallback"), trace.get("fallback_reason")
+        print(_format_answer(answer, thought, passages, fallback))
     else:
-        trace_obj, answer_obj = ask(ctx, args.question)
-        answer, thought = answer_obj.answer, answer_obj.thought
-        passages = [vars(p) for p in trace_obj.passages]
-        fallback = trace_obj.used_dpr_fallback, trace_obj.fallback_reason
-    print(answer)
-    if thought:
-        print(f"\nThought: {thought}")
-    print("\nTop passages:")
-    for p in passages[:5]:
-        print(f"  {p['rank']:>2}. {p['score']:.4f}  {p['title']}  [{p['source_name']}]")
-    if fallback[0]:
-        print(f"\n(no facts matched, fell back to embedding search: {fallback[1]})")
+        with query_session(ctx) as session:
+            trace_obj, answer_obj = ask(ctx, args.question, session=session)
+            output = _format_answer(
+                answer_obj.answer,
+                answer_obj.thought,
+                [vars(p) for p in trace_obj.passages],
+                (trace_obj.used_dpr_fallback, trace_obj.fallback_reason),
+            )
+            session.validate()
+            print(output)
     return 0
+
+
+def _format_answer(answer, thought, passages, fallback) -> str:
+    lines = [answer]
+    if thought:
+        lines.append(f"\nThought: {thought}")
+    lines.append("\nTop passages:")
+    for p in passages[:5]:
+        lines.append(f"  {p['rank']:>2}. {p['score']:.4f}  {p['title']}  [{p['source_name']}]")
+    if fallback[0]:
+        lines.append(f"\n(no facts matched, fell back to embedding search: {fallback[1]})")
+    return "\n".join(lines)
 
 
 # ----------------------------------------------------------- the code graph

@@ -256,7 +256,7 @@ def test_migration_records_legacy_and_current_checksums(store):
     m = migrations()
     store.ensure_schema()
     history = store.schema_history()
-    assert {row["version"] for row in history} == {1, 2, 3}
+    assert {row["version"] for row in history} == {1, 2, 3, 4}
     assert {row["version"]: row["checksum"] for row in history} == m.SUPPORTED_CHECKSUMS
     assert all(row["state"] == "complete" for row in history)
 
@@ -290,7 +290,7 @@ def test_declared_complete_schema_is_checked_against_physical_shape(tmp_path):
         LadybugStore(path)
 
 
-@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("version", [2, 3, 4])
 def test_recovery_after_each_declared_schema_step(store, version):
     if store.knowledge_backend == "fake":
         pytest.skip("Fake storage has no DDL; its data rollback is tested separately")
@@ -425,3 +425,78 @@ def test_caught_result_failure_poisons_ladybug_transaction(store, monkeypatch, f
         store.run("MATCH (w:Workspace) WHERE w.id IN ['result-before','result-after'] RETURN w.id AS id")
         == []
     )
+
+
+def test_v3_descriptor_is_frozen_and_v4_covers_native_columns():
+    from hippo.knowledge.identity import canonical_json, text_hash
+
+    m = migrations()
+    assert text_hash(canonical_json(m._descriptor(3))) == m.V3_CHECKSUM
+    assert m._descriptor(3)[1]["AccessPolicy"]["origin"] == "STRING"
+    assert "GenerationEvidenceMember" not in m._descriptor(3)[1]
+    assert len(m._descriptor(4)) == 6
+    assert m._descriptor(4)[5] == {
+        name: {"generation_id": "STRING"} for name in ("Symbol", "DataObject", "Commit")
+    }
+
+
+def test_populated_actual_v3_reopens_as_v4_without_reidentification(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    from hippo.knowledge import model as k
+    from hippo.store.ladybug import LadybugStore
+
+    m = migrations()
+    path = tmp_path / "version3.lbug"
+    with monkeypatch.context() as patch:
+        patch.setattr(m, "CURRENT_SCHEMA_VERSION", 3)
+        store = LadybugStore(path)
+        source = store.create_source("text", "legacy v3")
+        workspace = m.DEFAULT_WORKSPACE_ID
+        policy = k.AccessPolicy(workspace_id=workspace, verified_at=datetime(2025, 1, 1, tzinfo=UTC))
+        artifact = k.Artifact(
+            workspace_id=workspace,
+            source_id=source,
+            kind="file",
+            external_id="a.txt",
+            canonical_uri="a.txt",
+            policy_id=policy.id,
+        )
+        store._write_knowledge(policy)
+        store._write_knowledge(artifact)
+        store.run("CREATE (n:Symbol {id:'symbol-old',source_id:$source,name:'old'})", source=source)
+        history = store.schema_history()
+        assert history[-1]["version"] == 3
+        store.close()
+    reopened = LadybugStore(path)
+    try:
+        assert reopened.schema_history()[:3] == history
+        assert reopened._knowledge_get("AccessPolicy", policy.id) == policy
+        assert reopened._knowledge_get("Artifact", artifact.id) == artifact
+        assert reopened.source_is_managed(source)
+        assert reopened._knowledge_get("Symbol", "symbol-old")["generation_id"] is None
+    finally:
+        reopened.close()
+
+
+def test_v4_backfill_enters_managed_mode_for_existing_generation(store):
+    from datetime import UTC, datetime
+
+    from hippo.knowledge import model as k
+
+    store.ensure_schema()
+    source = store.create_source("text", "preupgrade")
+    gen = k.Generation(
+        source_id=source,
+        status="staging",
+        parser_version="p",
+        linker_version="l",
+        embedding_profile="e",
+        created_at=datetime(2025, 1, 1, tzinfo=UTC),
+        manifest_hash="input",
+    )
+    store._write_knowledge(gen)
+    assert not store.source_is_managed(source)
+    with store.transaction():
+        migrations()._data_transform(store, version=4)
+    assert store.source_is_managed(source)

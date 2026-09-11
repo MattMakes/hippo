@@ -20,6 +20,7 @@ from typing import Any
 
 from .base import Neo4jBase, new_id, now_iso, with_defaults
 from .code import BOOSTABLE_LABELS, TUNED_LABELS, node_label
+from .generations import native_mutation
 
 
 class ChangesetQueries(Neo4jBase):
@@ -61,6 +62,7 @@ class ChangesetQueries(Neo4jBase):
 
     # ---------------------------------------------- the individual edits
 
+    @native_mutation
     def set_node_boost(self, entity_id: str, boost: float) -> None:
         """A boost on an entity, symbol or data object. The label comes from the id prefix (S2.2)."""
         label = node_label(entity_id, BOOSTABLE_LABELS)
@@ -68,6 +70,7 @@ class ChangesetQueries(Neo4jBase):
             return  # the same nothing a MATCH that finds no node writes
         self.run(f"MATCH (n:{label} {{id: $id}}) SET n.boost = $boost", id=entity_id, boost=float(boost))
 
+    @native_mutation
     def set_edge_weight(self, a: str, b: str, weight: float) -> None:
         """
         Pin the weight of the edge between two nodes. 0 removes the edge.
@@ -93,6 +96,7 @@ class ChangesetQueries(Neo4jBase):
             now=now_iso(),
         )
 
+    @native_mutation
     def clear_edge_weight(self, a: str, b: str) -> None:
         lo, hi = min(a, b), max(a, b)
         self.run("MATCH (a {id: $a})-[t:TUNED]->(b {id: $b}) DELETE t", a=lo, b=hi)

@@ -9,11 +9,14 @@ the MCP server call, then hand the result to a template.
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
 from ... import ask as ask_service
+from ...knowledge.access import AuthorizationChanged
+from ...knowledge.query_access import QuerySession, query_session
 from ...ollama import OllamaError
 from ...status import system_status
 from ...store.base import DEFAULT_SETTINGS, SETTING_RULES, validate_settings
@@ -66,9 +69,9 @@ def status_partial(request: Request):
 # -------------------------------------------------------------------- ask
 
 
-def scope_note(ctx, principal) -> dict:
+def scope_note(ctx, principal, *, session: QuerySession | None = None) -> dict:
     """Describe only the evidence inventory this caller may search."""
-    stats = system_status(ctx, access=principal.access)["stats"]
+    stats = system_status(ctx, access=principal.access, session=session)["stats"]
     visible = stats.get("sources", 0)
     return {
         "visible": visible,
@@ -83,17 +86,17 @@ def scope_note(ctx, principal) -> dict:
 def ask_page(request: Request, q: str = ""):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    from ...knowledge.query_access import query_access
-
-    validate = query_access(ctx, principal.access)[2] if ctx.store.ping() else None
-    return render(
-        request,
-        "ask.html",
-        nav="ask",
-        question=q,
-        scope=scope_note(ctx, principal),
-        authorization_check=validate,
-    )
+    manager = query_session(ctx, principal.access) if ctx.store.ping() else nullcontext(None)
+    with manager as session:
+        return render(
+            request,
+            "ask.html",
+            nav="ask",
+            question=q,
+            scope=scope_note(ctx, principal, session=session),
+            authorization_check=session.validate if session is not None else None,
+            session=session,
+        )
 
 
 @router.post("/ask")
@@ -104,34 +107,43 @@ def ask_submit(request: Request, question: str = Form("")):
     if not question:
         return render(request, "partials/answer.html", error="Type a question first.")
     try:
-        from ...knowledge.query_access import query_access
-
-        _, _, validate = query_access(ctx, principal.access)
-        trace, answer = ask_service.ask(ctx, question, access=principal.access)
-        graph = ctx.graph_for(principal.access)
-    except OllamaError as exc:
-        return render(request, "partials/answer.html", error=str(exc))
-    except Exception as exc:  # noqa: BLE001 - htmx drops a 500 silently, so show the problem instead
+        with query_session(ctx, principal.access) as session:
+            try:
+                trace, answer = ask_service.ask(ctx, question, access=principal.access, session=session)
+            except AuthorizationChanged:
+                raise
+            except OllamaError as exc:
+                return render(request, "partials/answer.html", error=str(exc), session=session)
+            except Exception as exc:  # noqa: BLE001 - HTMX needs a visible error fragment
+                log.exception("ask failed")
+                return render(
+                    request, "partials/answer.html", error=f"{type(exc).__name__}: {exc}", session=session
+                )
+            passages = []
+            for ranked in trace.passages[: int(trace.settings.get("qa_top_k", 5))]:
+                passage = session.graph.passage_by_id(ranked.passage_id)
+                passages.append({"ranked": ranked, "text": passage.text if passage else ranked.preview})
+            session.validate()
+            # Keep the trace so "Analyze this question" explains this answer without asking again.
+            trace_key = remember_adhoc(
+                trace, {"answer": answer.answer, "thought": answer.thought}, owner=principal.user_id
+            )
+            return render(
+                request,
+                "partials/answer.html",
+                question=question,
+                trace=trace,
+                answer=answer,
+                passages=passages,
+                trace_key=trace_key,
+                authorization_check=session.validate,
+                session=session,
+            )
+    except AuthorizationChanged:
+        raise
+    except Exception as exc:  # noqa: BLE001 - includes failures acquiring the query session
         log.exception("ask failed")
         return render(request, "partials/answer.html", error=f"{type(exc).__name__}: {exc}")
-    passages = []
-    for ranked in trace.passages[: int(trace.settings.get("qa_top_k", 5))]:
-        passage = graph.passage_by_id(ranked.passage_id)
-        passages.append({"ranked": ranked, "text": passage.text if passage else ranked.preview})
-    # Keep the trace so "Analyze this question" explains this very answer instead of asking again.
-    trace_key = remember_adhoc(
-        trace, {"answer": answer.answer, "thought": answer.thought}, owner=principal.user_id
-    )
-    return render(
-        request,
-        "partials/answer.html",
-        question=question,
-        trace=trace,
-        answer=answer,
-        passages=passages,
-        trace_key=trace_key,
-        authorization_check=validate,
-    )
 
 
 # --------------------------------------------------------------- settings

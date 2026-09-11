@@ -1,6 +1,13 @@
 """Permission checks around every model call and before releasing query output."""
 
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
+
 from ..access import Access
+from ..store.base import validate_settings
 from .access import AuthorizationChanged
 
 
@@ -56,15 +63,48 @@ class AuthorizedModel:
         return self._call("chat_text", *args, **kwargs)
 
 
-def query_access(ctx, access):
+def query_access(ctx, access, *, settings: dict[str, Any] | None = None):
     epoch = ctx.store.authorization_epoch()
     access = current_access(ctx.store, access)
-    graph = ctx.graph_for(access)
+    graph = ctx.graph_for(access, settings=settings) if settings is not None else ctx.graph_for(access)
 
     def validate():
         if ctx.store.authorization_epoch() != epoch:
             raise AuthorizationChanged("Permissions changed; repeat the query")
         graph.validate_authorization()
 
-    validate()
+    try:
+        validate()
+    except BaseException:
+        close = getattr(graph, "close_snapshot", None)
+        if close is not None:
+            close()
+        raise
     return graph, AuthorizedModel(ctx.ollama, validate), validate
+
+
+@dataclass(frozen=True)
+class QuerySession:
+    """The graph, guarded model and live authorization proof for one query."""
+
+    graph: Any
+    model: AuthorizedModel
+    validate: Callable[[], None]
+    settings: Mapping[str, Any]
+
+
+@contextmanager
+def query_session(ctx, access=None, *, settings: dict[str, Any] | None = None) -> Iterator[QuerySession]:
+    """Keep one view pinned through output construction, then release it on every exit."""
+    effective_settings = validate_settings({**ctx.store.get_settings(), **(settings or {})})
+    captured_settings = MappingProxyType(effective_settings)
+    graph, model, validate = query_access(ctx, access, settings=dict(captured_settings))
+    try:
+        yield QuerySession(graph, model, validate, captured_settings)
+    finally:
+        try:
+            validate()
+        finally:
+            close = getattr(graph, "close_snapshot", None)
+            if close is not None:
+                close()

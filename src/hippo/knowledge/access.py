@@ -30,8 +30,13 @@ class EvidenceSelection:
     revision_ids: frozenset[str] | None = None
     assertion_version_ids: frozenset[str] | None = None
     query_mode: Literal["current", "history"] = "current"
+    require_exact_membership: bool = False
 
     def __post_init__(self):
+        if type(self.require_exact_membership) is not bool:
+            raise ValueError("Exact membership requirement must be boolean")
+        if self.require_exact_membership and self.generation_ids is None:
+            raise ValueError("Exact membership requires explicit generation selection")
         if self.query_mode not in {"current", "history"}:
             raise ValueError("Unknown evidence query mode")
         for name in ("generation_ids", "revision_ids", "assertion_version_ids"):
@@ -72,6 +77,62 @@ class AuthorizedEvidence:
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _interpretation_inventory(rows, selection):
+    """Select sealed interpretation membership before evaluating any ACL.
+
+    Older trusted generations have only revision manifests and retain that read
+    contract until rebuilt. Durable snapshot callers explicitly reject them.
+    Crucially, an empty exact manifest means no interpretation, not a fallback.
+    """
+    if selection.generation_ids is None:
+        return rows
+    required = {"evidence", "dense", "native"}
+    exact = {
+        manifest.generation_id
+        for manifest in rows("IndexManifest").values()
+        if manifest.generation_id in selection.generation_ids
+        and manifest.ready
+        and required <= set(manifest.required_representations)
+        and required <= {item.kind for item in manifest.checksums if item.ready}
+    }
+    compatibility = selection.generation_ids - exact
+    if selection.require_exact_membership and compatibility:
+        raise ValueError("Selected generation needs a sealed exact manifest; rebuild required")
+    if not exact:
+        return rows
+    selected = defaultdict(set)
+    for member in rows("GenerationEvidenceMember").values():
+        if member.generation_id in exact:
+            selected[member.record_kind].add(member.record_id)
+    compatibility_revisions = {
+        member.artifact_revision_id
+        for member in rows("GenerationMember").values()
+        if member.generation_id in compatibility
+    }
+    # Compatibility supports retain their full AND groups, including spans from
+    # outside the selected revision set; ordinary revision checks will deny them.
+    compatibility_versions = {
+        support.assertion_version_id
+        for support in rows("AssertionSupport").values()
+        if (span := rows("EvidenceSpan").get(support.span_id)) is not None
+        and span.revision_id in compatibility_revisions
+    }
+    inventories = {}
+    for kind in ("EvidenceSpan", "ObjectObservation", "AssertionVersion", "AssertionSupport"):
+        inventories[kind] = {
+            identity: record
+            for identity, record in rows(kind).items()
+            if identity in selected[kind]
+            or (
+                kind in {"EvidenceSpan", "ObjectObservation"}
+                and record.revision_id in compatibility_revisions
+            )
+            or (kind == "AssertionVersion" and identity in compatibility_versions)
+            or (kind == "AssertionSupport" and record.assertion_version_id in compatibility_versions)
+        }
+    return lambda kind: inventories.get(kind, rows(kind))
 
 
 class EvidenceAccess:
@@ -145,6 +206,33 @@ class EvidenceAccess:
                 records[kind] = {record.id: record for record in self.store._knowledge_rows(kind)}
             return records[kind]
 
+        interpretation = _interpretation_inventory(rows, selection)
+        generation_members = {
+            (member.generation_id, member.artifact_revision_id)
+            for member in rows("GenerationMember").values()
+        }
+        selected_revisions = selection.revision_ids
+        if selection.generation_ids is not None:
+            generation_revisions = {
+                revision_id
+                for generation_id, revision_id in generation_members
+                if generation_id in selection.generation_ids
+            }
+            selected_revisions = (
+                generation_revisions
+                if selected_revisions is None
+                else generation_revisions.intersection(selected_revisions)
+            )
+        selected_artifacts = (
+            None
+            if selected_revisions is None
+            else {
+                revision.artifact_id
+                for revision in rows("ArtifactRevision").values()
+                if revision.id in selected_revisions
+            }
+        )
+
         suppressed = {
             (item.target_kind, item.target_id)
             for item in rows("Suppression").values()
@@ -214,6 +302,7 @@ class EvidenceAccess:
             for artifact in rows("Artifact").values():
                 if (
                     artifact.workspace_id != self.workspace_id
+                    or (selected_artifacts is not None and artifact.id not in selected_artifacts)
                     or ("artifact", artifact.id) in suppressed
                     or ("source", artifact.source_id) in suppressed
                 ):
@@ -228,22 +317,6 @@ class EvidenceAccess:
                 if proof := grant(artifact.policy_id, artifact):
                     artifacts[artifact.id] = artifact
                     remember(proof)
-        generation_members = {
-            (member.generation_id, member.artifact_revision_id)
-            for member in rows("GenerationMember").values()
-        }
-        selected_revisions = selection.revision_ids
-        if selection.generation_ids is not None:
-            generation_revisions = {
-                revision_id
-                for generation_id, revision_id in generation_members
-                if generation_id in selection.generation_ids
-            }
-            selected_revisions = (
-                generation_revisions
-                if selected_revisions is None
-                else generation_revisions.intersection(selected_revisions)
-            )
         revisions = {
             record.id: record
             for record in rows("ArtifactRevision").values()
@@ -252,7 +325,7 @@ class EvidenceAccess:
             and (selected_revisions is None or record.id in selected_revisions)
         }
         spans = {}
-        for span in rows("EvidenceSpan").values():
+        for span in interpretation("EvidenceSpan").values():
             if span.revision_id not in revisions or ("span", span.id) in suppressed:
                 continue
             if proof := grant(span.policy_id, artifacts[revisions[span.revision_id].artifact_id]):
@@ -260,7 +333,7 @@ class EvidenceAccess:
                 remember(proof)
         observations = {
             record.id: record
-            for record in rows("ObjectObservation").values()
+            for record in interpretation("ObjectObservation").values()
             if record.span_id in spans
             and record.revision_id == spans[record.span_id].revision_id
             and (obj := rows("KnowledgeObject").get(record.object_id)) is not None
@@ -268,11 +341,11 @@ class EvidenceAccess:
         }
         objects = frozenset(record.object_id for record in observations.values())
         all_groups = defaultdict(list)
-        for support in rows("AssertionSupport").values():
+        for support in interpretation("AssertionSupport").values():
             all_groups[(support.assertion_version_id, support.derivation_group)].append(support)
         versions, assertions, supports, complete_groups = set(), set(), set(), []
         for (version_id, group_name), members in sorted(all_groups.items()):
-            version = rows("AssertionVersion").get(version_id)
+            version = interpretation("AssertionVersion").get(version_id)
             if (
                 version is None
                 or ("assertion_version", version_id) in suppressed

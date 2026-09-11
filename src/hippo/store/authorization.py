@@ -98,3 +98,86 @@ def metadata_mutation(function):
             return result
 
     return wrapped
+
+
+# Every registered record is classified explicitly; unknown additions fail closed.
+RECORD_EPOCHS = {
+    **dict.fromkeys(("WorkspaceMembership", "GroupMembership", "AccessPolicy", "Connector"), "authorization"),
+    **dict.fromkeys(
+        (
+            "Artifact",
+            "ArtifactRevision",
+            "EvidenceSpan",
+            "KnowledgeObject",
+            "ObjectObservation",
+            "Assertion",
+            "AssertionVersion",
+            "AssertionSupport",
+            "NativeBinding",
+            "Generation",
+            "GenerationMember",
+            "GenerationEvidenceMember",
+            "IndexManifest",
+            "LinkGeneration",
+            "HistoryManifest",
+            "DerivedRecord",
+            "DerivedDependency",
+            "RetrievalView",
+            "Section",
+            "SectionMember",
+            "ConflictSet",
+            "Alias",
+        ),
+        "content",
+    ),
+    **dict.fromkeys(
+        (
+            "Workspace",
+            "SyncState",
+            "SyncRun",
+            "MaintenanceJob",
+            "SourceEvent",
+            "PurgeJob",
+            "IndexEvent",
+            "ConsumerAck",
+            "QuerySnapshot",
+            "SnapshotReference",
+        ),
+        "bookkeeping",
+    ),
+    "Suppression": "suppression",
+}
+
+
+def epoch(store, key):
+    store._ensure_knowledge_ready()
+    value = store.get_meta(key)
+    if value is None:
+        return 0
+    if type(value) is not int or value < 0:
+        raise RuntimeError(f"Invalid {key}; refuse stale state")
+    return value
+
+
+def bump_epoch(store, key):
+    # All callers own the shared authorization transaction lock, including Neo4j.
+    value = epoch(store, key) + 1
+    store.set_meta(key, value)
+    return value
+
+
+def record_mutation(store, record, existing=None):
+    name = type(record).__name__
+    classification = RECORD_EPOCHS[name]
+    if name in ("Artifact", "Generation"):
+        store.begin_managed_source(record.source_id)
+    if classification in ("authorization", "suppression") or (
+        name == "Artifact"
+        and existing is not None
+        and (record.policy_id != existing.policy_id or record.deleted_at != existing.deleted_at)
+    ):
+        store._bump_authorization_epoch()
+    if classification in ("content", "suppression"):
+        bump_epoch(store, "content_epoch")
+    if classification == "suppression":
+        bump_epoch(store, "suppression_epoch")

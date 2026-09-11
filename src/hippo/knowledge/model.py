@@ -369,6 +369,25 @@ class GenerationMember(Record):
     identity_fields = ("generation_id", "artifact_revision_id")
 
 
+class GenerationEvidenceMember(Record):
+    generation_id: Text
+    record_kind: Literal[
+        "EvidenceSpan",
+        "ObjectObservation",
+        "AssertionVersion",
+        "AssertionSupport",
+        "Section",
+        "SectionMember",
+        "RetrievalView",
+        "DerivedRecord",
+        "DerivedDependency",
+        "ConflictSet",
+        "Alias",
+    ]
+    record_id: Text
+    identity_fields = ("generation_id", "record_kind", "record_id")
+
+
 class EvidenceSpan(Record):
     revision_id: Text
     locator_kind: Literal["file_lines", "section", "field", "comment", "page", "table_cell", "diff_hunk"]
@@ -1204,6 +1223,33 @@ class QuerySnapshot(Record):
         return self
 
 
+class SnapshotReference(Record):
+    workspace_id: Text
+    snapshot_id: Text
+    kind: Literal["active_query", "saved", "retained"]
+    reference_key: Text
+    created_at: Instant
+    lease_owner: Text | None = None
+    lease_expires_at: Instant | None = None
+    released_at: Instant | None = None
+    identity_fields = ("workspace_id", "snapshot_id", "kind", "reference_key")
+
+    @model_validator(mode="after")
+    def lease_contract(self) -> Self:
+        if self.kind == "active_query":
+            if (
+                self.lease_owner is None
+                or self.lease_expires_at is None
+                or self.lease_expires_at <= self.created_at
+            ):
+                raise ValueError("Active query requires an owner and positive lease")
+        elif self.lease_owner is not None or self.lease_expires_at is not None:
+            raise ValueError("Durable references cannot have leases")
+        if self.released_at is not None and self.released_at < self.created_at:
+            raise ValueError("Release cannot precede creation")
+        return self
+
+
 # Explicit allow-list avoids silently making internal mixins wire record types.
 _RECORD_CLASSES = (
     Workspace,
@@ -1214,6 +1260,7 @@ _RECORD_CLASSES = (
     ArtifactRevision,
     Generation,
     GenerationMember,
+    GenerationEvidenceMember,
     EvidenceSpan,
     KnowledgeObject,
     ObjectObservation,
@@ -1241,6 +1288,7 @@ _RECORD_CLASSES = (
     ConflictSet,
     Alias,
     QuerySnapshot,
+    SnapshotReference,
 )
 
 RECORD_TYPES = MappingProxyType({record.__name__: record for record in _RECORD_CLASSES})

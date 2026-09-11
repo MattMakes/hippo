@@ -81,10 +81,11 @@ from .code import (
     symbol_write_row,
 )
 from .evals import _result_row, _run_row, _set_row
-from .generations import GenerationQueries
+from .generations import GenerationQueries, legacy_source_cleanup, native_mutation, native_write
 from .knowledge import KnowledgeQueries
 from .memory import _passage_row, _source_row
 from .migrations import DEFAULT_WORKSPACE_ID
+from .snapshots import SnapshotQueries
 from .users import _role_row, _user_row, clean_capabilities, clean_rank, clean_username, slug
 
 log = logging.getLogger(__name__)
@@ -241,7 +242,7 @@ def _by_label_pairs(
     return grouped
 
 
-class LadybugStore(KnowledgeQueries, GenerationQueries):
+class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
     knowledge_backend = "ladybug"
     """All of hippo's queries against an embedded LadybugDB file. Same interface as `Store`."""
 
@@ -586,6 +587,10 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                 id=source_id,
                 workspace=DEFAULT_WORKSPACE_ID,
             )
+            if self.schema_version()["version"] >= 4:
+                self.run(
+                    "MATCH (s:Source {id:$id}) SET s.managed=false, s.build_fencing_token=0", id=source_id
+                )
         return source_id
 
     def update_source(self, source_id: str, **fields: Any) -> None:
@@ -650,6 +655,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
         return [self._shape_source(r, counts) for r in rows]
 
     @permission_mutation
+    @legacy_source_cleanup
     def delete_source(self, source_id: str) -> None:
         with self._lock:
             self.delete_code_nodes_for_source(source_id)
@@ -657,6 +663,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
             self.run("MATCH (s:Source {id: $id}) DETACH DELETE s", id=source_id)
             self.remove_orphans()
 
+    @legacy_source_cleanup
     def delete_passages_for_source(self, source_id: str) -> None:
         with self._lock:
             self.delete_code_nodes_for_source(source_id)
@@ -694,6 +701,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
 
     # ============================================================= passages
 
+    @native_write("Passage")
     def add_passages(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, source_id, ordinal, title, text, embedding}."""
         shaped = [
@@ -722,6 +730,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                 )
                 self._link("FROM", "Passage", "Source", [(r["id"], r["source_id"]) for r in batch])
 
+    @native_mutation
     def save_extraction(
         self, passage_id: str, entities: list[str], triples: list[list[str]], error: str | None
     ) -> None:
@@ -786,6 +795,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
         rows = self.run("MATCH (e:Entity) WHERE e.id IN $ids RETURN e.id AS id", ids=list(ids))
         return {r["id"] for r in rows}
 
+    @native_mutation
     def add_entities(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, name, embedding}. Re-adding an existing id is harmless."""
         shaped = [
@@ -853,6 +863,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
         rows = self.run("MATCH (f:Fact) WHERE f.id IN $ids RETURN f.id AS id", ids=list(ids))
         return {r["id"] for r in rows}
 
+    @native_mutation
     def add_facts(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, subject, predicate, object, subject_id, object_id, embedding}."""
         shaped = [
@@ -915,12 +926,15 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
 
     # ================================================================ links
 
+    @native_mutation
     def link_passage_facts(self, pairs: list[tuple[str, str]]) -> None:
         self._link("STATES", "Passage", "Fact", list(pairs))
 
+    @native_mutation
     def link_passage_entities(self, pairs: list[tuple[str, str]]) -> None:
         self._link("MENTIONS", "Passage", "Entity", list(pairs))
 
+    @native_mutation
     def add_synonyms(self, rows: list[tuple[str, str, float]], manual: bool = False) -> None:
         """
         rows: (node_id_a, node_id_b, score). Stored once per pair (a < b), keeping the best score.
@@ -966,6 +980,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
     # Every write is bound to one concrete label pair, because LadybugDB refuses to create a
     # relationship whose endpoints are bound by several labels (R4 T7).
 
+    @native_write("Symbol")
     def add_symbols(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, source_id, name, qualname, kind, lang, path, line_start, line_end, signature,
         doc, is_test, raises, embedding}. Re-adding updates in place; an unknown source is skipped."""
@@ -990,6 +1005,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                 )
                 self._set_embeddings("Symbol", batch)
 
+    @native_write("DataObject")
     def add_data_objects(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, source_id, name, qualname, kind, dialect, embedding}."""
         shaped = [data_object_write_row(r) for r in rows]
@@ -1020,6 +1036,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                 rows=batch,
             )
 
+    @native_write("Commit")
     def add_commits(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, source_id, sha, author, date, message, ordinal}."""
         shaped = [commit_write_row(r) for r in rows]
@@ -1046,6 +1063,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                 now=now_iso(),
             )
 
+    @native_mutation
     def add_code_edges(self, rows: list[dict[str, Any]]) -> None:
         """rows: {a, b, kind, omega, provenance, extra}. Directed, one per (a, b, kind); re-adding
         raises omega and never lowers it. Unknown kinds raise; self-loops and bad pairs are dropped."""
@@ -1088,11 +1106,13 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                         rows=batch,
                     )
 
+    @native_mutation
     def link_definitions(self, pairs: list[tuple[str, str]]) -> None:
         """(node_id, passage_id) -> DEFINED_IN. The node may be a symbol, data object or commit."""
         for label, group in _by_label_pairs(pairs, DEFINABLE_LABELS).items():
             self._link("DEFINED_IN", label, "Passage", group)
 
+    @native_mutation
     def add_modifies(self, rows: list[dict[str, Any]]) -> None:
         """rows: {commit_id, symbol_id, omega, hunk}. One edge per (commit, symbol)."""
         shaped = [{**r, "hunk": text(r["hunk"])} for r in modifies_write_rows(rows)]
@@ -1116,6 +1136,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                     rows=batch,
                 )
 
+    @native_mutation
     def add_precedes(self, pairs: list[tuple[str, str]]) -> None:
         """(a, b) -> PRECEDES, the first-parent chain. Never reaches igraph; the history tool reads it."""
         chain = [
@@ -1123,6 +1144,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
         ]
         self._link("PRECEDES", "Commit", "Commit", chain)
 
+    @native_mutation
     def add_refers_to(self, rows: list[dict[str, Any]]) -> None:
         """rows: {passage_id, node_id, omega, token}. A prose or commit passage naming a code node."""
         grouped: dict[str, list[dict[str, Any]]] = {}
@@ -1150,6 +1172,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                         rows=batch,
                     )
 
+    @native_mutation
     def set_symbol_communities(self, mapping: dict[str, int]) -> None:
         """{symbol_id: community}. The Leiden label, shown as the subsystem name."""
         rows = [{"id": sid, "community": int(value)} for sid, value in mapping.items()]
@@ -1340,6 +1363,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                     vectors.append(list(row["embedding"]))
         return ids, vectors
 
+    @legacy_source_cleanup
     def delete_code_nodes_for_source(self, source_id: str) -> None:
         """
         Every code node of one source, as **three per-label statements**.
@@ -1368,7 +1392,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
         return self.run(
             """
             MATCH (p:Passage)-[:FROM]->(s:Source)
-            RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal, p.embedding AS embedding,
+            RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal, p.embedding AS embedding, p.generation_id AS generation_id,
                    s.id AS source_id, s.name AS source_name
             """
         )
@@ -1702,6 +1726,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
             now=now_iso(),
         )
 
+    @native_mutation
     def set_node_boost(self, entity_id: str, boost: float) -> None:
         """A boost on an entity, symbol or data object. The label comes from the id prefix (S2.2)."""
         label = node_label(entity_id, BOOSTABLE_LABELS)
@@ -1709,6 +1734,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
             return  # Neo4j's MATCH finds nothing and writes nothing; same here
         self.run(f"MATCH (n:{label} {{id: $id}}) SET n.boost = $boost", id=entity_id, boost=float(boost))
 
+    @native_mutation
     def set_edge_weight(self, a: str, b: str, weight: float) -> None:
         lo, hi = min(a, b), max(a, b)
         label_a, label_b = node_label(lo, TUNED_LABELS), node_label(hi, TUNED_LABELS)
@@ -1727,6 +1753,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                 now=now_iso(),
             )
 
+    @native_mutation
     def clear_edge_weight(self, a: str, b: str) -> None:
         lo, hi = min(a, b), max(a, b)
         label_a, label_b = node_label(lo, TUNED_LABELS), node_label(hi, TUNED_LABELS)

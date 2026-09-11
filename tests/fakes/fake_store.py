@@ -43,9 +43,10 @@ from hippo.store.code import (
     refers_to_write_rows,
     symbol_write_row,
 )
-from hippo.store.generations import GenerationQueries
+from hippo.store.generations import GenerationQueries, legacy_source_cleanup, native_mutation, native_write
 from hippo.store.knowledge import KnowledgeQueries
 from hippo.store.migrations import DEFAULT_WORKSPACE_ID
+from hippo.store.snapshots import SnapshotQueries
 from hippo.store.users import clean_capabilities, clean_rank, clean_username, slug
 
 
@@ -54,7 +55,7 @@ def _boost(entity: dict[str, Any]) -> float:
     return 1.0 if entity.get("boost") is None else float(entity["boost"])
 
 
-class FakeStore(KnowledgeQueries, GenerationQueries):
+class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
     knowledge_backend = "fake"
 
     def __init__(self) -> None:
@@ -213,6 +214,9 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
             "workspace_id": DEFAULT_WORKSPACE_ID,
             "active_generation_id": None,
             "generation_version": 0,
+            "managed": False,
+            "active_build_id": None,
+            "build_fencing_token": 0,
             "name": name,
             "status": "queued",
             "stage": "queued",
@@ -283,11 +287,13 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
         self.synonyms = {k: v for k, v in self.synonyms.items() if not (set(k) & gone)}
 
     @permission_mutation
+    @legacy_source_cleanup
     def delete_source(self, source_id: str) -> None:
         self._drop_passages_and_code(source_id)
         self.sources.pop(source_id, None)
         self.remove_orphans()
 
+    @legacy_source_cleanup
     def delete_passages_for_source(self, source_id: str) -> None:
         self._drop_passages_and_code(source_id)
         self.remove_orphans()
@@ -320,6 +326,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
             self.tuned = {k: v for k, v in self.tuned.items() if eid not in k}
 
     # --------------------------------------------------------- passages
+    @native_write("Passage")
     def add_passages(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
             if row["source_id"] not in self.sources:
@@ -335,6 +342,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
                 "embedding": list(row["embedding"]),
             }
 
+    @native_mutation
     def save_extraction(
         self, passage_id: str, entities: list[str], triples: list[list[str]], error: str | None
     ) -> None:
@@ -392,6 +400,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
     def existing_entity_ids(self, ids: list[str]) -> set[str]:
         return {i for i in ids if i in self.entities}
 
+    @native_mutation
     def add_entities(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
             e = self.entities.setdefault(
@@ -445,6 +454,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
     def existing_fact_ids(self, ids: list[str]) -> set[str]:
         return {i for i in ids if i in self.facts}
 
+    @native_mutation
     def add_facts(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
             if row["subject_id"] not in self.entities or row["object_id"] not in self.entities:
@@ -485,11 +495,13 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
         return rows
 
     # ------------------------------------------------------------ links
+    @native_mutation
     def link_passage_facts(self, pairs: list[tuple[str, str]]) -> None:
         for p, f in pairs:
             if p in self.passages and f in self.facts:
                 self.statements.add((p, f))
 
+    @native_mutation
     def link_passage_entities(self, pairs: list[tuple[str, str]]) -> None:
         for p, e in pairs:
             if p in self.passages and e in self.entities:
@@ -501,6 +513,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
             self.entities | self.symbols | self.data_objects
         )
 
+    @native_mutation
     def add_synonyms(self, rows: list[tuple[str, str, float]], manual: bool = False) -> None:
         for a, b, score in rows:
             if a == b or not self._synonym_node(a) or not self._synonym_node(b):
@@ -528,17 +541,21 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
                 "embedding": list(embedding) if embedding else list(existing.get("embedding") or []),
             }
 
+    @native_write("Symbol")
     def add_symbols(self, rows: list[dict[str, Any]]) -> None:
         self._add_code_nodes(self.symbols, rows, symbol_write_row)
         for node in self.symbols.values():
             node.setdefault("community", None)
 
+    @native_write("DataObject")
     def add_data_objects(self, rows: list[dict[str, Any]]) -> None:
         self._add_code_nodes(self.data_objects, rows, data_object_write_row)
 
+    @native_write("Commit")
     def add_commits(self, rows: list[dict[str, Any]]) -> None:
         self._add_code_nodes(self.commits, rows, commit_write_row)
 
+    @native_mutation
     def add_code_edges(self, rows: list[dict[str, Any]]) -> None:
         for row in code_edge_write_rows(rows):
             if not self._code_node(row["a"]) or not self._code_node(row["b"]):
@@ -561,11 +578,13 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
                 return table[node_id]
         return None
 
+    @native_mutation
     def link_definitions(self, pairs: list[tuple[str, str]]) -> None:
         for node_id, passage_id in pairs:
             if self._code_node(node_id) is not None and passage_id in self.passages:
                 self.definitions.add((node_id, passage_id))
 
+    @native_mutation
     def add_modifies(self, rows: list[dict[str, Any]]) -> None:
         for row in modifies_write_rows(rows):
             if row["commit_id"] not in self.commits or row["symbol_id"] not in self.symbols:
@@ -575,11 +594,13 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
             if current is None or current["omega"] < row["omega"]:
                 self.modifies[key] = dict(row)
 
+    @native_mutation
     def add_precedes(self, pairs: list[tuple[str, str]]) -> None:
         for a, b in pairs:
             if a != b and a in self.commits and b in self.commits and (a, b) not in self.precedes:
                 self.precedes.append((a, b))
 
+    @native_mutation
     def add_refers_to(self, rows: list[dict[str, Any]]) -> None:
         for row in refers_to_write_rows(rows):
             target = self.symbols.get(row["node_id"]) or self.data_objects.get(row["node_id"])
@@ -595,6 +616,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
                     "token": row["token"],
                 }
 
+    @native_mutation
     def set_symbol_communities(self, mapping: dict[str, int]) -> None:
         for symbol_id, community in mapping.items():
             if symbol_id in self.symbols:
@@ -709,6 +731,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
                     vectors.append(list(node["embedding"]))
         return ids, vectors
 
+    @legacy_source_cleanup
     def delete_code_nodes_for_source(self, source_id: str) -> set[str]:
         """Every code node of one source, and every code edge touching one. Returns the ids dropped
         so the caller can prune the edge dicts a real graph would cascade for it."""
@@ -942,6 +965,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
                 "embedding": p["embedding"],
                 "source_id": p["source_id"],
                 "source_name": self.sources[p["source_id"]]["name"],
+                "generation_id": p.get("generation_id"),
             }
             for p in self.passages.values()
         ]
@@ -1199,17 +1223,20 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
     def mark_applied(self, changeset_id: str) -> None:
         self.changesets[changeset_id].update(status="applied", applied_at=now_iso())
 
+    @native_mutation
     def set_node_boost(self, entity_id: str, boost: float) -> None:
         label = node_label(entity_id, BOOSTABLE_LABELS)
         for table in (self.entities, self.symbols, self.data_objects):
             if label is not None and entity_id in table:
                 table[entity_id]["boost"] = float(boost)
 
+    @native_mutation
     def set_edge_weight(self, a: str, b: str, weight: float) -> None:
         known = set(self.entities) | set(self.passages) | set(self.symbols) | set(self.data_objects)
         tunable = node_label(a, TUNED_LABELS) and node_label(b, TUNED_LABELS)
         if tunable and a in known and b in known:
             self.tuned[(min(a, b), max(a, b))] = float(weight)
 
+    @native_mutation
     def clear_edge_weight(self, a: str, b: str) -> None:
         self.tuned.pop((min(a, b), max(a, b)), None)

@@ -66,7 +66,7 @@ from .access import Access, Principal
 from .ask import ask, code_block, code_fields, search
 from .context import AppContext
 from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
-from .knowledge.query_access import query_access
+from .knowledge.query_access import query_session
 from .web.auth import StoreDown, principal_from_bearer, resolve_principal
 from .web.routes.code import (
     DEFAULT_DEPTH,
@@ -274,67 +274,61 @@ def search_tool(
     question = _clean_question(question)
     top_k = max(1, min(int(top_k), MAX_TOP_K))
     access = principal.access if principal else None
-    graph, _model, validate = query_access(ctx, access)
-    try:
-        trace = search(ctx, question, access=access)
-    finally:
-        validate()
-    passages = []
-    for ranked in trace.passages[:top_k]:
-        passage = graph.passage_by_id(ranked.passage_id)
-        if passage is None:
-            continue
-        passages.append(
-            {
-                "passage_id": ranked.passage_id,
-                "title": ranked.title,
-                "source": ranked.source_name,
-                "text": passage.text,
-                "score": round(ranked.score, 6),
-                "rank": ranked.rank,
-            }
-        )
-    kept_facts = [c.triple for c in trace.fact_candidates if c.kept]
-    payload = {
-        "question": question,
-        "passages": passages,
-        "kept_facts": kept_facts,
-        "used_dpr_fallback": trace.used_dpr_fallback,
-        **code_fields(trace, code_block(graph, trace)),
-    }
-    validate()
-    return payload
+    with query_session(ctx, access) as session:
+        trace = search(ctx, question, access=access, session=session)
+        passages = []
+        for ranked in trace.passages[:top_k]:
+            passage = session.graph.passage_by_id(ranked.passage_id)
+            if passage is None:
+                continue
+            passages.append(
+                {
+                    "passage_id": ranked.passage_id,
+                    "title": ranked.title,
+                    "source": ranked.source_name,
+                    "text": passage.text,
+                    "score": round(ranked.score, 6),
+                    "rank": ranked.rank,
+                }
+            )
+        kept_facts = [c.triple for c in trace.fact_candidates if c.kept]
+        payload = {
+            "question": question,
+            "passages": passages,
+            "kept_facts": kept_facts,
+            "used_dpr_fallback": trace.used_dpr_fallback,
+            **code_fields(trace, code_block(session.graph, trace)),
+        }
+        session.validate()
+        return payload
 
 
 def ask_tool(ctx: AppContext, question: str, principal: Principal | None = None) -> dict[str, Any]:
     question = _clean_question(question)
     access = principal.access if principal else None
-    _graph, _model, validate = query_access(ctx, access)
-    try:
-        trace, answer = ask(ctx, question, access=access)
-    finally:
-        validate()
-    # Only the passages the LLM actually read count as "sources" of the answer.
-    read = set(answer.passage_ids)
-    sources = [
-        {
-            "passage_id": p.passage_id,
-            "title": p.title,
-            "source": p.source_name,
-            "rank": p.rank,
-            "score": round(p.score, 6),
+    with query_session(ctx, access) as session:
+        trace, answer = ask(ctx, question, access=access, session=session)
+        # Only the passages the LLM actually read count as "sources" of the answer.
+        read = set(answer.passage_ids)
+        sources = [
+            {
+                "passage_id": p.passage_id,
+                "title": p.title,
+                "source": p.source_name,
+                "rank": p.rank,
+                "score": round(p.score, 6),
+            }
+            for p in trace.passages
+            if p.passage_id in read
+        ]
+        payload = {
+            "answer": answer.answer,
+            "thought": answer.thought,
+            "sources": sources,
+            **code_fields(trace, answer.context_block),
         }
-        for p in trace.passages
-        if p.passage_id in read
-    ]
-    payload = {
-        "answer": answer.answer,
-        "thought": answer.thought,
-        "sources": sources,
-        **code_fields(trace, answer.context_block),
-    }
-    validate()
-    return payload
+        session.validate()
+        return payload
 
 
 # ------------------------------------------------------- the code graph tools

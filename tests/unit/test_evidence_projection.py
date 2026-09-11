@@ -522,3 +522,38 @@ def test_composing_real_legacy_graph_with_empty_preserves_its_retrieval_results(
     reset = np.zeros(legacy.num_nodes)
     reset[0] = 1
     np.testing.assert_array_equal(composed.ppr(reset, 0.85), legacy.ppr(reset, 0.85))
+
+
+def test_retired_generation_requires_a_live_snapshot_reference():
+    from types import SimpleNamespace
+
+    from hippo.knowledge.access import AuthorizationChanged
+
+    w = fixture()
+    proof = engine(w).build(w.selection)
+    w.store.add(w.generation.replace(status="retired"))
+    w.source["active_generation_id"] = "next"
+    live = [True]
+
+    def validate():
+        if not live[0]:
+            raise AuthorizationChanged("snapshot lease expired")
+
+    bundle = SimpleNamespace(generation_ids=frozenset({w.generation.id}), validate=validate)
+    result = api().project_managed_graph(
+        w.full,
+        w.store,
+        proof,
+        embedding_profile="embed-v1",
+        snapshot_bundle=bundle,
+    )
+    assert result.passage_by_id(w.spans[0].id).text == "first"
+    live[0] = False
+    with pytest.raises(AuthorizationChanged):
+        api().project_managed_graph(
+            w.full,
+            w.store,
+            proof,
+            embedding_profile="embed-v1",
+            snapshot_bundle=bundle,
+        )

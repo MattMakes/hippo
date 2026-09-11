@@ -40,22 +40,25 @@ class ProjectionError(ValueError):
     """The supplied graph/evidence cannot establish a coherent current view."""
 
 
-def _current_generations(store, authorized, embedding_profile):
+def _current_generations(store, authorized, embedding_profile, snapshot_bundle=None):
     selection = authorized.selection
     if selection.query_mode != "current" or selection.generation_ids is None:
         raise ProjectionError("Managed compatibility projection requires explicit current generations")
     generations = {}
     source_ids = set()
+    if snapshot_bundle is not None:
+        snapshot_bundle.validate()
+    pinned = snapshot_bundle.generation_ids if snapshot_bundle is not None else frozenset()
     for identity in sorted(selection.generation_ids):
         generation = store._knowledge_get("Generation", identity)
         source = store.get_source(generation.source_id) if generation else None
         if (
             generation is None
-            or generation.status != "active"
+            or generation.status not in ({"active", "retired"} if identity in pinned else {"active"})
             or generation.embedding_profile != embedding_profile
             or source is None
             or source.get("workspace_id") != authorized.workspace_id
-            or source.get("active_generation_id") != identity
+            or (identity not in pinned and source.get("active_generation_id") != identity)
             or generation.source_id in source_ids
         ):
             raise ProjectionError("Selected generation is not the current compatible workspace generation")
@@ -177,18 +180,18 @@ def _code_node(obj, kind, observations, source_id):
 
 
 def project_managed_graph(
-    full: GraphIndex, store, authorized: AuthorizedEvidence, *, embedding_profile: str
+    full: GraphIndex, store, authorized: AuthorizedEvidence, *, embedding_profile: str, snapshot_bundle=None
 ) -> GraphIndex:
     """Build only the managed lane; no native provenance is inferred from endpoints.
 
     Projected passage IDs are EvidenceSpan IDs and object IDs are KnowledgeObject
     IDs. Unbound vectors are omitted until indexing supplies the required binding.
     Typed assertions stay out of the legacy OpenIE fact-filter slots. Historical
-    generation selection belongs to the later snapshot implementation.
+    generations are usable only while a supplied snapshot reference is live.
     """
     if not embedding_profile:
         raise ProjectionError("An explicit embedding profile is required")
-    generations = _current_generations(store, authorized, embedding_profile)
+    generations = _current_generations(store, authorized, embedding_profile, snapshot_bundle)
 
     def allowed(kind, identities):
         return {row.id: row for row in store._knowledge_rows(kind) if row.id in identities}
@@ -314,7 +317,10 @@ def project_managed_graph(
                 derivation_group=group.derivation_group,
             ),
         )
-    return _assemble(entities, nodes, passages, vectors, [], {}, edges, arrows)
+    result = _assemble(entities, nodes, passages, vectors, [], {}, edges, arrows)
+    if snapshot_bundle is not None:
+        snapshot_bundle.validate()
+    return result
 
 
 def _assemble(

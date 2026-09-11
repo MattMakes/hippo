@@ -12,6 +12,8 @@ nor read by the model. None means unrestricted (open mode, the CLI, tests).
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from typing import Any
 
 from . import prompts
@@ -20,7 +22,7 @@ from .context import AppContext
 from .hipporag import paths
 from .hipporag.answerer import Answer, answer_question
 from .hipporag.retriever import Retriever, Trace
-from .knowledge.query_access import AuthorizedModel, query_access
+from .knowledge.query_access import AuthorizedModel, QuerySession, query_session
 from .knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from .store.base import validate_settings
 
@@ -32,32 +34,44 @@ def search(
     access: Access | None = None,
     *,
     authorization_check: Callable[[], None] | None = None,
+    session: QuerySession | None = None,
 ) -> Trace:
     """Rank visible passages, retaining any saved-input guard at every model boundary."""
-    graph, model, validate = _query_access(ctx, access, authorization_check)
-    trace = _search(ctx, graph, model, question, settings)
-    validate()
-    return trace
+    with _query_session(ctx, access, authorization_check, session, settings) as query:
+        trace = _search(ctx, query.graph, query.model, question, settings, effective_settings=query.settings)
+        query.validate()
+        return trace
 
 
-def _query_access(ctx, access, authorization_check):
+@contextmanager
+def _query_session(ctx, access, authorization_check, session, settings):
     if authorization_check is not None:
         authorization_check()
-    graph, model, query_check = query_access(ctx, access)
-    if authorization_check is None:
-        return graph, model, query_check
+    if session is not None:
+        overrides = validate_settings(settings or {})
+        if any(session.settings.get(key) != value for key, value in overrides.items()):
+            raise ValueError("Query settings do not match the active session")
+    manager = nullcontext(session) if session is not None else query_session(ctx, access, settings=settings)
+    with manager as query:
 
-    def validate():
-        authorization_check()
-        query_check()
+        def validate():
+            if authorization_check is not None:
+                authorization_check()
+            query.validate()
 
-    validate()
-    return graph, AuthorizedModel(model, validate), validate
+        validate()
+        try:
+            yield QuerySession(query.graph, AuthorizedModel(query.model, validate), validate, query.settings)
+        finally:
+            validate()
 
 
-def _search(ctx, graph, model, question, settings):
-    merged = ctx.store.get_settings()
-    merged.update(validate_settings(settings or {}))  # raises ValueError on junk, before any model call
+def _search(ctx, graph, model, question, settings, *, effective_settings=None):
+    if effective_settings is None:
+        merged = ctx.store.get_settings()
+        merged.update(validate_settings(settings or {}))
+    else:
+        merged = dict(effective_settings)
     retriever = Retriever(graph, model)
     # The LLM keep/drop/expand pass is installed here rather than inside `retrieve`, so a unit test
     # or a replayed simulation that calls `retrieve` directly never makes a second model call. It
@@ -68,15 +82,21 @@ def _search(ctx, graph, model, question, settings):
 
 
 def ask(
-    ctx: AppContext, question: str, settings: dict[str, Any] | None = None, access: Access | None = None
+    ctx: AppContext,
+    question: str,
+    settings: dict[str, Any] | None = None,
+    access: Access | None = None,
+    *,
+    authorization_check: Callable[[], None] | None = None,
+    session: QuerySession | None = None,
 ) -> tuple[Trace, Answer]:
     """Retrieve, then let the LLM read the top `qa_top_k` passages and answer."""
-    graph, model, validate = query_access(ctx, access)
-    trace = _search(ctx, graph, model, question, settings)
-    validate()
-    answer = _answer_from_trace(graph, model, trace)
-    validate()
-    return trace, answer
+    with _query_session(ctx, access, authorization_check, session, settings) as query:
+        trace = _search(ctx, query.graph, query.model, question, settings, effective_settings=query.settings)
+        query.validate()
+        answer = _answer_from_trace(query.graph, query.model, trace)
+        query.validate()
+        return trace, answer
 
 
 def answer_from_trace(
@@ -85,14 +105,16 @@ def answer_from_trace(
     access: Access | None = None,
     *,
     authorization_check: Callable[[], None] | None = None,
+    session: QuerySession | None = None,
 ) -> Answer:
     """Answer from ranked passages while preserving the caller's saved-input authorization."""
-    graph, model, validate = _query_access(ctx, access, authorization_check)
-    if not can_reuse_answer(graph, trace.evidence_fingerprint):
-        trace = reconstruct_trace(graph, trace, question=trace.question)
-    answer = _answer_from_trace(graph, model, trace)
-    validate()
-    return answer
+    with _query_session(ctx, access, authorization_check, session, trace.settings) as query:
+        if not can_reuse_answer(query.graph, trace.evidence_fingerprint):
+            trace = reconstruct_trace(query.graph, trace, question=trace.question)
+        trace = replace(trace, settings=dict(query.settings))
+        answer = _answer_from_trace(query.graph, query.model, trace)
+        query.validate()
+        return answer
 
 
 def _answer_from_trace(graph, model, trace):

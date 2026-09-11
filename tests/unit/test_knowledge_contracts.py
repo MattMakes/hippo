@@ -812,3 +812,37 @@ def test_manifest_allows_matching_or_default_latest_knowledge_cutoff(name, known
         else {"temporal": TypeAdapter(m.TemporalSelector).validate_json(identity.canonical_json(selector))}
     )
     assert m.RECORD_TYPES[name](**(record_values()[name] | change)).knowledge_cutoff == NOW
+
+
+@pytest.mark.parametrize("kind", ["active_query", "saved", "retained"])
+def test_snapshot_reference_roundtrip_identity_and_lease_contract(kind):
+    m = model()
+    lease = (
+        dict(lease_owner="reader", lease_expires_at=NOW + timedelta(minutes=1))
+        if kind == "active_query"
+        else {}
+    )
+    ref = m.SnapshotReference(
+        workspace_id="w", snapshot_id="snapshot", kind=kind, reference_key="request", created_at=NOW, **lease
+    )
+    assert m.SnapshotReference.model_validate_json(ref.model_dump_json()) == ref
+    assert ref.replace(created_at=NOW - timedelta(seconds=1)).id == ref.id
+    assert ref.replace(reference_key="another").id != ref.id
+    with pytest.raises(ValidationError):
+        if kind == "active_query":
+            ref.replace(lease_expires_at=NOW)
+        else:
+            ref.replace(lease_owner="reader", lease_expires_at=NOW + timedelta(minutes=1))
+    with pytest.raises(ValidationError):
+        ref.replace(released_at=NOW - timedelta(seconds=1))
+
+
+def test_generation_evidence_membership_roundtrips_and_rejects_arbitrary_labels():
+    m = model()
+    member = m.GenerationEvidenceMember(generation_id="g", record_kind="EvidenceSpan", record_id="span")
+    assert m.GenerationEvidenceMember.model_validate_json(member.model_dump_json()) == member
+    assert member.replace(generation_id="new").id != member.id
+    with pytest.raises(ValidationError):
+        member.replace(record_kind="User")
+    with pytest.raises(ValidationError):
+        member.replace(record_kind="EvidenceSpan) DETACH DELETE n")

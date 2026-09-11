@@ -52,6 +52,7 @@ from .generations import GenerationQueries
 from .knowledge import KnowledgeQueries
 from .ladybug import LadybugStore, StoreLockedError
 from .memory import MemoryQueries
+from .snapshots import SnapshotQueries
 from .users import UserQueries
 
 if TYPE_CHECKING:
@@ -63,6 +64,7 @@ log = logging.getLogger(__name__)
 class Store(
     KnowledgeQueries,
     GenerationQueries,
+    SnapshotQueries,
     MemoryQueries,
     CodeQueries,
     EvalQueries,

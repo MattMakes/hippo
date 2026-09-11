@@ -18,7 +18,7 @@ from .codegraph.model import CODE_EDGE_KINDS
 from .context import AppContext
 from .hipporag.graph_index import GraphIndex
 from .knowledge.access import AuthorizationChanged
-from .knowledge.query_access import current_access
+from .knowledge.query_access import QuerySession, current_access
 from .ollama import OllamaError
 
 CACHE_SECONDS = 8.0
@@ -34,18 +34,20 @@ class SourceView:
     validate: Callable[[], None]
 
 
-def source_view(ctx: AppContext, access: Access) -> SourceView:
+def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None = None) -> SourceView:
     """Keep source controls separate from managed evidence labels and inventory."""
     epoch = ctx.store.authorization_epoch()
     access = current_access(ctx.store, access)
-    graph = ctx.graph_for(access)
+    graph = session.graph if session is not None else ctx.graph_for(access)
 
     def validate():
+        if session is not None:
+            session.validate()
         graph.validate_authorization()
         if ctx.store.authorization_epoch() != epoch:
             raise AuthorizationChanged("Authorization changed while computing source inventory")
 
-    graph.validate_authorization()
+    validate()
     sources = ctx.store.list_sources(access)
     managed = {row.source_id for row in ctx.store._knowledge_rows("Artifact")}
     managed.update(row.source_id for row in ctx.store._knowledge_rows("Generation"))
@@ -114,7 +116,13 @@ def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
     }
 
 
-def system_status(ctx: AppContext, fresh: bool = False, *, access: Access | None = None) -> dict[str, Any]:
+def system_status(
+    ctx: AppContext,
+    fresh: bool = False,
+    *,
+    access: Access | None = None,
+    session: QuerySession | None = None,
+) -> dict[str, Any]:
     """Omitted access preserves internal diagnostics; transports must pass an audience."""
     now = time.monotonic()
     cached = getattr(ctx, "_status_health_cache", None)
@@ -132,7 +140,7 @@ def system_status(ctx: AppContext, fresh: bool = False, *, access: Access | None
         code = _code_card(stats, ctx.store.list_sources())
         jobs = ctx.jobs.running_keys()
     else:
-        stats, code, jobs = _audience_inventory(ctx, access)
+        stats, code, jobs = _audience_inventory(ctx, access, session=session)
     # The global embedding profile has no audience provenance. Do not expose
     # changes caused solely by a hidden corpus through a mismatch badge.
     built = ctx.store.get_meta("embed_model") if internal and health["store"] else None
@@ -171,7 +179,9 @@ def _health(ctx: AppContext) -> dict[str, Any]:
     }
 
 
-def _audience_inventory(ctx: AppContext, access: Access) -> tuple[dict, dict, list[str]]:
+def _audience_inventory(
+    ctx: AppContext, access: Access, *, session: QuerySession | None = None
+) -> tuple[dict, dict, list[str]]:
     stats = dict.fromkeys(
         (
             "sources",
@@ -189,7 +199,7 @@ def _audience_inventory(ctx: AppContext, access: Access) -> tuple[dict, dict, li
     )
     if access.audience_kind == "preview":
         return stats, _code_card(stats, []), []
-    view = source_view(ctx, access)
+    view = source_view(ctx, access, session=session)
     graph = view.graph
     legacy_sources = [source for source in view.sources if source["id"] in view.legacy_ids]
     stats.update(

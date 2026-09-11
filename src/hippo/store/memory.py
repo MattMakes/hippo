@@ -22,6 +22,7 @@ from ..access import ACCESS_WHERE, Access, access_params
 from .authorization import permission_mutation
 from .base import Neo4jBase, new_id, now_iso, with_defaults
 from .code import SYNONYM_LABELS, grouped_by_labels
+from .generations import legacy_source_cleanup, native_mutation, native_write
 from .migrations import DEFAULT_WORKSPACE_ID
 
 BATCH = 200  # rows per write query; keeps transactions small and progress visible
@@ -72,6 +73,10 @@ class MemoryQueries(Neo4jBase):
                 id=source_id,
                 workspace=DEFAULT_WORKSPACE_ID,
             )
+            if self.schema_version()["version"] >= 4:
+                self.run(
+                    "MATCH (s:Source {id:$id}) SET s.managed=false, s.build_fencing_token=0", id=source_id
+                )
         return source_id
 
     def update_source(self, source_id: str, **fields: Any) -> None:
@@ -114,6 +119,7 @@ class MemoryQueries(Neo4jBase):
         return [_source_row(r) for r in rows]
 
     @permission_mutation
+    @legacy_source_cleanup
     def delete_source(self, source_id: str) -> None:
         """Delete a source and its passages, then any entities/facts that nothing mentions any more."""
         self.delete_code_nodes_for_source(source_id)  # CodeQueries; both are mixins of Store
@@ -132,6 +138,7 @@ class MemoryQueries(Neo4jBase):
         self.run("MATCH (s:Source {id: $id}) DETACH DELETE s", id=source_id)
         self.remove_orphans()
 
+    @legacy_source_cleanup
     def delete_passages_for_source(self, source_id: str) -> None:
         """Forget a source's passages (and whatever only they supported) but keep the Source row, for re-indexing."""
         self.delete_code_nodes_for_source(source_id)  # CodeQueries; both are mixins of Store
@@ -190,6 +197,7 @@ class MemoryQueries(Neo4jBase):
 
     # ============================================================= passages
 
+    @native_write("Passage")
     def add_passages(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, source_id, ordinal, title, text, embedding}."""
         for batch in _batches(rows):
@@ -206,6 +214,7 @@ class MemoryQueries(Neo4jBase):
                 rows=batch,
             )
 
+    @native_mutation
     def save_extraction(
         self, passage_id: str, entities: list[str], triples: list[list[str]], error: str | None
     ) -> None:
@@ -266,6 +275,7 @@ class MemoryQueries(Neo4jBase):
         rows = self.run("UNWIND $ids AS id MATCH (e:Entity {id: id}) RETURN e.id AS id", ids=ids)
         return {r["id"] for r in rows}
 
+    @native_mutation
     def add_entities(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, name, embedding}. Callers pass only new ids (see existing_entity_ids); re-adding is harmless."""
         for batch in _batches(rows):
@@ -326,6 +336,7 @@ class MemoryQueries(Neo4jBase):
         rows = self.run("UNWIND $ids AS id MATCH (f:Fact {id: id}) RETURN f.id AS id", ids=ids)
         return {r["id"] for r in rows}
 
+    @native_mutation
     def add_facts(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, subject, predicate, object, subject_id, object_id, embedding}. Callers pass only new ids."""
         for batch in _batches(rows):
@@ -364,6 +375,7 @@ class MemoryQueries(Neo4jBase):
 
     # ================================================================ links
 
+    @native_mutation
     def link_passage_facts(self, pairs: list[tuple[str, str]]) -> None:
         rows = [{"passage_id": p, "fact_id": f} for p, f in pairs]
         for batch in _batches(rows, 1000):
@@ -376,6 +388,7 @@ class MemoryQueries(Neo4jBase):
                 rows=batch,
             )
 
+    @native_mutation
     def link_passage_entities(self, pairs: list[tuple[str, str]]) -> None:
         rows = [{"passage_id": p, "entity_id": e} for p, e in pairs]
         for batch in _batches(rows, 1000):
@@ -388,6 +401,7 @@ class MemoryQueries(Neo4jBase):
                 rows=batch,
             )
 
+    @native_mutation
     def add_synonyms(self, rows: list[tuple[str, str, float]], manual: bool = False) -> None:
         """
         rows: (node_id_a, node_id_b, score). Stored once per pair (a < b), keeping the best score.
@@ -433,7 +447,7 @@ class MemoryQueries(Neo4jBase):
         return self.run(
             """
             MATCH (p:Passage)-[:FROM]->(s:Source)
-            RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal, p.embedding AS embedding,
+            RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal, p.embedding AS embedding, p.generation_id AS generation_id,
                    s.id AS source_id, s.name AS source_name
             """
         )
@@ -490,6 +504,9 @@ SOURCE_DEFAULTS: dict[str, Any] = {
     "workspace_id": DEFAULT_WORKSPACE_ID,
     "active_generation_id": None,
     "generation_version": 0,
+    "managed": False,
+    "active_build_id": None,
+    "build_fencing_token": 0,
     "access_role_id": None,
     "min_rank": 0,
 }

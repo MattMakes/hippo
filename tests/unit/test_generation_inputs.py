@@ -94,3 +94,31 @@ def test_empty_generation_is_still_identified_before_outputs_are_built():
 def test_empty_generation_still_requires_an_explicit_workspace(workspace):
     with pytest.raises(ValueError, match="workspace"):
         build([], workspace_id=workspace)
+
+
+def test_generation_passage_identity_is_bound_to_all_selected_inputs():
+    from hippo.knowledge.lifecycle import generation_passage_id
+
+    identity = generation_passage_id("g1", "r1", "s1", 0)
+    assert identity.startswith("passage-")
+    assert (
+        len(
+            {
+                identity,
+                generation_passage_id("g2", "r1", "s1", 0),
+                generation_passage_id("g1", "r2", "s1", 0),
+                generation_passage_id("g1", "r1", "s2", 0),
+                generation_passage_id("g1", "r1", "s1", 1),
+            }
+        )
+        == 5
+    )
+    for args in [
+        ("", "r", "s", 0),
+        ("g", "", "s", 0),
+        ("g", "r", "", 0),
+        ("g", "r", "s", -1),
+        ("g", "r", "s", True),
+    ]:
+        with pytest.raises(ValueError):
+            generation_passage_id(*args)

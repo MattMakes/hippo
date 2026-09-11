@@ -355,3 +355,25 @@ def test_graph_preview_menu_uses_the_live_actor_after_a_pre_entry_downgrade(ctx,
     assert response.status_code == 200
     assert captured["principal"].role_id == "individual"
     assert captured["previewable"] == []
+
+
+def test_light_up_holds_one_graph_through_source_inventory_and_releases(
+    ctx, client, public_source, monkeypatch
+):
+    acquired, released = [], []
+    original = ctx.graph_for
+
+    def graph_for(*args, **kwargs):
+        result = original(*args, **kwargs)
+        acquired.append(result)
+        result.close_snapshot = lambda: released.append(result)
+        return result
+
+    monkeypatch.setattr(ctx, "graph_for", graph_for)
+    response = client.post(
+        "/api/graph/light-up", json={"question": "Who designed Orion?", "settings": {"qa_top_k": 1}}
+    )
+    assert response.status_code == 200, response.text
+    assert len(acquired) == 1
+    assert released == acquired
+    assert response.json()["settings"]["qa_top_k"] == 1

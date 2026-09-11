@@ -32,6 +32,7 @@ from typing import Any
 from ..access import ACCESS_WHERE, Access, access_params
 from ..hipporag.text import label_of, split_identifier
 from .base import Neo4jBase, now_iso, with_defaults
+from .generations import legacy_source_cleanup, native_mutation, native_write
 
 CODE_BATCH = 5000  # rows per UNWIND write (measured in research/S0-spikes.md spike 3)
 
@@ -110,6 +111,7 @@ def symbol_write_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"],
         "source_id": row["source_id"],
+        "generation_id": row.get("generation_id"),
         "name": name,
         "qualname": str(row.get("qualname") or ""),
         "kind": str(row.get("kind") or ""),
@@ -132,6 +134,7 @@ def data_object_write_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"],
         "source_id": row["source_id"],
+        "generation_id": row.get("generation_id"),
         "name": name,
         "qualname": str(row.get("qualname") or ""),
         "kind": str(row.get("kind") or ""),
@@ -146,6 +149,7 @@ def commit_write_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"],
         "source_id": row["source_id"],
+        "generation_id": row.get("generation_id"),
         "sha": str(row.get("sha") or ""),
         "author": str(row.get("author") or ""),
         "date": str(row.get("date") or ""),
@@ -354,6 +358,7 @@ class CodeQueries(Neo4jBase):
 
     # ============================================================== writing
 
+    @native_write("Symbol")
     def add_symbols(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, source_id, name, qualname, kind, lang, path, line_start, line_end, signature,
         doc, is_test, raises, embedding}. Re-adding updates in place; an unknown source is skipped."""
@@ -377,6 +382,7 @@ class CodeQueries(Neo4jBase):
                 now=now_iso(),
             )
 
+    @native_write("DataObject")
     def add_data_objects(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, source_id, name, qualname, kind, dialect, embedding}."""
         shaped = [data_object_write_row(r) for r in rows]
@@ -396,6 +402,7 @@ class CodeQueries(Neo4jBase):
                 now=now_iso(),
             )
 
+    @native_write("Commit")
     def add_commits(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, source_id, sha, author, date, message, ordinal}."""
         shaped = [commit_write_row(r) for r in rows]
@@ -413,6 +420,7 @@ class CodeQueries(Neo4jBase):
                 now=now_iso(),
             )
 
+    @native_mutation
     def add_code_edges(self, rows: list[dict[str, Any]]) -> None:
         """rows: {a, b, kind, omega, provenance, extra}. Directed, one per (a, b, kind); re-adding
         raises omega and never lowers it. Unknown kinds raise; self-loops and bad pairs are dropped."""
@@ -441,6 +449,7 @@ class CodeQueries(Neo4jBase):
                     rows=batch,
                 )
 
+    @native_mutation
     def link_definitions(self, pairs: list[tuple[str, str]]) -> None:
         """(node_id, passage_id) -> DEFINED_IN. The node may be a symbol, data object or commit."""
         rows = [{"a": a, "b": b} for a, b in dict.fromkeys(pairs)]
@@ -455,6 +464,7 @@ class CodeQueries(Neo4jBase):
                     rows=batch,
                 )
 
+    @native_mutation
     def add_modifies(self, rows: list[dict[str, Any]]) -> None:
         """rows: {commit_id, symbol_id, omega, hunk}. One edge per (commit, symbol)."""
         for batch in _batches(modifies_write_rows(rows)):
@@ -468,6 +478,7 @@ class CodeQueries(Neo4jBase):
                 rows=batch,
             )
 
+    @native_mutation
     def add_precedes(self, pairs: list[tuple[str, str]]) -> None:
         """(a, b) -> PRECEDES, the first-parent chain. Never reaches igraph; the history tool reads it."""
         rows = [
@@ -485,6 +496,7 @@ class CodeQueries(Neo4jBase):
                 rows=batch,
             )
 
+    @native_mutation
     def add_refers_to(self, rows: list[dict[str, Any]]) -> None:
         """rows: {passage_id, node_id, omega, token}. A prose or commit passage naming a code node."""
         shaped = refers_to_write_rows(rows)
@@ -503,6 +515,7 @@ class CodeQueries(Neo4jBase):
                     rows=batch,
                 )
 
+    @native_mutation
     def set_symbol_communities(self, mapping: dict[str, int]) -> None:
         """{symbol_id: community}. The Leiden label, shown as the subsystem name."""
         rows = [{"id": sid, "community": int(value)} for sid, value in mapping.items()]
@@ -670,6 +683,7 @@ class CodeQueries(Neo4jBase):
 
     # ------------------------------------------------------------- deleting
 
+    @legacy_source_cleanup
     def delete_code_nodes_for_source(self, source_id: str) -> None:
         """
         Every code node of one source, as **three per-label statements**.

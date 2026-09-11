@@ -30,7 +30,7 @@ from ...analysis.explain import explain
 from ...hipporag import paths as path_tools
 from ...hipporag.graph_index import CODE_KINDS, DATA, ENTITY, PASSAGE, SYMBOL, GraphIndex
 from ...knowledge.access import AuthorizationChanged
-from ...knowledge.query_access import AuthorizedModel, current_access, query_access
+from ...knowledge.query_access import AuthorizedModel, current_access, query_session
 from ...ollama import OllamaError
 from ...status import source_view
 from ..auth import principal_of
@@ -314,21 +314,32 @@ def light_up(request: Request, body: LightUpBody):
     """
     ctx = ctx_of(request)
     principal, _preview, validate_viewer = viewer(request, body.as_role or None)
-    index, model, validate = query_access(ctx, principal.access)
     try:
-        trace = ask_service._search(
-            ctx, index, AuthorizedModel(model, validate_viewer), body.question.strip(), body.settings
-        )
+        with query_session(ctx, principal.access, settings=body.settings) as session:
+            return _light_up_response(ctx, principal, body, session, validate_viewer)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
     finally:
-        validate()
         validate_viewer()
+
+
+def _light_up_response(ctx, principal, body, session, validate_viewer):
+    index, model, validate = session.graph, session.model, session.validate
+    trace = ask_service._search(
+        ctx,
+        index,
+        AuthorizedModel(model, validate_viewer),
+        body.question.strip(),
+        body.settings,
+        effective_settings=session.settings,
+    )
+    validate()
+    validate_viewer()
     top = max(1, min(int(body.top_passages), 50))
     explanation = explain(index, trace, top_passages=top)
-    view = source_view(ctx, principal.access)
+    view = source_view(ctx, principal.access, session=session)
     _source_tier, node_tier = tiers_of(ctx, index, view.sources)
 
     seeds = [

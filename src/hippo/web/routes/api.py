@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ... import ask as ask_service
-from ...knowledge.query_access import query_access
+from ...knowledge.query_access import query_session
 from ...ollama import OllamaError
 from ...status import system_status
 from ..auth import principal_of, require
@@ -73,43 +73,43 @@ def pull_models(request: Request):
 def ask(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     access = principal_of(request).access
-    _graph, _model, validate = query_access(ctx, access)
     try:
-        trace, answer = ask_service.ask(ctx, body.question.strip(), body.settings, access=access)
+        with query_session(ctx, access, settings=body.settings) as session:
+            trace, answer = ask_service.ask(
+                ctx, body.question.strip(), body.settings, access=access, session=session
+            )
+            payload = {
+                "answer": answer.answer,
+                "thought": answer.thought,
+                "passage_ids": answer.passage_ids,
+                "trace": trace.to_dict(),
+                **ask_service.code_fields(trace, answer.context_block),
+            }
+            session.validate()
+            return payload
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
-    finally:
-        validate()
-    payload = {
-        "answer": answer.answer,
-        "thought": answer.thought,
-        "passage_ids": answer.passage_ids,
-        "trace": trace.to_dict(),
-        **ask_service.code_fields(trace, answer.context_block),
-    }
-    validate()
-    return payload
 
 
 @router.post("/search")
 def search(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     access = principal_of(request).access
-    graph, _model, validate = query_access(ctx, access)
     try:
-        trace = ask_service.search(ctx, body.question.strip(), body.settings, access=access)
+        with query_session(ctx, access, settings=body.settings) as session:
+            trace = ask_service.search(
+                ctx, body.question.strip(), body.settings, access=access, session=session
+            )
+            block = ask_service.code_block(session.graph, trace)
+            payload = {"trace": trace.to_dict(), **ask_service.code_fields(trace, block)}
+            session.validate()
+            return payload
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except OllamaError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
-    finally:
-        validate()
-    block = ask_service.code_block(graph, trace)
-    payload = {"trace": trace.to_dict(), **ask_service.code_fields(trace, block)}
-    validate()
-    return payload
 
 
 # ------------------------------------------------------------- graph lookups

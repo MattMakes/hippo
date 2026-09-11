@@ -1266,7 +1266,7 @@ The authorization foundation is implemented and reviewed separately in `ai_docs/
 
 ### Task 5 — Staged generations and pinned query snapshots
 
-Generation input identity and extraction namespace propagation are implemented and independently reviewed in `ai_docs/gates/rag-it-all/task-5-namespace/GATES.md`: unchanged legacy IDs, separate logical source ownership, and consistent walker/resolver/Git/chunk references. The full task remains open for writer validation, syntax/embedding reuse, staged publication, exact evidence membership, snapshot leases and managed lifecycle dispatch.
+Generation input identity and extraction namespace propagation are implemented and independently reviewed in `ai_docs/gates/rag-it-all/task-5-namespace/GATES.md`: unchanged legacy IDs, separate logical source ownership, and consistent walker/resolver/Git/chunk references. Optional syntax and embedding cache primitives are reviewed in `task-5-syntax-cache/GATES.md` and `task-5-embedding-cache/GATES.md` under that same gates directory. Schema 4 storage now provides fenced builds, exact immutable membership, sealed publication, snapshot references, safe retries and conservative collection; `task-5-store/GATES.md` records the checks. Core query entry points hold one generation view through retrieval, model calls and rendering; `task-5-reader/GATES.md` records the checks. The full task remains open for staged pipeline integration, resolved model profiles, managed lifecycle dispatch, retained-result wiring and remaining analysis/evaluation consumers. Existing ingestion is still the legacy pipeline.
 
 **Depends on:** Tasks 3–4. **Gates:** G5.
 

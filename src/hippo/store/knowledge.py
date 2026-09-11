@@ -28,6 +28,8 @@ REFERENCES = {
     },
     "ArtifactRevision": {"artifact_id": "Artifact"},
     "Generation": {"source_id": "Source", "parent_id": "Generation"},
+    "GenerationEvidenceMember": {"generation_id": "Generation"},
+    "SnapshotReference": {"snapshot_id": "QuerySnapshot", "workspace_id": "Workspace"},
     "GenerationMember": {"generation_id": "Generation", "artifact_revision_id": "ArtifactRevision"},
     "EvidenceSpan": {"revision_id": "ArtifactRevision", "policy_id": "AccessPolicy"},
     "KnowledgeObject": {"workspace_id": "Workspace"},
@@ -112,6 +114,8 @@ REL_FIELDS = {
         ("BINDING_SPAN", "EvidenceSpan", "span_id"),
     ],
     "SectionMember": [("SECTION_PARENT", "Section", "section_id")],
+    "GenerationEvidenceMember": [("EVIDENCE_GENERATION", "Generation", "generation_id")],
+    "SnapshotReference": [("REFERENCE_SNAPSHOT", "QuerySnapshot", "snapshot_id")],
 }
 # Only these lifecycle fields may change under the same record identity.
 MUTABLE_FIELDS = {
@@ -247,7 +251,10 @@ class KnowledgeQueries:
                 return getattr(
                     self, {"Symbol": "symbols", "DataObject": "data_objects", "Commit": "commits"}[name]
                 ).get(record_id)
-            return self.run_one(f"MATCH (n:{name} {{id:$id}}) RETURN n.source_id AS source_id", id=record_id)
+            return self.run_one(
+                f"MATCH (n:{name} {{id:$id}}) RETURN n.source_id AS source_id, n.generation_id AS generation_id",
+                id=record_id,
+            )
         return next((record for record in self._knowledge_rows(name) if record.id == record_id), None)
 
     def _write_knowledge(self, record: k.Record, *, create_only: bool = False) -> None:
@@ -285,8 +292,8 @@ class KnowledgeQueries:
                     expression = f"${field}"
                 assignments.append(f"n.{field}={expression}")
             self.run(
-                f"MERGE (n:{name} {{id:$record_id}}) SET " + ", ".join(assignments),
-                record_id=record.id,
+                f"MERGE (n:{name} {{id:$knowledge_record_pk}}) SET " + ", ".join(assignments),
+                knowledge_record_pk=record.id,
                 **values,
             )
         for relation, target, field in REL_FIELDS.get(name, []):
@@ -307,6 +314,8 @@ class KnowledgeQueries:
             for field, target in LIST_REFERENCES.get(type(record).__name__, {}).items()
             for value in getattr(record, field)
         ]
+        if isinstance(record, k.GenerationEvidenceMember):
+            refs.append((record.record_kind, record.record_id))
         if isinstance(record, k.NativeBinding):
             refs.append((record.native_kind, record.native_id))
         if isinstance(record, k.SectionMember):
@@ -479,8 +488,11 @@ class KnowledgeQueries:
             if existing is not None and existing != record:
                 raise ValueError("Immutable record already exists with different contents")
             if existing is None:
+                self._check_knowledge_write(record)
                 self._write_knowledge(record, create_only=True)
-                self._bump_authorization_epoch()
+                from .authorization import record_mutation
+
+                record_mutation(self, record)
         return record.id
 
     def update_knowledge(self, record: k.Record) -> str:
@@ -517,8 +529,11 @@ class KnowledgeQueries:
                 if field in changed and getattr(record, field) < getattr(existing, field):
                     raise ValueError("Lifecycle counters cannot decrease")
             if changed:
+                self._check_knowledge_write(record, existing)
                 self._write_knowledge(record)
-                self._bump_authorization_epoch()
+                from .authorization import record_mutation
+
+                record_mutation(self, record, existing)
         return record.id
 
     def _reader_proof(self, workspace_id: str, access: Access, *, expected_epoch=None, selection=None):

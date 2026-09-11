@@ -18,7 +18,7 @@ from jinja2 import Undefined
 
 from ..access import Access
 from ..context import AppContext
-from ..knowledge.query_access import query_access
+from ..knowledge.query_access import QuerySession, query_access
 from ..status import system_status
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -72,6 +72,7 @@ def render(
     nav: str = "",
     status_code: int = 200,
     authorization_check: Callable[[], None] | None = None,
+    session: QuerySession | None = None,
     **context: Any,
 ):
     if authorization_check is not None:
@@ -84,11 +85,17 @@ def render(
     store_online = ctx.store.ping()
     # Every signed-in page includes scoped status, even when its own content has
     # no evidence callback (for example Settings or the status partial).
-    status_check = (
-        query_access(ctx, access)[2] if store_online and access.audience_kind != "preview" else None
-    )
+    if session is not None:
+        status_check = session.validate
+        status_check()
+    else:
+        status_check = (
+            query_access(ctx, access)[2] if store_online and access.audience_kind != "preview" else None
+        )
     context.update(
-        nav=nav, status=system_status(ctx, access=access, fresh=not store_online), config=ctx.config
+        nav=nav,
+        status=system_status(ctx, access=access, fresh=not store_online, session=session),
+        config=ctx.config,
     )
     response = templates.TemplateResponse(request, template, context, status_code=status_code)
     if authorization_check is not None:

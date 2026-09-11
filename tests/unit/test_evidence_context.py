@@ -303,3 +303,13 @@ def test_published_managed_span_reaches_query_and_revocation_evicts_cached_graph
     with pytest.raises(AuthorizationChanged):
         graph.validate_authorization()
     assert ctx.graph_for(access).passages == []
+
+
+def test_managed_reader_does_not_load_unselected_full_graph(ctx, monkeypatch):
+    foundation(ctx.store)
+
+    def forbidden():
+        raise AssertionError("unselected graph was loaded before generation filtering")
+
+    monkeypatch.setattr(ctx, "graph", forbidden)
+    assert ctx.graph_for(Principal.open().access).passages == []

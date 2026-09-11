@@ -28,6 +28,15 @@ from .store import AnyStore, open_store
 log = logging.getLogger(__name__)
 
 
+def _release_snapshot(bundle):
+    try:
+        bundle.close()
+    except Exception:
+        # Process/store shutdown may beat finalization. The durable lease still
+        # expires, so collection never depends on Python object destruction.
+        log.warning("Snapshot reference release deferred to lease expiry", exc_info=True)
+
+
 @dataclass
 class AppContext:
     config: Config
@@ -105,7 +114,7 @@ class AppContext:
 
     SCOPED_CACHE_SIZE = 16
 
-    def graph_for(self, access: Access | None) -> GraphIndex:
+    def graph_for(self, access: Access | None, *, settings: dict | None = None) -> GraphIndex:
         """
         The graph as `access` may see it. Unrestricted access (None, open mode, internal work)
         gets the full graph; anyone else gets an induced subgraph over their visible sources,
@@ -115,15 +124,25 @@ class AppContext:
         from .knowledge.query_access import current_access
 
         access = current_access(self.store, access)
-        graph = self._graph_for(access, epoch)
+        graph = self._graph_for(access, epoch, settings=settings)
         from .knowledge.access import AuthorizationChanged
 
-        if self.store.authorization_epoch() != epoch:
-            raise AuthorizationChanged("Authorization changed while loading graph scope")
-        if access is not None and access.audience_kind != "internal" and graph.authorization_check is None:
-            graph = self._authorize_legacy(graph, epoch)
-        graph.validate_authorization()
-        return graph
+        try:
+            if self.store.authorization_epoch() != epoch:
+                raise AuthorizationChanged("Authorization changed while loading graph scope")
+            if (
+                access is not None
+                and access.audience_kind != "internal"
+                and graph.authorization_check is None
+            ):
+                graph = self._authorize_legacy(graph, epoch)
+            graph.validate_authorization()
+            return graph
+        except BaseException:
+            close = getattr(graph, "close_snapshot", None)
+            if close is not None:
+                close()
+            raise
 
     def _authorize_legacy(self, graph: GraphIndex, epoch: int) -> GraphIndex:
         from .knowledge.access import AuthorizationChanged
@@ -146,12 +165,15 @@ class AppContext:
                 self._legacy_authorized.popitem(last=False)
             return view
 
-    def _graph_for(self, access: Access | None, epoch: int) -> GraphIndex:
-        full = self.graph()
+    def _graph_for(self, access: Access | None, epoch: int, *, settings=None) -> GraphIndex:
         managed_sources = {record.source_id for record in self.store._knowledge_rows("Artifact")}
         managed_sources.update(record.source_id for record in self.store._knowledge_rows("Generation"))
+        managed_sources.update(row["id"] for row in self.store.list_sources() if row.get("managed"))
         if managed_sources:
-            return self._managed_graph_for(full, access or Principal.open().access, managed_sources, epoch)
+            return self._managed_graph_for(
+                access or Principal.open().access, managed_sources, epoch, settings=settings
+            )
+        full = self.graph()
         if access is None or access.unrestricted:
             return full
         # The store applies the access predicate itself, so this is the Cypher-checked list.
@@ -169,13 +191,55 @@ class AppContext:
                 self._scoped.popitem(last=False)
         return scoped
 
-    def _managed_graph_for(self, full, access, managed_sources, epoch):
+    def _managed_graph_for(self, access, managed_sources, epoch, *, settings=None):
+        # Pointer selection and reference acquisition share collection's durable
+        # transaction boundary. No model calls run in this transaction.
+        with self.store.transaction():
+            return self._build_managed_graph(access, managed_sources, epoch, settings=settings)
+
+    def _build_managed_graph(self, access, managed_sources, epoch, *, settings=None):
         from .knowledge.access import AuthorizationChanged, EvidenceSelection
+        from .knowledge.graph_loader import load_generation_graph
         from .knowledge.projection import compose_graphs, project_managed_graph
 
         profile = self.ollama.embed_model
         sources = self.store.list_sources(access)
         legacy_ids = frozenset(row["id"] for row in sources if row["id"] not in managed_sources)
+        selected = {
+            row["id"]: row["active_generation_id"]
+            for row in sources
+            if row["id"] in managed_sources and row.get("active_generation_id")
+        }
+        strict = {
+            manifest.generation_id
+            for manifest in self.store._knowledge_rows("IndexManifest")
+            if manifest.ready and {"evidence", "dense", "native"} <= set(manifest.required_representations)
+        }
+        bundle = None
+        if any(identity in strict for identity in selected.values()):
+            from .knowledge.identity import canonical_json, text_hash
+            from .knowledge.snapshots import acquire_query_snapshots
+
+            bundle = acquire_query_snapshots(
+                self.store,
+                access,
+                source_ids=frozenset(
+                    source for source, generation in selected.items() if generation in strict
+                ),
+                profile_fingerprint=profile,
+                settings_fingerprint=text_hash(
+                    canonical_json(self.store.get_settings() if settings is None else settings)
+                ),
+            )
+        full = load_generation_graph(
+            self.store,
+            generations=selected,
+            legacy_source_ids=legacy_ids,
+            version=self.store.graph_version(),
+            trusted_untagged_generations={
+                source: gen for source, gen in selected.items() if gen not in strict
+            },
+        )
         proofs = []
         for workspace_id in sorted({row["workspace_id"] for row in sources if row["id"] in managed_sources}):
             generations = frozenset(
@@ -195,6 +259,8 @@ class AppContext:
             )
 
         def validate():
+            if bundle is not None:
+                bundle.validate()
             if self.ollama.embed_model != profile:
                 raise AuthorizationChanged("Retrieval profile changed during graph use")
             if self.store.authorization_epoch() != epoch:
@@ -216,12 +282,13 @@ class AppContext:
         )
         with self._scoped_lock:
             cached = self._managed_scoped.get(key)
-            if cached is not None:
+            if cached is not None and bundle is None:
                 cached.validate_authorization()
                 self._managed_scoped.move_to_end(key)
                 return cached
         projections = [
-            project_managed_graph(full, self.store, proof, embedding_profile=profile) for _, proof in proofs
+            project_managed_graph(full, self.store, proof, embedding_profile=profile, snapshot_bundle=bundle)
+            for _, proof in proofs
         ]
         scoped = compose_graphs(full.scoped(legacy_ids), *projections)
         scoped.authorization_check = validate
@@ -230,6 +297,12 @@ class AppContext:
 
             scoped.version = int(view_fingerprint(scoped)[:12], 16)
         validate()
+        if bundle is not None:
+            import weakref
+
+            scoped.snapshot_ids = tuple(snapshot.id for snapshot in bundle.snapshots)
+            scoped.close_snapshot = weakref.finalize(scoped, _release_snapshot, bundle)
+            return scoped
         with self._scoped_lock:
             self._managed_scoped[key] = scoped
             while len(self._managed_scoped) > self.SCOPED_CACHE_SIZE:
