@@ -123,6 +123,7 @@ RECORD_EPOCHS = {
             "DerivedRecord",
             "DerivedDependency",
             "RetrievalView",
+            "ProseExtraction",
             "Section",
             "SectionMember",
             "ConflictSet",

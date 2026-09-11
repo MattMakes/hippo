@@ -64,6 +64,7 @@ REFERENCES = {
     "HistoryManifest": {"workspace_id": "Workspace"},
     "DerivedRecord": {"workspace_id": "Workspace"},
     "ConsumerAck": {"event_id": "IndexEvent"},
+    "ProseExtraction": {"generation_id": "Generation", "derived_record_id": "DerivedRecord"},
     "RetrievalView": {
         "object_id": "KnowledgeObject",
         "span_id": "EvidenceSpan",
@@ -77,6 +78,7 @@ REFERENCES = {
     "QuerySnapshot": {"workspace_id": "Workspace", "link_generation_id": "LinkGeneration"},
 }
 LIST_REFERENCES = {
+    "ProseExtraction": {"support_passage_ids": "Passage"},
     "LinkGeneration": {"assertion_version_ids": "AssertionVersion"},
     "HistoryManifest": {
         "revision_ids": "ArtifactRevision",
@@ -244,6 +246,8 @@ class KnowledgeQueries:
         # Internal-only reference lookups; public access never defaults to unrestricted.
         if name == "Source":
             return self.get_source(record_id)
+        if name == "Passage":
+            return next((row for row in self._native_rows("Passage") if row["id"] == record_id), None)
         if name == "User":
             return self.get_user(record_id)
         if name in {"Symbol", "DataObject", "Commit"}:
@@ -314,6 +318,8 @@ class KnowledgeQueries:
             for field, target in LIST_REFERENCES.get(type(record).__name__, {}).items()
             for value in getattr(record, field)
         ]
+        if isinstance(record, k.ProseExtraction):
+            refs.append(("EvidenceSpan" if record.input_kind == "span" else "RetrievalView", record.input_id))
         if isinstance(record, k.GenerationEvidenceMember):
             refs.append((record.record_kind, record.record_id))
         if isinstance(record, k.NativeBinding):

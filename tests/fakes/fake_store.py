@@ -966,6 +966,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 "source_id": p["source_id"],
                 "source_name": self.sources[p["source_id"]]["name"],
                 "generation_id": p.get("generation_id"),
+                "retrieval_view_id": p.get("retrieval_view_id"),
             }
             for p in self.passages.values()
         ]

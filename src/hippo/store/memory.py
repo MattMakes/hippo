@@ -447,7 +447,7 @@ class MemoryQueries(Neo4jBase):
         return self.run(
             """
             MATCH (p:Passage)-[:FROM]->(s:Source)
-            RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal, p.embedding AS embedding, p.generation_id AS generation_id,
+            RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal, p.embedding AS embedding, p.generation_id AS generation_id, p.retrieval_view_id AS retrieval_view_id,
                    s.id AS source_id, s.name AS source_name
             """
         )

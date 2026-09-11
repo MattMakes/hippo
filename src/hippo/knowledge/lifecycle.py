@@ -70,7 +70,9 @@ def generation_namespace(generation: k.Generation) -> str:
     return text_hash(canonical_json([generation.source_id, generation.id]))
 
 
-def generation_passage_id(generation_id: str, revision_id: str, span_id: str, ordinal: int) -> str:
+def generation_passage_id(
+    generation_id: str, revision_id: str, span_id: str, ordinal: int, *, retrieval_view_id: str | None = None
+) -> str:
     """Bind native passage identity to immutable generation and original evidence."""
     if any(
         not isinstance(value, str) or not value.strip() for value in (generation_id, revision_id, span_id)
@@ -78,4 +80,10 @@ def generation_passage_id(generation_id: str, revision_id: str, span_id: str, or
         raise ValueError("Passage identity requires generation, revision and span IDs")
     if type(ordinal) is not int or ordinal < 0:
         raise ValueError("Passage ordinal must be a nonnegative integer")
+    if retrieval_view_id is not None:
+        if not isinstance(retrieval_view_id, str) or not retrieval_view_id.strip():
+            raise ValueError("Rendered passage requires a view ID")
+        return make_identity(
+            "passage", ["view-v1", generation_id, revision_id, span_id, ordinal, retrieval_view_id]
+        )
     return make_identity("passage", [generation_id, revision_id, span_id, ordinal])

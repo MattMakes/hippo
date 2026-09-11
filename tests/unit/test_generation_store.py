@@ -64,7 +64,7 @@ def publish(store, gen, job, **kwargs):
 
 
 def test_schema4_freezes_v3(store):
-    assert migrations.CURRENT_SCHEMA_VERSION == 4
+    assert migrations.CURRENT_SCHEMA_VERSION == 5
     assert (
         migrations.SUPPORTED_CHECKSUMS[3]
         == "ffc12b6f274a5b5573eed4dde9798f8b4abe9d37d68a570247a5c281c10d3ddc"

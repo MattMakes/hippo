@@ -256,7 +256,7 @@ def test_migration_records_legacy_and_current_checksums(store):
     m = migrations()
     store.ensure_schema()
     history = store.schema_history()
-    assert {row["version"] for row in history} == {1, 2, 3, 4}
+    assert {row["version"] for row in history} == {1, 2, 3, 4, 5}
     assert {row["version"]: row["checksum"] for row in history} == m.SUPPORTED_CHECKSUMS
     assert all(row["state"] == "complete" for row in history)
 
@@ -290,7 +290,7 @@ def test_declared_complete_schema_is_checked_against_physical_shape(tmp_path):
         LadybugStore(path)
 
 
-@pytest.mark.parametrize("version", [2, 3, 4])
+@pytest.mark.parametrize("version", [2, 3, 4, 5])
 def test_recovery_after_each_declared_schema_step(store, version):
     if store.knowledge_backend == "fake":
         pytest.skip("Fake storage has no DDL; its data rollback is tested separately")

@@ -219,6 +219,12 @@ class GenerationQueries:
         from .authorization import RECORD_EPOCHS
 
         if (
+            isinstance(record, k.Generation)
+            and isinstance(json.loads(record.coverage_json), dict)
+            and "derived_evidence_version" in json.loads(record.coverage_json)
+        ):
+            raise ValueError("Derived capability is controlled by storage membership")
+        if (
             isinstance(record, k.MaintenanceJob)
             and record.kind == "rebuild"
             and self._knowledge_get("Generation", record.input_fingerprint) is not None
@@ -241,11 +247,37 @@ class GenerationQueries:
         if existing is not None and isinstance(record, (k.Generation, k.SnapshotReference)):
             raise ValueError("Controlled lifecycle operation required")
         if isinstance(
-            record, (k.GenerationMember, k.GenerationEvidenceMember, k.NativeBinding, k.IndexManifest)
+            record,
+            (
+                k.GenerationMember,
+                k.GenerationEvidenceMember,
+                k.NativeBinding,
+                k.IndexManifest,
+                k.ProseExtraction,
+            ),
         ):
             self._assert_generation_writable(
-                record.generation_id, legacy_fixture=not isinstance(record, k.GenerationEvidenceMember)
+                record.generation_id,
+                legacy_fixture=not isinstance(record, (k.GenerationEvidenceMember, k.ProseExtraction)),
             )
+        if isinstance(record, k.GenerationEvidenceMember) and record.record_kind in {
+            "RetrievalView",
+            "DerivedRecord",
+            "DerivedDependency",
+            "ProseExtraction",
+        }:
+            gen = self._generation(record.generation_id)
+            coverage = json.loads(gen.coverage_json)
+            if not isinstance(coverage, dict):
+                raise ValueError("Derived capability requires object coverage")
+            if "derived_evidence_version" not in coverage:
+                self._write_knowledge(
+                    gen.replace(coverage_json=canonical_json({**coverage, "derived_evidence_version": 1}))
+                )
+        if isinstance(record, k.ProseExtraction):
+            from ..knowledge.derivations import validate_prose
+
+            validate_prose(self, record.generation_id, record, require_member=False)
         if isinstance(record, k.GenerationEvidenceMember):
             selected = {
                 r.artifact_revision_id
@@ -253,6 +285,8 @@ class GenerationQueries:
                 if r.generation_id == record.generation_id
             }
             target = self._knowledge_get(record.record_kind, record.record_id)
+            if isinstance(target, k.ProseExtraction) and target.generation_id != record.generation_id:
+                raise ValueError("Prose extraction belongs to another generation")
             if not self._record_revisions(target) <= selected:
                 raise ValueError("Evidence member is outside generation revisions")
         if isinstance(record, k.NativeBinding):
@@ -288,6 +322,10 @@ class GenerationQueries:
             m.record_kind == type(record).__name__ and m.record_id == record.id for m in frozen
         ):
             raise ValueError("Published interpretation is immutable")
+        if isinstance(record, k.DerivedDependency) and any(
+            m.record_kind == "DerivedRecord" and m.record_id == record.derived_record_id for m in frozen
+        ):
+            raise ValueError("Sealed derivation cannot gain dependencies")
         if isinstance(record, k.AssertionSupport) and any(
             m.record_kind == "AssertionVersion" and m.record_id == record.assertion_version_id for m in frozen
         ):
@@ -427,6 +465,11 @@ class GenerationQueries:
 
         for record in [*members, *exact, *bindings]:
             visit(record)
+        from ..knowledge.derivations import derived_capability, validate_generation_derivations
+
+        if derived_capability(gen):
+            validate_generation_derivations(self, gen.id)
+            evidence[("DerivedCapability", gen.id)] = {"derived_evidence_version": 1}
         dense = [r for r in self._native_rows("Passage") if r.get("generation_id") == generation_id]
         # Minimum capability coverage; a pipeline also verifies its declared chunk
         # inventory. Nested/support spans need not each have a separate vector.
@@ -480,6 +523,21 @@ class GenerationQueries:
             if not any(o.object_id == binding.object_id for o in observations):
                 raise ValueError("Native binding object lacks a selected observation")
         dimensions = set()
+        from ..knowledge.derivations import validate_prose
+
+        inputs = set()
+        for member in exact:
+            if member.record_kind != "ProseExtraction":
+                continue
+            extraction = self._knowledge_get("ProseExtraction", member.record_id)
+            validate_prose(self, gen.id, extraction)
+            key = (extraction.input_kind, extraction.input_id, extraction.extractor_profile)
+            if key in inputs:
+                raise ValueError("Conflicting prose extraction results for one input")
+            inputs.add(key)
+            dimensions.update(
+                len(row.embedding) for row in (*extraction.payload.entities, *extraction.payload.triples)
+            )
         for row in dense:
             self._validate_managed_native("Passage", row, gen)
             if ("EvidenceSpan", row["span_id"]) not in exact_ids:
@@ -704,6 +762,8 @@ class GenerationQueries:
                     "content_kind",
                 )
             }
+            if row.get("retrieval_view_id") is not None:
+                shaped["retrieval_view_id"] = row["retrieval_view_id"]
             shaped.update(
                 title=row.get("title") or "",
                 text=row.get("text") or "",
@@ -734,18 +794,38 @@ class GenerationQueries:
                 for m in self._knowledge_rows("GenerationMember")
                 if m.generation_id == gen.id
             }
+            view = None
+            if row.get("retrieval_view_id") is not None:
+                from ..knowledge.derivations import validate_view
+
+                view = self._knowledge_get("RetrievalView", row["retrieval_view_id"])
+                if view is None:
+                    raise ValueError("Missing rendered retrieval view")
+                validate_view(self, gen.id, view)
+                if (
+                    view.span_id != row.get("span_id")
+                    or view.source_revision_id != row.get("artifact_revision_id")
+                    or view.vector_profile != gen.embedding_profile
+                ):
+                    raise ValueError("Rendered passage binding differs")
             if (
                 span is None
                 or revision is None
                 or revision.id not in selected
                 or span.revision_id != revision.id
                 or row.get("embedding_profile") != gen.embedding_profile
-                or row.get("text") != span.text
+                or row.get("text") != (view.text if view else span.text)
             ):
                 raise ValueError("Passage revision/span/profile/original text binding differs")
             from ..knowledge.lifecycle import generation_passage_id
 
-            if row.get("id") != generation_passage_id(gen.id, revision.id, span.id, row.get("ordinal", 0)):
+            if row.get("id") != generation_passage_id(
+                gen.id,
+                revision.id,
+                span.id,
+                row.get("ordinal", 0),
+                retrieval_view_id=row.get("retrieval_view_id"),
+            ):
                 raise ValueError("Passage ID does not match generation binding")
             if not row.get("embedding"):
                 raise ValueError("Dense passage requires a vector")
@@ -852,6 +932,7 @@ def native_write(kind):
                             "embedding_profile",
                             "parent_passage_id",
                             "content_kind",
+                            "retrieval_view_id",
                         )
                         if kind == "Passage"
                         else ("generation_id",)

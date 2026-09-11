@@ -17,7 +17,10 @@ from typing import Literal
 
 from hippo.access import Access
 
+from .derivations import derived_capability, validate_prose, validate_view
 from .identity import canonical_json
+
+_DERIVED_KINDS = ("DerivedRecord", "DerivedDependency", "RetrievalView", "ProseExtraction")
 
 
 class AuthorizationChanged(RuntimeError):
@@ -69,6 +72,10 @@ class AuthorizedEvidence:
     assertion_ids: frozenset[str] = frozenset()
     support_ids: frozenset[str] = frozenset()
     native_binding_ids: frozenset[str] = frozenset()
+    derived_record_ids: frozenset[str] = frozenset()
+    derived_dependency_ids: frozenset[str] = frozenset()
+    retrieval_view_ids: frozenset[str] = frozenset()
+    prose_extraction_ids: frozenset[str] = frozenset()
     support_groups: tuple[AuthorizedSupportGroup, ...] = ()
     policy_fingerprint: str = ""
     authorization_epoch: int = field(default=0, repr=False)
@@ -79,6 +86,27 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _exact_generations(rows, selection):
+    required = {"evidence", "dense", "native"}
+    return {
+        manifest.generation_id
+        for manifest in rows("IndexManifest").values()
+        if selection.generation_ids is not None
+        and manifest.generation_id in selection.generation_ids
+        and manifest.ready
+        and required <= set(manifest.required_representations)
+        and required <= {item.kind for item in manifest.checksums if item.ready}
+    }
+
+
+def _derived_generations(rows, exact):
+    return {
+        identity
+        for identity in exact
+        if (generation := rows("Generation").get(identity)) is not None and derived_capability(generation)
+    }
+
+
 def _interpretation_inventory(rows, selection):
     """Select sealed interpretation membership before evaluating any ACL.
 
@@ -87,24 +115,19 @@ def _interpretation_inventory(rows, selection):
     Crucially, an empty exact manifest means no interpretation, not a fallback.
     """
     if selection.generation_ids is None:
-        return rows
-    required = {"evidence", "dense", "native"}
-    exact = {
-        manifest.generation_id
-        for manifest in rows("IndexManifest").values()
-        if manifest.generation_id in selection.generation_ids
-        and manifest.ready
-        and required <= set(manifest.required_representations)
-        and required <= {item.kind for item in manifest.checksums if item.ready}
-    }
+        return lambda kind: {} if kind in _DERIVED_KINDS else rows(kind)
+    exact = _exact_generations(rows, selection)
     compatibility = selection.generation_ids - exact
     if selection.require_exact_membership and compatibility:
         raise ValueError("Selected generation needs a sealed exact manifest; rebuild required")
     if not exact:
-        return rows
+        return lambda kind: {} if kind in _DERIVED_KINDS else rows(kind)
+    derived_exact = _derived_generations(rows, exact)
     selected = defaultdict(set)
     for member in rows("GenerationEvidenceMember").values():
-        if member.generation_id in exact:
+        if member.generation_id in exact and (
+            member.record_kind not in _DERIVED_KINDS or member.generation_id in derived_exact
+        ):
             selected[member.record_kind].add(member.record_id)
     compatibility_revisions = {
         member.artifact_revision_id
@@ -120,7 +143,13 @@ def _interpretation_inventory(rows, selection):
         and span.revision_id in compatibility_revisions
     }
     inventories = {}
-    for kind in ("EvidenceSpan", "ObjectObservation", "AssertionVersion", "AssertionSupport"):
+    for kind in (
+        "EvidenceSpan",
+        "ObjectObservation",
+        "AssertionVersion",
+        "AssertionSupport",
+        *_DERIVED_KINDS,
+    ):
         inventories[kind] = {
             identity: record
             for identity, record in rows(kind).items()
@@ -133,6 +162,54 @@ def _interpretation_inventory(rows, selection):
             or (kind == "AssertionSupport" and record.assertion_version_id in compatibility_versions)
         }
     return lambda kind: inventories.get(kind, rows(kind))
+
+
+def _authorized_derivations(store, rows, interpretation, selection, spans, revisions, bindings, suppressed):
+    """Validate full trusted closures before applying all-input audience grants."""
+    exact = _derived_generations(rows, _exact_generations(rows, selection))
+    views = interpretation("RetrievalView")
+    prose = interpretation("ProseExtraction")
+    derived = interpretation("DerivedRecord")
+    dependencies = interpretation("DerivedDependency")
+    selected_outputs = defaultdict(set)
+    for member in rows("GenerationEvidenceMember").values():
+        if member.generation_id in exact and member.record_kind in {"RetrievalView", "ProseExtraction"}:
+            selected_outputs[member.record_kind].add((member.generation_id, member.record_id))
+    visible_derived, visible_dependencies, visible_views, visible_prose = set(), set(), set(), set()
+
+    def include(closure):
+        if (
+            not closure.span_ids <= spans.keys()
+            or not closure.revision_ids <= revisions.keys()
+            or not closure.binding_ids <= bindings
+            or not closure.derived_record_ids <= derived.keys()
+            or not closure.dependency_ids <= dependencies.keys()
+            or not closure.view_ids <= views.keys()
+            or any(("derived_record", identity) in suppressed for identity in closure.derived_record_ids)
+        ):
+            return False
+        visible_derived.update(closure.derived_record_ids)
+        visible_dependencies.update(closure.dependency_ids)
+        visible_views.update(closure.view_ids)
+        return True
+
+    for generation_id, identity in sorted(selected_outputs["RetrievalView"]):
+        view = views.get(identity)
+        if view is None:
+            raise ValueError("Selected derived retrieval view is missing")
+        include(validate_view(store, generation_id, view))
+    for generation_id, identity in sorted(selected_outputs["ProseExtraction"]):
+        extraction = prose.get(identity)
+        if extraction is None:
+            raise ValueError("Selected prose extraction is missing")
+        if include(validate_prose(store, generation_id, extraction)):
+            visible_prose.add(identity)
+    return dict(
+        derived_record_ids=frozenset(visible_derived),
+        derived_dependency_ids=frozenset(visible_dependencies),
+        retrieval_view_ids=frozenset(visible_views),
+        prose_extraction_ids=frozenset(visible_prose),
+    )
 
 
 class EvidenceAccess:
@@ -397,6 +474,9 @@ class EvidenceAccess:
                 and native.get("source_id") == artifact.source_id
             ):
                 bindings.add(binding.id)
+        derived_visible = _authorized_derivations(
+            self.store, rows, interpretation, selection, spans, revisions, bindings, suppressed
+        )
         visible = dict(
             artifact_ids=frozenset(artifacts),
             revision_ids=frozenset(revisions),
@@ -408,6 +488,10 @@ class EvidenceAccess:
             support_ids=frozenset(supports),
             native_binding_ids=frozenset(bindings),
         )
+        # An additive schema must not invalidate original-only schema 4 proofs
+        # or expose the existence of denied/unselected derived payloads.
+        if any(derived_visible.values()):
+            visible.update(derived_visible)
         fingerprint = hashlib.sha256(
             canonical_json(
                 [

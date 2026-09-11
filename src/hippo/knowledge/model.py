@@ -379,6 +379,7 @@ class GenerationEvidenceMember(Record):
         "Section",
         "SectionMember",
         "RetrievalView",
+        "ProseExtraction",
         "DerivedRecord",
         "DerivedDependency",
         "ConflictSet",
@@ -991,6 +992,111 @@ class RetrievalView(Record):
     )
 
 
+def _prose_vector(value):
+    import math
+    import struct
+
+    if not isinstance(value, (tuple, list)) or not value or any(type(v) not in (int, float) for v in value):
+        raise ValueError("Prose vector requires finite numeric values")
+    try:
+        result = tuple(struct.unpack("f", struct.pack("f", v))[0] for v in value)
+    except (OverflowError, TypeError) as error:
+        raise ValueError("Invalid prose vector") from error
+    if not all(math.isfinite(v) for v in result):
+        raise ValueError("Prose vector must be finite")
+    return result
+
+
+ProseVector = Annotated[tuple[float, ...], BeforeValidator(_prose_vector)]
+
+
+class ProseEntity(Contract):
+    name: Text
+    embedding: ProseVector
+
+
+class ProseTriple(Contract):
+    subject: Text
+    predicate: Text
+    object: Text
+    embedding: ProseVector
+
+
+class ProseExtractionPayload(Contract):
+    schema_version: VersionOne = 1
+    evidence_class: Literal["model_inferred"] = "model_inferred"
+    entities: tuple[ProseEntity, ...] = ()
+    triples: tuple[ProseTriple, ...] = ()
+
+    @model_validator(mode="after")
+    def canonical_output(self) -> Self:
+        from ..hipporag.text import clean_phrase
+
+        entities = {}
+        triples = {}
+        for row in self.entities:
+            if row.name != clean_phrase(row.name):
+                raise ValueError("Entity name requires normalized text")
+            if row.name in entities and entities[row.name] != row:
+                raise ValueError("Conflicting entity vectors")
+            entities[row.name] = row
+        for row in self.triples:
+            key = (row.subject, row.predicate, row.object)
+            if any(value != clean_phrase(value) for value in key):
+                raise ValueError("Triple requires normalized text")
+            if not {row.subject, row.object} <= entities.keys():
+                raise ValueError("Triple endpoint missing from entities")
+            if key in triples and triples[key] != row:
+                raise ValueError("Conflicting triple vectors")
+            triples[key] = row
+        if len({len(row.embedding) for row in (*entities.values(), *triples.values())}) > 1:
+            raise ValueError("Prose vector dimensions differ")
+        object.__setattr__(self, "entities", tuple(entities[key] for key in sorted(entities)))
+        object.__setattr__(self, "triples", tuple(triples[key] for key in sorted(triples)))
+        return self
+
+
+class ProseExtraction(Record):
+    generation_id: Text
+    derived_record_id: Text
+    input_kind: Literal["span", "view"]
+    input_id: Text
+    input_text_hash: Text
+    support_passage_ids: Annotated[tuple[Text, ...], Field(min_length=1)]
+    extractor_profile: Text
+    embedding_profile: Text
+    payload: ProseExtractionPayload
+    payload_hash: Text = "pending"
+    identity_fields = (
+        "generation_id",
+        "derived_record_id",
+        "input_kind",
+        "input_id",
+        "input_text_hash",
+        "support_passage_ids",
+        "extractor_profile",
+        "embedding_profile",
+        "payload_hash",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def bind_payload(cls, values):
+        if isinstance(values, dict) and "payload" in values:
+            payload = (
+                values["payload"]
+                if isinstance(values["payload"], ProseExtractionPayload)
+                else ProseExtractionPayload.model_validate_json(canonical_json(values["payload"]))
+            )
+            expected = text_hash(canonical_json(payload.model_dump(mode="json")))
+            if values.get("payload_hash", expected) != expected:
+                raise ValueError("Prose payload hash differs")
+            values = values | {"payload": payload, "payload_hash": expected}
+            if "support_passage_ids" in values:
+                values = values | {"support_passage_ids": tuple(sorted(set(values["support_passage_ids"])))}
+        return values
+
+
 class Section(Record):
     source_revision_id: Text
     original_heading: str
@@ -1283,6 +1389,7 @@ _RECORD_CLASSES = (
     IndexEvent,
     ConsumerAck,
     RetrievalView,
+    ProseExtraction,
     Section,
     SectionMember,
     ConflictSet,
