@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-09-11T18:59:36.409997+00:00",
+  "exit_code": 0,
+  "engine": {
+    "distribution": "0.15.3",
+    "version": "0.15.3",
+    "storage_version": 40,
+    "platform": "macOS-26.5.1-arm64-arm-64bit",
+    "python": "3.12.11"
+  },
+  "native": {
+    "fts": {
+      "load": {
+        "status": "unavailable",
+        "error": "RuntimeError: Binder exception: Extension: fts is an official extension and has not been installed.\nYou can install it by: install fts."
+      },
+      "extension_version": null,
+      "extension_version_note": "Loaded catalog reports source/path, not a separate semantic version; no version inferred",
+      "checks": {
+        "create": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "query": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "dimensions": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "insert": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "edit": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "delete": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "rebuild": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "transaction": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "transaction_create_index": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "reopen_load": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "reopen_query": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        }
+      }
+    },
+    "vector": {
+      "load": {
+        "status": "unavailable",
+        "error": "RuntimeError: Binder exception: Extension: vector is an official extension and has not been installed.\nYou can install it by: install vector."
+      },
+      "extension_version": null,
+      "extension_version_note": "Loaded catalog reports source/path, not a separate semantic version; no version inferred",
+      "checks": {
+        "create": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "query": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "dimensions": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "insert": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "edit": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "delete": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "rebuild": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "transaction": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "transaction_create_index": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "reopen_load": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        },
+        "reopen_query": {
+          "status": "not_run",
+          "reason": "Prerequisite unavailable or failed"
+        }
+      }
+    }
+  },
+  "guarantees": {
+    "application_acl": "not_run",
+    "generation_membership": "not_run",
+    "bitemporal_membership": "not_run",
+    "concurrent_revocation": "not_run",
+    "native_filtered_top_k": "not_run",
+    "native_score_noninterference": "not_run",
+    "bm25_correctness": "not_run",
+    "target_slice_recall": "not_run",
+    "crash_recovery": "not_run"
+  },
+  "extension_install_attempted": false,
+  "selection": {
+    "native_enabled": false,
+    "lexical": "authorized_view_bm25",
+    "dense": "authorized_view_numpy_exact",
+    "reasons": [
+      "Application isolation/lifecycle/recall guarantees remain unproved",
+      "fts: native capability unavailable or failed; see checks",
+      "vector: native capability unavailable or failed; see checks"
+    ]
+  },
+  "database_path": "/tmp/hippo-store-capabilities-ly4zclfp/probe.lbug",
+  "official_extensions": {
+    "status": "passed",
+    "details": [
+      [
+        "ALGO",
+        "Adds support for graph algorithms"
+      ],
+      [
+        "AZURE",
+        "Adds support for reading from azure blob storage"
+      ],
+      [
+        "DELTA",
+        "Adds support for reading from delta tables"
+      ],
+      [
+        "DUCKDB",
+        "Adds support for reading from duckdb tables"
+      ],
+      [
+        "FTS",
+        "Adds support for full-text search indexes"
+      ],
+      [
+        "HTTPFS",
+        "Adds support for reading and writing files over a HTTP(S)/S3 filesystem"
+      ],
+      [
+        "ICEBERG",
+        "Adds support for reading from iceberg tables"
+      ],
+      [
+        "JSON",
+        "Adds support for JSON operations"
+      ],
+      [
+        "LLM",
+        "Adds support for LLM operations"
+      ],
+      [
+        "NEO4J",
+        "Adds support for migrating nodes and rels from neo4j to lbug"
+      ],
+      [
+        "POSTGRES",
+        "Adds support for reading from POSTGRES tables"
+      ],
+      [
+        "SQLITE",
+        "Adds support for reading from SQLITE tables"
+      ],
+      [
+        "UNITY_CATALOG",
+        "Adds support for scanning delta tables registered in unity catalog"
+      ]
+    ]
+  },
+  "loaded_extensions_initial": {
+    "status": "passed",
+    "details": []
+  },
+  "exact_baseline": {
+    "status": "passed",
+    "initial_ids": [
+      "allowed_a",
+      "allowed_b"
+    ],
+    "scores": [
+      1.0,
+      0.7999999928474427
+    ],
+    "after_retirement_ids": [
+      "allowed_b"
+    ],
+    "after_delete_ids": [],
+    "hidden_edit_unchanged": true,
+    "fixed_dimension_rejection": true,
+    "boundary": "Scalar fixture filters only; not application ACL, concurrent revocation, or BM25 proof."
+  },
+  "loaded_extensions": {
+    "status": "passed",
+    "details": []
+  },
+  "core_reopen": {
+    "status": "passed",
+    "details": [
+      [
+        4
+      ]
+    ]
+  },
+  "connection_close": {
+    "status": "passed",
+    "details": null
+  },
+  "database_close": {
+    "status": "passed",
+    "details": null
+  },
+  "cleanup": {
+    "status": "passed",
+    "details": null
+  }
+}
