@@ -99,11 +99,27 @@ def query_session(ctx, access=None, *, settings: dict[str, Any] | None = None) -
     effective_settings = validate_settings({**ctx.store.get_settings(), **(settings or {})})
     captured_settings = MappingProxyType(effective_settings)
     graph, model, validate = query_access(ctx, access, settings=dict(captured_settings))
+    heartbeat = None
+
+    def validate_live():
+        if heartbeat is not None:
+            heartbeat.check()
+        validate()
+        if heartbeat is not None:
+            heartbeat.check()
+
     try:
-        yield QuerySession(graph, model, validate, captured_settings)
+        if getattr(graph, "snapshot_ids", ()):
+            from .lease_heartbeat import LeaseHeartbeat
+
+            heartbeat = LeaseHeartbeat(validate, interval=graph.snapshot_renewal_interval)
+            heartbeat.start()
+        yield QuerySession(graph, AuthorizedModel(model, validate_live), validate_live, captured_settings)
     finally:
+        if heartbeat is not None:
+            heartbeat.close()
         try:
-            validate()
+            validate_live()
         finally:
             close = getattr(graph, "close_snapshot", None)
             if close is not None:

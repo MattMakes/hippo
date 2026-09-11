@@ -1,0 +1,11 @@
+# Task 5 renewal during outstanding model requests
+
+Status: implementation contract, approved within the existing Task 5 scope. This closes the outstanding-call lease gap in the staged pipeline plan; it does not add a scheduler or change retention policy.
+
+A QuerySession with durable snapshot references owns one renewal worker. The worker invokes the graph's existing local authorization/lease validation callback every one-third of the captured lease duration. It performs no model requests. Legacy graphs start no worker. The interval derives from the actual lease contract; it is not an implementation estimate.
+
+The worker records its first failure and stops. Every subsequent model boundary and final response validation checks that failure, rejects output, and never attempts to revive an expired reference. Successful content publication continues to leave the held generation usable. Current access revocation remains authoritative. Python cannot interrupt an arbitrary running model HTTP call; a failed renewal makes that call's eventual output unusable and prevents further calls.
+
+The session signals stop and joins its owned renewal worker before releasing snapshot references, on success and exceptions. No background callback can run after close returns. Thread-start failure still releases the acquired graph. Nested callers borrow the session and start no additional worker. Store calls are short transactions outside model work; callback execution and foreground store validation use the store's existing serialization. Do not add a lock held across both store calls and graph callbacks, which could invert the transaction lock order.
+
+Add a reusable internal LeaseHeartbeat in knowledge/lease_heartbeat.py, expose the captured renewal interval on strict context graphs, and wire query_session without changing legacy query_access tuple consumers. Use event-controlled worker tests (renewal, failure, stop/join, no calls after close), a controlled-clock real managed reference test proving G1 remains protected across its original expiry during an outstanding model call, and current-revocation/error cleanup tests. Fake and Ladybug prove the contract; Neo runs require exclusive reservation. The complete Task 5 consumer conversion remains separately tracked.

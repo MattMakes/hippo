@@ -301,6 +301,7 @@ class AppContext:
             import weakref
 
             scoped.snapshot_ids = tuple(snapshot.id for snapshot in bundle.snapshots)
+            scoped.snapshot_renewal_interval = bundle.lease_duration.total_seconds() / 3
             scoped.close_snapshot = weakref.finalize(scoped, _release_snapshot, bundle)
             return scoped
         with self._scoped_lock:
