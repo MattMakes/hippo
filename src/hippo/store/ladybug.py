@@ -54,6 +54,7 @@ from ..access import (
     new_token,
     verify_password,
 )
+from .authorization import metadata_mutation, permission_mutation
 from .base import DEFAULT_SETTINGS, new_id, now_iso, validate_settings
 from .changesets import _changeset_row
 from .code import (
@@ -461,6 +462,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
     def get_meta(self, key: str) -> Any:
         return json.loads(self._settings_row()["meta"] or "{}").get(key)
 
+    @metadata_mutation
     def set_meta(self, key: str, value: Any) -> None:
         with self._lock:
             meta = json.loads(self._settings_row()["meta"] or "{}")
@@ -647,6 +649,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
         counts = self._source_counts()
         return [self._shape_source(r, counts) for r in rows]
 
+    @permission_mutation
     def delete_source(self, source_id: str) -> None:
         with self._lock:
             self.delete_code_nodes_for_source(source_id)
@@ -1812,6 +1815,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
             )
         return role_id
 
+    @permission_mutation
     def update_role(self, role_id: str, **fields: Any) -> dict[str, Any]:
         """Edit name/rank/description/capabilities. A rank change is copied onto the role's sources."""
         allowed = {"name", "rank", "description", "capabilities"}
@@ -1842,6 +1846,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
                 )
             return self.get_role(role_id)  # type: ignore[return-value]
 
+    @permission_mutation
     def delete_role(self, role_id: str) -> None:
         """Remove a role nobody uses. Refused while a user or a source still names it."""
         with self._lock:
@@ -1894,6 +1899,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
         rows = self._users("u.token = decode($value)", value=text(token))
         return rows[0] if rows else None
 
+    @permission_mutation
     def create_user(self, username: str, password: str, role_id: str, display_name: str = "") -> str:
         username = clean_username(username)
         with self._lock:
@@ -1918,6 +1924,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
             )
         return user_id
 
+    @permission_mutation
     def update_user(self, user_id: str, **fields: Any) -> dict[str, Any]:
         """Edit display_name, role_id, disabled or password. Unknown keys are refused."""
         allowed = {"display_name", "role_id", "disabled", "password"}
@@ -1947,6 +1954,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
         self.run("MATCH (u:User {id: $id}) SET u.token = decode($token)", id=user_id, token=text(token))
         return token
 
+    @permission_mutation
     def delete_user(self, user_id: str) -> None:
         """Remove a user. Their sources stay, ownerless (visible by their tier alone)."""
         with self._lock:
@@ -1962,6 +1970,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries):
 
     # ======================================================= source access
 
+    @permission_mutation
     def set_source_access(self, source_id: str, role_id: str | None, owner_id: str | None = ...) -> None:
         """
         Who may see a source: the lowest role (None = everyone) and, optionally, a new owner.

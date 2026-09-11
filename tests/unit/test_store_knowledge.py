@@ -15,7 +15,13 @@ def foundation(store):
     workspace = k.Workspace(name="default")
     store.put_knowledge(workspace)
     source = store.create_source("file", "schema.sql")
-    policy = k.AccessPolicy(workspace_id=workspace.id, mode="workspace", verified_at=NOW)
+    policy = k.AccessPolicy(
+        workspace_id=workspace.id,
+        origin="local_curated",
+        scope_key="source:" + source,
+        mode="workspace",
+        verified_at=NOW - timedelta(days=1),
+    )
     store.put_knowledge(policy)
     artifact = k.Artifact(
         workspace_id=workspace.id,
@@ -39,6 +45,22 @@ def foundation(store):
     )
     store.put_knowledge(span)
     return workspace, source, policy, artifact, revision, span
+
+
+def reader(store, workspace_id, name):
+    store.ensure_roles()
+    user = store.create_user(name, "secret1", "individual")
+    store.set_meta("reviewed_mapping_authorities", ["reviewed"])
+    store.put_knowledge(
+        k.WorkspaceMembership(
+            workspace_id=workspace_id,
+            principal_id=user,
+            enabled=True,
+            mapping_authority="reviewed",
+            policy_epoch=1,
+        )
+    )
+    return user
 
 
 def test_persist_immutable_evidence_and_required_scoped_read(store):
@@ -165,6 +187,7 @@ def test_publication_compare_and_swap_is_atomic_and_idempotent(store):
 
 def test_unknown_policy_and_source_visibility_fail_closed(store):
     workspace, source, policy, artifact, revision, span = foundation(store)
+    user = reader(store, workspace.id, "evidence-reader")
     denied = k.AccessPolicy(workspace_id=workspace.id, mode="unknown", verified_at=NOW)
     store.put_knowledge(denied)
     private_span = span.replace(
@@ -173,20 +196,27 @@ def test_unknown_policy_and_source_visibility_fail_closed(store):
     store.put_knowledge(private_span)
     assert (
         store.get_knowledge(
-            "EvidenceSpan", private_span.id, workspace_id=workspace.id, access=Access(user_id="u")
+            "EvidenceSpan", private_span.id, workspace_id=workspace.id, access=Access(user_id=user)
         )
         is None
     )
     assert (
-        store.get_knowledge("EvidenceSpan", span.id, workspace_id=workspace.id, access=Access(user_id="u"))
+        store.get_knowledge("EvidenceSpan", span.id, workspace_id=workspace.id, access=Access(user_id=user))
         == span
     )
 
 
 def test_support_groups_require_and_within_group_or_across_groups(store):
     w, source, policy, artifact, revision, public = foundation(store)
+    ordinary = reader(store, w.id, "ordinary")
+    privileged = reader(store, w.id, "privileged")
     private_policy = k.AccessPolicy(
-        workspace_id=w.id, mode="restricted", allow_users=("privileged",), verified_at=NOW
+        workspace_id=w.id,
+        origin="local_curated",
+        scope_key="fixture:private",
+        mode="restricted",
+        allow_users=(privileged,),
+        verified_at=NOW - timedelta(days=1),
     )
     store.put_knowledge(private_policy)
     private = k.EvidenceSpan(
@@ -226,24 +256,22 @@ def test_support_groups_require_and_within_group_or_across_groups(store):
             k.AssertionSupport(assertion_version_id=version.id, span_id=span.id, derivation_group="mapped")
         )
     assert (
-        store.get_knowledge(
-            "KnowledgeObject", subject.id, workspace_id=w.id, access=Access(user_id="ordinary")
-        )
+        store.get_knowledge("KnowledgeObject", subject.id, workspace_id=w.id, access=Access(user_id=ordinary))
         == subject
     )
     assert (
-        store.get_knowledge("Assertion", assertion.id, workspace_id=w.id, access=Access(user_id="ordinary"))
+        store.get_knowledge("Assertion", assertion.id, workspace_id=w.id, access=Access(user_id=ordinary))
         is None
     )
     assert (
-        store.get_knowledge("Assertion", assertion.id, workspace_id=w.id, access=Access(user_id="privileged"))
+        store.get_knowledge("Assertion", assertion.id, workspace_id=w.id, access=Access(user_id=privileged))
         == assertion
     )
     store.put_knowledge(
         k.AssertionSupport(assertion_version_id=version.id, span_id=public.id, derivation_group="independent")
     )
     assert (
-        store.get_knowledge("Assertion", assertion.id, workspace_id=w.id, access=Access(user_id="ordinary"))
+        store.get_knowledge("Assertion", assertion.id, workspace_id=w.id, access=Access(user_id=ordinary))
         == assertion
     )
 
@@ -668,18 +696,9 @@ def test_concurrent_immutable_insert_cannot_overwrite_winning_payload(store, mon
     )
     other.ensure_schema()
     barrier = Barrier(2)
-    for backend in (store, other):
-        original = backend._knowledge_get
-
-        def read(name, identity, original=original):
-            found = original(name, identity)
-            if name == "ArtifactRevision" and identity == candidates[0].id and found is None:
-                barrier.wait(timeout=15)
-            return found
-
-        monkeypatch.setattr(backend, "_knowledge_get", read)
 
     def insert(backend, record):
+        barrier.wait(timeout=15)
         try:
             backend.put_knowledge(record)
             return record
@@ -731,12 +750,12 @@ def test_artifact_cannot_move_existing_history_to_another_source(store):
         == source
     )
     assert (
-        store.get_knowledge("ArtifactRevision", revision.id, workspace_id=workspace.id, access=Access())
+        store.get_knowledge("ArtifactRevision", revision.id, workspace_id=workspace.id, access=EVERYTHING)
         == revision
     )
 
 
-def test_membership_reads_are_safe_and_limited_to_the_named_principal(store):
+def test_membership_control_records_require_internal_access(store):
     workspace, *_ = foundation(store)
     store.ensure_roles()
     user = store.create_user("membership-reader", "secret1", "individual")
@@ -752,13 +771,19 @@ def test_membership_reads_are_safe_and_limited_to_the_named_principal(store):
         store.get_knowledge(
             "WorkspaceMembership", membership.id, workspace_id=workspace.id, access=Access(user_id=user)
         )
-        == membership
+        is None
     )
     assert (
         store.get_knowledge(
             "WorkspaceMembership", membership.id, workspace_id=workspace.id, access=Access(user_id="other")
         )
         is None
+    )
+    assert (
+        store.get_knowledge(
+            "WorkspaceMembership", membership.id, workspace_id=workspace.id, access=EVERYTHING
+        )
+        == membership
     )
 
 

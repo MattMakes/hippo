@@ -17,6 +17,7 @@ import re
 from typing import Any
 
 from ..access import ALL_CAPABILITIES, DEFAULT_ROLES, EVERYONE_RANK, hash_password, new_token, verify_password
+from .authorization import permission_mutation
 from .base import Neo4jBase, new_id, now_iso, with_defaults
 
 ROLE_DEFAULTS: dict[str, Any] = {
@@ -121,6 +122,7 @@ class UserQueries(Neo4jBase):
         )
         return role_id
 
+    @permission_mutation
     def update_role(self, role_id: str, **fields: Any) -> dict[str, Any]:
         """Edit name/rank/description/capabilities. A rank change is copied onto the role's sources."""
         allowed = {"name", "rank", "description", "capabilities"}
@@ -150,6 +152,7 @@ class UserQueries(Neo4jBase):
             )
         return self.get_role(role_id)  # type: ignore[return-value]
 
+    @permission_mutation
     def delete_role(self, role_id: str) -> None:
         """Remove a role nobody uses. Refused while a user or a source still names it."""
         role = self.get_role(role_id)
@@ -207,6 +210,7 @@ class UserQueries(Neo4jBase):
         )
         return _user_row(row) if row else None
 
+    @permission_mutation
     def create_user(self, username: str, password: str, role_id: str, display_name: str = "") -> str:
         username = clean_username(username)
         if self.get_user_by_username(username) is not None:
@@ -232,6 +236,7 @@ class UserQueries(Neo4jBase):
         )
         return user_id
 
+    @permission_mutation
     def update_user(self, user_id: str, **fields: Any) -> dict[str, Any]:
         """Edit display_name, role_id, disabled or password. Unknown keys are refused."""
         allowed = {"display_name", "role_id", "disabled", "password"}
@@ -269,6 +274,7 @@ class UserQueries(Neo4jBase):
         self.run("MATCH (u:User {id: $id}) SET u.token = $token", id=user_id, token=token)
         return token
 
+    @permission_mutation
     def delete_user(self, user_id: str) -> None:
         """Remove a user. Their sources stay, ownerless (visible by their tier alone)."""
         self.run("MATCH (s:Source {owner_id: $id}) REMOVE s.owner_id", id=user_id)
@@ -283,6 +289,7 @@ class UserQueries(Neo4jBase):
 
     # ======================================================= source access
 
+    @permission_mutation
     def set_source_access(self, source_id: str, role_id: str | None, owner_id: str | None = ...) -> None:
         """
         Who may see a source: the lowest role (None = everyone) and, optionally, a new owner.

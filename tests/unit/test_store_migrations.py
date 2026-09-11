@@ -164,6 +164,7 @@ def test_populated_backend_migration_preserves_legacy_records(store):
     m = migrations()
     if store.knowledge_backend == "fake":
         store._schema_row = {"version": 1, "checksum": m.V1_CHECKSUM, "state": "complete", "step": 0}
+        store._schema_history = {1: dict(store._schema_row)}
     else:
         store.run("MATCH (v:SchemaVersion) DETACH DELETE v")
         store.run(
@@ -232,10 +233,14 @@ def test_ladybug_future_version_releases_lock_and_does_not_cleanup(tmp_path):
 
 def test_migration_data_failure_rolls_back_and_recovers(store):
     m = migrations()
+    store.ensure_schema()
     if store.knowledge_backend == "fake":
-        store._schema_row = None
+        store._schema_history.pop(m.CURRENT_SCHEMA_VERSION)
+        store._schema_row = dict(store._schema_history[m.CURRENT_SCHEMA_VERSION - 1])
     else:
-        store.run("MATCH (v:SchemaVersion) DETACH DELETE v")
+        store.run(
+            "MATCH (v:SchemaVersion {version:$version}) DETACH DELETE v", version=m.CURRENT_SCHEMA_VERSION
+        )
 
     def fault(step):
         if step == "data":
@@ -251,8 +256,8 @@ def test_migration_records_legacy_and_current_checksums(store):
     m = migrations()
     store.ensure_schema()
     history = store.schema_history()
-    assert {row["version"] for row in history} == {1, 2}
-    assert {row["version"]: row["checksum"] for row in history} == {1: m.V1_CHECKSUM, 2: m.MIGRATION_CHECKSUM}
+    assert {row["version"] for row in history} == {1, 2, 3}
+    assert {row["version"]: row["checksum"] for row in history} == m.SUPPORTED_CHECKSUMS
     assert all(row["state"] == "complete" for row in history)
 
 
@@ -285,12 +290,13 @@ def test_declared_complete_schema_is_checked_against_physical_shape(tmp_path):
         LadybugStore(path)
 
 
-def test_recovery_after_each_declared_schema_step(store):
+@pytest.mark.parametrize("version", [2, 3])
+def test_recovery_after_each_declared_schema_step(store, version):
     if store.knowledge_backend == "fake":
         pytest.skip("Fake storage has no DDL; its data rollback is tested separately")
     m = migrations()
-    for position in range(len(m.schema_steps(store))):
-        store.run("MATCH (v:SchemaVersion {version:2}) DETACH DELETE v")
+    for position in range(len(m.schema_steps(store, version=version))):
+        store.run("MATCH (v:SchemaVersion) WHERE v.version >= $version DETACH DELETE v", version=version)
 
         def fail(step, expected=f"schema:{position}"):
             if step == expected:
@@ -304,7 +310,7 @@ def test_recovery_after_each_declared_schema_step(store):
         try:
             row = store.schema_version()
             if store.knowledge_backend == "ladybug":
-                assert row["version"] == 1  # all migration writes rolled back
+                assert row["version"] == version - 1  # migration writes rolled back
             else:
                 assert row["state"] == "pending" and row["step"] == position + 1
         finally:
@@ -322,7 +328,7 @@ def test_first_ladybug_schema_failure_rolls_back_actual_new_tables(tmp_path, mon
         store = LadybugStore(tmp_path / "rollback.lbug")
     try:
         original_tables = store.run("CALL show_tables() RETURN name,type ORDER BY name")
-        last_step = f"schema:{len(m.schema_steps(store)) - 1}"
+        last_step = f"schema:{len(m.schema_steps(store, version=2)) - 1}"
 
         def fail(step):
             if step == last_step:

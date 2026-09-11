@@ -1,7 +1,7 @@
 """Shared evidence validation and backend persistence, never an unscoped public read.
 
-Task 4 supplies the full principal/group/snapshot authorization engine. Until then
-provider policies fail closed; source rank is an additional intersection. Internal
+Managed reads apply principal/group/evidence authorization; source rank is an
+additional intersection. Internal
 write validation uses private lookups and does not expose a bypass transport.
 """
 
@@ -183,6 +183,21 @@ def _json_field(model, field):
 
 
 class KnowledgeQueries:
+    def authorization_epoch(self) -> int:
+        from .authorization import authorization_epoch
+
+        return authorization_epoch(self)
+
+    def _bump_authorization_epoch(self) -> int:
+        from .authorization import bump_authorization_epoch
+
+        return bump_authorization_epoch(self)
+
+    def _lock_authorization(self) -> None:
+        from .authorization import lock_authorization
+
+        lock_authorization(self)
+
     def _ensure_knowledge_ready(self):
         if not getattr(self, "_schema_checked", False) and not self._migrating:
             self.ensure_schema()
@@ -360,6 +375,14 @@ class KnowledgeQueries:
         return result
 
     def _validate_knowledge(self, record):
+        from .authorization import configured_provider, safer_connector
+
+        if isinstance(record, k.Connector) and configured_provider(record) and self.count_users() == 0:
+            existing = self._knowledge_get("Connector", record.id)
+            if not safer_connector(existing, record):
+                raise ValueError(
+                    "Provider connectors require a signed-in installation; open mode cannot configure or enable them"
+                )
         refs = []
         for name, rid in self._references(record):
             reference = self._knowledge_get(name, rid)
@@ -450,12 +473,14 @@ class KnowledgeQueries:
             raise TypeError("Expected a registered immutable knowledge record")
         record = type(record).model_validate(record)
         with self.transaction():
+            self._lock_authorization()
             self._validate_knowledge(record)
             existing = self._knowledge_get(type(record).__name__, record.id)
             if existing is not None and existing != record:
                 raise ValueError("Immutable record already exists with different contents")
             if existing is None:
                 self._write_knowledge(record, create_only=True)
+                self._bump_authorization_epoch()
         return record.id
 
     def update_knowledge(self, record: k.Record) -> str:
@@ -466,6 +491,7 @@ class KnowledgeQueries:
             raise TypeError("Expected a registered immutable knowledge record")
         record = type(record).model_validate(record)
         with self.transaction():
+            self._lock_authorization()
             if self.knowledge_backend == "neo4j":
                 # Lock before reading lifecycle state; two processes must not both
                 # close the same historical interpretation from an old open view.
@@ -490,75 +516,45 @@ class KnowledgeQueries:
             for field in ("fencing_token", "attempt_count", "policy_epoch"):
                 if field in changed and getattr(record, field) < getattr(existing, field):
                     raise ValueError("Lifecycle counters cannot decrease")
-            self._write_knowledge(record)
+            if changed:
+                self._write_knowledge(record)
+                self._bump_authorization_epoch()
         return record.id
 
-    def _policy_visible(self, policy, access):
-        if access.unrestricted:
-            return True
-        if policy.mode == "unknown" or (policy.expires_at and policy.expires_at <= datetime.now(UTC)):
-            return False
-        if access.user_id in policy.deny_users or policy.deny_groups:
-            return False
-        return policy.mode == "workspace" or (
-            access.user_id is not None and access.user_id in policy.allow_users
-        )
+    def _reader_proof(self, workspace_id: str, access: Access, *, expected_epoch=None, selection=None):
+        from ..knowledge.access import AuthorizationChanged, EvidenceAccess
 
-    def _record_visible(self, record, access, seen=None):
-        if access.unrestricted:
-            return True
-        if isinstance(record, (k.WorkspaceMembership, k.GroupMembership)):
-            return access.user_id is not None and record.principal_id == access.user_id
-        if record is None or isinstance(record, dict):
-            return False
-        seen = set() if seen is None else seen
-        if record.id in seen:
-            return False
-        seen = seen | {record.id}
-        if isinstance(record, k.AccessPolicy):
-            return self._policy_visible(record, access)
-        if isinstance(record, k.EvidenceSpan):
-            policy = self._knowledge_get("AccessPolicy", record.policy_id)
-            revision = self._knowledge_get("ArtifactRevision", record.revision_id)
-            return self._policy_visible(policy, access) and self._record_visible(revision, access, seen)
-        if isinstance(record, k.ObjectObservation):
-            return self._record_visible(self._knowledge_get("EvidenceSpan", record.span_id), access, seen)
-        if isinstance(record, k.Artifact):
-            return access.can_see_source(self.get_source(record.source_id)) and self._policy_visible(
-                self._knowledge_get("AccessPolicy", record.policy_id), access
-            )
-        if isinstance(record, k.AssertionVersion):
-            groups = {}
-            for support in self._knowledge_rows("AssertionSupport"):
-                if support.assertion_version_id == record.id:
-                    groups.setdefault(support.derivation_group, []).append(support.span_id)
-            return any(
-                all(
-                    self._record_visible(self._knowledge_get("EvidenceSpan", span), access, seen)
-                    for span in spans
-                )
-                for spans in groups.values()
-            )
-        if isinstance(record, k.Assertion):
-            return any(
-                version.assertion_id == record.id and self._record_visible(version, access, seen)
-                for version in self._knowledge_rows("AssertionVersion")
-            )
-        if isinstance(record, k.KnowledgeObject):
-            return any(
-                obs.object_id == record.id and self._record_visible(obs, access, seen)
-                for obs in self._knowledge_rows("ObjectObservation")
-            )
-        refs = self._references(record)
-        if not refs:
-            return isinstance(record, k.Workspace)
-        return all(
-            access.can_see_source(reference)
-            if isinstance(reference, dict) and "kind" in reference
-            else self._record_visible(reference, access, seen)
-            for name, rid in refs
-            if (reference := self._knowledge_get(name, rid)) is not None
-        )
+        expected_epoch = self.authorization_epoch() if expected_epoch is None else expected_epoch
+
+        authorities = self.get_meta("reviewed_mapping_authorities") or []
+        if not isinstance(authorities, list) or any(
+            not isinstance(item, str) or not item for item in authorities
+        ):
+            raise RuntimeError("Invalid reviewed membership authority configuration")
+        engine = EvidenceAccess(self, workspace_id, access, mapping_authorities=frozenset(authorities))
+        proof = engine.build(selection)
+        if proof.authorization_epoch != expected_epoch:
+            raise AuthorizationChanged("Authorization changed during the evidence read")
+        return engine, proof
+
+    @staticmethod
+    def _record_visible(record, access, proof):
+        field = {
+            "Artifact": "artifact_ids",
+            "ArtifactRevision": "revision_ids",
+            "EvidenceSpan": "span_ids",
+            "ObjectObservation": "observation_ids",
+            "KnowledgeObject": "object_ids",
+            "Assertion": "assertion_ids",
+            "AssertionVersion": "assertion_version_ids",
+            "AssertionSupport": "support_ids",
+            "NativeBinding": "native_binding_ids",
+        }.get(type(record).__name__)
+        if field is not None:
+            return record.id in getattr(proof, field)
+        # Control records contain credentials, complete inventory counts or derived
+        # text. Their user-facing DTOs must be rendered by the owning service.
+        return False
 
     def get_knowledge(self, name: str, record_id: str, *, workspace_id: str, access: Access):
         self._ensure_knowledge_ready()
@@ -566,17 +562,28 @@ class KnowledgeQueries:
             raise ValueError("Unknown knowledge record type")
         if not isinstance(access, Access) or not workspace_id:
             raise TypeError("Knowledge reads require explicit workspace and Access")
+        epoch = self.authorization_epoch()
         record = self._knowledge_get(name, record_id)
         if record is None or self._workspaces(record) != {workspace_id}:
             return None
-        return record if self._record_visible(record, access) else None
+        if access.audience_kind == "internal":
+            return record
+        engine, proof = self._reader_proof(workspace_id, access, expected_epoch=epoch)
+        visible = self._record_visible(record, access, proof)
+        engine.validate_current(proof)
+        return record if visible else None
 
     def list_knowledge(self, name: str, *, workspace_id: str, access: Access):
         self._ensure_knowledge_ready()
         if not isinstance(access, Access) or not workspace_id:
             raise TypeError("Knowledge reads require explicit workspace and Access")
-        return [
-            record
-            for record in self._knowledge_rows(name)
-            if self._workspaces(record) == {workspace_id} and self._record_visible(record, access)
+        epoch = self.authorization_epoch()
+        records = [
+            record for record in self._knowledge_rows(name) if self._workspaces(record) == {workspace_id}
         ]
+        if access.audience_kind == "internal":
+            return records
+        engine, proof = self._reader_proof(workspace_id, access, expected_epoch=epoch)
+        visible = [record for record in records if self._record_visible(record, access, proof)]
+        engine.validate_current(proof)
+        return visible

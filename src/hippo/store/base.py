@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from .authorization import metadata_mutation
+
 log = logging.getLogger(__name__)
 
 # The retrieval knobs, with the reference implementation's defaults (BaseConfig in HippoRAG 2).
@@ -290,6 +292,7 @@ class Neo4jBase:
         row = self.run_one("MATCH (s:Settings {id: 'global'}) RETURN s[$key] AS value", key=key)
         return row["value"] if row else None
 
+    @metadata_mutation
     def set_meta(self, key: str, value: Any) -> None:
         # `SET s += $map` works on every Neo4j 5.x (the dynamic `s[$key] = ...` form needs 5.24+).
         self.run(

@@ -24,6 +24,7 @@ from hippo.access import (
     new_token,
     verify_password,
 )
+from hippo.store.authorization import metadata_mutation, permission_mutation
 from hippo.store.base import DEFAULT_SETTINGS, new_id, now_iso, validate_settings
 from hippo.store.code import (
     BOOSTABLE_LABELS,
@@ -164,6 +165,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
     def get_meta(self, key: str) -> Any:
         return self.meta.get(key)
 
+    @metadata_mutation
     def set_meta(self, key: str, value: Any) -> None:
         self.meta[key] = value
 
@@ -280,6 +282,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
         self.tuned = {k: v for k, v in self.tuned.items() if not (set(k) & gone)}
         self.synonyms = {k: v for k, v in self.synonyms.items() if not (set(k) & gone)}
 
+    @permission_mutation
     def delete_source(self, source_id: str) -> None:
         self._drop_passages_and_code(source_id)
         self.sources.pop(source_id, None)
@@ -766,6 +769,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
         }
         return role_id
 
+    @permission_mutation
     def update_role(self, role_id: str, **fields: Any) -> dict[str, Any]:
         allowed = {"name", "rank", "description", "capabilities"}
         bad = set(fields) - allowed
@@ -789,6 +793,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
             role["capabilities"] = clean_capabilities(fields["capabilities"])
         return self._role_row(role)
 
+    @permission_mutation
     def delete_role(self, role_id: str) -> None:
         role = self.get_role(role_id)
         if role is None:
@@ -838,6 +843,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
                 return self._user_row(u)
         return None
 
+    @permission_mutation
     def create_user(self, username: str, password: str, role_id: str, display_name: str = "") -> str:
         username = clean_username(username)
         if self.get_user_by_username(username) is not None:
@@ -857,6 +863,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
         }
         return user_id
 
+    @permission_mutation
     def update_user(self, user_id: str, **fields: Any) -> dict[str, Any]:
         allowed = {"display_name", "role_id", "disabled", "password"}
         bad = set(fields) - allowed
@@ -883,6 +890,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
             self.users[user_id]["token"] = token
         return token
 
+    @permission_mutation
     def delete_user(self, user_id: str) -> None:
         for s in self.sources.values():
             if s.get("owner_id") == user_id:
@@ -895,6 +903,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries):
             return None
         return user if verify_password(password, user.get("password_hash")) else None
 
+    @permission_mutation
     def set_source_access(self, source_id: str, role_id: str | None, owner_id: str | None = ...) -> None:
         if role_id:
             role = self.roles.get(role_id)

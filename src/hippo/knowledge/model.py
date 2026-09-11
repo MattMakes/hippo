@@ -599,6 +599,8 @@ class ForeignKeyMapping(Contract):
 
 class AccessPolicy(Record):
     workspace_id: Text
+    origin: Literal["legacy_unknown", "local_curated", "provider"] = "legacy_unknown"
+    scope_key: Text | None = None
     mode: Literal["unknown", "restricted", "workspace"] = "unknown"
     allow_users: tuple[Text, ...] = ()
     allow_groups: tuple[Text, ...] = ()
@@ -607,6 +609,16 @@ class AccessPolicy(Record):
     verified_at: Instant
     expires_at: Instant | None = None
     identity_fields = ("workspace_id", "mode", "allow_users", "allow_groups", "deny_users", "deny_groups")
+
+    def identity_parts(self) -> list:
+        parts = super().identity_parts()
+        if self.origin == "legacy_unknown":
+            if self.scope_key is not None:
+                raise ValueError("Legacy policy origin cannot declare a scope")
+            return parts
+        if self.scope_key is None:
+            raise ValueError("Explicit policy origin requires a scope_key")
+        return [*parts, self.origin, self.scope_key]
 
     @model_validator(mode="after")
     def expiry(self) -> Self:

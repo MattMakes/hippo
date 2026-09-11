@@ -1,0 +1,377 @@
+"""Audience-safe evidence proofs, separate from retrieval and temporal selection.
+
+Only internal readers may bypass policy checks. A caller selecting current or
+historical evidence must supply its resolved selection; an omitted selection
+authorizes retained records without claiming that they are currently applicable.
+The store owns epoch mutation and callers must validate before releasing results.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Literal
+
+from hippo.access import Access
+
+from .identity import canonical_json
+
+
+class AuthorizationChanged(RuntimeError):
+    """An authorization proof expired or changed; discard dependent output."""
+
+
+@dataclass(frozen=True)
+class EvidenceSelection:
+    generation_ids: frozenset[str] | None = None
+    revision_ids: frozenset[str] | None = None
+    assertion_version_ids: frozenset[str] | None = None
+    query_mode: Literal["current", "history"] = "current"
+
+    def __post_init__(self):
+        if self.query_mode not in {"current", "history"}:
+            raise ValueError("Unknown evidence query mode")
+        for name in ("generation_ids", "revision_ids", "assertion_version_ids"):
+            values = getattr(self, name)
+            if values is not None and (
+                not isinstance(values, frozenset)
+                or any(not isinstance(item, str) or not item for item in values)
+            ):
+                raise ValueError("Evidence selection IDs must be immutable nonempty strings")
+
+
+@dataclass(frozen=True)
+class AuthorizedSupportGroup:
+    assertion_version_id: str
+    derivation_group: str
+    span_ids: frozenset[str]
+    support_ids: frozenset[str]
+
+
+@dataclass(frozen=True)
+class AuthorizedEvidence:
+    workspace_id: str
+    selection: EvidenceSelection
+    artifact_ids: frozenset[str] = frozenset()
+    revision_ids: frozenset[str] = frozenset()
+    span_ids: frozenset[str] = frozenset()
+    observation_ids: frozenset[str] = frozenset()
+    object_ids: frozenset[str] = frozenset()
+    assertion_version_ids: frozenset[str] = frozenset()
+    assertion_ids: frozenset[str] = frozenset()
+    support_ids: frozenset[str] = frozenset()
+    native_binding_ids: frozenset[str] = frozenset()
+    support_groups: tuple[AuthorizedSupportGroup, ...] = ()
+    policy_fingerprint: str = ""
+    authorization_epoch: int = field(default=0, repr=False)
+    valid_until: datetime | None = None
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+class EvidenceAccess:
+    """Build proofs from full trusted storage inventories, never filtered groups.
+
+    Mapping authorities are explicit administrator configuration. Provider scopes
+    are opaque IDs whose connector-to-policy binding must be verified by ingestion;
+    this layer additionally checks origin, connector namespace, and freshness.
+    """
+
+    def __init__(
+        self,
+        store,
+        workspace_id: str,
+        access: Access,
+        *,
+        mapping_authorities: frozenset[str] = frozenset(),
+        clock: Callable[[], datetime] = utc_now,
+        policy_max_age: timedelta | None = None,
+        epoch_reader: Callable[[], int] | None = None,
+    ):
+        if policy_max_age is not None and policy_max_age <= timedelta(0):
+            raise ValueError("Policy maximum age must be positive")
+        self.store = store
+        self.workspace_id = workspace_id
+        self.access = access
+        self.mapping_authorities = frozenset(mapping_authorities)
+        self.clock = clock
+        self.policy_max_age = policy_max_age
+        self.epoch_reader = epoch_reader or store.authorization_epoch
+
+    def _now(self) -> datetime:
+        now = self.clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("Authorization clock must be timezone aware")
+        return now.astimezone(UTC)
+
+    def _identity(self):
+        if self.access.audience_kind == "internal":
+            return self.access
+        if self.access.audience_kind != "reader" or not self.access.user_id:
+            return None
+        user = self.store.get_user(self.access.user_id)
+        if not user or user.get("disabled") or user.get("id") != self.access.user_id:
+            return None
+        role = self.store.get_role(user.get("role_id"))
+        if not role:
+            return None
+        memberships = self.store._knowledge_rows("WorkspaceMembership")
+        if not any(self._membership(member) for member in memberships):
+            return None
+        return Access(rank=min(self.access.rank, int(role.get("rank") or 0)), user_id=self.access.user_id)
+
+    def _membership(self, member) -> bool:
+        return (
+            member.workspace_id == self.workspace_id
+            and member.principal_id == self.access.user_id
+            and member.enabled
+            and member.mapping_authority in self.mapping_authorities
+        )
+
+    def build(self, selection: EvidenceSelection | None = None) -> AuthorizedEvidence:
+        selection = selection or EvidenceSelection()
+        epoch, now = self.epoch_reader(), self._now()
+        identity = self._identity()
+        internal = self.access.audience_kind == "internal"
+        records = {}
+
+        def rows(kind):
+            if kind not in records:
+                records[kind] = {record.id: record for record in self.store._knowledge_rows(kind)}
+            return records[kind]
+
+        suppressed = {
+            (item.target_kind, item.target_id)
+            for item in rows("Suppression").values()
+            if item.workspace_id == self.workspace_id
+            and (item.all_principals or self.access.user_id in item.principal_ids)
+            and (selection.query_mode == "current" or item.view_applicability == "all_history")
+        }
+        groups = {
+            member.group_id
+            for member in rows("GroupMembership").values()
+            if self._membership(member)
+            and (group := rows("KnowledgeObject").get(member.group_id)) is not None
+            and group.workspace_id == self.workspace_id
+            and group.kind in {"group", "team"}
+        }
+        proofs = {}
+
+        def grant(policy_id, artifact):
+            policy = rows("AccessPolicy").get(policy_id)
+            if (
+                policy is None
+                or policy.workspace_id != self.workspace_id
+                or ("policy", policy_id) in suppressed
+            ):
+                return False
+            if internal:
+                return True
+            if policy.origin == "legacy_unknown" or policy.mode == "unknown" or policy.verified_at > now:
+                return False
+            if artifact.connector_id:
+                connector = rows("Connector").get(artifact.connector_id)
+                if (
+                    connector is None
+                    or not connector.enabled
+                    or connector.workspace_id != self.workspace_id
+                    or connector.instance_url != artifact.provider_instance
+                ):
+                    return False
+                if connector.kind != "local" and policy.origin != "provider":
+                    return False
+            elif policy.origin != "local_curated":
+                return False
+            deadline = policy.expires_at
+            if policy.origin == "provider" and self.policy_max_age is not None:
+                maximum = policy.verified_at + self.policy_max_age
+                deadline = min(deadline, maximum) if deadline else maximum
+            if policy.origin == "provider" and deadline is None:
+                return False
+            if deadline is not None and now >= deadline:
+                return False
+            if self.access.user_id in policy.deny_users or groups.intersection(policy.deny_groups):
+                return False
+            if (
+                policy.mode != "workspace"
+                and self.access.user_id not in policy.allow_users
+                and not groups.intersection(policy.allow_groups)
+            ):
+                return False
+            return (policy.id, deadline)
+
+        def remember(proof):
+            if isinstance(proof, tuple):
+                proofs[proof[0]] = proof[1]
+
+        artifacts = {}
+        if identity is not None and self.workspace_id in rows("Workspace"):
+            for artifact in rows("Artifact").values():
+                if (
+                    artifact.workspace_id != self.workspace_id
+                    or ("artifact", artifact.id) in suppressed
+                    or ("source", artifact.source_id) in suppressed
+                ):
+                    continue
+                source = self.store.get_source(artifact.source_id)
+                if (
+                    not source
+                    or source.get("workspace_id") != self.workspace_id
+                    or not identity.can_see_source(source)
+                ):
+                    continue
+                if proof := grant(artifact.policy_id, artifact):
+                    artifacts[artifact.id] = artifact
+                    remember(proof)
+        generation_members = {
+            (member.generation_id, member.artifact_revision_id)
+            for member in rows("GenerationMember").values()
+        }
+        selected_revisions = selection.revision_ids
+        if selection.generation_ids is not None:
+            generation_revisions = {
+                revision_id
+                for generation_id, revision_id in generation_members
+                if generation_id in selection.generation_ids
+            }
+            selected_revisions = (
+                generation_revisions
+                if selected_revisions is None
+                else generation_revisions.intersection(selected_revisions)
+            )
+        revisions = {
+            record.id: record
+            for record in rows("ArtifactRevision").values()
+            if record.artifact_id in artifacts
+            and ("revision", record.id) not in suppressed
+            and (selected_revisions is None or record.id in selected_revisions)
+        }
+        spans = {}
+        for span in rows("EvidenceSpan").values():
+            if span.revision_id not in revisions or ("span", span.id) in suppressed:
+                continue
+            if proof := grant(span.policy_id, artifacts[revisions[span.revision_id].artifact_id]):
+                spans[span.id] = span
+                remember(proof)
+        observations = {
+            record.id: record
+            for record in rows("ObjectObservation").values()
+            if record.span_id in spans
+            and record.revision_id == spans[record.span_id].revision_id
+            and (obj := rows("KnowledgeObject").get(record.object_id)) is not None
+            and obj.workspace_id == self.workspace_id
+        }
+        objects = frozenset(record.object_id for record in observations.values())
+        all_groups = defaultdict(list)
+        for support in rows("AssertionSupport").values():
+            all_groups[(support.assertion_version_id, support.derivation_group)].append(support)
+        versions, assertions, supports, complete_groups = set(), set(), set(), []
+        for (version_id, group_name), members in sorted(all_groups.items()):
+            version = rows("AssertionVersion").get(version_id)
+            if (
+                version is None
+                or ("assertion_version", version_id) in suppressed
+                or (
+                    selection.assertion_version_ids is not None
+                    and version_id not in selection.assertion_version_ids
+                )
+            ):
+                continue
+            assertion = rows("Assertion").get(version.assertion_id)
+            if (
+                assertion is None
+                or assertion.workspace_id != self.workspace_id
+                or assertion.subject_id not in objects
+                or assertion.object_id not in objects
+                or not all(member.span_id in spans for member in members)
+            ):
+                continue
+            versions.add(version_id)
+            assertions.add(assertion.id)
+            supports.update(member.id for member in members)
+            complete_groups.append(
+                AuthorizedSupportGroup(
+                    version_id,
+                    group_name,
+                    frozenset(member.span_id for member in members),
+                    frozenset(member.id for member in members),
+                )
+            )
+        bindings = set()
+        for binding in rows("NativeBinding").values():
+            if (
+                binding.span_id not in spans
+                or binding.object_id not in objects
+                or (
+                    selection.generation_ids is not None
+                    and binding.generation_id not in selection.generation_ids
+                )
+            ):
+                continue
+            generation = rows("Generation").get(binding.generation_id)
+            artifact = artifacts[revisions[spans[binding.span_id].revision_id].artifact_id]
+            native = self.store._knowledge_get(binding.native_kind, binding.native_id)
+            if (
+                generation
+                and generation.source_id == artifact.source_id
+                and (generation.id, spans[binding.span_id].revision_id) in generation_members
+                and native
+                and native.get("source_id") == artifact.source_id
+            ):
+                bindings.add(binding.id)
+        visible = dict(
+            artifact_ids=frozenset(artifacts),
+            revision_ids=frozenset(revisions),
+            span_ids=frozenset(spans),
+            observation_ids=frozenset(observations),
+            object_ids=objects,
+            assertion_version_ids=frozenset(versions),
+            assertion_ids=frozenset(assertions),
+            support_ids=frozenset(supports),
+            native_binding_ids=frozenset(bindings),
+        )
+        fingerprint = hashlib.sha256(
+            canonical_json(
+                [
+                    self.workspace_id,
+                    self.access.audience_kind,
+                    self.access.user_id,
+                    {key: sorted(value) for key, value in visible.items()},
+                    sorted((key, value.isoformat() if value else None) for key, value in proofs.items()),
+                ]
+            ).encode()
+        ).hexdigest()
+        deadlines = [deadline for deadline in proofs.values() if deadline is not None]
+        valid_until = min(deadlines) if deadlines else None
+        self._check_current_boundary(epoch, valid_until)
+        return AuthorizedEvidence(
+            workspace_id=self.workspace_id,
+            selection=selection,
+            **visible,
+            support_groups=tuple(complete_groups),
+            policy_fingerprint=fingerprint,
+            authorization_epoch=epoch,
+            valid_until=valid_until,
+        )
+
+    def _check_current_boundary(self, epoch: int, valid_until: datetime | None) -> None:
+        if (valid_until is not None and self._now() >= valid_until) or self.epoch_reader() != epoch:
+            raise AuthorizationChanged("Authorization proof expired or changed")
+
+    def validate_current(self, view: AuthorizedEvidence) -> None:
+        """Recheck current grants, including expiry even without an epoch write."""
+        if view.workspace_id != self.workspace_id:
+            raise AuthorizationChanged("Authorization proof belongs to another workspace")
+        self._check_current_boundary(view.authorization_epoch, view.valid_until)
+        current = self.build(view.selection)
+        if (
+            current.authorization_epoch != view.authorization_epoch
+            or current.policy_fingerprint != view.policy_fingerprint
+        ):
+            raise AuthorizationChanged("Audience evidence permissions changed")
+        self._check_current_boundary(view.authorization_epoch, view.valid_until)

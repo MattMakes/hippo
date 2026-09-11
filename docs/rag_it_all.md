@@ -1243,6 +1243,8 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 
 Step 5 (HTTP/stdio credential separation) is implemented and independently reviewed; see `ai_docs/gates/rag-it-all/task-4-mcp/GATES.md` (38 passing tests including real standalone HTTP). It uses the existing transport/authentication interfaces and was implemented independently alongside Task 3. The managed authorization, projection and publication integration still depends on the completed persistence contracts.
 
+The authorization foundation is implemented and reviewed separately in `ai_docs/gates/rag-it-all/task-4-foundation/GATES.md`: scoped policy identities and schema 3 recovery, live reviewed membership, complete support groups, durable atomic revocation epochs, typed evidence reads and open-mode connector guards. Full Task 4 remains open until graph, replay and all read surfaces use these boundaries.
+
 **Create:** `src/hippo/knowledge/access.py`, `tests/unit/test_evidence_access.py`, `tests/unit/test_rag_replay_access.py`.
 
 **Modify:** `src/hippo/access.py`, `context.py`, `status.py`, `mcp_server.py`, `store/{knowledge,evals,ladybug}.py`, `web/routes/{api,evals,analyze,graph,pages}.py`, `web/{app,auth,render,adhoc}.py`, `analysis/simulate.py`, `hipporag/graph_index.py`, relevant store fakes. Page status, cached ad-hoc answers and simulation comparisons must use the same audience-safe view as the API.

@@ -10,6 +10,7 @@ class GenerationQueries:
         self, generation_id: str, *, expected_parent_id: str | None, published_at: datetime, fault_hook=None
     ) -> str:
         with self.transaction():
+            self._lock_authorization()
             generation = self._knowledge_get("Generation", generation_id)
             if generation is None:
                 raise ValueError("Unknown generation")
@@ -61,6 +62,7 @@ class GenerationQueries:
             if fault_hook:
                 fault_hook("pointer")
             self.bump_graph_version()
+            self._bump_authorization_epoch()
             if fault_hook:
                 fault_hook("version")
             event = k.IndexEvent(

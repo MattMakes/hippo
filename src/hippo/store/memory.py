@@ -19,6 +19,7 @@ import json
 from typing import Any
 
 from ..access import ACCESS_WHERE, Access, access_params
+from .authorization import permission_mutation
 from .base import Neo4jBase, new_id, now_iso, with_defaults
 from .code import SYNONYM_LABELS, grouped_by_labels
 from .migrations import DEFAULT_WORKSPACE_ID
@@ -112,6 +113,7 @@ class MemoryQueries(Neo4jBase):
         )
         return [_source_row(r) for r in rows]
 
+    @permission_mutation
     def delete_source(self, source_id: str) -> None:
         """Delete a source and its passages, then any entities/facts that nothing mentions any more."""
         self.delete_code_nodes_for_source(source_id)  # CodeQueries; both are mixins of Store

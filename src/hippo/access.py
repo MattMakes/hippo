@@ -33,7 +33,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, Literal
 
 # ------------------------------------------------------------ capabilities
 # What a role may *do* (as opposed to *see*, which is the rank). Each is a boolean on the Role.
@@ -102,6 +102,7 @@ class Access:
     rank: int = 0
     user_id: str | None = None
     unrestricted: bool = False  # open mode or the store's own internal reads
+    audience_kind: Literal["reader", "open", "preview", "internal"] = "reader"
 
     def params(self) -> dict[str, Any]:
         """Parameters for ACCESS_WHERE. Always all three, so every query binds the same names."""
@@ -116,7 +117,7 @@ class Access:
         return int(source.get("min_rank") or EVERYONE_RANK) <= self.rank
 
 
-EVERYTHING = Access(rank=0, user_id=None, unrestricted=True)
+EVERYTHING = Access(rank=0, user_id=None, unrestricted=True, audience_kind="internal")
 
 # The Cypher predicate, with `s` bound to a Source. Sources written before there were roles have no
 # min_rank; coalesce makes them "open to everyone", which is what they were.
@@ -146,7 +147,11 @@ class Principal:
         """Open mode: no users exist yet, so whoever is here acts as the top role and sees everything."""
         role = dict(top_role or DEFAULT_ROLES[0])
         role["capabilities"] = sorted(ALL_CAPABILITIES)
-        return cls(user=None, role=role, access=Access(rank=int(role.get("rank") or 0), unrestricted=True))
+        return cls(
+            user=None,
+            role=role,
+            access=Access(rank=int(role.get("rank") or 0), unrestricted=True, audience_kind="open"),
+        )
 
     @property
     def is_open(self) -> bool:
@@ -196,7 +201,11 @@ class Principal:
 
     def as_role(self, role: dict[str, Any]) -> Principal:
         """A preview principal: 'what would someone with this role (and no sources of their own) see?'"""
-        return replace(self, role=dict(role), access=Access(rank=int(role.get("rank") or 0), user_id=None))
+        return replace(
+            self,
+            role=dict(role),
+            access=Access(rank=int(role.get("rank") or 0), user_id=None, audience_kind="preview"),
+        )
 
 
 # ------------------------------------------------------------- passwords

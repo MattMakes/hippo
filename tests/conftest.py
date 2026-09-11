@@ -198,10 +198,22 @@ def store(tmp_path):
         # Fixture reset intentionally precedes application bootstrapping. Migration
         # tests may leave an unsupported version behind; normal Store.run must
         # refuse that database, but the next disposable test still needs isolation.
-        real.driver.execute_query("MATCH (n) DETACH DELETE n", database_=real.database)
-        real.ensure_schema()
-        yield real
-        real.close()
+        try:
+            real.driver.execute_query("MATCH (n) DETACH DELETE n", database_=real.database)
+            # Nodes alone do not reset a disposable database: managed constraints
+            # without their migration journal correctly prevent application startup.
+            # Drop constraints first, which also removes their backing indexes.
+            for catalog, kind in (("CONSTRAINTS", "CONSTRAINT"), ("INDEXES", "INDEX")):
+                result = real.driver.execute_query(
+                    f"SHOW {catalog} YIELD name RETURN name", database_=real.database
+                )
+                for record in result.records:
+                    name = record["name"].replace("`", "``")
+                    real.driver.execute_query(f"DROP {kind} `{name}` IF EXISTS", database_=real.database)
+            real.ensure_schema()
+            yield real
+        finally:
+            real.close()
     elif backend == "ladybug":
         from hippo.store.ladybug import LadybugStore
 
