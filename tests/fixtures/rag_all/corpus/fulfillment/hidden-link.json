@@ -1,0 +1,9 @@
+{
+  "id": "fulfillment-private-comment",
+  "parent": "fulfillment-100",
+  "visibility": {
+    "group": "operators"
+  },
+  "body": "Shipping depends on Tracking.",
+  "revision": "3"
+}

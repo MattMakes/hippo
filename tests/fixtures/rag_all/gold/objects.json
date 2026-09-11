@@ -1,0 +1,197 @@
+[
+  {
+    "id": "commerce:endpoint:POST:/billing/orders",
+    "kind": "endpoint",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:service:billing",
+    "kind": "service",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:table:postgres:commerce.orders",
+    "kind": "table",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:table:postgres:commerce.customers",
+    "kind": "table",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:table:sqlserver:dbo.orders",
+    "kind": "table",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:table:sqlserver:dbo.customers",
+    "kind": "table",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:function:create_order",
+    "kind": "function",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:function:save_order",
+    "kind": "function",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:criterion:AC-1",
+    "kind": "criterion",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:decision:DEC-7",
+    "kind": "decision",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:column:postgres:commerce.orders.coupon_code",
+    "kind": "column",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "fulfillment:endpoint:PUT:/shipping/allocations",
+    "kind": "endpoint",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:service:shipping",
+    "kind": "service",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:table:postgres:logistics.allocations",
+    "kind": "table",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:table:postgres:logistics.stock",
+    "kind": "table",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:table:sqlserver:warehouse.allocations",
+    "kind": "table",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:table:sqlserver:warehouse.stock",
+    "kind": "table",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:function:allocate_shipment",
+    "kind": "function",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:function:reserve_stock",
+    "kind": "function",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:criterion:AC-A",
+    "kind": "criterion",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:decision:DEC-W",
+    "kind": "decision",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:column:postgres:logistics.allocations.hold_reason",
+    "kind": "column",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "commerce:column:postgres:commerce.orders.tenant_id",
+    "kind": "column",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:column:postgres:commerce.orders.customer_id",
+    "kind": "column",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:column:postgres:commerce.customers.tenant_id",
+    "kind": "column",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:column:postgres:commerce.customers.customer_id",
+    "kind": "column",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:column:sqlserver:dbo.orders.tenant_id",
+    "kind": "column",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:column:sqlserver:dbo.orders.customer_id",
+    "kind": "column",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:column:sqlserver:dbo.customers.tenant_id",
+    "kind": "column",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "commerce:column:sqlserver:dbo.customers.customer_id",
+    "kind": "column",
+    "artifact_group": "commerce"
+  },
+  {
+    "id": "fulfillment:column:postgres:logistics.allocations.warehouse_id",
+    "kind": "column",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:column:postgres:logistics.allocations.sku",
+    "kind": "column",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:column:postgres:logistics.stock.warehouse_id",
+    "kind": "column",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:column:postgres:logistics.stock.sku",
+    "kind": "column",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:column:sqlserver:warehouse.allocations.warehouse_id",
+    "kind": "column",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:column:sqlserver:warehouse.allocations.sku",
+    "kind": "column",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:column:sqlserver:warehouse.stock.warehouse_id",
+    "kind": "column",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "fulfillment:column:sqlserver:warehouse.stock.sku",
+    "kind": "column",
+    "artifact_group": "fulfillment"
+  },
+  {
+    "id": "commerce:service:checkout",
+    "kind": "service",
+    "artifact_group": "commerce"
+  }
+]

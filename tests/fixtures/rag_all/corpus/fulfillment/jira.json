@@ -1,0 +1,32 @@
+{
+  "id": "fulfillment-100",
+  "key": "SHIPPING-12",
+  "fields": {
+    "summary": "Require warehouse-scoped allocation keys",
+    "customfield_10421": "accepted",
+    "description": "DEC-W chose warehouse-scoped reservations to avoid promising stock at a different location."
+  },
+  "changelog": [
+    {
+      "id": "1",
+      "field": "status",
+      "from": "Draft",
+      "to": "Accepted"
+    },
+    {
+      "id": "2",
+      "field": "description",
+      "from": "single key",
+      "to": "warehouse key"
+    }
+  ],
+  "comments": [
+    {
+      "id": "1",
+      "body": "Public review complete."
+    }
+  ],
+  "deleted_comment_ids": [
+    "2"
+  ]
+}

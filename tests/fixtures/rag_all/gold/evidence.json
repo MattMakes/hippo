@@ -1,0 +1,380 @@
+[
+  {
+    "id": "e-commerce-route",
+    "source_id": "commerce-route",
+    "quote": "app.post(\"/billing/orders\")(create_order)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-call",
+    "source_id": "commerce-route",
+    "quote": "return save_order(tenant_id, order_id)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-storage",
+    "source_id": "commerce-storage",
+    "quote": "INSERT INTO commerce.orders (tenant_id, order_id) VALUES (%s, %s)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-other-service",
+    "source_id": "commerce-other-service",
+    "quote": "app.get(\"/checkout/orders\")(list_orders)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-schema",
+    "source_id": "commerce-schema",
+    "quote": "FOREIGN KEY (tenant_id, customer_id) REFERENCES commerce.customers(tenant_id, customer_id)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-sqlserver",
+    "source_id": "commerce-sqlserver",
+    "quote": "CONSTRAINT orders_customer_fk FOREIGN KEY (tenant_id, customer_id) REFERENCES dbo.customers(tenant_id, customer_id)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-analytics",
+    "source_id": "commerce-analytics",
+    "quote": "CREATE TABLE analytics.orders",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-migration-before",
+    "source_id": "commerce-migration-before",
+    "quote": "ADD COLUMN coupon_code TEXT",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-migration-after",
+    "source_id": "commerce-migration-after",
+    "quote": "DROP COLUMN coupon_code",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-prd",
+    "source_id": "commerce-prd",
+    "quote": "AC-1 [accepted]: Every order belongs to a tenant.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-decision",
+    "source_id": "commerce-prd",
+    "quote": "| DEC-7 | accepted | Tenant-scoped keys prevent cross-tenant joins. |",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-owners",
+    "source_id": "commerce-owners",
+    "quote": "Billing is owned by Commerce Platform.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-owners-before",
+    "source_id": "commerce-owners-before",
+    "quote": "\"owner\": \"Payments\"",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-manifest",
+    "source_id": "commerce-manifest",
+    "quote": "\"owner\": \"Commerce Platform\"",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-jira",
+    "source_id": "commerce-jira",
+    "quote": "DEC-7 chose tenant-scoped keys to prevent cross-tenant joins.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-hidden-link",
+    "source_id": "commerce-hidden-link",
+    "quote": "Billing depends on Checkout.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-tuleap",
+    "source_id": "commerce-tuleap",
+    "quote": "Preserve both tenant and customer keys.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-github",
+    "source_id": "commerce-github",
+    "quote": "Tenant key retained.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-gitlab",
+    "source_id": "commerce-gitlab",
+    "quote": "Tenant key retained.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-backstage",
+    "source_id": "commerce-backstage",
+    "quote": "\"owner\": \"group:default/payments\"",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-commerce-openapi",
+    "source_id": "commerce-openapi",
+    "quote": "\"operationId\": \"createOrder\"",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-route",
+    "source_id": "fulfillment-route",
+    "quote": "app.put(\"/shipping/allocations\")(allocate_shipment)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-call",
+    "source_id": "fulfillment-route",
+    "quote": "return reserve_stock(warehouse_id, sku, quantity)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-storage",
+    "source_id": "fulfillment-storage",
+    "quote": "UPDATE logistics.stock SET reserved = reserved + %s WHERE warehouse_id = %s AND sku = %s",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-other-service",
+    "source_id": "fulfillment-other-service",
+    "quote": "app.get(\"/tracking/orders\")(list_orders)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-schema",
+    "source_id": "fulfillment-schema",
+    "quote": "FOREIGN KEY (warehouse_id, sku) REFERENCES logistics.stock(warehouse_id, sku)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-sqlserver",
+    "source_id": "fulfillment-sqlserver",
+    "quote": "CONSTRAINT allocations_stock_fk FOREIGN KEY (warehouse_id, sku) REFERENCES warehouse.stock(warehouse_id, sku)",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-analytics",
+    "source_id": "fulfillment-analytics",
+    "quote": "CREATE TABLE analytics.orders",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-migration-before",
+    "source_id": "fulfillment-migration-before",
+    "quote": "ADD COLUMN hold_reason TEXT",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-migration-after",
+    "source_id": "fulfillment-migration-after",
+    "quote": "DROP COLUMN hold_reason",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-prd",
+    "source_id": "fulfillment-prd",
+    "quote": "AC-A [accepted]: Reserve stock only in the requested warehouse.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-decision",
+    "source_id": "fulfillment-prd",
+    "quote": "| DEC-W | accepted | Warehouse-scoped reservations prevent promising inventory held at another location. |",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-owners",
+    "source_id": "fulfillment-owners",
+    "quote": "Shipping is owned by Warehouse Operations.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-owners-before",
+    "source_id": "fulfillment-owners-before",
+    "quote": "\"owner\": \"Logistics Legacy\"",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-manifest",
+    "source_id": "fulfillment-manifest",
+    "quote": "\"owner\": \"Warehouse Operations\"",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-jira",
+    "source_id": "fulfillment-jira",
+    "quote": "DEC-W chose warehouse-scoped reservations to avoid promising stock at a different location.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-hidden-link",
+    "source_id": "fulfillment-hidden-link",
+    "quote": "Shipping depends on Tracking.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-tuleap",
+    "source_id": "fulfillment-tuleap",
+    "quote": "Preserve both warehouse and stock keys.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-github",
+    "source_id": "fulfillment-github",
+    "quote": "Tenant key retained.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-gitlab",
+    "source_id": "fulfillment-gitlab",
+    "quote": "Tenant key retained.",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-backstage",
+    "source_id": "fulfillment-backstage",
+    "quote": "\"owner\": \"group:default/payments\"",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  },
+  {
+    "id": "e-fulfillment-openapi",
+    "source_id": "fulfillment-openapi",
+    "quote": "\"operationId\": \"createOrder\"",
+    "locator": {
+      "kind": "exact_text",
+      "occurrence": 1
+    }
+  }
+]

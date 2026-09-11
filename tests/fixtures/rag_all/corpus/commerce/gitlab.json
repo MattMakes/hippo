@@ -1,0 +1,37 @@
+{
+  "id": 31,
+  "title": "Retain tenant when saving orders",
+  "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "files": [
+    {
+      "old_path": "legacy_storage.py",
+      "new_path": "storage.py",
+      "renamed": true,
+      "diff": "@@ -1 +1 @@\n-save_order(order_id)\n+save_order(tenant_id, order_id)",
+      "truncated": false
+    },
+    {
+      "old_path": "large.py",
+      "new_path": "large.py",
+      "diff": null,
+      "truncated": true
+    }
+  ],
+  "comments": [
+    {
+      "id": 3,
+      "side": "LEFT",
+      "original_line": 1,
+      "body": "Missing tenant here.",
+      "outdated": true
+    },
+    {
+      "id": 4,
+      "side": "RIGHT",
+      "line": 1,
+      "body": "Tenant key retained.",
+      "outdated": false
+    }
+  ]
+}

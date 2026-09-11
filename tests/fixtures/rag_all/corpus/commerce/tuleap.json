@@ -1,0 +1,35 @@
+{
+  "id": 100,
+  "tracker": {
+    "id": 8,
+    "fields": [
+      {
+        "field_id": 12,
+        "name": "acceptance_criteria",
+        "type": "text"
+      }
+    ]
+  },
+  "values": [
+    {
+      "field_id": 12,
+      "value": "Preserve both tenant and customer keys."
+    }
+  ],
+  "links": [
+    {
+      "id": 101,
+      "type": "_is_child"
+    }
+  ],
+  "changesets": [
+    {
+      "id": 1,
+      "old": "draft",
+      "new": "accepted"
+    }
+  ],
+  "deleted_comment_ids": [
+    9
+  ]
+}

@@ -1,0 +1,456 @@
+{
+  "schema_version": 1,
+  "review_status": "hand_authored_pending_human_review",
+  "workspace": "commerce",
+  "description": "Synthetic fixture; no real credentials or customer data.",
+  "principals": {
+    "reader": {
+      "audiences": [
+        "public"
+      ],
+      "legacy_rank": 0
+    },
+    "operator": {
+      "audiences": [
+        "public",
+        "operators"
+      ],
+      "legacy_rank": 20
+    }
+  },
+  "snapshots": {
+    "before": {
+      "valid_at": "2026-05-01T00:00:00Z",
+      "known_at": "2026-05-10T00:00:00Z"
+    },
+    "after": {
+      "valid_at": "2026-05-01T00:00:00Z",
+      "known_at": "2026-05-12T00:00:00Z"
+    }
+  },
+  "sources": [
+    {
+      "id": "commerce-route",
+      "path": "corpus/commerce/route.py",
+      "family": "code",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ],
+      "repository_id": "commerce-repo"
+    },
+    {
+      "id": "commerce-storage",
+      "path": "corpus/commerce/storage.py",
+      "family": "code",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ],
+      "repository_id": "commerce-repo"
+    },
+    {
+      "id": "commerce-other-service",
+      "path": "corpus/commerce/other-service.py",
+      "family": "code",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ],
+      "repository_id": "commerce-repo"
+    },
+    {
+      "id": "commerce-schema",
+      "path": "corpus/commerce/schema.sql",
+      "family": "ddl",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-sqlserver",
+      "path": "corpus/commerce/sqlserver.sql",
+      "family": "ddl",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-analytics",
+      "path": "corpus/commerce/analytics.sql",
+      "family": "ddl",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-migration-before",
+      "path": "corpus/commerce/migration-before.sql",
+      "family": "ddl",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before"
+      ]
+    },
+    {
+      "id": "commerce-migration-after",
+      "path": "corpus/commerce/migration-after.sql",
+      "family": "ddl",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-prd",
+      "path": "corpus/commerce/prd.md",
+      "family": "prd",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-owners",
+      "path": "corpus/commerce/owners.md",
+      "family": "prd",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-owners-before",
+      "path": "corpus/commerce/owners-before.json",
+      "family": "manifest",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before"
+      ]
+    },
+    {
+      "id": "commerce-manifest",
+      "path": "corpus/commerce/manifest.json",
+      "family": "manifest",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-jira",
+      "path": "corpus/commerce/jira.json",
+      "family": "jira",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-hidden-link",
+      "path": "corpus/commerce/hidden-link.json",
+      "family": "jira",
+      "artifact_group": "commerce",
+      "audience": "operators",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-tuleap",
+      "path": "corpus/commerce/tuleap.json",
+      "family": "tuleap",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-github",
+      "path": "corpus/commerce/github.json",
+      "family": "github",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-gitlab",
+      "path": "corpus/commerce/gitlab.json",
+      "family": "gitlab",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-backstage",
+      "path": "corpus/commerce/backstage.json",
+      "family": "backstage",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "commerce-openapi",
+      "path": "corpus/commerce/openapi.json",
+      "family": "openapi",
+      "artifact_group": "commerce",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-route",
+      "path": "corpus/fulfillment/route.py",
+      "family": "code",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ],
+      "repository_id": "fulfillment-repo"
+    },
+    {
+      "id": "fulfillment-storage",
+      "path": "corpus/fulfillment/storage.py",
+      "family": "code",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ],
+      "repository_id": "fulfillment-repo"
+    },
+    {
+      "id": "fulfillment-other-service",
+      "path": "corpus/fulfillment/other-service.py",
+      "family": "code",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ],
+      "repository_id": "fulfillment-repo"
+    },
+    {
+      "id": "fulfillment-schema",
+      "path": "corpus/fulfillment/schema.sql",
+      "family": "ddl",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-sqlserver",
+      "path": "corpus/fulfillment/sqlserver.sql",
+      "family": "ddl",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-analytics",
+      "path": "corpus/fulfillment/analytics.sql",
+      "family": "ddl",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-migration-before",
+      "path": "corpus/fulfillment/migration-before.sql",
+      "family": "ddl",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before"
+      ]
+    },
+    {
+      "id": "fulfillment-migration-after",
+      "path": "corpus/fulfillment/migration-after.sql",
+      "family": "ddl",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-prd",
+      "path": "corpus/fulfillment/prd.md",
+      "family": "prd",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-owners",
+      "path": "corpus/fulfillment/owners.md",
+      "family": "prd",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-owners-before",
+      "path": "corpus/fulfillment/owners-before.json",
+      "family": "manifest",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before"
+      ]
+    },
+    {
+      "id": "fulfillment-manifest",
+      "path": "corpus/fulfillment/manifest.json",
+      "family": "manifest",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-jira",
+      "path": "corpus/fulfillment/jira.json",
+      "family": "jira",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-hidden-link",
+      "path": "corpus/fulfillment/hidden-link.json",
+      "family": "jira",
+      "artifact_group": "fulfillment",
+      "audience": "operators",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-tuleap",
+      "path": "corpus/fulfillment/tuleap.json",
+      "family": "tuleap",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-github",
+      "path": "corpus/fulfillment/github.json",
+      "family": "github",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-gitlab",
+      "path": "corpus/fulfillment/gitlab.json",
+      "family": "gitlab",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-backstage",
+      "path": "corpus/fulfillment/backstage.json",
+      "family": "backstage",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    },
+    {
+      "id": "fulfillment-openapi",
+      "path": "corpus/fulfillment/openapi.json",
+      "family": "openapi",
+      "artifact_group": "fulfillment",
+      "audience": "public",
+      "snapshots": [
+        "before",
+        "after"
+      ]
+    }
+  ],
+  "gold": {
+    "questions": "gold/questions.json",
+    "evidence": "gold/evidence.json",
+    "objects": "gold/objects.json",
+    "permission_cases": "gold/permission_cases.json"
+  },
+  "release_targets": null
+}

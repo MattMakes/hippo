@@ -1176,6 +1176,8 @@ Only run Neo4j fixture tests against a disposable test instance: the existing fi
 
 ### Task 1 — Cross-source fixture and retrieval baseline
 
+- [x] Implemented and verified; see `ai_docs/gates/rag-it-all/task-1/GATES.md`. The captured fake-model report is `ai_docs/reports/2026-09-11-rag-legacy-dev.json`; it is a diagnostic baseline, not release-quality evidence.
+
 **Depends on:** Task 0. **Gates:** G1.
 
 **Create:** `tests/fixtures/rag_all/`, `tests/unit/test_rag_eval.py`, `src/hippo/evals/rag_all.py`, `scripts/rag_eval.py`.

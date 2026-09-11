@@ -1,0 +1,34 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Billing",
+    "version": "2"
+  },
+  "paths": {
+    "/billing/orders": {
+      "post": {
+        "operationId": "createOrder",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Order"
+        }
+      }
+    }
+  },
+  "components": {
+    "requestBodies": {
+      "Order": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "tenant_id",
+                "order_id"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,2046 @@
+{
+  "budgets": {
+    "chunk_overlap_chars": 150,
+    "chunk_size_chars": 1500,
+    "retrieval_top_k": 20
+  },
+  "coverage_gaps": {
+    "backstage": "catalog ingestion and drift resolution unavailable",
+    "ddl": "text/code extraction only; typed schema constraints and join validation unavailable",
+    "github": "review ingestion and diff-side provenance unavailable",
+    "gitlab": "review ingestion and diff-side provenance unavailable",
+    "jira": "provider ingestion and comment-level ACL unavailable",
+    "manifest": "typed service manifest ingestion unavailable",
+    "openapi": "API contract ingestion and reference resolution unavailable",
+    "prd": "heading chunks only; approval-state and structured decision extraction unavailable",
+    "tuleap": "provider ingestion and tracker-field mapping unavailable"
+  },
+  "evaluated_count": 7,
+  "fixture_fingerprint": "060915c745d861bbccd57215f5d24d7df152ce1a7c1babd7b194329703cf17e7",
+  "gold_review_status": "hand_authored_pending_human_review",
+  "index_counts": {
+    "code_edges": 19,
+    "commits": 0,
+    "data_objects": 21,
+    "entities": 4,
+    "facts": 2,
+    "invokes_edges": 1,
+    "passages": 13,
+    "refers_to": 0,
+    "symbols": 6,
+    "synonyms": 28
+  },
+  "mode": "legacy",
+  "model_profile": "fake-hash128-v1",
+  "models": {
+    "embedding": "nomic-embed-text",
+    "llm": "qwen3:8b"
+  },
+  "per_slice": {
+    "code_dependency": {
+      "evaluated_count": 2,
+      "metric_sample_counts": {
+        "all_required_set_success@10": 2,
+        "all_required_set_success@20": 2,
+        "all_required_set_success@5": 2,
+        "any_hit@10": 2,
+        "any_hit@20": 2,
+        "any_hit@5": 2,
+        "evidence_recall@10": 2,
+        "evidence_recall@20": 2,
+        "evidence_recall@5": 2,
+        "mrr": 2,
+        "ndcg@10": 2
+      },
+      "metrics": {
+        "all_required_set_success@10": 1.0,
+        "all_required_set_success@20": 1.0,
+        "all_required_set_success@5": 1.0,
+        "any_hit@10": 1.0,
+        "any_hit@20": 1.0,
+        "any_hit@5": 1.0,
+        "evidence_recall@10": 1.0,
+        "evidence_recall@20": 1.0,
+        "evidence_recall@5": 1.0,
+        "mrr": 0.75,
+        "ndcg@10": 0.8254604649035663
+      },
+      "question_count": 2
+    },
+    "cross_source_impact": {
+      "evaluated_count": 1,
+      "metric_sample_counts": {
+        "all_required_set_success@10": 1,
+        "all_required_set_success@20": 1,
+        "all_required_set_success@5": 1,
+        "any_hit@10": 1,
+        "any_hit@20": 1,
+        "any_hit@5": 1,
+        "evidence_recall@10": 1,
+        "evidence_recall@20": 1,
+        "evidence_recall@5": 1,
+        "mrr": 1,
+        "ndcg@10": 1
+      },
+      "metrics": {
+        "all_required_set_success@10": 1.0,
+        "all_required_set_success@20": 1.0,
+        "all_required_set_success@5": 0.0,
+        "any_hit@10": 1.0,
+        "any_hit@20": 1.0,
+        "any_hit@5": 1.0,
+        "evidence_recall@10": 1.0,
+        "evidence_recall@20": 1.0,
+        "evidence_recall@5": 0.5,
+        "mrr": 0.2,
+        "ndcg@10": 0.4415801103577823
+      },
+      "question_count": 2
+    },
+    "exact_lookup": {
+      "evaluated_count": 2,
+      "metric_sample_counts": {
+        "all_required_set_success@10": 2,
+        "all_required_set_success@20": 2,
+        "all_required_set_success@5": 2,
+        "any_hit@10": 2,
+        "any_hit@20": 2,
+        "any_hit@5": 2,
+        "evidence_recall@10": 2,
+        "evidence_recall@20": 2,
+        "evidence_recall@5": 2,
+        "mrr": 2,
+        "ndcg@10": 2
+      },
+      "metrics": {
+        "all_required_set_success@10": 1.0,
+        "all_required_set_success@20": 1.0,
+        "all_required_set_success@5": 1.0,
+        "any_hit@10": 1.0,
+        "any_hit@20": 1.0,
+        "any_hit@5": 1.0,
+        "evidence_recall@10": 1.0,
+        "evidence_recall@20": 1.0,
+        "evidence_recall@5": 1.0,
+        "mrr": 0.75,
+        "ndcg@10": 0.8154648767857288
+      },
+      "question_count": 2
+    },
+    "requirements_rationale": {
+      "evaluated_count": 2,
+      "metric_sample_counts": {
+        "all_required_set_success@10": 2,
+        "all_required_set_success@20": 2,
+        "all_required_set_success@5": 2,
+        "any_hit@10": 2,
+        "any_hit@20": 2,
+        "any_hit@5": 2,
+        "evidence_recall@10": 2,
+        "evidence_recall@20": 2,
+        "evidence_recall@5": 2,
+        "mrr": 2,
+        "ndcg@10": 1
+      },
+      "metrics": {
+        "all_required_set_success@10": 0.5,
+        "all_required_set_success@20": 0.5,
+        "all_required_set_success@5": 0.5,
+        "any_hit@10": 0.5,
+        "any_hit@20": 0.5,
+        "any_hit@5": 0.5,
+        "evidence_recall@10": 0.5,
+        "evidence_recall@20": 0.5,
+        "evidence_recall@5": 0.5,
+        "mrr": 0.25,
+        "ndcg@10": 0.6309297535714575
+      },
+      "question_count": 2
+    },
+    "schema_join": {
+      "evaluated_count": 0,
+      "metric_sample_counts": {},
+      "metrics": {},
+      "question_count": 2
+    },
+    "temporal_conflict_insufficient": {
+      "evaluated_count": 0,
+      "metric_sample_counts": {},
+      "metrics": {},
+      "question_count": 2
+    }
+  },
+  "privacy_status": "provider ACL and adversarial permission suite not implemented; not a privacy pass",
+  "purpose": "deterministic harness diagnostics; not product-quality or release evidence",
+  "question_count": 12,
+  "questions": [
+    {
+      "candidate_evidence_ids": [
+        [
+          "e-commerce-owners"
+        ],
+        [
+          "e-commerce-route"
+        ],
+        [],
+        [],
+        [
+          "e-commerce-call"
+        ],
+        [
+          "e-commerce-storage"
+        ],
+        [
+          "e-commerce-other-service"
+        ],
+        [
+          "e-commerce-prd"
+        ],
+        [
+          "e-commerce-sqlserver"
+        ],
+        [
+          "e-commerce-analytics"
+        ],
+        [
+          "e-commerce-schema"
+        ],
+        [],
+        [
+          "e-commerce-migration-after"
+        ]
+      ],
+      "candidates": [
+        {
+          "evidence_ids": [
+            "e-commerce-owners"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-ce0bc1153bfc53ec877b4d938e50569c",
+          "rank": 1,
+          "source_id": "eval-source-f3345070af2f657200913b00a4a34e08f7fd163bda1a7f97c946b8baa3e7ad62",
+          "title": "Ownership"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-route"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-19a81aa8993408e1a9c0eef0e574bb00",
+          "rank": 2,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route (lines 1-8)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-6531406ef65af0f7ff9946046f751f67",
+          "rank": 3,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 1)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-bbec114da54909314dad78596ed6979a",
+          "rank": 4,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-call"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-49ea6a62631ec514367dd3efce890fc8",
+          "rank": 5,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route.create_order (lines 5-6)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-storage"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-5783091a780f43438215393e4f19b069",
+          "rank": 6,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/storage.py :: corpus.commerce.storage.save_order (lines 1-3)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-other-service"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 3
+          },
+          "passage_id": "passage-ea7264d3e11346dfddf13fd44c458b55",
+          "rank": 7,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service (lines 1-7)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-prd"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-90754b1ebc00dd185f08998f39e764ff",
+          "rank": 8,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-sqlserver"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-6e9557576f5725144bb3acf82e482093",
+          "rank": 9,
+          "source_id": "eval-source-a45b674185c9dda97b9f84de27580e80a97983aad478026c408a14aadceab4ad",
+          "title": "corpus/commerce/sqlserver.sql (lines 1-2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-analytics"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-9a8d81d1f10fe7acb9aa2df3803ae097",
+          "rank": 10,
+          "source_id": "eval-source-22d6badcb2903ae730ff685c359676e8f575899eb564d364cd8acc162334bb21",
+          "title": "corpus/commerce/analytics.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-schema"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-d3d5b91de094c76f57b379a948b757b9",
+          "rank": 11,
+          "source_id": "eval-source-3fbb798d0f36ceb23da94707317d04d9db7ac7d17f9b674289fe8759f009796e",
+          "title": "corpus/commerce/schema.sql (lines 1-4)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 4
+          },
+          "passage_id": "passage-1652c19583871a5417b26d6d252ae834",
+          "rank": 12,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service.list_orders (lines 4-5)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-migration-after"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-a26f576b83e07d60fd6732e60dcd2829",
+          "rank": 13,
+          "source_id": "eval-source-defa123c454e3cfb1163f4a588f64fc0649978d78ec385a7e8e750e604bac41d",
+          "title": "corpus/commerce/migration-after.sql (lines 1-1)"
+        }
+      ],
+      "fallback_reason": "",
+      "id": "commerce-q01",
+      "principal": "reader",
+      "query_mode": "current",
+      "ranked_evidence_ids": [
+        "e-commerce-owners",
+        "e-commerce-route",
+        "e-commerce-call",
+        "e-commerce-storage",
+        "e-commerce-other-service",
+        "e-commerce-prd",
+        "e-commerce-sqlserver",
+        "e-commerce-analytics",
+        "e-commerce-schema",
+        "e-commerce-migration-after"
+      ],
+      "ranked_scores": [
+        0.17046957315399222,
+        0.01260779358884132,
+        0.010654348322124512,
+        0.010022029074771965,
+        0.009524567786768303,
+        0.007332357142358403,
+        0.0067324690139024266,
+        0.006619747370777425,
+        0.005436932893583861,
+        0.00421872359829551,
+        0.0037072307811171364,
+        0.002733438881011307,
+        0.0023059791126159327
+      ],
+      "retrieved_passage_count": 13,
+      "route": "hipporag",
+      "scope": "legacy source-rank ACL; current static snapshot",
+      "scores": {
+        "all_required_set_success@10": 1.0,
+        "all_required_set_success@20": 1.0,
+        "all_required_set_success@5": 1.0,
+        "any_hit@10": 1.0,
+        "any_hit@20": 1.0,
+        "any_hit@5": 1.0,
+        "evidence_recall@10": 1.0,
+        "evidence_recall@20": 1.0,
+        "evidence_recall@5": 1.0,
+        "mrr": 0.5,
+        "ndcg@10": 0.6309297535714575
+      },
+      "slice": "exact_lookup",
+      "snapshot": "after",
+      "status": "evaluated",
+      "total_relevant_passages": 1,
+      "used_code_seeds": false,
+      "used_dpr_fallback": false
+    },
+    {
+      "candidate_evidence_ids": [
+        [
+          "e-commerce-owners"
+        ],
+        [
+          "e-commerce-sqlserver"
+        ],
+        [
+          "e-commerce-schema"
+        ],
+        [
+          "e-commerce-analytics"
+        ],
+        [],
+        [],
+        [
+          "e-commerce-storage"
+        ],
+        [
+          "e-commerce-migration-after"
+        ],
+        [
+          "e-commerce-other-service"
+        ],
+        [
+          "e-commerce-prd"
+        ],
+        [
+          "e-commerce-route"
+        ],
+        [],
+        [
+          "e-commerce-call"
+        ]
+      ],
+      "candidates": [
+        {
+          "evidence_ids": [
+            "e-commerce-owners"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-ce0bc1153bfc53ec877b4d938e50569c",
+          "rank": 1,
+          "source_id": "eval-source-f3345070af2f657200913b00a4a34e08f7fd163bda1a7f97c946b8baa3e7ad62",
+          "title": "Ownership"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-sqlserver"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-6e9557576f5725144bb3acf82e482093",
+          "rank": 2,
+          "source_id": "eval-source-a45b674185c9dda97b9f84de27580e80a97983aad478026c408a14aadceab4ad",
+          "title": "corpus/commerce/sqlserver.sql (lines 1-2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-schema"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-d3d5b91de094c76f57b379a948b757b9",
+          "rank": 3,
+          "source_id": "eval-source-3fbb798d0f36ceb23da94707317d04d9db7ac7d17f9b674289fe8759f009796e",
+          "title": "corpus/commerce/schema.sql (lines 1-4)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-analytics"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-9a8d81d1f10fe7acb9aa2df3803ae097",
+          "rank": 4,
+          "source_id": "eval-source-22d6badcb2903ae730ff685c359676e8f575899eb564d364cd8acc162334bb21",
+          "title": "corpus/commerce/analytics.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-6531406ef65af0f7ff9946046f751f67",
+          "rank": 5,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 1)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-bbec114da54909314dad78596ed6979a",
+          "rank": 6,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-storage"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-5783091a780f43438215393e4f19b069",
+          "rank": 7,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/storage.py :: corpus.commerce.storage.save_order (lines 1-3)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-migration-after"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-a26f576b83e07d60fd6732e60dcd2829",
+          "rank": 8,
+          "source_id": "eval-source-defa123c454e3cfb1163f4a588f64fc0649978d78ec385a7e8e750e604bac41d",
+          "title": "corpus/commerce/migration-after.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-other-service"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 3
+          },
+          "passage_id": "passage-ea7264d3e11346dfddf13fd44c458b55",
+          "rank": 9,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service (lines 1-7)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-prd"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-90754b1ebc00dd185f08998f39e764ff",
+          "rank": 10,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-route"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-19a81aa8993408e1a9c0eef0e574bb00",
+          "rank": 11,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route (lines 1-8)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 4
+          },
+          "passage_id": "passage-1652c19583871a5417b26d6d252ae834",
+          "rank": 12,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service.list_orders (lines 4-5)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-call"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-49ea6a62631ec514367dd3efce890fc8",
+          "rank": 13,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route.create_order (lines 5-6)"
+        }
+      ],
+      "fallback_reason": "",
+      "id": "commerce-q02",
+      "principal": "operator",
+      "query_mode": "current",
+      "ranked_evidence_ids": [
+        "e-commerce-owners",
+        "e-commerce-sqlserver",
+        "e-commerce-schema",
+        "e-commerce-analytics",
+        "e-commerce-storage",
+        "e-commerce-migration-after",
+        "e-commerce-other-service",
+        "e-commerce-prd",
+        "e-commerce-route",
+        "e-commerce-call"
+      ],
+      "ranked_scores": [
+        0.1440739213301195,
+        0.014988006440504627,
+        0.014134194710289358,
+        0.014029211634900778,
+        0.0087925340621974,
+        0.008251240786813732,
+        0.0051130833389776715,
+        0.004265442502025659,
+        0.00415951605251011,
+        0.002970016136586896,
+        0.0023991837519842067,
+        0.001634432893634941,
+        7.767532395546222e-05
+      ],
+      "retrieved_passage_count": 13,
+      "route": "hipporag",
+      "scope": "legacy source-rank ACL; current static snapshot",
+      "scores": {
+        "all_required_set_success@10": 1.0,
+        "all_required_set_success@20": 1.0,
+        "all_required_set_success@5": 1.0,
+        "any_hit@10": 1.0,
+        "any_hit@20": 1.0,
+        "any_hit@5": 1.0,
+        "evidence_recall@10": 1.0,
+        "evidence_recall@20": 1.0,
+        "evidence_recall@5": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "slice": "exact_lookup",
+      "snapshot": "after",
+      "status": "evaluated",
+      "total_relevant_passages": 1,
+      "used_code_seeds": false,
+      "used_dpr_fallback": false
+    },
+    {
+      "id": "commerce-q03",
+      "missing_capabilities": [
+        "typed_constraints"
+      ],
+      "principal": "reader",
+      "query_mode": "current",
+      "slice": "schema_join",
+      "snapshot": "after",
+      "status": "coverage_gap"
+    },
+    {
+      "id": "commerce-q04",
+      "missing_capabilities": [
+        "typed_constraints"
+      ],
+      "principal": "operator",
+      "query_mode": "current",
+      "slice": "schema_join",
+      "snapshot": "after",
+      "status": "coverage_gap"
+    },
+    {
+      "candidate_evidence_ids": [
+        [
+          "e-commerce-owners"
+        ],
+        [
+          "e-commerce-call"
+        ],
+        [
+          "e-commerce-route"
+        ],
+        [
+          "e-commerce-storage"
+        ],
+        [],
+        [
+          "e-commerce-analytics"
+        ],
+        [],
+        [
+          "e-commerce-prd"
+        ],
+        [
+          "e-commerce-other-service"
+        ],
+        [
+          "e-commerce-migration-after"
+        ],
+        [],
+        [
+          "e-commerce-schema"
+        ],
+        [
+          "e-commerce-sqlserver"
+        ]
+      ],
+      "candidates": [
+        {
+          "evidence_ids": [
+            "e-commerce-owners"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-ce0bc1153bfc53ec877b4d938e50569c",
+          "rank": 1,
+          "source_id": "eval-source-f3345070af2f657200913b00a4a34e08f7fd163bda1a7f97c946b8baa3e7ad62",
+          "title": "Ownership"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-call"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-49ea6a62631ec514367dd3efce890fc8",
+          "rank": 2,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route.create_order (lines 5-6)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-route"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-19a81aa8993408e1a9c0eef0e574bb00",
+          "rank": 3,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route (lines 1-8)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-storage"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-5783091a780f43438215393e4f19b069",
+          "rank": 4,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/storage.py :: corpus.commerce.storage.save_order (lines 1-3)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-6531406ef65af0f7ff9946046f751f67",
+          "rank": 5,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-analytics"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-9a8d81d1f10fe7acb9aa2df3803ae097",
+          "rank": 6,
+          "source_id": "eval-source-22d6badcb2903ae730ff685c359676e8f575899eb564d364cd8acc162334bb21",
+          "title": "corpus/commerce/analytics.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-bbec114da54909314dad78596ed6979a",
+          "rank": 7,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-prd"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-90754b1ebc00dd185f08998f39e764ff",
+          "rank": 8,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-other-service"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 3
+          },
+          "passage_id": "passage-ea7264d3e11346dfddf13fd44c458b55",
+          "rank": 9,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service (lines 1-7)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-migration-after"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-a26f576b83e07d60fd6732e60dcd2829",
+          "rank": 10,
+          "source_id": "eval-source-defa123c454e3cfb1163f4a588f64fc0649978d78ec385a7e8e750e604bac41d",
+          "title": "corpus/commerce/migration-after.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 4
+          },
+          "passage_id": "passage-1652c19583871a5417b26d6d252ae834",
+          "rank": 11,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service.list_orders (lines 4-5)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-schema"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-d3d5b91de094c76f57b379a948b757b9",
+          "rank": 12,
+          "source_id": "eval-source-3fbb798d0f36ceb23da94707317d04d9db7ac7d17f9b674289fe8759f009796e",
+          "title": "corpus/commerce/schema.sql (lines 1-4)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-sqlserver"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-6e9557576f5725144bb3acf82e482093",
+          "rank": 13,
+          "source_id": "eval-source-a45b674185c9dda97b9f84de27580e80a97983aad478026c408a14aadceab4ad",
+          "title": "corpus/commerce/sqlserver.sql (lines 1-2)"
+        }
+      ],
+      "fallback_reason": "",
+      "id": "commerce-q05",
+      "principal": "reader",
+      "query_mode": "current",
+      "ranked_evidence_ids": [
+        "e-commerce-owners",
+        "e-commerce-call",
+        "e-commerce-route",
+        "e-commerce-storage",
+        "e-commerce-analytics",
+        "e-commerce-prd",
+        "e-commerce-other-service",
+        "e-commerce-migration-after",
+        "e-commerce-schema",
+        "e-commerce-sqlserver"
+      ],
+      "ranked_scores": [
+        0.11770003033550307,
+        0.03605362727796116,
+        0.015801392951474525,
+        0.01156122299108666,
+        0.005982286216956374,
+        0.005804374145348225,
+        0.005590417759515197,
+        0.005576366424105661,
+        0.005447897440326147,
+        0.0050982264965353415,
+        0.004728784185648875,
+        0.004013974663309439,
+        0.003207697781023413
+      ],
+      "retrieved_passage_count": 13,
+      "route": "code+hipporag",
+      "scope": "legacy source-rank ACL; current static snapshot",
+      "scores": {
+        "all_required_set_success@10": 1.0,
+        "all_required_set_success@20": 1.0,
+        "all_required_set_success@5": 1.0,
+        "any_hit@10": 1.0,
+        "any_hit@20": 1.0,
+        "any_hit@5": 1.0,
+        "evidence_recall@10": 1.0,
+        "evidence_recall@20": 1.0,
+        "evidence_recall@5": 1.0,
+        "mrr": 0.5,
+        "ndcg@10": 0.6509209298071326
+      },
+      "slice": "code_dependency",
+      "snapshot": "after",
+      "status": "evaluated",
+      "total_relevant_passages": 2,
+      "used_code_seeds": true,
+      "used_dpr_fallback": false
+    },
+    {
+      "candidate_evidence_ids": [
+        [
+          "e-commerce-storage"
+        ],
+        [
+          "e-commerce-call"
+        ],
+        [
+          "e-commerce-route"
+        ],
+        [
+          "e-commerce-prd"
+        ],
+        [
+          "e-commerce-migration-after"
+        ],
+        [
+          "e-commerce-sqlserver"
+        ],
+        [
+          "e-commerce-analytics"
+        ],
+        [
+          "e-commerce-schema"
+        ],
+        [],
+        [],
+        [
+          "e-commerce-owners"
+        ],
+        [
+          "e-commerce-other-service"
+        ],
+        []
+      ],
+      "candidates": [
+        {
+          "evidence_ids": [
+            "e-commerce-storage"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-5783091a780f43438215393e4f19b069",
+          "rank": 1,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/storage.py :: corpus.commerce.storage.save_order (lines 1-3)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-call"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-49ea6a62631ec514367dd3efce890fc8",
+          "rank": 2,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route.create_order (lines 5-6)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-route"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-19a81aa8993408e1a9c0eef0e574bb00",
+          "rank": 3,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route (lines 1-8)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-prd"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-90754b1ebc00dd185f08998f39e764ff",
+          "rank": 4,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-migration-after"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-a26f576b83e07d60fd6732e60dcd2829",
+          "rank": 5,
+          "source_id": "eval-source-defa123c454e3cfb1163f4a588f64fc0649978d78ec385a7e8e750e604bac41d",
+          "title": "corpus/commerce/migration-after.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-sqlserver"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-6e9557576f5725144bb3acf82e482093",
+          "rank": 6,
+          "source_id": "eval-source-a45b674185c9dda97b9f84de27580e80a97983aad478026c408a14aadceab4ad",
+          "title": "corpus/commerce/sqlserver.sql (lines 1-2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-analytics"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-9a8d81d1f10fe7acb9aa2df3803ae097",
+          "rank": 7,
+          "source_id": "eval-source-22d6badcb2903ae730ff685c359676e8f575899eb564d364cd8acc162334bb21",
+          "title": "corpus/commerce/analytics.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-schema"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-d3d5b91de094c76f57b379a948b757b9",
+          "rank": 8,
+          "source_id": "eval-source-3fbb798d0f36ceb23da94707317d04d9db7ac7d17f9b674289fe8759f009796e",
+          "title": "corpus/commerce/schema.sql (lines 1-4)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-6531406ef65af0f7ff9946046f751f67",
+          "rank": 9,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 1)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-bbec114da54909314dad78596ed6979a",
+          "rank": 10,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-owners"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-ce0bc1153bfc53ec877b4d938e50569c",
+          "rank": 11,
+          "source_id": "eval-source-f3345070af2f657200913b00a4a34e08f7fd163bda1a7f97c946b8baa3e7ad62",
+          "title": "Ownership"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-other-service"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 3
+          },
+          "passage_id": "passage-ea7264d3e11346dfddf13fd44c458b55",
+          "rank": 12,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service (lines 1-7)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 4
+          },
+          "passage_id": "passage-1652c19583871a5417b26d6d252ae834",
+          "rank": 13,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service.list_orders (lines 4-5)"
+        }
+      ],
+      "fallback_reason": "",
+      "id": "commerce-q06",
+      "principal": "operator",
+      "query_mode": "current",
+      "ranked_evidence_ids": [
+        "e-commerce-storage",
+        "e-commerce-call",
+        "e-commerce-route",
+        "e-commerce-prd",
+        "e-commerce-migration-after",
+        "e-commerce-sqlserver",
+        "e-commerce-analytics",
+        "e-commerce-schema",
+        "e-commerce-owners",
+        "e-commerce-other-service"
+      ],
+      "ranked_scores": [
+        0.06888340607338313,
+        0.03716504661008604,
+        0.03610568612516236,
+        0.024073396377945318,
+        0.02141104257488517,
+        0.019812093366289977,
+        0.01963065605438676,
+        0.01608799113683697,
+        0.01495411638620198,
+        0.014921291828803017,
+        0.014069076109525118,
+        0.006186420739055033,
+        0.0002379392591944243
+      ],
+      "retrieved_passage_count": 13,
+      "route": "code+hipporag",
+      "scope": "legacy source-rank ACL; current static snapshot",
+      "scores": {
+        "all_required_set_success@10": 1.0,
+        "all_required_set_success@20": 1.0,
+        "all_required_set_success@5": 1.0,
+        "any_hit@10": 1.0,
+        "any_hit@20": 1.0,
+        "any_hit@5": 1.0,
+        "evidence_recall@10": 1.0,
+        "evidence_recall@20": 1.0,
+        "evidence_recall@5": 1.0,
+        "mrr": 1.0,
+        "ndcg@10": 1.0
+      },
+      "slice": "code_dependency",
+      "snapshot": "after",
+      "status": "evaluated",
+      "total_relevant_passages": 1,
+      "used_code_seeds": true,
+      "used_dpr_fallback": false
+    },
+    {
+      "candidate_evidence_ids": [
+        [],
+        [
+          "e-commerce-prd"
+        ],
+        [
+          "e-commerce-other-service"
+        ],
+        [
+          "e-commerce-analytics"
+        ],
+        [
+          "e-commerce-route"
+        ],
+        [
+          "e-commerce-call"
+        ],
+        [
+          "e-commerce-storage"
+        ],
+        [
+          "e-commerce-migration-after"
+        ],
+        [
+          "e-commerce-schema"
+        ],
+        [
+          "e-commerce-owners"
+        ],
+        [
+          "e-commerce-sqlserver"
+        ],
+        [],
+        []
+      ],
+      "candidates": [
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 4
+          },
+          "passage_id": "passage-1652c19583871a5417b26d6d252ae834",
+          "rank": 1,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service.list_orders (lines 4-5)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-prd"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-90754b1ebc00dd185f08998f39e764ff",
+          "rank": 2,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-other-service"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 3
+          },
+          "passage_id": "passage-ea7264d3e11346dfddf13fd44c458b55",
+          "rank": 3,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service (lines 1-7)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-analytics"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-9a8d81d1f10fe7acb9aa2df3803ae097",
+          "rank": 4,
+          "source_id": "eval-source-22d6badcb2903ae730ff685c359676e8f575899eb564d364cd8acc162334bb21",
+          "title": "corpus/commerce/analytics.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-route"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-19a81aa8993408e1a9c0eef0e574bb00",
+          "rank": 5,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route (lines 1-8)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-call"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-49ea6a62631ec514367dd3efce890fc8",
+          "rank": 6,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route.create_order (lines 5-6)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-storage"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-5783091a780f43438215393e4f19b069",
+          "rank": 7,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/storage.py :: corpus.commerce.storage.save_order (lines 1-3)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-migration-after"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-a26f576b83e07d60fd6732e60dcd2829",
+          "rank": 8,
+          "source_id": "eval-source-defa123c454e3cfb1163f4a588f64fc0649978d78ec385a7e8e750e604bac41d",
+          "title": "corpus/commerce/migration-after.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-schema"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-d3d5b91de094c76f57b379a948b757b9",
+          "rank": 9,
+          "source_id": "eval-source-3fbb798d0f36ceb23da94707317d04d9db7ac7d17f9b674289fe8759f009796e",
+          "title": "corpus/commerce/schema.sql (lines 1-4)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-owners"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-ce0bc1153bfc53ec877b4d938e50569c",
+          "rank": 10,
+          "source_id": "eval-source-f3345070af2f657200913b00a4a34e08f7fd163bda1a7f97c946b8baa3e7ad62",
+          "title": "Ownership"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-sqlserver"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-6e9557576f5725144bb3acf82e482093",
+          "rank": 11,
+          "source_id": "eval-source-a45b674185c9dda97b9f84de27580e80a97983aad478026c408a14aadceab4ad",
+          "title": "corpus/commerce/sqlserver.sql (lines 1-2)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-bbec114da54909314dad78596ed6979a",
+          "rank": 12,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 2)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-6531406ef65af0f7ff9946046f751f67",
+          "rank": 13,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 1)"
+        }
+      ],
+      "fallback_reason": "no facts survived the filter",
+      "id": "commerce-q07",
+      "principal": "reader",
+      "query_mode": "current",
+      "ranked_evidence_ids": [
+        "e-commerce-prd",
+        "e-commerce-other-service",
+        "e-commerce-analytics",
+        "e-commerce-route",
+        "e-commerce-call",
+        "e-commerce-storage",
+        "e-commerce-migration-after",
+        "e-commerce-schema",
+        "e-commerce-owners",
+        "e-commerce-sqlserver"
+      ],
+      "ranked_scores": [
+        1.0,
+        0.884447390557533,
+        0.8530868649718449,
+        0.6598124214675344,
+        0.5945040687227171,
+        0.4471543944687697,
+        0.41650445095788247,
+        0.36781314069834165,
+        0.35039564693772984,
+        0.268527494119451,
+        0.24831327194701444,
+        0.24229267307801083,
+        0.0
+      ],
+      "retrieved_passage_count": 13,
+      "route": "dense_fallback",
+      "scope": "legacy source-rank ACL; current static snapshot",
+      "scores": {
+        "all_required_set_success@10": 1.0,
+        "all_required_set_success@20": 1.0,
+        "all_required_set_success@5": 1.0,
+        "any_hit@10": 1.0,
+        "any_hit@20": 1.0,
+        "any_hit@5": 1.0,
+        "evidence_recall@10": 1.0,
+        "evidence_recall@20": 1.0,
+        "evidence_recall@5": 1.0,
+        "mrr": 0.5,
+        "ndcg@10": 0.6309297535714575
+      },
+      "slice": "requirements_rationale",
+      "snapshot": "after",
+      "status": "evaluated",
+      "total_relevant_passages": 1,
+      "used_code_seeds": false,
+      "used_dpr_fallback": true
+    },
+    {
+      "candidate_evidence_ids": [
+        [],
+        [
+          "e-commerce-sqlserver"
+        ],
+        [
+          "e-commerce-schema"
+        ],
+        [
+          "e-commerce-storage"
+        ],
+        [
+          "e-commerce-call"
+        ],
+        [
+          "e-commerce-prd"
+        ],
+        [
+          "e-commerce-owners"
+        ],
+        [],
+        [],
+        [
+          "e-commerce-route"
+        ],
+        [
+          "e-commerce-other-service"
+        ],
+        [
+          "e-commerce-analytics"
+        ],
+        [
+          "e-commerce-migration-after"
+        ]
+      ],
+      "candidates": [
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-bbec114da54909314dad78596ed6979a",
+          "rank": 1,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-sqlserver"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-6e9557576f5725144bb3acf82e482093",
+          "rank": 2,
+          "source_id": "eval-source-a45b674185c9dda97b9f84de27580e80a97983aad478026c408a14aadceab4ad",
+          "title": "corpus/commerce/sqlserver.sql (lines 1-2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-schema"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-d3d5b91de094c76f57b379a948b757b9",
+          "rank": 3,
+          "source_id": "eval-source-3fbb798d0f36ceb23da94707317d04d9db7ac7d17f9b674289fe8759f009796e",
+          "title": "corpus/commerce/schema.sql (lines 1-4)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-storage"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-5783091a780f43438215393e4f19b069",
+          "rank": 4,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/storage.py :: corpus.commerce.storage.save_order (lines 1-3)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-call"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-49ea6a62631ec514367dd3efce890fc8",
+          "rank": 5,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route.create_order (lines 5-6)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-prd"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-90754b1ebc00dd185f08998f39e764ff",
+          "rank": 6,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-owners"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-ce0bc1153bfc53ec877b4d938e50569c",
+          "rank": 7,
+          "source_id": "eval-source-f3345070af2f657200913b00a4a34e08f7fd163bda1a7f97c946b8baa3e7ad62",
+          "title": "Ownership"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-6531406ef65af0f7ff9946046f751f67",
+          "rank": 8,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 1)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 4
+          },
+          "passage_id": "passage-1652c19583871a5417b26d6d252ae834",
+          "rank": 9,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service.list_orders (lines 4-5)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-route"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-19a81aa8993408e1a9c0eef0e574bb00",
+          "rank": 10,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route (lines 1-8)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-other-service"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 3
+          },
+          "passage_id": "passage-ea7264d3e11346dfddf13fd44c458b55",
+          "rank": 11,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service (lines 1-7)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-analytics"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-9a8d81d1f10fe7acb9aa2df3803ae097",
+          "rank": 12,
+          "source_id": "eval-source-22d6badcb2903ae730ff685c359676e8f575899eb564d364cd8acc162334bb21",
+          "title": "corpus/commerce/analytics.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-migration-after"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-a26f576b83e07d60fd6732e60dcd2829",
+          "rank": 13,
+          "source_id": "eval-source-defa123c454e3cfb1163f4a588f64fc0649978d78ec385a7e8e750e604bac41d",
+          "title": "corpus/commerce/migration-after.sql (lines 1-1)"
+        }
+      ],
+      "fallback_reason": "no facts survived the filter",
+      "id": "commerce-q08",
+      "principal": "operator",
+      "query_mode": "current",
+      "ranked_evidence_ids": [
+        "e-commerce-sqlserver",
+        "e-commerce-schema",
+        "e-commerce-storage",
+        "e-commerce-call",
+        "e-commerce-prd",
+        "e-commerce-owners",
+        "e-commerce-route",
+        "e-commerce-other-service",
+        "e-commerce-analytics",
+        "e-commerce-migration-after"
+      ],
+      "ranked_scores": [
+        1.0,
+        0.9972523641893067,
+        0.9421234090547296,
+        0.9117546015440965,
+        0.8374396550831804,
+        0.7168773663288676,
+        0.7137493622755753,
+        0.7070715985330156,
+        0.4912239127496242,
+        0.4890199177718583,
+        0.3616564219196295,
+        0.21644180925725884,
+        0.0
+      ],
+      "retrieved_passage_count": 13,
+      "route": "dense_fallback",
+      "scope": "legacy source-rank ACL; current static snapshot",
+      "scores": {
+        "all_required_set_success@10": 0.0,
+        "all_required_set_success@20": 0.0,
+        "all_required_set_success@5": 0.0,
+        "any_hit@10": 0.0,
+        "any_hit@20": 0.0,
+        "any_hit@5": 0.0,
+        "evidence_recall@10": 0.0,
+        "evidence_recall@20": 0.0,
+        "evidence_recall@5": 0.0,
+        "mrr": 0.0
+      },
+      "slice": "requirements_rationale",
+      "snapshot": "after",
+      "status": "evaluated",
+      "total_relevant_passages": 0,
+      "used_code_seeds": false,
+      "used_dpr_fallback": true
+    },
+    {
+      "candidate_evidence_ids": [
+        [
+          "e-commerce-sqlserver"
+        ],
+        [
+          "e-commerce-schema"
+        ],
+        [],
+        [],
+        [
+          "e-commerce-prd"
+        ],
+        [
+          "e-commerce-owners"
+        ],
+        [
+          "e-commerce-storage"
+        ],
+        [
+          "e-commerce-call"
+        ],
+        [
+          "e-commerce-analytics"
+        ],
+        [],
+        [
+          "e-commerce-route"
+        ],
+        [
+          "e-commerce-migration-after"
+        ],
+        [
+          "e-commerce-other-service"
+        ]
+      ],
+      "candidates": [
+        {
+          "evidence_ids": [
+            "e-commerce-sqlserver"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-6e9557576f5725144bb3acf82e482093",
+          "rank": 1,
+          "source_id": "eval-source-a45b674185c9dda97b9f84de27580e80a97983aad478026c408a14aadceab4ad",
+          "title": "corpus/commerce/sqlserver.sql (lines 1-2)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-schema"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-d3d5b91de094c76f57b379a948b757b9",
+          "rank": 2,
+          "source_id": "eval-source-3fbb798d0f36ceb23da94707317d04d9db7ac7d17f9b674289fe8759f009796e",
+          "title": "corpus/commerce/schema.sql (lines 1-4)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-bbec114da54909314dad78596ed6979a",
+          "rank": 3,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 2)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-6531406ef65af0f7ff9946046f751f67",
+          "rank": 4,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD \u203a Decisions (part 1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-prd"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-90754b1ebc00dd185f08998f39e764ff",
+          "rank": 5,
+          "source_id": "eval-source-2fa02e97871e85c1df9ff804e3c1870a25afd926175a0c9ad2b37f083ad43fbe",
+          "title": "Billing PRD"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-owners"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-ce0bc1153bfc53ec877b4d938e50569c",
+          "rank": 6,
+          "source_id": "eval-source-f3345070af2f657200913b00a4a34e08f7fd163bda1a7f97c946b8baa3e7ad62",
+          "title": "Ownership"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-storage"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 2
+          },
+          "passage_id": "passage-5783091a780f43438215393e4f19b069",
+          "rank": 7,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/storage.py :: corpus.commerce.storage.save_order (lines 1-3)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-call"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 1
+          },
+          "passage_id": "passage-49ea6a62631ec514367dd3efce890fc8",
+          "rank": 8,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route.create_order (lines 5-6)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-analytics"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-9a8d81d1f10fe7acb9aa2df3803ae097",
+          "rank": 9,
+          "source_id": "eval-source-22d6badcb2903ae730ff685c359676e8f575899eb564d364cd8acc162334bb21",
+          "title": "corpus/commerce/analytics.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 4
+          },
+          "passage_id": "passage-1652c19583871a5417b26d6d252ae834",
+          "rank": 10,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service.list_orders (lines 4-5)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-route"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-19a81aa8993408e1a9c0eef0e574bb00",
+          "rank": 11,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/route.py :: corpus.commerce.route (lines 1-8)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-migration-after"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 0
+          },
+          "passage_id": "passage-a26f576b83e07d60fd6732e60dcd2829",
+          "rank": 12,
+          "source_id": "eval-source-defa123c454e3cfb1163f4a588f64fc0649978d78ec385a7e8e750e604bac41d",
+          "title": "corpus/commerce/migration-after.sql (lines 1-1)"
+        },
+        {
+          "evidence_ids": [
+            "e-commerce-other-service"
+          ],
+          "locator": {
+            "kind": "legacy_chunk_ordinal",
+            "ordinal": 3
+          },
+          "passage_id": "passage-ea7264d3e11346dfddf13fd44c458b55",
+          "rank": 13,
+          "source_id": "eval-source-1b535c7af6c084736b00f2029d2213c1262587f00773b11551be769ce68a00b3",
+          "title": "corpus/commerce/other-service.py :: corpus.commerce.other-service (lines 1-7)"
+        }
+      ],
+      "fallback_reason": "",
+      "id": "commerce-q09",
+      "principal": "reader",
+      "query_mode": "current",
+      "ranked_evidence_ids": [
+        "e-commerce-sqlserver",
+        "e-commerce-schema",
+        "e-commerce-prd",
+        "e-commerce-owners",
+        "e-commerce-storage",
+        "e-commerce-call",
+        "e-commerce-analytics",
+        "e-commerce-route",
+        "e-commerce-migration-after",
+        "e-commerce-other-service"
+      ],
+      "ranked_scores": [
+        0.05557229595585238,
+        0.05486015490618468,
+        0.013011490609420803,
+        0.011834229004653671,
+        0.010763296553015405,
+        0.010384346677672334,
+        0.010278498819937268,
+        0.009938587761217782,
+        0.006282241747264168,
+        0.0043407769713056914,
+        0.0038877390512552694,
+        0.0022395788656780244,
+        0.00016695296043483428
+      ],
+      "retrieved_passage_count": 13,
+      "route": "code+hipporag",
+      "scope": "legacy source-rank ACL; current static snapshot",
+      "scores": {
+        "all_required_set_success@10": 1.0,
+        "all_required_set_success@20": 1.0,
+        "all_required_set_success@5": 0.0,
+        "any_hit@10": 1.0,
+        "any_hit@20": 1.0,
+        "any_hit@5": 1.0,
+        "evidence_recall@10": 1.0,
+        "evidence_recall@20": 1.0,
+        "evidence_recall@5": 0.5,
+        "mrr": 0.2,
+        "ndcg@10": 0.4415801103577823
+      },
+      "slice": "cross_source_impact",
+      "snapshot": "after",
+      "status": "evaluated",
+      "total_relevant_passages": 2,
+      "used_code_seeds": true,
+      "used_dpr_fallback": false
+    },
+    {
+      "id": "commerce-q10",
+      "missing_capabilities": [
+        "provider_acl",
+        "typed_links",
+        "insufficiency_evaluation",
+        "source_family_or_policy"
+      ],
+      "principal": "reader",
+      "query_mode": "current",
+      "slice": "cross_source_impact",
+      "snapshot": "after",
+      "status": "coverage_gap"
+    },
+    {
+      "id": "commerce-q11",
+      "missing_capabilities": [
+        "bitemporal",
+        "source_family_or_policy"
+      ],
+      "principal": "reader",
+      "query_mode": "as_of",
+      "slice": "temporal_conflict_insufficient",
+      "snapshot": "before",
+      "status": "coverage_gap"
+    },
+    {
+      "id": "commerce-q12",
+      "missing_capabilities": [
+        "bitemporal",
+        "conflict_resolution",
+        "source_family_or_policy"
+      ],
+      "principal": "operator",
+      "query_mode": "compare",
+      "slice": "temporal_conflict_insufficient",
+      "snapshot": "after",
+      "status": "coverage_gap"
+    }
+  ],
+  "release_targets": "unapproved",
+  "retrieval_settings": {
+    "code_community_boost": 0.0,
+    "code_dense_seeds": 5,
+    "code_expand_max": 10,
+    "code_git_timeout_s": 10,
+    "code_history_depth": 200,
+    "code_history_total_s": 120,
+    "code_seed_weight": 1.0,
+    "code_select": true,
+    "code_structural_scale": 1.0,
+    "code_theta": 0.5,
+    "code_triples_chars": 1500,
+    "damping": 0.5,
+    "linking_top_k": 5,
+    "node_specificity": true,
+    "passage_node_weight": 0.05,
+    "qa_top_k": 5,
+    "retrieval_top_k": 20,
+    "synonymy_threshold": 0.8
+  },
+  "schema_version": 1,
+  "split": "dev"
+}
