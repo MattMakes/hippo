@@ -48,11 +48,12 @@ Create `src/hippo/knowledge/embedding_profile.py`. Keep low-level HTTP parsing i
 class EmbeddingSpec:
     query_prefix: str
     document_prefix: str
-    options_json: str          # canonical strict JSON object, copied at capture
+    options_json: str  # canonical strict JSON object, copied at capture
     dimensions: int | None = None
     truncate: bool = False
     normalization: str = "l2-f64-to-f32-v1"
     preprocessing: str = "exact-utf8-prefix-v1"
+
 
 @dataclass(frozen=True)
 class ResolvedEmbeddingProfile:
@@ -64,19 +65,26 @@ class ResolvedEmbeddingProfile:
 
     def descriptor(self) -> dict: ...  # copied profile/spec/fingerprint only
 
-def resolve_embedding_profile(ollama, *, spec: EmbeddingSpec,
-                              authorization_check=None) -> ResolvedEmbeddingProfile: ...
+
+def resolve_embedding_profile(
+    ollama, *, spec: EmbeddingSpec, authorization_check=None
+) -> ResolvedEmbeddingProfile: ...
+
 
 class ProfiledEmbeddings:
-    def __init__(self, ollama, resolved, *, cache=None,
-                 authorization_check=None): ...
+    def __init__(self, ollama, resolved, *, cache=None, authorization_check=None): ...
     def validate(self) -> None: ...  # remote; never invoke under a DB lock
     def embed(self, texts, kind="document", batch_size=32) -> np.ndarray: ...
     def embed_one(self, text, kind="query") -> np.ndarray: ...
-    def embedding_dim(self) -> int: ...      # captured value, no HTTP
+    def embedding_dim(self) -> int: ...  # captured value, no HTTP
+
 
 class EmbeddingProfileUnavailable(OllamaError): ...
+
+
 class EmbeddingProfileChanged(OllamaError): ...
+
+
 class EmbeddingProfileMismatch(OllamaError): ...
 ```
 

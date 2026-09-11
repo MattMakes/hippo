@@ -53,9 +53,17 @@ Add a typed immutable record:
 class GenerationEvidenceMember(Record):
     generation_id: Text
     record_kind: Literal[
-        "EvidenceSpan", "ObjectObservation", "AssertionVersion", "AssertionSupport",
-        "Section", "SectionMember", "RetrievalView", "DerivedRecord",
-        "DerivedDependency", "ConflictSet", "Alias",
+        "EvidenceSpan",
+        "ObjectObservation",
+        "AssertionVersion",
+        "AssertionSupport",
+        "Section",
+        "SectionMember",
+        "RetrievalView",
+        "DerivedRecord",
+        "DerivedDependency",
+        "ConflictSet",
+        "Alias",
     ]
     record_id: Text
     identity_fields = ("generation_id", "record_kind", "record_id")
@@ -108,54 +116,97 @@ def suppression_epoch() -> int: ...
 def source_is_managed(source_id: str) -> bool: ...
 def begin_managed_source(source_id: str) -> None: ...
 
+
 def claim_generation_build(
-    generation_id: str, *, job_key: str, lease_owner: str,
+    generation_id: str,
+    *,
+    job_key: str,
+    lease_owner: str,
     lease_expires_at: datetime,
 ) -> MaintenanceJob: ...
+
 
 def renew_generation_build(
-    job_id: str, *, lease_owner: str, fencing_token: int,
+    job_id: str,
+    *,
+    lease_owner: str,
+    fencing_token: int,
     lease_expires_at: datetime,
 ) -> MaintenanceJob: ...
 
+
 def check_generation_write(
-    generation_id: str, *, job_id: str, lease_owner: str,
+    generation_id: str,
+    *,
+    job_id: str,
+    lease_owner: str,
     fencing_token: int,
 ) -> None: ...
 
+
 def seal_generation(
-    generation_id: str, index_manifest: IndexManifest, *,
-    job_id: str, lease_owner: str, fencing_token: int,
+    generation_id: str,
+    index_manifest: IndexManifest,
+    *,
+    job_id: str,
+    lease_owner: str,
+    fencing_token: int,
 ) -> str: ...  # returns the verified, immutable manifest ID
 
+
 def publish_staged_generation(
-    generation_id: str, *, expected_parent_id: str | None,
-    job_id: str, lease_owner: str, fencing_token: int,
-    expected_suppression_epoch: int, published_at: datetime,
+    generation_id: str,
+    *,
+    expected_parent_id: str | None,
+    job_id: str,
+    lease_owner: str,
+    fencing_token: int,
+    expected_suppression_epoch: int,
+    published_at: datetime,
     fault_hook=None,
 ) -> str: ...  # returns the durable publication IndexEvent ID
 
+
 def acquire_snapshot_reference(
-    snapshot: QuerySnapshot, *, reference_key: str,
-    lease_owner: str, lease_expires_at: datetime,
+    snapshot: QuerySnapshot,
+    *,
+    reference_key: str,
+    lease_owner: str,
+    lease_expires_at: datetime,
     require_current: bool = True,
 ) -> SnapshotReference: ...
 
+
 def renew_snapshot_reference(
-    reference_id: str, *, lease_owner: str, lease_expires_at: datetime,
+    reference_id: str,
+    *,
+    lease_owner: str,
+    lease_expires_at: datetime,
 ) -> SnapshotReference: ...
 
+
 def retain_snapshot(
-    snapshot_id: str, *, kind: Literal["saved", "retained"], reference_key: str,
+    snapshot_id: str,
+    *,
+    kind: Literal["saved", "retained"],
+    reference_key: str,
 ) -> SnapshotReference: ...
+
 
 def release_snapshot_reference(reference_id: str, *, lease_owner: str | None = None) -> None: ...
 
+
 def discard_generation(
-    generation_id: str, *, job_id: str, lease_owner: str, fencing_token: int,
+    generation_id: str,
+    *,
+    job_id: str,
+    lease_owner: str,
+    fencing_token: int,
 ) -> CollectionResult: ...
 
+
 def collect_generation(generation_id: str) -> CollectionResult: ...
+
 
 def recover_generation_builds() -> RecoveryResult: ...
 ```
