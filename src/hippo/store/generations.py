@@ -2,6 +2,7 @@
 
 import json
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from ..knowledge import model as k
@@ -9,6 +10,20 @@ from ..knowledge.identity import canonical_json, text_hash
 from .authorization import bump_epoch, epoch
 
 MANDATORY_REPRESENTATIONS = ("evidence", "dense", "native")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTombstone:
+    """What one committed managed tombstone changed. Nothing was deleted."""
+
+    suppression_epoch: int
+    fencing_token: int
+    cancelled_generation_id: str | None
+    cancelled_job_id: str | None
+
+
+def tombstone_scope_key(source_id: str) -> str:
+    return f"source:{source_id}:delete"
 
 
 class GenerationQueries:
@@ -51,6 +66,64 @@ class GenerationQueries:
             if not self.source_is_managed(source_id):
                 self._source_fields(source_id, managed=True)
                 self._bump_authorization_epoch()
+
+    def apply_source_tombstone(self, source_id, *, operation_id, created_at):
+        """Fence the builder and suppress the current view of a managed source.
+
+        Deletes nothing: published and retired generations, their manifests, raw
+        references, saved snapshots and the active pointer all stay exactly as
+        they are, so an authorized historical read still reconstructs them.
+
+        The caller must already hold a transaction; the authorization and source
+        locks are taken here so the transition cannot run without them.
+        """
+        if not getattr(self, "_transaction_depth", 0) and getattr(self, "_transaction", None) is None:
+            raise RuntimeError("Managed tombstone requires the caller's transaction")
+        self._lock_source(source_id)
+        if not self.source_is_managed(source_id):
+            raise ValueError("Managed source required for suppression")
+        source = self.get_source(source_id)
+        fence = int(source.get("build_fencing_token") or 0) + 1
+        cancelled_generation = cancelled_job = None
+        job = self._knowledge_get("MaintenanceJob", source.get("active_build_id"))
+        if job is not None and job.kind == "rebuild" and job.status == "running":
+            gen = self._knowledge_get("Generation", job.input_fingerprint)
+            if (
+                gen is not None
+                and gen.source_id == source_id
+                and gen.status in ("staging", "ready")
+                and gen.published_at is None
+                and source.get("active_generation_id") != gen.id
+                and not any(
+                    event.generation_id == gen.id and event.kind == "published"
+                    for event in self._knowledge_rows("IndexEvent")
+                )
+            ):
+                # Only this exact unpublished attempt ends; the published active
+                # generation and every other job keep their state.
+                self._write_knowledge(gen.replace(status="failed"))
+                self._write_knowledge(job.replace(status="cancelled", error_code="source_tombstoned"))
+                cancelled_generation, cancelled_job = gen.id, job.id
+        self._source_fields(source_id, active_build_id=None, build_fencing_token=fence)
+        self.update_source(
+            source_id, status="deleted", stage="tombstoned", progress_done=0, progress_total=0, error=None
+        )
+        suppression = k.Suppression(
+            workspace_id=source["workspace_id"],
+            target_kind="source",
+            target_id=source_id,
+            scope_key=tombstone_scope_key(source_id),
+            all_principals=True,
+            view_applicability="current_only",
+            reason="tombstone",
+            epoch=self.suppression_epoch() + 1,
+            created_at=created_at,
+            restoration_barrier=operation_id,
+        )
+        # Writing the record through the reviewed path is what commits the
+        # suppression, content and authorization epochs with this transition.
+        self.put_knowledge(suppression)
+        return SourceTombstone(suppression.epoch, fence, cancelled_generation, cancelled_job)
 
     def _generation(self, generation_id):
         row = self._knowledge_get("Generation", generation_id)
