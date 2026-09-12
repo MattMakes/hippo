@@ -21,6 +21,7 @@ from ..context import AppContext
 from ..hipporag.indexer import index_source, passage_id
 from ..ingest.chunker import chunk_documents
 from ..ingest.readers import read_path
+from ..knowledge.query_access import query_session
 from .metrics import passage_evidence_metrics
 
 SLICES = (
@@ -382,52 +383,59 @@ def evaluate(fixture: Fixture, ctx: AppContext, *, split: str, model_profile: st
             row.update(status="coverage_gap", missing_capabilities=list(dict.fromkeys(missing)))
         else:
             principal = fixture.manifest["principals"][q["principal"]]
-            trace = search(
-                ctx, q["question"], {"retrieval_top_k": 20}, access=Access(rank=principal["legacy_rank"])
-            )
-            ranked = list(dict.fromkeys(e for p in trace.passages for e in mapping.get(p.passage_id, [])))
-            candidate_evidence = [mapping.get(p.passage_id, []) for p in trace.passages]
-            relevant = {e for group in q["alternative_evidence_sets"] for e in group}
-            total_relevant = sum(bool(set(ids) & relevant) for ids in mapping.values())
-            scores = passage_evidence_metrics(
-                q["alternative_evidence_sets"], candidate_evidence, total_relevant_passages=total_relevant
-            )
-            graph = ctx.graph_for(Access(rank=principal["legacy_rank"]))
-            candidates = []
-            for rank, candidate in enumerate(trace.passages, 1):
-                passage = graph.passage_by_id(candidate.passage_id)
-                if passage is None:
-                    raise ValueError("retrieved passage is absent from the evaluation graph")
-                candidates.append(
-                    {
-                        "rank": rank,
-                        "passage_id": passage.id,
-                        "source_id": passage.source_id,
-                        "title": passage.title,
-                        "locator": {"kind": "legacy_chunk_ordinal", "ordinal": passage.ordinal},
-                        "evidence_ids": mapping.get(passage.id, []),
-                    }
+            with query_session(
+                ctx, Access(rank=principal["legacy_rank"]), settings={"retrieval_top_k": 20}
+            ) as session:
+                trace = search(
+                    ctx,
+                    q["question"],
+                    {"retrieval_top_k": 20},
+                    access=Access(rank=principal["legacy_rank"]),
+                    session=session,
                 )
-            row.update(
-                status="evaluated",
-                candidates=candidates,
-                ranked_evidence_ids=ranked,
-                scores=scores,
-                retrieved_passage_count=len(trace.passages),
-                used_code_seeds=trace.used_code_seeds,
-                ranked_scores=[float(p.score) for p in trace.passages],
-                candidate_evidence_ids=candidate_evidence,
-                total_relevant_passages=total_relevant,
-                used_dpr_fallback=trace.used_dpr_fallback,
-                fallback_reason=trace.fallback_reason,
-                route="dense_fallback"
-                if trace.used_dpr_fallback
-                else "code+hipporag"
-                if trace.used_code_seeds
-                else "hipporag",
-                scope="legacy source-rank ACL; current static snapshot",
-            )
-            by_slice[q["slice"]].append(scores)
+                ranked = list(dict.fromkeys(e for p in trace.passages for e in mapping.get(p.passage_id, [])))
+                candidate_evidence = [mapping.get(p.passage_id, []) for p in trace.passages]
+                relevant = {e for group in q["alternative_evidence_sets"] for e in group}
+                total_relevant = sum(bool(set(ids) & relevant) for ids in mapping.values())
+                scores = passage_evidence_metrics(
+                    q["alternative_evidence_sets"], candidate_evidence, total_relevant_passages=total_relevant
+                )
+                graph = session.graph
+                candidates = []
+                for rank, candidate in enumerate(trace.passages, 1):
+                    passage = graph.passage_by_id(candidate.passage_id)
+                    if passage is None:
+                        raise ValueError("retrieved passage is absent from the evaluation graph")
+                    candidates.append(
+                        {
+                            "rank": rank,
+                            "passage_id": passage.id,
+                            "source_id": passage.source_id,
+                            "title": passage.title,
+                            "locator": {"kind": "legacy_chunk_ordinal", "ordinal": passage.ordinal},
+                            "evidence_ids": mapping.get(passage.id, []),
+                        }
+                    )
+                row.update(
+                    status="evaluated",
+                    candidates=candidates,
+                    ranked_evidence_ids=ranked,
+                    scores=scores,
+                    retrieved_passage_count=len(trace.passages),
+                    used_code_seeds=trace.used_code_seeds,
+                    ranked_scores=[float(p.score) for p in trace.passages],
+                    candidate_evidence_ids=candidate_evidence,
+                    total_relevant_passages=total_relevant,
+                    used_dpr_fallback=trace.used_dpr_fallback,
+                    fallback_reason=trace.fallback_reason,
+                    route="dense_fallback"
+                    if trace.used_dpr_fallback
+                    else "code+hipporag"
+                    if trace.used_code_seeds
+                    else "hipporag",
+                    scope="legacy source-rank ACL; current static snapshot",
+                )
+                by_slice[q["slice"]].append(scores)
         rows.append(row)
     if not any(row["status"] == "evaluated" for row in rows):
         raise ValueError("no evaluable questions; required capabilities are not implemented")

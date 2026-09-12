@@ -346,3 +346,10 @@ IndependentSPEC/QUALITYPASS41focused/210regression plus mixed-dimension/scoping 
 Full Fake run on this stable code:2739passed,23skipped,6failed,2errors; all eight unsuccessful cases were PermissionError at localhost socket.bind in test_mcp_http.py (/tmp/hippo-rag-full-fake-current.log). Re-ran that complete file with local socket permission:19passed (/tmp/hippo-rag-mcp-http-final.log), resolving every failed/error case without code changes. Third-party Starlette/httpx warnings remain. GitHub latest published CI runs were queued at last check, not claimed green.
 
 Next approved work: storage agent step2 opt-in structural loading/snapshot grouping with a separate faithful legacy-vector sidecar (legacy-only behavior preserved; no production default switch), loader managed plain-prose model preparation/staged writer contract under review. Root owns lifecycle/profile binding integration. FullTask5 and subsequent tasks remain OPEN; production ingestion still legacy and application data untouched.
+
+
+## Task 5 static fixture evaluator lifetime verified
+
+Dense capability published de3a213. Each evaluated fixture question now holds one query session through retrieval, metrics and candidate DTO construction. Error and revocation paths close the same view. The harness still advertises its static legacy-only evaluation scope. Root2gatesMET59Fake/Ruff; independent SPEC/QUALITY PASS59Fake (/tmp/hippo-rag-eval-independent.log). No extra model calls or managed evaluation capability are claimed.
+
+Approved parallel work now implements opt-in structural loading, controlled accepted-manifest profile binding, and managed plain-prose preparation/staged writing. All are uncommitted pending independent reviews and root gates. Production ingestion remains legacy; Task5 remains OPEN.
