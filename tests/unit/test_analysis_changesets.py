@@ -177,7 +177,9 @@ def test_overrides_to_ops_are_valid_and_apply_reaches_the_graph(ctx, indexed):
     # And a search afterwards uses the new settings.
     after = search(ctx, QUESTION)
     assert after.settings["damping"] == 0.7
-    assert after.graph_version == version_before + 1
+    # A structural view's version is the fingerprint of its content, not the store's counter, so
+    # what proves the edits reached the graph this search ran on is that the two traces disagree.
+    assert after.graph_version != before.graph_version
 
 
 def test_apply_writes_a_manual_synonym(ctx, indexed):
