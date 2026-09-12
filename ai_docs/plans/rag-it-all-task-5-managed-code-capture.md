@@ -1,0 +1,448 @@
+# RAG-it-all Task 5: managed capture of code repositories
+
+**Status:** proposed implementation contract for root review. Nothing here is implemented and no
+production route is activated by this document. The plain-prose coordinator
+(`ai_docs/plans/rag-it-all-task-5-prose-coordinator.md`), the production activation plan and the
+storage contract are prerequisites and are not reopened by this plan.
+
+## 1. Outcome and scope
+
+One authenticated, explicitly invoked operation converts a repository, an archive or a single code
+file from the legacy pipeline to managed generations, with every guarantee the plain-prose lane now
+has: immutable accepted inputs, detached preparation, legacy evidence serving until the first
+publication, fenced refresh with G1 serving, non-collecting failure, exact
+`GenerationEvidenceMember` closure, original spans with real locators, no source-wide cleanup,
+tombstone rather than deletion, one structural owner per query, and verified or tag-compatible
+dense dispatch.
+
+**In scope.** Sources of kind `repo` (a cloned checkout), `archive` (a ZIP of a tree) and `file`
+whose stored name is a code name (`readers.is_code_name`), together with the plain-prose and
+unparsed text files those trees contain; the code graph (symbols, data objects, edges,
+`DEFINED_IN`); and git history (commits, `MODIFIES`, `PRECEDES`) with the Task 5A temporal fields.
+
+**Out of scope.** Rich documents (PDF/DOCX/EPUB/HTML) and their block model, a separate plan; Task 6
+blocks and the local import adapter; connectors and provider identity (Tasks 9–11); cross-source
+bindings and the typed assertion vocabulary (Task 12); purge, retention and restore (Task 9A);
+endpoint extractors (master plan §6.2); retrieval fusion (Task 13). No new predicate is written
+into `knowledge/predicates.py`.
+
+## 2. Existing seams
+
+| Seam | Use or required boundary |
+| --- | --- |
+| `codegraph/extract.py:51` `extract_code` | Already takes `node_namespace` and `syntax_cache`. Use unchanged; managed callers pass the generation namespace. |
+| `codegraph/syntax_cache.py:73` `cache_key`, `:154` `SyntaxCache` | Rematerialises objects and native IDs for the requested namespace and reruns source-wide resolution. Cached IDs are never trusted. A cache hit is coverage, never generation identity. |
+| `codegraph/resolve.py:152` `build_index` | Whole-source resolution. Recomputed for every generation; per §7.3 partial reuse is not safe. |
+| `codegraph/model.py:110,:122,:130` `symbol_id`/`data_id`/`commit_id`; `:39-41` the three `CODE_MAX_*` rails | Namespaced native IDs — `store/generations.py:1182` already re-derives and rejects a mismatch — and the existing safety rails, reused as the managed ceilings. |
+| `codegraph/git_history.py:192` `read_history`, `:124` `History` | Commits/`MODIFIES`/`PRECEDES` in store-row shape, plus `skipped` and `truncated`. Consume its output; do not reimplement diffing. |
+| `ingest/repos.py:59` `clone_repo`, `:115` `walk_repo` | Clone and tree walk. `walk_repo` produces `Document`s only; managed capture needs paths and bytes, so it is a reference, not the capture path. |
+| `ingest/readers.py:58,:63,:145,:189,:215,:262` | `PROSE_EXTENSIONS`, `CODE_EXTENSIONS`, `is_code_name`, `is_plain_prose_name`, `read_file`, `read_zip`. Eligibility reuses these predicates; capture reuses byte reading and budgets. |
+| `ingest/chunker.py:70` `chunk_documents`, `:92` `_chunk_commits` | Symbol-aware chunking and one synthesized passage per commit. Legacy behaviour is the parity target; its generated text is not an original span. |
+| `ingest/pipeline.py:158` `add_repo`, `:370` `_read_chunk_index`, `:449` `_read_history`, `:504` `read_source`, `:74` `MAX_CHUNKS` | The legacy lane. `add_repo` accepts no `build_actor` today. `_read_history` is the legacy history pass to replace for managed sources. |
+| `hipporag/indexer.py:151` `index_source`, `:279-281`, `:434` `_write_code_graph`; `hipporag/preparation.py:69` `prepare_code_rows` | Legacy code writes plus the global side effects (`set_meta("embed_model")`, `set_meta("embedding_dim")`, `bump_graph_version`) that staged writes must not perform; `prepare_code_rows` is the store-free row/vector/name preparation already extracted for reuse. |
+| `store/code.py:362,:406,:424,:453,:468,:482,:687` | `add_symbols`, `add_commits`, `add_code_edges`, `link_definitions`, `add_modifies`, `add_precedes`; `delete_code_nodes_for_source` is source-wide and must never run for a managed attempt. |
+| `store/generations.py:1274` `native_write`, `:1363` `native_mutation` | Enforce generation ownership, payload immutability and the cross-generation relationship rule. **Both scan whole native tables per call**; see §8. |
+| `store/generations.py:590` `_native_relationships`, `:673` `generation_checksums` | Already seal `CODE_EDGE`, `DEFINED_IN`, `MODIFIES`, `PRECEDES`, `REFERS_TO` and the native Symbol/DataObject/Commit rows, and require every native row to have a `NativeBinding` and every binding a selected `ObjectObservation`. Both are whole-database scans today. |
+| `store/generations.py:190` `claim_generation_build`, `:298` `fail_generation_build`, `store/snapshots.py:346` `recover_generation_builds` | Fenced claim, non-collecting failure and expired-lease recovery. **Recovery marks an abandoned staging generation `failed`, and reclaiming a `failed` generation collects its rows** (`generations.py:241-247`); see §8. |
+| `knowledge/lifecycle.py:15,:68,:73`; `knowledge/identity.py:157,:264,:276` | `generation_for_inputs`, `generation_namespace`, `generation_passage_id`, `repository_identity`, `symbol_key`, `symbol_identity` — the canonical managed identities. Use unchanged. |
+| `knowledge/model.py:289,:341,:448,:490,:608` | `Artifact` (already has `repository` and `history_event` kinds), `ArtifactRevision` (`provider_revision`, `source_updated_at`, `source_precision`, `observed_at`), `KnowledgeObject` (already has `repository`, `file`, `symbol`, `commit`), `ObjectObservation` (`TemporalRecord`), `NativeBinding`. No schema change is required. |
+| `knowledge/projection.py:600-623`; `knowledge/dense.py:156,:171` | Projection derives `DEFINED_IN` from an observation's span matching a passage entry and emits `StructuralCodeEvidence` per contributing source generation; the writer's job is to make those bindings exist. See §4 for why `StructuralRelationEvidence` stays empty here. |
+| `knowledge/staged_prose.py:69,:129,:190,:211` | The writer template. `_inventory` at `:187` explicitly requires the native code/relationship inventory to be **empty**, so the code lane needs its own writer, not a flag on this one. |
+| `knowledge/input_binding.py:294` `_view`, `:348` `materialize_chunk_evidence` | The rendered-view pattern (`RetrievalView` + `DerivedRecord` + `DerivedDependency` over original spans) that generated code/commit text must reuse. |
+| `ingest/prepared_chunks.py:371`, `ingest/provenance.py:322` | `prepare_prose_chunks` and `read_plain_provenance` both **reject code**; new sibling seams are required. |
+| `ingest/accepted_inputs.py:170` `capture_raw_inputs`, `knowledge/inputs.py:43,:56` | Bounded canonical capture over `ByteInput`/`FileInput`. Reused unchanged for a tree. |
+| `ingest/prose_generation.py:621` `build_plain_source`, `knowledge/build_authority.py:340` `capture_build_authority`, `knowledge/lease_heartbeat.py` | The coordinator template, the authority primitive and the renewal worker. |
+| `ingest/managed_activation.py:111` `managed_eligibility`, `:166` `plan_dispatch`, `:219` `build_options`, `:465` `run_managed_build` | The activation adapter to extend. Eligibility is closed and decided on the Source row alone. |
+| `context.py:171-173`, `status.py:58-59` | **A source leaves the legacy lane as soon as any `Artifact` or `Generation` row names it**, while the managed lane contributes nothing until `active_generation_id` is set (`context.py:215-219`); see §7. |
+
+Two seams named in the brief do not exist as described. `write_commit_history` is
+`tests/fakes/code_fixture.py`, a test fixture, not a production writer: production history writes
+are `store.add_commits` / `add_modifies` / `add_precedes` through `indexer.py:448-450`. There is no
+`git_history` module under `hipporag`; it is `codegraph/git_history.py`.
+
+## 3. Public API
+
+Create `src/hippo/ingest/code_generation.py` with a coordinator separate from
+`build_plain_source`:
+
+```python
+def build_code_source(
+    ctx,
+    *,
+    source_id: str,
+    actor: BuildActor,
+    tree: CodeTreeInput,
+    options: CodeBuildOptions,
+    raw_store: RawArtifactStore,
+    embedding_spec: EmbeddingSpec,
+    operation_id: str,
+    should_stop: Callable[[], bool],
+    on_progress: Callable[[BuildProgress], None] | None = None,
+) -> BuildReceipt: ...
+```
+
+Reasons for a separate entry point rather than widening `build_plain_source`: prose bootstrap is a
+single detached commit with no durable reservation, while a repository bootstrap is durable staging
+over many commits with resume (§6); prose rejects code by contract at three reviewed seams
+(`prepare_prose_chunks`, `read_plain_provenance`, `staged_prose._inventory`); and the reviewed
+prose gates PC1–PC8 would all have to be reopened. The two coordinators share `BuildActor`,
+`BuildAuthority`, `LeaseHeartbeat`, `RawArtifactStore`, `BuildProgress` and `BuildReceipt`, and the
+shared `_Run` failure latch is factored into `src/hippo/ingest/build_run.py` so neither owns it.
+
+`CodeTreeInput` is frozen and carries: the absolute checkout/extraction root; the ordered tuple of
+normalized relative paths to capture; the source kind (`repo`, `archive`, `file`); the repository
+descriptor (§5); and the resolved head commit SHA or `None`. `CodeBuildOptions` is frozen and
+carries the input-affecting configuration (chunk size/overlap, synonymy threshold, history depth,
+walker/grammar profile, exclusion and empty policy) separately from the operational scheduling
+limits (batch size, checkpoint interval, lease duration and renewal interval, worker count,
+ceilings from §8). Only the first group enters generation identity. `BuildReceipt` gains
+`resumed_from_batches: int` and is otherwise unchanged; it still names no path, no text and no
+exception body.
+
+New modules, all with focused tests and one owner each: `ingest/repo_capture.py`,
+`ingest/code_provenance.py`, `ingest/prepared_code_chunks.py`, `knowledge/code_binding.py`,
+`knowledge/code_history.py`, `knowledge/staged_code.py`, `ingest/code_generation.py`,
+`ingest/build_run.py`.
+
+## 4. What a code generation contains
+
+`generation_checksums` already accepts every record below; no schema change is proposed.
+
+- **Accepted inputs.** One `Artifact(kind="repository")` (or `kind="file"` for a single code file)
+  for the tree, one `Artifact(kind="file")` per captured file, one
+  `Artifact(kind="manifest", external_id="accepted-inputs-v1")`, and one
+  `Artifact(kind="history_event")` per commit. Each with one immutable `ArtifactRevision`.
+- **Originals.** One `EvidenceSpan` per contributing original region, `locator_kind="file_lines"`,
+  with real start/end lines from `code_provenance` — never a synthetic whole-file span.
+- **Rendered views.** Every passage whose text is not byte-identical to one original region is a
+  `RetrievalView` + `DerivedRecord` + `DerivedDependency` over its originals, exactly as
+  `input_binding._view` does for prose. This covers the chunker's generated context header, the
+  data-object mention passages and every commit passage (`chunker.py:92`), whose text is a
+  synthesized message-plus-symbol-names rendering.
+- **Objects.** `KnowledgeObject` of kind `repository`, `file`, `symbol`, `commit` and the schema
+  kinds for SQL data objects, keyed with `identity.repository_identity` and `identity.symbol_key`.
+  One `ObjectObservation` per object per span, carrying the attributes the projection renders
+  (`name`, `path`, `kind`, `doc`, `signature`, `lang`, `is_test`, community label).
+- **Native rows and bindings.** `Symbol` / `DataObject` / `Commit` rows carrying `generation_id`
+  and the namespaced ID, each with a `NativeBinding` to its `KnowledgeObject` and span. The store
+  re-derives every native ID from the generation namespace and rejects a mismatch
+  (`generations.py:1238-1257`). The obligation runs one way only: `generation_checksums:789-792`
+  requires a binding for every native row, and `:751-767` requires a selected observation for every
+  binding, but a `KnowledgeObject` may have observations and no native row at all. `repository` and
+  `file` objects are exactly that case and seal correctly without one.
+- **Native relations.** `CODE_EDGE`, `DEFINED_IN`, `MODIFIES`, `PRECEDES` and `REFERS_TO` written
+  through the existing writers under the generation fence. `_native_relationships` already seals
+  them into the `native` representation and `native_mutation` already refuses a relationship whose
+  endpoints belong to different generations.
+- **Dense.** One `Passage` per chunk with `generation_id`, `span_id`, `artifact_revision_id`,
+  `retrieval_view_id` where rendered, and a vector from the verified profile.
+
+**Code relations stay native; this lane writes no `Assertion`.** `knowledge/predicates.py:66`
+registers no `CONTAINS`/`IMPORTS`/`INHERITS`/`OVERRIDES`/`INVOKES`/`RAISES`/`CATCHES`/`TESTED_BY`/
+`READS`/`WRITES` predicate, and master plan §5.3 states that existing code relations remain in
+`CODE_EDGE`. Consequently this lane populates `StructuralCodeEvidence` (from the object/span/
+generation bindings, via `projection.py:611`) and `StructuralObjectEvidence` for SQL data objects,
+and populates **no** `StructuralRelationEvidence`: that channel is `AssertionSupport`-backed and
+belongs to Task 12's typed bindings. The brief's phrasing implies otherwise; see §11.
+
+**No `SYNONYM` writes and no post-seal `set_symbol_communities`.** §7.3 forbids staged or retired
+code entering a published synonym projection, and the managed projection already computes cosine
+synonyms at read time. The community label is computed during preparation
+(`indexer.module_communities`) and written in the `Symbol` row before the seal.
+
+**OpenIE is not applied to code.** Plain-prose files inside a captured tree go through the shared
+prose path and do receive extraction; every code, config and unparsed file records
+`openie: "skipped"` in `coverage_json` and produces no `ProseExtraction`. The seal is valid without
+one: `generation_checksums:719-724` requires dense coverage only for nonempty exact text.
+
+## 5. Identity
+
+- **Repository.** `repository_identity(workspace, provider_instance, provider_repository_id)`.
+  Until a connector supplies provider IDs (Task 10), use the normalized clone URL's host as the
+  provider instance and its normalized `owner/name` path as the repository ID; master plan §5.2
+  already treats URLs as aliases of the true identity, so a later connector adds an alias rather
+  than renaming evidence. An archive or single file has no repository: it uses the source-scoped
+  local identity `local_artifact_identity` and a repository key of `source:<source-id>`.
+- **Generation.** `generation_for_inputs` over every accepted artifact/revision pair plus the
+  manifest pair, the captured configuration and the expected parent. The head commit SHA enters
+  identity as the repository revision's `provider_revision`; the per-file content hashes enter as
+  their own revisions. The captured configuration records `parser_version` and `linker_version` on
+  the `Generation`, and inside `configuration_json`: `syntax_cache.WALKER_RULES_VERSION`, the
+  `syntax_cache.parser_profile(grammar)` tuple for every grammar used, `syntax_cache.SCHEMA_VERSION`,
+  the effective chunk size/overlap after the chunker's clamp, the history depth, the synonymy
+  threshold and the exclusion/empty policy. Operational limits, worker count, progress, clone depth
+  and observation timestamps do not enter identity.
+- **Symbols.** `symbol_key(repository, language, path, qualified_name, signature, kind=...)`. The
+  signature discriminator is supplied where the walker produced one, so overloads do not merge
+  (§5.2). Native IDs remain `codegraph.model.symbol_id(..., node_namespace=generation_namespace)`.
+- **Commits.** `KnowledgeObject(kind="commit")` keyed by repository plus SHA; native
+  `commit_id(source_id, sha, node_namespace=...)`.
+
+## 6. Deterministic preparation
+
+All of it runs outside every write transaction, with the build guard checked before and after each
+step and before any text reaches a model.
+
+1. Resolve `ResolvedEmbeddingProfile` (and `ResolvedOpenIEProfile` only if prose files were
+   captured) with live guards; keep safe descriptors only.
+2. Enumerate. `repo_capture.walk_tree(root)` returns the ordered, normalized relative paths under
+   `readers.IGNORED_DIRS`, applies `CODE_MAX_FILES` and the per-file byte cap, and classifies each
+   path as `code`, `prose`, `excluded` (with an explicit reason) or `unsupported`. Symlinks,
+   non-regular files and paths escaping the root are refused, not skipped.
+3. Capture. Pass the complete inventory to `capture_raw_inputs` unchanged; the manifest excludes
+   itself. Every subsequent read is from the captured raw object, never the live checkout, through
+   `code_provenance.read_code_source(...)` — the code-accepting sibling of `read_plain_provenance`
+   with the same decode, trim and complete-line locator behaviour, where rich and binary outcomes
+   still refuse.
+4. Extract. `extract_code(docs, source_id, node_namespace=generation_namespace(gen), syntax_cache=...)`
+   then whole-source resolution. Cache hits rematerialise; cached IDs are never trusted.
+5. History. `read_history(checkout, code.symbols, source_id, depth=..., ...)` against the captured
+   checkout, then `code_history.bind_history(...)` (§9).
+6. Chunk. `prepared_code_chunks.prepare_code_chunks(...)` wraps `chunk_documents(..., code=code)`
+   and maps every emitted chunk to its exact original line ranges plus its generated segments, the
+   contract `PreparedChunk` already expresses for prose. Seeded parity against the committed legacy
+   chunker is required, as the prose slice did with 2,000 cases: managed chunk text must equal
+   legacy chunk text for the same inputs.
+7. Bind and embed. `code_binding.materialize_code_evidence(...)` turns prepared chunks plus the
+   resolved `CodeGraph` into the §4 inventory — pure, with no store handle, no model and no clock
+   beyond the one injected capture instant — then one vector per chunk and per code node is
+   produced through the verified profile and the disposable `EmbeddingCache`, batched, outside
+   transactions.
+
+## 7. Legacy serving during a multi-commit bootstrap
+
+`context.py:171-173` and `status.py:58-59` classify a source as managed on the presence of any
+`Artifact` or `Generation` row, while `context.py:215-219` selects managed evidence only when the
+Source has an `active_generation_id`. A repository bootstrap that stages over many transactions
+therefore makes the legacy repository **disappear from every query** the moment its first staging
+record commits. The prose lane never hits this because it installs and publishes in one
+transaction; a 1,000-file repository cannot.
+
+The fix is one narrow, testable predicate rather than a shadow source: a source keeps serving its
+legacy evidence while it has no published generation. Add
+`store.source_serves_legacy(source_row) -> bool`, true when the Source has `managed` false, no
+`active_generation_id`, and no `IndexEvent(kind="published")` for any of its generations. Use it in
+`context._build_managed_graph` and `status.system_status` in place of the current
+Artifact/Generation presence test. Staging records are already invisible to selection, so a
+converting source serves exactly its old legacy graph and nothing else.
+
+`begin_managed_source` (which sets `managed=True` and bumps the authorization epoch) is therefore
+**not** called at staging start. It runs inside the publication transaction, together with the
+active pointer, the source presentation and the counts — the same atomic swap the prose bootstrap
+performs, only reached after the staged content already exists.
+
+**Refresh differs from bootstrap in exactly three places.** It claims a fenced build before any
+inference, as prose does, because the source is already managed and a concurrent builder must be
+excluded. Its serving guarantee comes from G1 remaining the active pointer, not from §7. And it
+publishes with `expected_parent_id=G1` rather than `None`. Everything else — capture, extraction,
+chunking, binding, batching, resume, seal — is the same code path, which is why the coordinator has
+one preparation phase and two admission phases rather than two pipelines.
+
+## 8. Staged writing at scale
+
+### 8.1 The scale defect that blocks this task
+
+Three reviewed store helpers are whole-table or whole-database scans:
+
+- `native_write` (`generations.py:1283`) materialises **every** row of the kind on every call.
+- `native_mutation` (`:1384`) materialises every row of all six native kinds on every call.
+- `_native_relationships` (`:590`) enumerates every relationship of eleven kinds in the database,
+  and `generation_checksums` (`:673`) canonically hashes the result.
+
+A 1,000-file repository is up to `CODE_MAX_SYMBOLS_PER_SOURCE` symbols and several times that many
+edges. Writing them in batches of 128 is roughly 400 full scans per representation, which is
+quadratic in the corpus and will not hold the contract on Neo4j at scale. The checkpoint already
+records the related concern ("typed ID reads currently decode full record tables; optimize
+parameterized lookup before scaling", 2026-09-11, Task 3 final).
+
+Task CC2 is therefore a hard prerequisite, not an optimisation: add generation-scoped, parameterised reads
+(`_native_rows(kind, *, generation_id=None, ids=None)`,
+`_native_relationships(ids, *, generation_id=None)`,
+`_knowledge_rows(kind, *, generation_id=None)`) on all three backends and the fake, make
+`native_write`, `native_mutation` and `generation_checksums` use them, and prove equal results and
+bounded query counts. Public behaviour and every existing checksum stay byte-identical.
+
+### 8.2 Batching, checkpoints and resume
+
+The staged code writer `knowledge/staged_code.py` mirrors `staged_prose.py`: a pure
+`_write_batches(prepared, *, batch_size)` generator of complete dependency groups, a callback-free
+`_write_batch(store, prepared, batch, **authority)`, an `_inventory` and a `_seal`, plus the public
+`write_staged_code(...)` wrapper that refuses an ambient transaction. Differences:
+
+- Batch groups are ordered accepted preflight → revision members → repository/file objects →
+  original spans → derived views → dense passages → native code rows and bindings → native
+  relations → history. A relation group is emitted only after both endpoints, so a partial run
+  never leaves a dangling edge.
+- `_inventory` is the inverse of the prose one: it requires the exact `Symbol`/`DataObject`/
+  `Commit` rows, `NativeBinding`s, `ObjectObservation`s and native relations for this generation,
+  and requires that no other generation's rows are present. It reuses the scoped reads of §8.1.
+- Between batches, and never inside `generation_write`, the coordinator renews the lease, invokes
+  the external `check` and reports progress. Every batch re-validates the expected authorization
+  and suppression epochs inside its own short transaction, exactly as prose does.
+
+**Resume.** `recover_generation_builds` (`snapshots.py:378-380`) marks an abandoned staging
+generation `failed`, and `claim_generation_build` (`generations.py:241-247`) then **collects** the
+failed generation's rows before returning it to `staging`. Under that behaviour a crashed
+repository build always restarts from zero, so "resumable" is not achievable without a store
+change. Task CC3 adds one:
+
+```python
+def reclaim_generation_build(
+    self,
+    generation_id,
+    *,
+    job_key,
+    lease_owner,
+    lease_expires_at,
+    expected_manifest_hash,
+): ...
+```
+
+It admits only a never-published `staging` or `failed` generation whose `manifest_hash` equals
+`expected_manifest_hash`, takes the source lock, advances the fence, installs a fresh holder and
+returns the generation to `staging` **without collecting**. Any other caller, and any mismatched
+manifest, keeps today's collect-then-stage `claim_generation_build` semantics untouched, so the
+reviewed prose retry contract does not change. Because `manifest_hash` is input-only, identical
+accepted inputs produce the identical generation ID, so a retry either matches exactly or is a
+different generation.
+
+Replay is idempotent by construction: `native_write` already skips a prior identical managed row
+(`generations.py:1302-1315`), `put_knowledge` accepts an equal record, and the batch plan is a pure
+function of the prepared output. The resume checkpoint is therefore the store's own rows, not a
+side file: the coordinator probes each batch group's records with one scoped read and skips a group
+whose inventory already matches. `BuildReceipt.resumed_from_batches` reports how many were skipped.
+A conflicting persisted row (same ID, different payload) is not overwritten; it fails the build and
+requires the explicit failed-generation cleanup path.
+
+**Long-build authority.** A repository build outlives many unrelated permission mutations, and a
+frozen epoch equality would abort it whenever any user logs a role change. Between batches, under
+the authorization and source locks, the guard may call one new bounded operation
+`BuildAuthority.rebaseline()`: it re-runs `check_local()` in full and, only if the actor still has
+every capability it started with, adopts the current epochs as the new expected baseline. It is
+refused inside `generation_write`, after any sticky failure, and after a suppression that applies
+to this source. This is strictly the `check_local()` proof, not a reset; it is listed in §11 as a
+decision to rule on.
+
+### 8.3 Ceilings
+
+Managed ceilings reuse the existing safety rails rather than inventing numbers: `CODE_MAX_FILES`
+(5,000) captured files, `CODE_MAX_SYMBOLS_PER_SOURCE` (50,000) symbols, `CODE_MAX_FILE_BYTES`
+(512 KiB) per parsed file, `MAX_CHUNKS` (20,000) passages, and the existing raw and decoded
+budgets — all operational settings outside representation identity. The prose bootstrap's
+1,000-chunk / 50,000-record / 64 MiB single-transaction ceiling does not apply because a code
+bootstrap is not one transaction; a per-batch canonical payload ceiling (proposed 64 MiB, the same
+unit) applies instead. Exceeding a ceiling refuses the build before capture; it never truncates
+silently and never installs a partial generation as authoritative.
+
+## 9. Temporal fields for commits and file revisions
+
+One capture instant is taken from the store clock at the start of the operation and threaded
+through every record; no record calls `now()` itself and there is no wall-clock default anywhere.
+
+| Field | Value |
+| --- | --- |
+| `ArtifactRevision.observed_at` (file, repository, manifest) | the one capture instant |
+| `ArtifactRevision.source_updated_at` (file) | `None`; a working-tree mtime is not provider truth |
+| `ArtifactRevision.provider_revision` (repository) | head commit SHA; (file) `None` for v1 |
+| `ArtifactRevision(kind="history_event").source_updated_at` | the commit's git author date |
+| `ArtifactRevision.source_timestamp_original` / `source_timezone` | the raw `%aI` string and its offset, unparsed |
+| `ArtifactRevision.source_precision` | `"second"` |
+| commit `ObjectObservation.valid_from` / `valid_to` | author date / `None`, `validity_kind="explicit_interval"` |
+| commit `ObjectObservation.temporal_basis` / `temporal_precision` | `"commit"` / `"second"` |
+| commit `ObjectObservation.recorded_from` | the one capture instant; `recorded_to` stays `None` |
+| symbol/data `ObjectObservation` | `validity_kind="observed_snapshot"`, `temporal_basis="observed"`, `recorded_from` the capture instant |
+
+The legacy native history writes are replaced rather than wrapped. `pipeline._read_history`
+(`:449`) mutates the `CodeGraph` in place and `indexer._write_code_graph` (`:448-450`) then calls
+`add_commits`, `add_modifies` and `add_precedes` untagged; the managed lane skips both, calls
+`read_history` itself in step 5 of §6, and emits the same three row shapes from
+`code_history.bind_history(...)` through the staged writer under the generation fence, so each row
+carries `generation_id` and the namespaced `commit_id` and is validated by
+`_validate_managed_native`. Legacy behaviour for unmanaged sources is untouched.
+
+`History.skipped`, `History.truncated`, `CodeGraph.truncated`, `files_skipped` by reason and the
+shallow-clone boundary are recorded in `coverage_json`, so a partial history is never presented as
+complete. A repository with `code_history_depth = 0` records `history: "disabled"` and produces no
+`history_event` artifact; that is a configuration value in generation identity, so enabling history
+later is a new generation rather than an append.
+
+## 10. Failure, cancellation, idempotence, privacy
+
+- **Failure.** `fail_generation_build` under the held fence; the staged inventory is retained for
+  audited recovery. During bootstrap the legacy graph keeps serving because §7 keeps the source in
+  the legacy lane until publication; during refresh G1 stays active and the Source keeps
+  `status="ready"` with a `refresh_failed` stage, as the activation plan specifies for prose.
+  Never any collection, `_clear_passages`, `delete_code_nodes_for_source`, `rmtree` or raw deletion.
+- **Cancellation and crash.** Cancellation is cooperative, checked between batches and before each
+  model call, and leaves a resumable staging generation. After a crash nothing beyond staged rows
+  and orphan raw objects can remain; restart recovery clears the expired holder and §8.2's reclaim
+  resumes the same generation. A retry with different inputs supersedes rather than resumes. A
+  crash after the publication commit is resolved by the immutable publication receipt.
+- **Idempotence.** `operation_id` resolves a prior receipt under the source lock; an accepted
+  manifest equal to the active generation's returns `already_current` without inference or writes.
+- **Privacy.** Absolute paths, repository URLs with credentials, source text, diff hunks, commit
+  messages, model prompts and unknown exception strings never reach logs, Source rows or public
+  errors; only relative logical paths enter the accepted manifest, and failures map through the
+  existing `managed_activation` closed mapper and `knowledge/public_errors.py`. Model I/O is
+  restricted to embedding text for code chunks and prose OpenIE for captured prose files; no code
+  text is sent to a chat model by this lane.
+
+## 11. Decisions to rule on before implementation
+
+1. **`StructuralRelationEvidence` is not populated by this lane** (§4). If the orchestrator wants
+   code edges to become typed assertions instead, `knowledge/predicates.py` needs ten new
+   predicates and the projection's relation channel becomes the code channel, which is a materially
+   larger change and contradicts master plan §5.3.
+2. **`BuildAuthority.rebaseline()`** (§8.2). The alternative is to fail a long repository build on
+   any unrelated authorization-epoch change, which makes large repositories effectively
+   unbuildable on a busy instance.
+3. **The legacy-serving predicate change** (§7) touches `context.py` and `status.py`, which the
+   production-activation plan's Tasks 2 and 4 owned. It needs the orchestrator's confirmation that
+   those files are released, and a check that no activation test asserts the current
+   Artifact-presence classification.
+4. **Provisional repository identity from the clone URL** (§5). Cheap and reversible via an alias,
+   but it does mint identities that Task 10 must reconcile.
+5. **Prose files inside a repository go through OpenIE** (§4). The alternative — skip extraction
+   for everything in a code source in v1 — is cheaper and loses README facts that the legacy lane
+   currently extracts, so it would be a retrieval regression.
+
+### Orchestrator rulings (2026-09-12)
+
+1. **Accepted.** Code relations stay native `CODE_EDGE`/`DEFINED_IN`/`MODIFIES`/`PRECEDES` sealed in the native representation; `StructuralRelationEvidence` is Task 12's typed-assertion work. The brief's contrary phrasing is withdrawn.
+2. **Accepted with conditions.** `BuildAuthority.rebaseline()` may adopt a new *authorization* epoch only after `check_local()` re-proves the actor and every accepted input's policy in full under the authorization and source locks; a suppression epoch change that applies to this source refuses; it is callable only between batches, never inside `generation_write`, never after a sticky failure; every receipt records the number of rebaselines; the between-batch test proves a removed capability still aborts.
+3. **Confirmed.** `context.py` and `status.py` are released (activation Tasks 2 and 4 are merged and reviewed). CC1 runs the activation regression (`test_managed_source_inventory.py`, `test_status_access.py`, `test_managed_route_activation.py`, `test_managed_web_surfaces.py`, `test_managed_web_ingress.py`) and may adapt only assertions that pin the Artifact-presence classification, naming each in its evidence.
+4. **Accepted.** Provisional repository identity from the normalized clone URL; Task 10 adds provider aliases rather than renaming evidence.
+5. **Accepted, bounded.** Files matching `readers.PROSE_EXTENSIONS` inside a repository go through OpenIE under the same budgets as the plain lane; code comments and docstrings are not prose inputs.
+
+Blockers A (legacy serving until publication) and B (resumable reclaim) and the scale finding (generation-scoped reads) are accepted as prerequisites CC1–CC3. The split CC1–CC11 is adopted; CC1 and CC4 start in parallel, the rest in the stated order. An independent design review runs alongside CC1/CC4; its findings bind the later tasks.
+
+## 12. Task split
+
+Each task starts with failing behavioural tests, owns its files exclusively, and is sized to finish
+well inside the fleet budget rule in `ai_docs/handoffs/fleet-worker-rules.md`. Shared files are
+owned sequentially; the dependency column is binding.
+
+| # | Task | Depends on | Gates | Exclusive files | Required result |
+| --- | --- | --- | --- | --- | --- |
+| CC1 | Legacy serving until publication | — | CD2 | `src/hippo/store/generations.py`, `src/hippo/context.py`, `src/hippo/status.py`, NEW `tests/unit/test_converting_source_serving.py` | `source_serves_legacy` beside `source_is_managed` (`generations.py:58`); a source with staging-only managed rows serves its legacy graph, appears once in inventory, and flips atomically at publication. Smallest store slice, so it holds the shared file first. |
+| CC2 | Generation-scoped store reads | CC1 (file handoff) | CD1 | `src/hippo/store/generations.py`, `src/hippo/store/snapshots.py`, `src/hippo/store/ladybug.py`, `src/hippo/store/memory.py`, NEW `tests/unit/test_generation_scoped_reads.py` | Parameterised `_native_rows`/`_native_relationships`/`_knowledge_rows`; `native_write`, `native_mutation`, `generation_checksums` use them; identical checksums and bounded query counts on Fake, Ladybug and Neo4j. |
+| CC3 | Resumable staging reclaim | CC2 (same files) | CD1, CD7 | the CC2 store files, released by CC2, plus NEW `tests/unit/test_generation_resume.py` | `reclaim_generation_build` with manifest equality and no collection; recovery leaves a reclaimable attempt; existing `claim_generation_build` behaviour and the prose retry gates unchanged. |
+| CC4 | Repository capture and code provenance | — | CD3 | NEW `src/hippo/ingest/repo_capture.py`, NEW `src/hippo/ingest/code_provenance.py`, NEW `tests/unit/test_repo_capture.py`, NEW `tests/unit/test_code_provenance.py` | Ordered normalized tree inventory with explicit exclusion reasons and refusals; code/config decode with exact complete-line locators; reordering does not change accepted identity. |
+| CC5 | Mapped code chunks | CC4 | CD4 | NEW `src/hippo/ingest/prepared_code_chunks.py`, NEW `tests/unit/test_prepared_code_chunks.py` | `prepare_code_chunks` with exact original ranges and generated segments for symbol, mention and commit passages; seeded parity against the committed legacy chunker. |
+| CC6 | Code evidence and object binding | CC5 | CD5 | NEW `src/hippo/knowledge/code_binding.py`, NEW `tests/unit/test_code_binding.py` | Pure materialisation of the §4 inventory with exact membership closure, rendered views for generated text, namespaced native rows and bindings; no store, model or clock. |
+| CC7 | Git history binding | CC6 | CD6 | NEW `src/hippo/knowledge/code_history.py`, NEW `tests/unit/test_code_history.py` | `history_event` artifacts/revisions, commit objects/observations with the §9 temporal fields, commit views, `MODIFIES`/`PRECEDES` rows; truncation and shallow boundaries in coverage; no wall-clock default. |
+| CC8 | Staged code writer and long-build authority | CC2, CC6, CC7 | CD7 | NEW `src/hippo/knowledge/staged_code.py`, NEW `tests/unit/test_staged_code_writer.py`, `src/hippo/knowledge/build_authority.py`, `tests/unit/test_build_authority.py` | Fenced batches, exact inventory, `IndexManifest` seal through `seal_generation`; idempotent replay; no callback, model or filesystem access inside a transaction. Owns `BuildAuthority.rebaseline` too, because the between-batch contract is what proves it; CC9 only calls it. |
+| CC9 | Coordinator | CC1, CC3, CC8 | CD7, CD8 | NEW `src/hippo/ingest/code_generation.py`, NEW `src/hippo/ingest/build_run.py`, NEW `tests/unit/test_code_generation.py` | `build_code_source` bootstrap/refresh/resume/failure/receipt; `_Run` factored out of `prose_generation.py` without changing its contract. |
+| CC10 | Activation dispatch | CC9 | CD8 | `src/hippo/ingest/managed_activation.py`, `src/hippo/ingest/pipeline.py`, `src/hippo/ingest/readers.py`, NEW `tests/unit/test_managed_code_activation.py` | Eligibility extended to `repo`, `archive` and code `file` with an actor; `add_repo(..., build_actor=...)`; managed sources bypass `_read_history` and `_prepare_reindex`; unsupported and actorless callers stay legacy; destructive-operation spies stay untouched. |
+| CC11 | Acceptance and review | CC1–CC10 | CD9, CD10 | this plan and `ai_docs/gates/rag-it-all/task-5-code-capture/GATES.md` only | Full ledger with Ladybug as primary; root-owned disposable Neo4j parity evidence; independent SPEC and QUALITY review with findings closed and affected gates rerun. |
+
+## 13. Acceptance gates
+
+The proposed ledger is `ai_docs/gates/rag-it-all/task-5-code-capture/GATES.md`, unticked, with
+gates CD1–CD10: CD1 scoped store reads, CD2 legacy serving until publication, CD3 capture and
+provenance, CD4 mapped chunks, CD5 evidence binding, CD6 history and temporal fields, CD7 staged
+writer and resume, CD8 coordinator and activation dispatch, CD9 Ladybug acceptance with recorded
+Neo4j parity, CD10 lint and independent review. Fake is the first backend for every gate, LadybugDB
+is the acceptance backend, and Neo4j parity is recorded as root-owned evidence under CD9 rather
+than as a separately runnable line, following the `task-5-prose-coordinator` PC-N4 convention: the
+disposable container admits one pytest process at a time. No gate is satisfied by this document.
