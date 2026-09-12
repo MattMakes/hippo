@@ -45,6 +45,11 @@ from hippo.store.code import (
 )
 from hippo.store.generations import GenerationQueries, legacy_source_cleanup, native_mutation, native_write
 from hippo.store.knowledge import KnowledgeQueries
+from hippo.store.memory import (
+    INTERRUPTED_REFRESH_ERROR,
+    INTERRUPTED_REFRESH_STAGE,
+    REFRESHING_PREFIX,
+)
 from hippo.store.migrations import DEFAULT_WORKSPACE_ID
 from hippo.store.snapshots import SnapshotQueries
 from hippo.store.users import clean_capabilities, clean_rank, clean_username, slug
@@ -315,6 +320,12 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
         for s in self.sources.values():
             if s["status"] in ("reading", "indexing"):
                 s.update(status="failed", error=message, updated_at=now_iso())
+                total += 1
+            elif s["status"] == "ready" and str(s.get("stage") or "").startswith(REFRESHING_PREFIX):
+                # A managed refresh never stopped serving: only its stage is retired.
+                s.update(
+                    stage=INTERRUPTED_REFRESH_STAGE, error=INTERRUPTED_REFRESH_ERROR, updated_at=now_iso()
+                )
                 total += 1
         for r in self.runs.values():
             if r["status"] == "running":

@@ -27,6 +27,18 @@ from .migrations import DEFAULT_WORKSPACE_ID
 
 BATCH = 200  # rows per write query; keeps transactions small and progress visible
 
+# A managed refresh leaves the source `ready` with a `refreshing: ...` stage, because its
+# published generation keeps serving throughout. A restart therefore cannot mark it failed
+# the way an interrupted legacy job is marked failed: only the stage has to be retired, or
+# the row claims a refresh that no longer has a worker. The code and message are the same
+# bounded shape the managed build's own failures use; saying it here keeps the store from
+# importing the pipeline to recover from a crash.
+REFRESHING_PREFIX = "refreshing:"
+INTERRUPTED_REFRESH_STAGE = "refresh_failed"
+INTERRUPTED_REFRESH_ERROR = (
+    "build_interrupted: The build was interrupted by a restart. Reindex to run it again."
+)
+
 
 def _batches(rows: list[Any], size: int = BATCH):
     for start in range(0, len(rows), size):
@@ -160,6 +172,9 @@ class MemoryQueries(Neo4jBase):
         """
         After a restart, nothing is running any more: sources still 'reading'/'indexing', runs still
         'running' and question sets still 'generating' are marked failed so the UI does not wait forever.
+
+        A managed refresh is the one job that is not failed by this: it never stopped serving, so it
+        keeps its status, its active generation and its counts, and only its stage is retired.
         """
         message = "interrupted by a restart; run it again"
         now = now_iso()
@@ -189,7 +204,18 @@ class MemoryQueries(Neo4jBase):
             """,
             message=message,
         )
-        return sum(int((row or {}).get("n", 0)) for row in (sources, runs, sets))
+        refreshing = self.run_one(
+            """
+            MATCH (s:Source) WHERE s.status = 'ready' AND s.stage STARTS WITH $prefix
+            SET s.stage = $stage, s.error = $error, s.updated_at = $now
+            RETURN count(s) AS n
+            """,
+            prefix=REFRESHING_PREFIX,
+            stage=INTERRUPTED_REFRESH_STAGE,
+            error=INTERRUPTED_REFRESH_ERROR,
+            now=now,
+        )
+        return sum(int((row or {}).get("n", 0)) for row in (sources, runs, sets, refreshing))
 
     def remove_orphans(self) -> None:
         self.run("MATCH (f:Fact) WHERE NOT (f)<-[:STATES]-() DETACH DELETE f")
