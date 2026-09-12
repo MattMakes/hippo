@@ -15,18 +15,37 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..context import AppContext
+from ..ingest.managed_activation import ManagedActorRequired, ManagedDispatchError
 from ..knowledge.access import AuthorizationChanged
+from ..knowledge.dense import DenseUnavailable
+from ..knowledge.projection import ProjectionError
+from ..knowledge.public_errors import OPERATION_FAILED, public_failure
+from ..ollama import OllamaError
 from . import auth
 from .render import STATIC_DIR, render
 from .routes import analyze, api, code, evals, graph, pages, sources, users
 from .security import HostAndOriginGuard
 
 log = logging.getLogger(__name__)
+
+# Failures the closed table in `knowledge/public_errors.py` knows how to say out loud. A
+# route that wants to shape its own body still catches them first; this is the net for every
+# route that does not, so no activation or retrieval exception can reach a client as a
+# traceback or as its own message. `httpx.TransportError` is here because the model client
+# is httpx: an unwrapped connection error is still "the model is not answering".
+PUBLIC_FAILURES = (
+    OllamaError,
+    DenseUnavailable,
+    ProjectionError,
+    ManagedDispatchError,
+    httpx.TransportError,
+)
 
 
 def create_app(ctx: AppContext | None = None) -> FastAPI:
@@ -47,6 +66,12 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
     app.add_middleware(HostAndOriginGuard, allowed_hosts=ctx.config.allowed_hosts)
     app.add_exception_handler(HTTPException, forbidden_page)
     app.add_exception_handler(AuthorizationChanged, authorization_changed)
+    for failure in PUBLIC_FAILURES:
+        app.add_exception_handler(failure, public_failure_page)
+    # A managed operation an open or preview identity may not perform is a permission answer,
+    # not a failure report. Starlette picks the handler by walking the exception's own class
+    # first, so this wins over the ManagedDispatchError row above.
+    app.add_exception_handler(ManagedActorRequired, authorization_changed)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(auth.router)
     app.include_router(users.router)
@@ -68,8 +93,21 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
     return app
 
 
-async def authorization_changed(request: Request, exc: AuthorizationChanged):
+async def authorization_changed(request: Request, exc: Exception):
     return JSONResponse({"error": "Permissions changed; repeat the query"}, status_code=409)
+
+
+async def public_failure_page(request: Request, exc: Exception):
+    """
+    One stable code and one bounded sentence for a failure no route shaped itself.
+
+    `public_failure` returning None means the table does not know this exception; inside the
+    managed paths that reach here it can only be answered generically, which is the caller
+    rule the mapper documents. The body keeps the `{"error": ...}` shape the pages' JavaScript
+    already reads and adds `code`, the same field the MCP tools and the CLI report.
+    """
+    failure = public_failure(exc) or OPERATION_FAILED
+    return JSONResponse({"error": failure.message, "code": failure.code}, status_code=failure.http_status)
 
 
 async def forbidden_page(request: Request, exc: HTTPException):

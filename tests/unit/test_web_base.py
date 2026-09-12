@@ -11,6 +11,7 @@ from hippo.config import Config
 from hippo.context import AppContext
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.hipporag.text import make_id
+from hippo.knowledge.public_errors import OPERATION_FAILED
 from hippo.web.app import create_app
 from hippo.web.routes import pages
 from hippo.web.routes.pages import parse_settings_form
@@ -69,7 +70,11 @@ def test_unexpected_error_while_asking_is_shown_not_swallowed(client, monkeypatc
     # htmx ignores a 500 body, so the error must come back as a normal page fragment.
     response = client.post("/ask", data={"question": "anything"}, headers={"HX-Request": "true"})
     assert response.status_code == 200
-    assert "callout bad" in response.text and "RuntimeError: Neo4j went away" in response.text
+    # Shown, but in the closed vocabulary: an unknown query failure is `operation_failed`,
+    # never the exception's own words, which can carry a path, a prompt or a model body.
+    assert "callout bad" in response.text
+    assert OPERATION_FAILED.message in response.text and OPERATION_FAILED.code in response.text
+    assert "Neo4j went away" not in response.text
 
 
 def test_asking_returns_an_answer_with_facts_and_passages(client):

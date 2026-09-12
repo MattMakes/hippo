@@ -1,5 +1,6 @@
 """One pinned graph survives model work and rendering, with deterministic release."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,7 @@ from hippo import ask, cli, mcp_server
 from hippo.access import Principal
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.knowledge.access import AuthorizationChanged
+from hippo.knowledge.public_errors import OPERATION_FAILED
 from hippo.knowledge.replay import view_fingerprint
 from hippo.web.routes import api
 
@@ -79,8 +81,20 @@ def test_model_failure_releases_graph_and_revocation_wins(observed, monkeypatch,
         raise RuntimeError("model failed")
 
     monkeypatch.setattr(ctx.ollama, "embed_one", fail)
-    with pytest.raises(AuthorizationChanged if revoke else RuntimeError):
-        invoke(surface, ctx)
+    if surface.startswith("http") and not revoke:
+        # The HTTP transport answers an unknown query failure with the closed public code
+        # instead of letting the exception out (Task 5, "Safe transport failures"); a
+        # revocation still outranks it, which is the `revoke` half below. Releasing the
+        # graph exactly once is the same assertion either way.
+        response = invoke(surface, ctx)
+        assert response.status_code == OPERATION_FAILED.http_status
+        assert json.loads(bytes(response.body)) == {
+            "error": OPERATION_FAILED.message,
+            "code": OPERATION_FAILED.code,
+        }
+    else:
+        with pytest.raises(AuthorizationChanged if revoke else RuntimeError):
+            invoke(surface, ctx)
     assert len(acquired) == 1
     assert released == acquired
 
