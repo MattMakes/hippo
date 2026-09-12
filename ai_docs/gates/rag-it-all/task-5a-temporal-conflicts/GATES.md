@@ -10,31 +10,31 @@ Status (2026-09-12, after the fixture loader): all six gates MET by the gate che
 
 - [x] T5A1: Pure temporal selectors preserve both clocks and unknown/open semantics.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/python -m pytest tests/unit/test_temporal_evidence.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=......                                                                   [100%] | 78 passed in 1.16s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=......                                                                   [100%] | 78 passed in 0.68s
   CRITERIA: UTC-aware half-open current/as-of/during/changes/atemporal/compare behavior; overlaps versus throughout; explicit open upper bound; unknown lower/time stays contextual; fixed known-at reconstruction; malformed intervals and contradictory snapshot/cutoff inputs reject; serialization preserves original/effective/observed/published fields without inferred dates.
   EXPECT: passed
 
 - [x] T5A2: Deterministic replacement and conflict sets never use ingestion order.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/python -m pytest tests/unit/test_temporal_conflicts.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=................................                                         [100%] | 32 passed in 0.02s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=................................                                         [100%] | 32 passed in 0.04s
   CRITERIA: only adapter-declared monotonic order supersedes same-source current candidates; old-imported-last/equality-only/equal-token-different-bytes remain ambiguous; independent sources remain alternatives; single versus multiple cardinality, effective overlap, unknown overlap and environment/scope isolation produce deterministic sorted ConflictSets with exact support.
   EXPECT: passed
 
 - [x] T5A3: G18 history/access and append-only correction integration passes on Fake.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/python -m pytest tests/unit/test_temporal_evidence.py tests/unit/test_temporal_conflicts.py tests/unit/test_temporal_fixture_loader.py -k 'history_manifest or recorded_correction or suppression_history or purge_history or fixture_loader' -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; branch=rag-it-all-tibs; output=94 passed, 53 deselected in 21.98s; supersedes the 77-passed line after the independent fixture-loader review (F1-F7 applied, loader suite 20 -> 37 cases: declared-offset preservation, null source timestamps on an undated row, five malformed shapes naming their row index, the equal-instant ordinal tiebreak and its two refusals, the ordinal-4 post-replay end state, purge markers over a proven source, and the barrier carve-out); detail=ai_docs/gates/rag-it-all/task-5a-temporal-conflicts/evidence-fixture.md
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=......................                                                   [100%] | 94 passed, 53 deselected in 14.78s
   CRITERIA: authorized HistoryManifest closure includes retired-only evidence at fixed cutoff; current policy remains mandatory; ordinary current-only deletion leaves permitted history; all-history access-loss/purge denies old snapshots; May backdated correction preserves each recorded segment; atomic failure leaves prior publication unchanged; exact retry is idempotent.
   EXPECT: passed
 
 - [x] T5A4: G18 storage behavior survives a real Ladybug close/reopen.
   CHECK: HIPPO_TEST_STORE=ladybug .venv/bin/python -m pytest tests/unit/test_temporal_evidence.py tests/unit/test_temporal_conflicts.py tests/unit/test_temporal_fixture_loader.py -k 'history_manifest or recorded_correction or suppression_history or purge_history or fixture_loader' -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; branch=rag-it-all-tibs; output=94 passed, 53 deselected in 285.13s (0:04:45); supersedes the 77-passed line after the independent fixture-loader review (same F1-F7 fixes as T5A3, re-proved on real Ladybug including the added purge-marker scenario and the ordinal-4 post-replay end state; test_loaded_history_survives_a_ladybug_close_and_reopen still builds its own LadybugStore under tmp_path); detail=ai_docs/gates/rag-it-all/task-5a-temporal-conflicts/evidence-fixture.md
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=......................                                                   [100%] | 94 passed, 53 deselected in 245.00s (0:04:05)
   CRITERIA: parameterized recorded/effective selection, manifest persistence, interval closure/publication rollback and retained-history reachability match Fake after reopen; no test touches application data.
   EXPECT: passed
 
 - [x] T5A5: Existing evidence, generation, snapshot, migration and projection contracts remain compatible.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/python -m pytest tests/unit/test_knowledge_contracts.py tests/unit/test_store_knowledge.py tests/unit/test_evidence_access.py tests/unit/test_generation_store.py tests/unit/test_snapshot_store.py tests/unit/test_generation_graph_loader.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=......................................................................   [100%] | 213 passed, 1 skipped in 4.62s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=......................................................................   [100%] | 213 passed, 1 skipped in 4.16s
   CRITERIA: existing current selectors and query snapshots keep their behavior; history never widens access; recorded_to is the only mutable historical field; generation sealing/publication/collection and structural projections remain valid.
   EXPECT: passed
 
