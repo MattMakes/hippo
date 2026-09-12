@@ -46,6 +46,32 @@ It takes a plain string on purpose, so nothing in the query lane has to import
 the build lane to render a Source row. The two functions agree by construction
 for every family the managed table maps, and `test_public_errors.py` pins that
 pairing.
+
+A stored code is a message, never a status
+------------------------------------------
+The two entry points do not return the same *kind* of answer, and the difference
+matters at exactly one place.
+
+`public_failure(exc)` sees the exception. It can tell a file that was too big
+from a file of the wrong type, so its `http_status` is real information: 413
+against 400. That is the only point at which a status is meaningful, because it
+is the only point at which anything knows which of the two happened.
+
+`public_failure_for_code(code)` sees a string a different process wrote, possibly
+hours ago. What a caller may take from it is the **code and the message** -- the
+rendering, `f"{code}: {message}"`, which is what every surface prints. It must
+not take an HTTP status from it. Two failures deliberately share the code
+`invalid_source` (the 400 type error and the 413 size error), so a code alone
+cannot say which, and asking this function for a status would silently answer
+400 for a source that was too large.
+
+That is why the vocabulary is not split: `invalid_source` says the one true thing
+about both, the message carries the rest, and a status is re-derived where the
+exception still exists rather than reconstructed from a string where it does not.
+The consequence is pinned by name in `test_the_code_mapping_is_idempotent`, which
+asserts the mapping is a no-op on its own output for every code and spells out the
+413 -> 400 collision rather than skipping it, so that nobody builds on the
+assumption that a stored code remembers a status.
 """
 
 from dataclasses import dataclass
@@ -157,11 +183,12 @@ _ROWS: tuple[tuple[type[BaseException], PublicFailure], ...] = (
 # re-reading its own answer -- must not fall off the table and be told `operation_failed`
 # for something already classified as unavailable.
 #
-# One limit, and it is inherent rather than an omission: `INVALID_SOURCE_TYPE` (400) and
-# `INVALID_SOURCE_SIZE` (413) share the code `invalid_source`, so a code alone cannot say
-# which. `invalid_source` resolves to the 400, and a `source_too_large` row therefore
-# round-trips to the right code and the wrong status. The code is the stable contract; the
-# status is not recoverable from it, and a caller that needs the 413 has to keep it.
+# `INVALID_SOURCE_TYPE` (400) and `INVALID_SOURCE_SIZE` (413) deliberately share the code
+# `invalid_source`, so a code alone cannot say which, and `invalid_source` resolves to the
+# 400. That is not a gap to close: a stored code is rendered as `code: message` and never
+# as a status (see this module's docstring). `source_too_large` keeps its own size sentence
+# here, which is what a reader is shown; the 413 belongs to `public_failure(exc)`, where
+# something still knows which exception it was.
 _MANAGED_CODES: dict[str, PublicFailure | None] = {
     "build_cancelled": OPERATION_FAILED,
     "build_interrupted": OPERATION_FAILED,
@@ -198,8 +225,11 @@ def public_failure_for_code(code: str) -> PublicFailure | None:
 
     Closed over its own output: every code a returned `PublicFailure` carries is
     itself a key here, so rendering an already-rendered failure is a no-op rather
-    than a fall-through to `operation_failed`. The status is the one thing that
-    does not survive the trip for a `source_too_large` row -- see the table.
+    than a fall-through to `operation_failed`.
+
+    Take the code and the message from this; do not take `http_status`. A stored
+    code is a rendering, not a classification, and `invalid_source` covers both
+    the 400 and the 413. See "A stored code is a message, never a status" above.
     """
     if type(code) is not str:
         return None

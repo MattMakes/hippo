@@ -311,12 +311,13 @@ def test_every_public_code_round_trips_to_a_failure_carrying_that_code():
 def test_the_code_mapping_is_idempotent(code):
     """Applying it to its own result changes nothing -- with one inherent exception.
 
-    `INVALID_SOURCE_TYPE` (400) and `INVALID_SOURCE_SIZE` (413) share the code
-    `invalid_source`, so a code alone cannot say which, and `invalid_source` resolves to
-    the 400. A `source_too_large` row therefore round-trips to the right code and the
-    wrong *status*. That is a property of the vocabulary, not a gap in the table: the code
-    is the stable contract and the status is not recoverable from it. Pinned rather than
-    skipped, so that a caller who needs the 413 learns here that they must keep it.
+    `INVALID_SOURCE_TYPE` (400) and `INVALID_SOURCE_SIZE` (413) deliberately share the
+    code `invalid_source`, so a code alone cannot say which, and `invalid_source` resolves
+    to the 400. A `source_too_large` row therefore round-trips to the right code and the
+    wrong *status* -- which is exactly why a stored code is rendered as `code: message`
+    and never as an HTTP status; the 413 belongs to `public_failure(exc)`, where something
+    still knows which exception it was. Pinned by name rather than skipped, so nobody
+    builds on the assumption that a stored code remembers a status.
     """
     module = api()
     first = module.public_failure_for_code(code)

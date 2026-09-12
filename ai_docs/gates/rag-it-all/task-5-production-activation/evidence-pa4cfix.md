@@ -23,7 +23,7 @@ pair, because `test_cli.py`, `test_mcp_http.py` and `test_graph_surface_access.p
 | 2 | RED: the six files plus `test_public_errors.py` | **31 failed**, 259 passed | `/tmp/hippo-pa4cfix-red.log` |
 | 3 | GREEN (Fake), the brief's command plus `test_public_errors.py` | **307 passed**, EXIT 0 | `/tmp/hippo-pa4cfix-fake-green.log` |
 | 4 | GREEN (Fake), adjacent sweep — see below | **212 passed, 1 skipped**, EXIT 0 | `/tmp/hippo-pa4cfix-sweep.log` |
-| 5 | GREEN (Ladybug), `test_managed_transport_activation.py test_mcp_server.py test_public_errors.py` | **166 passed** in 212.77s, EXIT 0 | `/tmp/hippo-pa4cfix-ladybug-green.log` |
+| 5 | GREEN (Ladybug), `test_managed_transport_activation.py test_mcp_server.py test_public_errors.py` | **180 passed** in 251.46s, EXIT 0 | `/tmp/hippo-pa4cfix-ladybug-green.log` |
 
 The adjacent sweep (4) is not in the brief. `public_errors.py`, `cli.py`, `mcp_server.py` and
 `remote.py` are read by surfaces outside the six files, so it covers `test_public_errors.py`,
@@ -31,6 +31,10 @@ The adjacent sweep (4) is not in the brief. `public_errors.py`, `cli.py`, `mcp_s
 `test_status_access.py`, `test_managed_source_inventory.py`, `test_managed_source_lifecycle.py`,
 `test_source_snapshot_lifetime.py`, `test_query_snapshots.py` and `test_render_authorization.py`.
 (`test_public_errors.py` moved into row 3 once it gained tests of my own.) Nothing regressed.
+
+Rows 3 and 5 are the *final* runs, against the committed tree at `582ff2f`, so the logs
+and the commits agree. (Row 4's sweep touches none of the addendum files and was last run at
+`11e0859`.)
 
 Ruff: `.venv/bin/ruff check` and `ruff format --check` over all eight changed files — clean,
 re-run after every addendum.
@@ -375,8 +379,19 @@ comment if it ever moves. A test asserting total object idempotence would have p
 by not looking, and 4f would have inherited a false guarantee.
 `test_every_public_code_round_trips_to_a_failure_carrying_that_code` pins the closure itself.
 
-**Flagged for the orchestrator / 4f:** if 4f needs to recover a 413 from a stored code, it
-cannot; the status has to travel with the code or be re-derived from the source row.
+**Raised with the orchestrator, and ruled: keep the vocabulary as is, no split.** The rule
+is that a code round-trips to a *rendering*, not to a status: a status is only meaningful at
+`public_failure(exc)`, where something still knows which exception it was, and a stored code
+is rendered as `code: message` and never as an HTTP status. That makes the 400/413 collision
+a non-issue for stored rows by construction -- nobody should be reading a status off a stored
+code at all -- rather than a defect to design around.
+
+`public_failure_for_code`'s own docstring now says "take the code and the message from this;
+do not take `http_status`", and the module docstring gains a section, **"A stored code is a
+message, never a status"**, giving the reasoning: the two entry points do not return the same
+*kind* of answer, and `invalid_source` says the one true thing about both the 400 and the 413
+while the message carries the rest. The by-name pin of the 413 -> 400 collision stays, so
+nobody builds on the assumption that a stored code remembers a status.
 
 **Ownership note:** the test went into `tests/unit/test_public_errors.py`, which is not in
 this brief's owned list. The addendum said "with a test" and that file is the only sensible
