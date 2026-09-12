@@ -2,6 +2,7 @@
 
 import pytest
 from fastapi.testclient import TestClient
+from mcp.server.mcpserver.exceptions import ToolError
 
 from hippo import ask, mcp_server
 from hippo.access import Principal
@@ -122,8 +123,9 @@ def test_mcp_query_rechecks_after_building_output(ctx, public_source, monkeypatc
         return result
 
     monkeypatch.setattr(mcp_server, "code_fields", build)
-    with pytest.raises(AuthorizationChanged):
+    with pytest.raises(ToolError) as caught:
         getattr(mcp_server, surface + "_tool")(ctx, "Who designed Orion?", principal=Principal.open())
+    assert str(caught.value) == mcp_server.DENIED
 
 
 @pytest.mark.parametrize("error", [False, True])
@@ -282,8 +284,11 @@ def test_mcp_model_errors_cannot_skip_transport_revocation_checks(ctx, public_so
         raise OllamaError("PRIVATE PROVIDER ERROR")
 
     monkeypatch.setattr(mcp_server, surface, failed)
-    with pytest.raises(AuthorizationChanged):
+    with pytest.raises(ToolError) as caught:
         getattr(mcp_server, surface + "_tool")(ctx, "Who designed Orion?", principal=Principal.open())
+    message = str(caught.value)
+    assert message == mcp_server.DENIED
+    assert "PRIVATE PROVIDER ERROR" not in message
 
 
 @pytest.mark.parametrize("when", ["before_selection", "after_selection"])

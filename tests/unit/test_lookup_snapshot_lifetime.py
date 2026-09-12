@@ -125,6 +125,12 @@ def test_code_builder_holds_snapshot_and_captured_settings(ctx, managed, monkeyp
     monkeypatch.setattr(mcp_server if surface.startswith("mcp") else code, "path_payload", payload)
     if action == "publish":
         assert invoke(surface, ctx, request, span)["text"] == span.text
+    elif action == "error" and surface == "mcp_path":
+        with pytest.raises(ToolError) as caught:
+            invoke(surface, ctx, request, span)
+        message = str(caught.value)
+        assert message.startswith("operation_failed:")
+        assert "construction failed" not in message
     else:
         with pytest.raises(AuthorizationChanged if action == "revoke" else RuntimeError):
             invoke(surface, ctx, request, span)

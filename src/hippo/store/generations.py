@@ -407,7 +407,16 @@ class GenerationQueries:
             and self._knowledge_get("Generation", record.input_fingerprint) is not None
         ):
             raise ValueError("Generation build leases require controlled lifecycle operations")
-        if RECORD_EPOCHS[type(record).__name__] == "content" and not isinstance(record, k.Generation):
+        # The one authorized transition on a published historical row: the recorded
+        # interval an already-validated publication plan closes. It skips the two
+        # guards below because both refuse a change this transition is defined to
+        # make, and it can name no other row, field or instant.
+        closure = existing is not None and self._authorized_recorded_closure(record, existing)
+        if (
+            RECORD_EPOCHS[type(record).__name__] == "content"
+            and not isinstance(record, k.Generation)
+            and not closure
+        ):
             authority = getattr(self, "_generation_authority", None)
             source_ids = {record.source_id} if isinstance(record, k.Artifact) else set()
             for revision_id in self._record_revisions(record):
@@ -495,8 +504,10 @@ class GenerationQueries:
             for m in self._knowledge_rows("GenerationEvidenceMember")
             if self._generation(m.generation_id).status != "staging"
         ]
-        if existing is not None and any(
-            m.record_kind == type(record).__name__ and m.record_id == record.id for m in frozen
+        if (
+            existing is not None
+            and not closure
+            and any(m.record_kind == type(record).__name__ and m.record_id == record.id for m in frozen)
         ):
             raise ValueError("Published interpretation is immutable")
         if isinstance(record, k.DerivedDependency) and any(
@@ -808,6 +819,108 @@ class GenerationQueries:
         self._verify_manifest(gen, manifests[0])
         return manifests[0]
 
+    def _plan_row(self, kind, record_id):
+        row = self._knowledge_get(kind, record_id)
+        if row is None:
+            raise ValueError("Correction plan names a missing recorded row")
+        return row
+
+    def _plan_lineage(self, kind, row):
+        """The sources and revisions the row's complete support actually depends on."""
+        if kind == "ObjectObservation":
+            span = self._knowledge_get("EvidenceSpan", row.span_id)
+            revisions = {row.revision_id} | ({span.revision_id} if span is not None else set())
+        else:
+            supports = [
+                s for s in self._knowledge_rows("AssertionSupport") if s.assertion_version_id == row.id
+            ]
+            if not supports:
+                raise ValueError("Correction plan target has no complete support group")
+            revisions = set()
+            for support in supports:
+                span = self._knowledge_get("EvidenceSpan", support.span_id)
+                if span is None:
+                    raise ValueError("Correction plan target has no complete support group")
+                revisions.add(span.revision_id)
+        sources = set()
+        for revision_id in sorted(revisions):
+            revision = self._knowledge_get("ArtifactRevision", revision_id)
+            artifact = None if revision is None else self._knowledge_get("Artifact", revision.artifact_id)
+            if artifact is None:
+                raise ValueError("Correction plan target has no complete support group")
+            sources.add(artifact.source_id)
+        return sources, revisions
+
+    def _plan_series(self, kind, row):
+        """The logical series a corrected segment belongs to, never a bare record ID.
+
+        A correction replaces a claim, not a row: the May example closes
+        `checkout OWNED_BY ada` and appends `checkout OWNED_BY bo`, which are
+        different assertions in one workspace/subject/predicate/scope series.
+        Object observations correct object observations, so their series is the
+        observed object; the kind is part of the key and the two never cross.
+        """
+        if kind == "ObjectObservation":
+            return (kind, row.object_id)
+        assertion = self._knowledge_get("Assertion", row.assertion_id)
+        return (
+            kind,
+            assertion.workspace_id,
+            assertion.subject_id,
+            assertion.predicate,
+            assertion.scope_key,
+        )
+
+    def _validate_publication_plan(self, gen, plan):
+        """Prove every closure and every append before the publication writes anything."""
+        workspace = self.get_source(gen.source_id)["workspace_id"]
+        series = set()
+        for segment in plan.closures:
+            row = self._plan_row(segment.record_kind, segment.record_id)
+            if self._workspaces(row) != {workspace}:
+                raise ValueError("Correction plan target belongs to another workspace")
+            sources, _ = self._plan_lineage(segment.record_kind, row)
+            if sources != {gen.source_id}:
+                raise ValueError("Correction plan target is outside this source lineage")
+            if row.recorded_to is not None:
+                raise ValueError("Correction plan target is already closed")
+            if row.recorded_from >= plan.published_at:
+                raise ValueError("Correction plan target was not recorded before the publication")
+            series.add(self._plan_series(segment.record_kind, row))
+        staged = {
+            (m.record_kind, m.record_id)
+            for m in self._knowledge_rows("GenerationEvidenceMember")
+            if m.generation_id == gen.id
+        }
+        revisions = {
+            m.artifact_revision_id
+            for m in self._knowledge_rows("GenerationMember")
+            if m.generation_id == gen.id
+        }
+        for segment in plan.appends:
+            if (segment.record_kind, segment.record_id) not in staged:
+                raise ValueError("Corrected segment is not an exact member of the staged generation")
+            row = self._plan_row(segment.record_kind, segment.record_id)
+            if row.recorded_from != plan.published_at or row.recorded_to is not None:
+                raise ValueError("Corrected segment must open at the publication instant")
+            if self._plan_series(segment.record_kind, row) not in series:
+                raise ValueError("Corrected segment belongs to another corrected series")
+            _, dependencies = self._plan_lineage(segment.record_kind, row)
+            supports = {
+                ("AssertionSupport", s.id)
+                for s in self._knowledge_rows("AssertionSupport")
+                if s.assertion_version_id == row.id and segment.record_kind == "AssertionVersion"
+            }
+            if not dependencies <= revisions or not supports <= staged:
+                raise ValueError("Corrected segment depends on evidence outside its generation")
+
+    def _observe_recorded_closures(self, plan):
+        """An exact retry observes the closures its own publication already committed."""
+        for segment in plan.closures:
+            row = self._knowledge_get(segment.record_kind, segment.record_id)
+            if row is None or row.recorded_to != plan.published_at:
+                raise ValueError("Recorded correction differs from the committed publication")
+
     def publish_staged_generation(
         self,
         generation_id,
@@ -818,23 +931,32 @@ class GenerationQueries:
         fencing_token,
         expected_suppression_epoch,
         published_at,
+        plan=None,
         fault_hook=None,
     ):
         with self.transaction():
             gen = self._generation(generation_id)
             self._lock_source(gen.source_id)
+            if plan is not None and plan.published_at != published_at:
+                raise ValueError("Correction plan disagrees with the publication clock")
             receipt = [
                 e
                 for e in self._knowledge_rows("IndexEvent")
                 if e.generation_id == generation_id and e.kind == "published"
             ]
             origin = dict(job_id=job_id, fencing_token=fencing_token, lease_owner=lease_owner)
+            if plan is not None:
+                # The receipt carries the plan, so a retry that corrects something
+                # else is a different publication and is refused before any read.
+                origin["temporal_plan"] = plan.fingerprint
             if receipt:
                 if (
                     len(receipt) == 1
                     and json.loads(receipt[0].payload_json) == origin
                     and gen.parent_id == expected_parent_id
                 ):
+                    if plan is not None:
+                        self._observe_recorded_closures(plan)
                     return receipt[0].id
                 raise ValueError("Publication belongs to another build")
             job = self._check_build(
@@ -871,6 +993,14 @@ class GenerationQueries:
             if reachable & suppressed:
                 raise ValueError("Suppressed generation cannot activate")
             self.validate_generation_seal(gen.id)
+            if plan is not None:
+                self._validate_publication_plan(gen, plan)
+                self._close_recorded_intervals(
+                    tuple((s.record_kind, s.record_id) for s in plan.closures),
+                    recorded_to=plan.published_at,
+                )
+                if fault_hook:
+                    fault_hook("closure")
             result = self._publish_generation(
                 gen.id,
                 expected_parent_id=expected_parent_id,
@@ -884,8 +1014,17 @@ class GenerationQueries:
                 fault_hook("lease")
             return result
 
-    def publish_generation(self, generation_id, *, expected_parent_id, published_at, fault_hook=None):
-        """Trusted fixture compatibility primitive; production uses strict publication."""
+    def publish_generation(
+        self, generation_id, *, expected_parent_id, published_at, plan=None, fault_hook=None
+    ):
+        """Trusted fixture compatibility primitive; production uses strict publication.
+
+        A correction plan is refused outright here. This path takes no lease, no
+        fence and no suppression epoch, so honouring one would make the fixture
+        primitive the shortest route to closing a published interpretation.
+        """
+        if plan is not None:
+            raise ValueError("A correction plan is honoured only by strict publication")
         with self.transaction():
             return self._publish_generation(
                 generation_id,
