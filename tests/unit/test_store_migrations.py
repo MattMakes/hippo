@@ -256,7 +256,7 @@ def test_migration_records_legacy_and_current_checksums(store):
     m = migrations()
     store.ensure_schema()
     history = store.schema_history()
-    assert {row["version"] for row in history} == {1, 2, 3, 4, 5}
+    assert {row["version"] for row in history} == {1, 2, 3, 4, 5, 6}
     assert {row["version"]: row["checksum"] for row in history} == m.SUPPORTED_CHECKSUMS
     assert all(row["state"] == "complete" for row in history)
 

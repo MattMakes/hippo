@@ -196,9 +196,9 @@ def test_collection_waits_for_one_coherent_inventory_read(store, monkeypatch):
     rows_read, release_reader, collector_attempted = Event(), Event(), Event()
     paused = False
 
-    def pause_reader(kind):
+    def pause_reader(kind, **scope):
         nonlocal paused
-        rows = original(kind)
+        rows = original(kind, **scope)
         if kind == "Passage" and not paused:
             paused = True
             rows_read.set()
