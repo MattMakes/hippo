@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ...access import CAPABILITIES, Principal, top_role
+from ...knowledge.query_access import query_session
 from ...status import source_view
 from ..auth import principal_of, public_user, require, set_session_cookie
 from ..render import ctx_of, render
@@ -83,7 +84,9 @@ def _user_row(user, sources) -> dict[str, Any]:
 
 def ladder(ctx, principal: Principal, *, view=None) -> list[dict[str, Any]]:
     """Tier estimates intersect the caller's inventory; managed ACLs cannot be inferred from a tier."""
-    view = view or source_view(ctx, principal.access)
+    if view is None:
+        with query_session(ctx, principal.access) as session:
+            return ladder(ctx, principal, view=source_view(ctx, principal.access, session=session))
     roles = _role_rows(ctx, view.sources)
     rows = []
     for role in roles:
@@ -113,38 +116,42 @@ def users_page(request: Request, error: str = "", saved: str = "", show_token: s
     if not (principal.can("manage_users") or principal.can("manage_roles")):
         raise HTTPException(403, "your role may neither manage users nor roles")
     ctx = ctx_of(request)
-    view = source_view(ctx, principal.access)
-    roles = _role_rows(ctx, view.sources)
-    users = []
-    for user in ctx.store.list_users():
-        row = _user_row(user, view.sources)
-        row["manageable"] = principal.user_id != user["id"] and may_touch_rank(principal, user["rank"], roles)
-        row["is_me"] = principal.user_id == user["id"]
-        if show_token == user["id"] and row["manageable"]:
-            row["token"] = user.get("token")
-        users.append(row)
-    total_sources = len(view.sources)
-    open_sources = sum(not s.get("managed") and not s.get("access_role_id") for s in view.sources)
-    tier_rows = ladder(ctx, principal, view=view)
-    view.validate()
-    return render(
-        request,
-        "users.html",
-        nav="users",
-        ladder=tier_rows,
-        users=users,
-        roles=roles,
-        assignable=assignable_roles(principal, roles),
-        capabilities=CAPABILITIES,
-        open_mode=principal.is_open,
-        can_users=principal.can("manage_users"),
-        can_roles=principal.can("manage_roles"),
-        total_sources=total_sources,
-        open_sources=open_sources,
-        error=error,
-        saved=saved,
-        authorization_check=view.validate,
-    )
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        roles = _role_rows(ctx, view.sources)
+        users = []
+        for user in ctx.store.list_users():
+            row = _user_row(user, view.sources)
+            row["manageable"] = principal.user_id != user["id"] and may_touch_rank(
+                principal, user["rank"], roles
+            )
+            row["is_me"] = principal.user_id == user["id"]
+            if show_token == user["id"] and row["manageable"]:
+                row["token"] = user.get("token")
+            users.append(row)
+        total_sources = len(view.sources)
+        open_sources = sum(not s.get("managed") and not s.get("access_role_id") for s in view.sources)
+        tier_rows = ladder(ctx, principal, view=view)
+        view.validate()
+        return render(
+            request,
+            "users.html",
+            session=session,
+            nav="users",
+            ladder=tier_rows,
+            users=users,
+            roles=roles,
+            assignable=assignable_roles(principal, roles),
+            capabilities=CAPABILITIES,
+            open_mode=principal.is_open,
+            can_users=principal.can("manage_users"),
+            can_roles=principal.can("manage_roles"),
+            total_sources=total_sources,
+            open_sources=open_sources,
+            error=error,
+            saved=saved,
+            authorization_check=view.validate,
+        )
 
 
 def _back(message: str = "", saved: str = "", **extra: str) -> RedirectResponse:
@@ -279,20 +286,22 @@ class RolePatch(BaseModel):
 def list_users(request: Request):
     principal = require(request, "manage_users")
     ctx = ctx_of(request)
-    view = source_view(ctx, principal.access)
-    rows = [_user_row(user, view.sources) for user in ctx.store.list_users()]
-    view.validate()
-    return rows
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        rows = [_user_row(user, view.sources) for user in ctx.store.list_users()]
+        view.validate()
+        return rows
 
 
 @api.get("/roles")
 def list_roles(request: Request):
     principal = principal_of(request)
     ctx = ctx_of(request)
-    view = source_view(ctx, principal.access)
-    rows = _role_rows(ctx, view.sources)
-    view.validate()
-    return rows
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        rows = _role_rows(ctx, view.sources)
+        view.validate()
+        return rows
 
 
 @api.post("/users")
@@ -352,10 +361,11 @@ def patch_user(request: Request, user_id: str, body: UserPatch) -> dict[str, Any
         updated = ctx.store.update_user(user_id, **changes) if changes else user
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    view = source_view(ctx, principal.access)
-    row = _user_row(updated, view.sources)
-    view.validate()
-    return row
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        row = _user_row(updated, view.sources)
+        view.validate()
+        return row
 
 
 @api.post("/users/{user_id}/token")
@@ -422,10 +432,11 @@ def patch_role(request: Request, role_id: str, body: RolePatch) -> dict[str, Any
             ctx.store.update_role(role_id, **changes)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    view = source_view(ctx, principal.access)
-    updated = next(row for row in _role_rows(ctx, view.sources) if row["id"] == role_id)
-    view.validate()
-    return updated
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        updated = next(row for row in _role_rows(ctx, view.sources) if row["id"] == role_id)
+        view.validate()
+        return updated
 
 
 @api.delete("/roles/{role_id}")

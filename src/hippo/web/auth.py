@@ -38,6 +38,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..access import CAPABILITIES, Principal, top_role
 from ..context import AppContext
+from ..knowledge.query_access import query_session
 from ..status import source_view
 from .render import ctx_of, render
 
@@ -327,21 +328,23 @@ def logout(request: Request):
 def account_page(request: Request, saved: str = "", error: str = ""):
     principal = principal_of(request)
     ctx = ctx_of(request)
-    view = source_view(ctx, principal.access)
-    user = ctx.store.get_user(principal.user_id) if principal.user_id else None
-    return render(
-        request,
-        "account.html",
-        nav="account",
-        user=public_user(user, sources=view.sources) if user else None,
-        token=(user or {}).get("token"),
-        role=principal.role,
-        capabilities=CAPABILITIES,
-        saved=saved,
-        error=error,
-        mcp_url=str(request.base_url).rstrip("/") + "/mcp",
-        authorization_check=view.validate,
-    )
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        user = ctx.store.get_user(principal.user_id) if principal.user_id else None
+        return render(
+            request,
+            "account.html",
+            session=session,
+            nav="account",
+            user=public_user(user, sources=view.sources) if user else None,
+            token=(user or {}).get("token"),
+            role=principal.role,
+            capabilities=CAPABILITIES,
+            saved=saved,
+            error=error,
+            mcp_url=str(request.base_url).rstrip("/") + "/mcp",
+            authorization_check=view.validate,
+        )
 
 
 @router.post("/account/password")
@@ -378,15 +381,16 @@ def rotate_own_token(request: Request):
 def me(request: Request) -> dict[str, Any]:
     """Who am I, as the API sees it: role, rank, capabilities, and whether hippo is still open."""
     principal = principal_of(request)
-    view = source_view(ctx_of(request), principal.access)
-    result = {
-        "open_mode": principal.is_open,
-        "user": public_user(principal.user, sources=view.sources) if principal.user else None,
-        "role": {k: principal.role.get(k) for k in ("id", "name", "rank", "capabilities")},
-        "capabilities": sorted(c for c in CAPABILITIES if principal.can(c)),
-    }
-    view.validate()
-    return result
+    with query_session(ctx_of(request), principal.access) as session:
+        view = source_view(ctx_of(request), principal.access, session=session)
+        result = {
+            "open_mode": principal.is_open,
+            "user": public_user(principal.user, sources=view.sources) if principal.user else None,
+            "role": {k: principal.role.get(k) for k in ("id", "name", "rank", "capabilities")},
+            "capabilities": sorted(c for c in CAPABILITIES if principal.can(c)),
+        }
+        view.validate()
+        return result
 
 
 def public_user(
