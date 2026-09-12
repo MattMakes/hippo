@@ -17,8 +17,10 @@ from hippo.analysis.simulate import (
     trace_from_dict,
 )
 from hippo.ask import search
+from hippo.hipporag.graph_index import GraphIndex
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.hipporag.retriever import RankedPassage, Trace
+from hippo.knowledge.query_access import query_session
 from hippo.store.base import SETTING_RULES
 from tests.conftest import index_code_sample
 
@@ -222,13 +224,18 @@ def test_a_structural_scale_override_is_passed_to_the_graph_the_search_runs_on(c
     # The scale and an edge edit compose in one rebuild: applying the scale anywhere else would be
     # discarded the moment a simulation also edited an edge, because retrieve(graph=) runs on this
     # igraph and nothing else.
-    index = ctx.graph_for(None)
+    # The simulation builds its own structural view, so the recorder goes on the class: an
+    # instance patched here would simply not be the graph the search runs on.
     seen: list[float] = []
-    real = index.graph_with_edits
+    real = GraphIndex.graph_with_edits
     monkeypatch.setattr(
-        index, "graph_with_edits", lambda edits, scale=1.0: (seen.append(scale), real(edits, scale))[1]
+        GraphIndex,
+        "graph_with_edits",
+        lambda self, edits, scale=1.0: (seen.append(scale), real(self, edits, scale))[1],
     )
-    edits = [{"a": index.node_ids[0], "b": index.node_ids[1], "weight": 3.0}]
+    with query_session(ctx) as session:
+        node_ids = list(session.graph.node_ids)
+    edits = [{"a": node_ids[0], "b": node_ids[1], "weight": 3.0}]
     overrides = Overrides.from_dict({"settings": {"code_structural_scale": 0.0}, "edge_edits": edits})
     simulate(ctx, QUESTION, overrides, baseline=baseline)
     assert seen == [0.0]

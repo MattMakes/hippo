@@ -9,16 +9,20 @@ the two traces.
 To keep simulations cheap and repeatable, the LLM fact filter is *replayed*
 from the baseline trace (the same facts are kept) unless you ask to rerun
 it. Re-generating the answer is also opt-in, because it costs an LLM call.
+
+A simulation embeds the question and re-scores dense candidates, so it is a
+model/dense owner: it reaches its graph through the same `retrieval_session`
+dispatch `ask` uses, over the one session it owns or borrows. Nothing below
+this layer acquires a second graph.
 """
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..access import Access
-from ..ask import _answer_from_trace
+from ..ask import _answer_from_trace, _dispatch
 from ..context import AppContext
 from ..hipporag.answerer import Answer
 from ..hipporag.graph_index import EdgeEdit
@@ -31,7 +35,7 @@ from ..hipporag.retriever import (
     Trace,
     trace_from_dict,
 )
-from ..knowledge.query_access import AuthorizedModel, QuerySession, query_session
+from ..knowledge.query_access import AuthorizedModel, QuerySession
 from ..knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from ..store.base import validate_settings
 from .explain import TOP_PASSAGES
@@ -145,9 +149,12 @@ def simulate(
     """
     Run the search again with `overrides` and diff it against `baseline` (or a fresh plain search).
     `access` keeps the simulation inside the caller's slice of the graph (hippo/access.py).
+
+    The owner is acquired (or the caller's is borrowed) through `ask`'s dense dispatch, so the
+    retriever below runs on evidence this audience proved, and an already dispatched session is
+    passed straight through rather than re-resolving its embedding profile.
     """
-    manager = nullcontext(session) if session is not None else query_session(ctx, access)
-    with manager as query:
+    with _dispatch(ctx, access, session, None) as query:
         return _simulate(question, overrides, baseline, query, authorization_check)
 
 
