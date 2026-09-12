@@ -53,7 +53,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable, Iterable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Any, Literal
 
 from fastapi import FastAPI
@@ -333,9 +333,11 @@ def ask_tool(ctx: AppContext, question: str, principal: Principal | None = None)
 # returns are the same objects, so a client can move between the two without relearning anything.
 
 
-def _code_graph(ctx: AppContext, principal: Principal | None) -> tuple[Any, float]:
+@contextmanager
+def _code_graph(ctx: AppContext, principal: Principal | None):
     access: Access | None = principal.access if principal else None
-    return ctx.graph_for(access), float(ctx.store.get_settings().get("code_theta", 0.5))
+    with query_session(ctx, access) as session:
+        yield session.graph, float(session.settings["code_theta"])
 
 
 def _code_answer(build: Callable[[], dict[str, Any]], validate: Callable[[], None]) -> dict[str, Any]:
@@ -353,26 +355,26 @@ def _code_answer(build: Callable[[], dict[str, Any]], validate: Callable[[], Non
 
 
 def explain_path_tool(ctx: AppContext, a: str, b: str, principal: Principal | None = None) -> dict[str, Any]:
-    index, theta = _code_graph(ctx, principal)
-    return _code_answer(lambda: path_payload(index, a, b, theta=theta), index.validate_authorization)
+    with _code_graph(ctx, principal) as (index, theta):
+        return _code_answer(lambda: path_payload(index, a, b, theta=theta), index.validate_authorization)
 
 
 def blast_radius_tool(
     ctx: AppContext, symbol: str, depth: int = DEFAULT_DEPTH, principal: Principal | None = None
 ) -> dict[str, Any]:
-    index, theta = _code_graph(ctx, principal)
-    return _code_answer(
-        lambda: blast_payload(index, symbol, theta=theta, depth=depth), index.validate_authorization
-    )
+    with _code_graph(ctx, principal) as (index, theta):
+        return _code_answer(
+            lambda: blast_payload(index, symbol, theta=theta, depth=depth), index.validate_authorization
+        )
 
 
 def exception_path_tool(
     ctx: AppContext, symbol: str, exception: str, principal: Principal | None = None
 ) -> dict[str, Any]:
-    index, theta = _code_graph(ctx, principal)
-    return _code_answer(
-        lambda: exception_payload(index, symbol, exception, theta=theta), index.validate_authorization
-    )
+    with _code_graph(ctx, principal) as (index, theta):
+        return _code_answer(
+            lambda: exception_payload(index, symbol, exception, theta=theta), index.validate_authorization
+        )
 
 
 def history_tool(
@@ -381,8 +383,8 @@ def history_tool(
     limit: int = DEFAULT_HISTORY_LIMIT,
     principal: Principal | None = None,
 ) -> dict[str, Any]:
-    index, _theta = _code_graph(ctx, principal)
-    return _code_answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)
+    with _code_graph(ctx, principal) as (index, _theta):
+        return _code_answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)
 
 
 def remember_tool(

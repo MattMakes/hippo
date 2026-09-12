@@ -266,3 +266,10 @@ Raw artifact primitive remains uncommitted pending race fix/review: substituted 
 Projection/citations published303c4f2. RawArtifactStore provides explicit-root bounded immutable content-addressed bytes, strict references/hash/length, verified reads and atomic no-replace publication. Review caught staging-name substitution; two RED regressions led to retaining file descriptor ownership through publication, verifying final inode/digest, and skipping observed foreign staging entries during cleanup. Root gate checker3/3MET,46tests; independent finalSPEC/QUALITYPASS plus adversarial replacement probe. Directory root/ancestors must exclude untrusted local writers; portable POSIX cannot guarantee inode-conditional unlink against a hostile concurrent writer. No default/app wiring, authorization grant, GC or delete API was added.
 
 Approved input-provenance contract accompanies this increment. Loader owns new provenance/plain-reader mapping; storage agent begins shared index preparation helpers; root converts remaining lookup lifetimes. FullTask5 remains OPEN.
+
+
+## Task 5 code/graph lookup and standalone rendering verified
+
+Raw primitive published7b70a32. HTTP code/entity/neighborhood, MCP code tools, graph full/node detail and standalone render now own a QuerySession through materialized DTO/HTML and every error path. Path settings remain captured; source views and status borrow the selected graph. Viewer authorization validates on errors too. Root4gatesMET:28Fake/28Ladybug,173compatibility, Ruff; isolatedNeo28passed (/tmp/hippo-lookup-final-neo4j.log), session36233complete and NeoFREE. Independent SPEC/QUALITYPASS for lookup/render (113Fake) and graph full/node (50Fake). Updated stale graph_for test mock to accept settings so its revocation probe still runs.
+
+Source-page/read inventory integration remains uncommitted under root with10RED new lifetime tests; loader's plain provenance maps and storage agent shared index preparation are still under development/review. LatestCIe37a7e3 Ruff+Fakepy3.11/3.12SUCCESS, Ladybug/Neo jobs still in progress at check. FullTask5 remains OPEN; no managed production ingestion enabled.

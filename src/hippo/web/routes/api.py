@@ -126,54 +126,58 @@ def search(request: Request, body: QuestionBody):
 def entities(request: Request, q: str = "", limit: int = 20):
     if not q.strip():
         return []
-    index = ctx_of(request).graph_for(principal_of(request).access)
-    needle = q.strip().lower()
-    rows = [
-        {
-            "id": identity,
-            "name": name,
-            "passage_count": int(index.entity_passage_count[index.idx_of[identity]]),
-        }
-        for identity, name in index.entity_names.items()
-        if needle in name.lower()
-    ]
-    rows.sort(key=lambda row: (-row["passage_count"], row["name"]))
-    payload = rows[: max(0, min(limit, 100))]
-    index.validate_authorization()
-    return payload
+    with query_session(ctx_of(request), principal_of(request).access) as session:
+        index = session.graph
+        needle = q.strip().lower()
+        rows = [
+            {
+                "id": identity,
+                "name": name,
+                "passage_count": int(index.entity_passage_count[index.idx_of[identity]]),
+            }
+            for identity, name in index.entity_names.items()
+            if needle in name.lower()
+        ]
+        rows.sort(key=lambda row: (-row["passage_count"], row["name"]))
+        payload = rows[: max(0, min(limit, 100))]
+        session.validate()
+        return payload
 
 
 @router.get("/graph/neighborhood")
 def neighborhood(request: Request, node_id: str, depth: int = 1, limit: int = 60):
     """A small piece of the graph around one node, shaped for Cytoscape: {nodes: [...], edges: [...]}."""
-    index = ctx_of(request).graph_for(principal_of(request).access)
-    start = index.idx_of.get(node_id)
-    if start is None:
-        raise HTTPException(404, "unknown node")
-    seen = {start}
-    frontier = [start]
-    for _ in range(max(0, min(depth, 3))):
-        nxt = []
-        for v in frontier:
-            for other, _w in sorted(index.neighbors(v), key=lambda t: -t[1]):
-                if other not in seen and len(seen) < limit:
-                    seen.add(other)
-                    nxt.append(other)
-        frontier = nxt
-    nodes = [{"id": index.node_ids[v], "label": index.name_of(v), "kind": index.node_kind[v]} for v in seen]
-    edges = []
-    for v in seen:
-        for other, w in index.neighbors(v):
-            if other in seen and v < other:
-                e = index.edge_between(v, other)
-                edges.append(
-                    {
-                        "source": index.node_ids[v],
-                        "target": index.node_ids[other],
-                        "weight": w,
-                        "kinds": e.kinds if e else [],
-                    }
-                )
-    payload = {"nodes": nodes, "edges": edges}
-    index.validate_authorization()
-    return payload
+    with query_session(ctx_of(request), principal_of(request).access) as session:
+        index = session.graph
+        start = index.idx_of.get(node_id)
+        if start is None:
+            raise HTTPException(404, "unknown node")
+        seen = {start}
+        frontier = [start]
+        for _ in range(max(0, min(depth, 3))):
+            nxt = []
+            for v in frontier:
+                for other, _w in sorted(index.neighbors(v), key=lambda t: -t[1]):
+                    if other not in seen and len(seen) < limit:
+                        seen.add(other)
+                        nxt.append(other)
+            frontier = nxt
+        nodes = [
+            {"id": index.node_ids[v], "label": index.name_of(v), "kind": index.node_kind[v]} for v in seen
+        ]
+        edges = []
+        for v in seen:
+            for other, w in index.neighbors(v):
+                if other in seen and v < other:
+                    e = index.edge_between(v, other)
+                    edges.append(
+                        {
+                            "source": index.node_ids[v],
+                            "target": index.node_ids[other],
+                            "weight": w,
+                            "kinds": e.kinds if e else [],
+                        }
+                    )
+        payload = {"nodes": nodes, "edges": edges}
+        session.validate()
+        return payload

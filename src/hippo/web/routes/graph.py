@@ -181,119 +181,124 @@ def full_graph(
 ):
     ctx = ctx_of(request)
     principal, preview, validate_viewer = viewer(request, as_role or None)
-    view = source_view(ctx, principal.access)
-    index = view.graph
-    source_tier, node_tier = tiers_of(ctx, index, view.sources)
-    limit = max(10, min(int(limit), MAX_LIMIT))
+    try:
+        with query_session(ctx, principal.access) as session:
+            view = source_view(ctx, principal.access, session=session)
+            index = view.graph
+            source_tier, node_tier = tiers_of(ctx, index, view.sources)
+            limit = max(10, min(int(limit), MAX_LIMIT))
 
-    degree = index.graph.degree() if index.num_nodes else []
-    text = q.strip().lower()
-    wanted: set[int] = set()
+            degree = index.graph.degree() if index.num_nodes else []
+            text = q.strip().lower()
+            wanted: set[int] = set()
 
-    def matches(v: int) -> bool:
-        if kind and index.node_kind[v] != kind:
-            return False
-        if source:
-            if index.node_kind[v] == PASSAGE:
-                return index.passages[index.passage_position(v)].source_id == source
-            if index.node_kind[v] in CODE_KINDS:
-                # a symbol, table or commit names its own source; it needs no mention edge
-                node = index.code_node_at(v)
-                return bool(node and node.source_id == source)
-            # an entity belongs to a source when a passage of that source mentions it
-            return any(
-                index.node_kind[o] == PASSAGE
-                and index.passages[index.passage_position(o)].source_id == source
-                for o, _w in index.neighbors(v)
-            )
-        return True
+            def matches(v: int) -> bool:
+                if kind and index.node_kind[v] != kind:
+                    return False
+                if source:
+                    if index.node_kind[v] == PASSAGE:
+                        return index.passages[index.passage_position(v)].source_id == source
+                    if index.node_kind[v] in CODE_KINDS:
+                        # a symbol, table or commit names its own source; it needs no mention edge
+                        node = index.code_node_at(v)
+                        return bool(node and node.source_id == source)
+                    # an entity belongs to a source when a passage of that source mentions it
+                    return any(
+                        index.node_kind[o] == PASSAGE
+                        and index.passages[index.passage_position(o)].source_id == source
+                        for o, _w in index.neighbors(v)
+                    )
+                return True
 
-    for v in range(index.num_nodes):
-        if not matches(v):
-            continue
-        if text and text not in label_at(index, v).lower():
-            continue
-        wanted.add(v)
-    if text:
-        # A name search shows its matches in context: one hop of neighbours around each hit.
-        for v in list(wanted):
-            for o, _w in index.neighbors(v):
-                if matches(o):
-                    wanted.add(o)
+            for v in range(index.num_nodes):
+                if not matches(v):
+                    continue
+                if text and text not in label_at(index, v).lower():
+                    continue
+                wanted.add(v)
+            if text:
+                # A name search shows its matches in context: one hop of neighbours around each hit.
+                for v in list(wanted):
+                    for o, _w in index.neighbors(v):
+                        if matches(o):
+                            wanted.add(o)
 
-    ordered = sorted(wanted, key=lambda v: (-degree[v], v))
-    shown = ordered[:limit]
-    shown_set = set(shown)
-    labels = path_tools.community_labels(index)  # once: it walks every code node
-    nodes = []
-    for v in shown:
-        node_id = index.node_ids[v]
-        node: dict[str, Any] = {
-            "id": node_id,
-            "label": label_at(index, v),
-            "kind": index.node_kind[v],
-            "degree": int(degree[v]),
-            "tier": node_tier.get(node_id, EVERYONE_TIER)["name"],
-            "tier_rank": node_tier.get(node_id, EVERYONE_TIER)["rank"],
-        }
-        if index.node_kind[v] == PASSAGE:
-            p = index.passages[index.passage_position(v)]
-            node["source_id"] = p.source_id
-            node["source_name"] = p.source_name
-        elif index.node_kind[v] in CODE_KINDS:
-            code = index.code_node_at(v)
-            node.update(
-                code_kind=code.code_kind or code.kind,
-                lang=code.lang,
-                path=code.path,
-                source_id=code.source_id,
-                source_name=code.source_name,
-                community=code.community,
-                community_label=labels.get(code.community, "") if code.community is not None else "",
-            )
-        else:
-            node["passage_count"] = int(index.entity_passage_count[v])
-        nodes.append(node)
-    edges = []
-    for v in shown:
-        for o, w in index.neighbors(v):
-            if o <= v or o not in shown_set or w < min_weight:
-                continue
-            e = index.edge_between(v, o)
-            edges.append(
-                {
-                    "source": index.node_ids[v],
-                    "target": index.node_ids[o],
-                    "weight": round(float(w), 4),
-                    "kinds": e.kinds if e else [],
+            ordered = sorted(wanted, key=lambda v: (-degree[v], v))
+            shown = ordered[:limit]
+            shown_set = set(shown)
+            labels = path_tools.community_labels(index)  # once: it walks every code node
+            nodes = []
+            for v in shown:
+                node_id = index.node_ids[v]
+                node: dict[str, Any] = {
+                    "id": node_id,
+                    "label": label_at(index, v),
+                    "kind": index.node_kind[v],
+                    "degree": int(degree[v]),
+                    "tier": node_tier.get(node_id, EVERYONE_TIER)["name"],
+                    "tier_rank": node_tier.get(node_id, EVERYONE_TIER)["rank"],
                 }
+                if index.node_kind[v] == PASSAGE:
+                    p = index.passages[index.passage_position(v)]
+                    node["source_id"] = p.source_id
+                    node["source_name"] = p.source_name
+                elif index.node_kind[v] in CODE_KINDS:
+                    code = index.code_node_at(v)
+                    node.update(
+                        code_kind=code.code_kind or code.kind,
+                        lang=code.lang,
+                        path=code.path,
+                        source_id=code.source_id,
+                        source_name=code.source_name,
+                        community=code.community,
+                        community_label=labels.get(code.community, "") if code.community is not None else "",
+                    )
+                else:
+                    node["passage_count"] = int(index.entity_passage_count[v])
+                nodes.append(node)
+            edges = []
+            for v in shown:
+                for o, w in index.neighbors(v):
+                    if o <= v or o not in shown_set or w < min_weight:
+                        continue
+                    e = index.edge_between(v, o)
+                    edges.append(
+                        {
+                            "source": index.node_ids[v],
+                            "target": index.node_ids[o],
+                            "weight": round(float(w), 4),
+                            "kinds": e.kinds if e else [],
+                        }
+                    )
+            # The whole ladder (not only the tiers present) so colours mean the same thing on every graph.
+            tiers = sorted(
+                [{"id": r["id"], "name": r["name"], "rank": r["rank"]} for r in ctx.store.list_roles()]
+                + [dict(EVERYONE_TIER)],
+                key=lambda t: -t["rank"],
             )
-    # The whole ladder (not only the tiers present) so colours mean the same thing on every graph.
-    tiers = sorted(
-        [{"id": r["id"], "name": r["name"], "rank": r["rank"]} for r in ctx.store.list_roles()]
-        + [dict(EVERYONE_TIER)],
-        key=lambda t: -t["rank"],
-    )
-    payload = {
-        "nodes": nodes,
-        "edges": edges,
-        "total_nodes": index.num_nodes,
-        "matched_nodes": len(wanted),
-        "shown_nodes": len(shown),
-        "truncated": len(wanted) > len(shown),
-        "entities": index.num_entities,
-        "passages": len(index.passages),
-        "facts": len(index.facts),
-        "graph_version": index.version,
-        "viewer": {"role": principal.role_name, "rank": principal.rank, "preview": bool(preview)},
-        "tiers": tiers,
-        "sources": [
-            {"id": sid, "tier": tier["name"], "tier_rank": tier["rank"]} for sid, tier in source_tier.items()
-        ],
-    }
-    view.validate()
-    validate_viewer()
-    return payload
+            payload = {
+                "nodes": nodes,
+                "edges": edges,
+                "total_nodes": index.num_nodes,
+                "matched_nodes": len(wanted),
+                "shown_nodes": len(shown),
+                "truncated": len(wanted) > len(shown),
+                "entities": index.num_entities,
+                "passages": len(index.passages),
+                "facts": len(index.facts),
+                "graph_version": index.version,
+                "viewer": {"role": principal.role_name, "rank": principal.rank, "preview": bool(preview)},
+                "tiers": tiers,
+                "sources": [
+                    {"id": sid, "tier": tier["name"], "tier_rank": tier["rank"]}
+                    for sid, tier in source_tier.items()
+                ],
+            }
+            view.validate()
+            validate_viewer()
+            return payload
+    finally:
+        validate_viewer()
 
 
 # ------------------------------------------------------------- light up
@@ -404,63 +409,67 @@ def _light_up_response(ctx, principal, body, session, validate_viewer):
 def node_details(request: Request, node_id: str, as_role: str = ""):
     ctx = ctx_of(request)
     principal, _preview, validate_viewer = viewer(request, as_role or None)
-    view = source_view(ctx, principal.access)
-    index = view.graph
-    vertex = index.idx_of.get(node_id)
-    if vertex is None:
-        raise HTTPException(404, "unknown node")
-    _source_tier, node_tier = tiers_of(ctx, index, view.sources)
-    neighbours = sorted(index.neighbors(vertex), key=lambda t: -t[1])
-    kind = index.node_kind[vertex]
-    out: dict[str, Any] = {
-        "id": node_id,
-        "kind": kind,
-        "label": label_at(index, vertex),
-        "tier": node_tier.get(node_id, EVERYONE_TIER)["name"],
-        "degree": len(neighbours),
-        "neighbours": [
-            {
-                "id": index.node_ids[o],
-                "label": label_at(index, o),
-                "kind": index.node_kind[o],
-                "weight": round(float(w), 3),
-                "kinds": (index.edge_between(vertex, o) or _NO_EDGE).kinds,
+    try:
+        with query_session(ctx, principal.access) as session:
+            view = source_view(ctx, principal.access, session=session)
+            index = view.graph
+            vertex = index.idx_of.get(node_id)
+            if vertex is None:
+                raise HTTPException(404, "unknown node")
+            _source_tier, node_tier = tiers_of(ctx, index, view.sources)
+            neighbours = sorted(index.neighbors(vertex), key=lambda t: -t[1])
+            kind = index.node_kind[vertex]
+            out: dict[str, Any] = {
+                "id": node_id,
+                "kind": kind,
+                "label": label_at(index, vertex),
+                "tier": node_tier.get(node_id, EVERYONE_TIER)["name"],
+                "degree": len(neighbours),
+                "neighbours": [
+                    {
+                        "id": index.node_ids[o],
+                        "label": label_at(index, o),
+                        "kind": index.node_kind[o],
+                        "weight": round(float(w), 3),
+                        "kinds": (index.edge_between(vertex, o) or _NO_EDGE).kinds,
+                    }
+                    for o, w in neighbours[:60]
+                ],
             }
-            for o, w in neighbours[:60]
-        ],
-    }
-    if kind == PASSAGE:
-        p = index.passages[index.passage_position(vertex)]
-        out.update(
-            title=p.title,
-            source_id=p.source_id,
-            source_name=p.source_name,
-            ordinal=p.ordinal,
-            text=p.text,
-            facts=[f.triple for f in index.facts if p.id in f.passage_ids][:40],
-            defines=[
-                {"id": index.node_ids[v], "label": label_at(index, v)}
-                for v in sorted(index.symbols_defined_in(vertex), key=lambda v: label_at(index, v))
-            ],
-        )
-    elif kind in CODE_KINDS:
-        out.update(_code_panel(ctx, index, vertex))
-    else:
-        facts = [f for f in index.facts if node_id in (f.subject_id, f.object_id)]
-        out.update(
-            passage_count=int(index.entity_passage_count[vertex]),
-            boost=float(index.entity_boost[vertex]),
-            facts=[f.triple for f in facts][:60],
-            fact_count=len(facts),
-            passages=[
-                {"id": index.node_ids[o], "title": index.name_of(o)}
-                for o, _w in neighbours
-                if index.node_kind[o] == PASSAGE
-            ][:40],
-        )
-    view.validate()
-    validate_viewer()
-    return out
+            if kind == PASSAGE:
+                p = index.passages[index.passage_position(vertex)]
+                out.update(
+                    title=p.title,
+                    source_id=p.source_id,
+                    source_name=p.source_name,
+                    ordinal=p.ordinal,
+                    text=p.text,
+                    facts=[f.triple for f in index.facts if p.id in f.passage_ids][:40],
+                    defines=[
+                        {"id": index.node_ids[v], "label": label_at(index, v)}
+                        for v in sorted(index.symbols_defined_in(vertex), key=lambda v: label_at(index, v))
+                    ],
+                )
+            elif kind in CODE_KINDS:
+                out.update(_code_panel(ctx, index, vertex, settings=session.settings))
+            else:
+                facts = [f for f in index.facts if node_id in (f.subject_id, f.object_id)]
+                out.update(
+                    passage_count=int(index.entity_passage_count[vertex]),
+                    boost=float(index.entity_boost[vertex]),
+                    facts=[f.triple for f in facts][:60],
+                    fact_count=len(facts),
+                    passages=[
+                        {"id": index.node_ids[o], "title": index.name_of(o)}
+                        for o, _w in neighbours
+                        if index.node_kind[o] == PASSAGE
+                    ][:40],
+                )
+            view.validate()
+            validate_viewer()
+            return out
+    finally:
+        validate_viewer()
 
 
 MAX_PANEL_EDGES = 60  # a hub symbol has hundreds of callers; the panel shows the first page
@@ -480,11 +489,11 @@ def sorted_edges(index: GraphIndex, edges) -> list:
     )
 
 
-def _code_panel(ctx, index: GraphIndex, vertex: int) -> dict[str, Any]:
+def _code_panel(ctx, index: GraphIndex, vertex: int, *, settings=None) -> dict[str, Any]:
     """The per-kind body of the side panel for a symbol, data object or commit."""
     node = index.code_node_at(vertex)
     assert node is not None  # the caller checked node_kind
-    theta = float(ctx.store.get_settings().get("code_theta", 0.0))
+    theta = float((ctx.store.get_settings() if settings is None else settings).get("code_theta", 0.0))
     rows = path_tools.triple_rows
     out: dict[str, Any] = {
         "code_kind": node.code_kind or node.kind,

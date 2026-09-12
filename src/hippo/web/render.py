@@ -18,7 +18,7 @@ from jinja2 import Undefined
 
 from ..access import Access
 from ..context import AppContext
-from ..knowledge.query_access import QuerySession, query_access
+from ..knowledge.query_access import QuerySession, query_session
 from ..status import system_status
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -83,15 +83,22 @@ def render(
     principal = context["me"]
     access = principal.access if principal is not None else Access(audience_kind="preview")
     store_online = ctx.store.ping()
-    # Every signed-in page includes scoped status, even when its own content has
-    # no evidence callback (for example Settings or the status partial).
-    if session is not None:
-        status_check = session.validate
+    # A standalone page owns its status snapshot; callers rendering evidence
+    # pass their session so status and page content share the same generation.
+    if session is None and store_online and access.audience_kind != "preview":
+        with query_session(ctx, access) as owned:
+            return render(
+                request,
+                template,
+                nav=nav,
+                status_code=status_code,
+                authorization_check=authorization_check,
+                session=owned,
+                **context,
+            )
+    status_check = session.validate if session is not None else None
+    if status_check is not None:
         status_check()
-    else:
-        status_check = (
-            query_access(ctx, access)[2] if store_online and access.audience_kind != "preview" else None
-        )
     context.update(
         nav=nav,
         status=system_status(ctx, access=access, fresh=not store_online, session=session),

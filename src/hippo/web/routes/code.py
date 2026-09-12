@@ -24,6 +24,7 @@ one shape that could drift apart.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -45,6 +46,7 @@ from ...hipporag.paths import (
     shortest_code_path,
     triple_rows,
 )
+from ...knowledge.query_access import query_session
 from ..auth import principal_of
 from ..render import ctx_of
 
@@ -174,11 +176,11 @@ def _required(value: str, name: str) -> str:
 # ------------------------------------------------------------------- routes
 
 
-def _graph(request: Request) -> tuple[GraphIndex, float]:
-    """The caller's slice of the graph, and the ω floor the path tools filter by (`code_theta`)."""
-    ctx = ctx_of(request)
-    index = ctx.graph_for(principal_of(request).access)
-    return index, float(ctx.store.get_settings().get("code_theta", 0.5))
+@contextmanager
+def _graph(request: Request):
+    """Hold the caller's graph and captured path settings through the response."""
+    with query_session(ctx_of(request), principal_of(request).access) as session:
+        yield session.graph, float(session.settings["code_theta"])
 
 
 def _answer(build: Callable[[], Any], validate: Callable[[], None]) -> Any:
@@ -198,33 +200,33 @@ def _answer(build: Callable[[], Any], validate: Callable[[], None]) -> Any:
 
 @api.get("/symbols")
 def symbols(request: Request, q: str = "", limit: int = DEFAULT_SYMBOL_LIMIT):
-    index, _theta = _graph(request)
-    return _answer(lambda: symbol_rows(index, q, limit), index.validate_authorization)
+    with _graph(request) as (index, _theta):
+        return _answer(lambda: symbol_rows(index, q, limit), index.validate_authorization)
 
 
 @api.get("/path")
 def code_path(request: Request, a: str, b: str):
-    index, theta = _graph(request)
-    return _answer(lambda: path_payload(index, a, b, theta=theta), index.validate_authorization)
+    with _graph(request) as (index, theta):
+        return _answer(lambda: path_payload(index, a, b, theta=theta), index.validate_authorization)
 
 
 @api.get("/blast-radius")
 def blast(request: Request, symbol: str, depth: int = DEFAULT_DEPTH):
-    index, theta = _graph(request)
-    return _answer(
-        lambda: blast_payload(index, symbol, theta=theta, depth=depth), index.validate_authorization
-    )
+    with _graph(request) as (index, theta):
+        return _answer(
+            lambda: blast_payload(index, symbol, theta=theta, depth=depth), index.validate_authorization
+        )
 
 
 @api.get("/exception-path")
 def raises(request: Request, symbol: str, exception: str):
-    index, theta = _graph(request)
-    return _answer(
-        lambda: exception_payload(index, symbol, exception, theta=theta), index.validate_authorization
-    )
+    with _graph(request) as (index, theta):
+        return _answer(
+            lambda: exception_payload(index, symbol, exception, theta=theta), index.validate_authorization
+        )
 
 
 @api.get("/history")
 def commits(request: Request, symbol: str, limit: int = DEFAULT_HISTORY_LIMIT):
-    index, _theta = _graph(request)
-    return _answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)
+    with _graph(request) as (index, _theta):
+        return _answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)

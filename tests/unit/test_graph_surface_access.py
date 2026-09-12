@@ -249,7 +249,7 @@ def test_entity_lookup_revalidates_after_reading_matches(ctx, client, public_sou
             return rows
 
     index.entity_names = Names(index.entity_names)
-    monkeypatch.setattr(ctx, "graph_for", lambda access: index)
+    monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: index)
     response = client.get("/api/entities?q=orion")
     assert changed
     assert response.status_code == 409
