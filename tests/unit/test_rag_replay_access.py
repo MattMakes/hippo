@@ -133,6 +133,7 @@ def test_simulation_diff_does_not_reveal_old_hidden_titles(ctx):
     assert "SECRET" not in json.dumps(outcome.diff)
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 @pytest.mark.parametrize("endpoint", ["analyze", "simulate"])
 def test_saved_analysis_routes_require_the_evaluation_owner(ctx, endpoint):
     from fastapi.testclient import TestClient
@@ -161,6 +162,7 @@ def test_saved_analysis_routes_require_the_evaluation_owner(ctx, endpoint):
     assert "SECRET" not in response.text
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_analysis_revocation_during_html_render_discards_cached_answer(ctx, monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -187,6 +189,7 @@ def test_analysis_revocation_during_html_render_discards_cached_answer(ctx, monk
     assert "SECRET" not in response.text
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_saved_question_revoked_before_simulation_never_reaches_model(ctx, monkeypatch):
     from fastapi.testclient import TestClient
 
