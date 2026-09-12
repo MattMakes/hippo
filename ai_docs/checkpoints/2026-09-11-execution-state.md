@@ -308,3 +308,7 @@ Mapped plain prose chunks independently SPEC/QUALITY PASS with 187 tests and 2,0
 ## Task 5 original citation browsing verified
 
 Accepted input capture published 1c69e99. Graph node DTO/panel and managed source passage pages now distinguish derived retrieval text from its complete original citation closure, including exact text and human-readable locators. Independent SPEC/QUALITY PASS; root three gates MET with 38 Fake regressions, 2 Ladybug cases, Python lint/format and browser JavaScript syntax. Existing held-session authorization guards cover final DTO/HTML construction. No runtime deployment or production ingestion activation claimed.
+
+## Task 5 mapped plain prose chunks verified
+
+Shared legacy prose chunking now supports immutable mapped text without changing public Chunk output. PreparedChunk preserves exact ordered original ranges, generated separator dependencies, title dependencies and honest complete-line original closure. Root all three gates MET with 187 reader/chunker tests and Ruff; independent SPEC/QUALITY PASS included 2,000 seeded parity cases against the committed implementation. Code/rich/remapped inputs explicitly reject in this new preparation seam. Pure chunk-to-evidence binding is now approved for implementation; no managed persistence or model calls are part of chunk preparation. Task5 remains OPEN.

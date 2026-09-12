@@ -40,13 +40,16 @@ all the documents of one source, so passage order is the order you read them.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from ..hipporag.indexer import MIN_OPENIE_DOC_CHARS, Chunk
 from .readers import Document, lang_of
 
 if TYPE_CHECKING:  # `codegraph` pulls tree-sitter in; the chunker only reads plain attributes
     from ..codegraph.model import CodeGraph, Symbol
+    from .prepared_chunks import _MappedText
+
+_Text = TypeVar("_Text", str, "_MappedText")
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
@@ -185,60 +188,84 @@ def chunk_document(
 
 
 def _chunk_prose(doc: Document, size: int, overlap: int) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
-    doc_title = document_title(doc)
-    for heading, body in split_sections(doc.text):
-        title = f"{doc_title} › {heading}" if heading and heading != doc_title else doc_title
+    return [(title, text) for title, text, _ in _prose_pieces(doc.text, doc.title, size, overlap)]
+
+
+def _prose_pieces(text: _Text, fallback: str, size: int, overlap: int):
+    """The shared prose decisions; mapped inputs also retain the title's source units."""
+    out = []
+    doc_title = _document_title(text, fallback)
+    for heading, body in split_sections(text):
+        title = f"{doc_title} › {heading}" if heading and str(heading) != str(doc_title) else doc_title
+        title = str(title)
+        title_inputs = (doc_title, heading) if heading else (doc_title,)
         pieces = pack_paragraphs(body, size, overlap)
         if len(pieces) == 1:
-            out.append((title, pieces[0]))
+            out.append((title, pieces[0], title_inputs))
         else:
-            out.extend((f"{title} (part {n})", piece) for n, piece in enumerate(pieces, start=1))
+            out.extend(
+                (f"{title} (part {n})", piece, title_inputs) for n, piece in enumerate(pieces, start=1)
+            )
     return out
 
 
 def document_title(doc: Document) -> str:
     """A markdown file that starts with a '# Heading' is called by that heading, not by its file name."""
-    for line in doc.text.splitlines():
+    return str(_document_title(doc.text, doc.title))
+
+
+def _document_title(text: _Text, fallback: str):
+    for line in text.splitlines():
         if not line.strip():
             continue
-        match = re.match(r"^#\s+(.+?)\s*#*\s*$", line)
-        return match.group(1).strip() if match else doc.title
-    return doc.title
+        match = re.match(r"^#\s+(.+?)\s*#*\s*$", str(line))
+        return line[match.start(1) : match.end(1)].strip() if match else fallback
+    return fallback
 
 
-def split_sections(text: str) -> list[tuple[str | None, str]]:
+def split_sections(text: _Text) -> list[tuple[_Text | None, _Text]]:
     """Split markdown on heading lines. Returns (heading or None, body) pairs; empty bodies are dropped."""
-    sections: list[tuple[str | None, list[str]]] = [(None, [])]
+    sections: list[tuple[_Text | None, list[_Text]]] = [(None, [])]
     in_code_block = False
     for line in text.splitlines():
-        if line.strip().startswith("```"):
+        if str(line).strip().startswith("```"):
             in_code_block = not in_code_block  # a "# comment" inside a code block is not a heading
-        match = None if in_code_block else HEADING_RE.match(line)
+        match = None if in_code_block else HEADING_RE.match(str(line))
         if match:
-            sections.append((match.group(2).strip(), []))
+            sections.append((line[match.start(2) : match.end(2)].strip(), []))
         else:
             sections[-1][1].append(line)
     result = []
     for heading, lines in sections:
-        body = "\n".join(lines).strip()
+        body = _join_values(lines, "\n", "section-lines-v1").strip()
         if body:
             result.append((heading, body))
     return result
 
 
-def split_paragraphs(text: str) -> list[str]:
-    return [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+def _split_matches(text: _Text, pattern: re.Pattern) -> list[_Text]:
+    """Use regex match offsets so equal substrings keep their distinct input positions."""
+    parts = []
+    cursor = 0
+    for match in pattern.finditer(str(text)):
+        parts.append(text[cursor : match.start()])
+        cursor = match.end()
+    parts.append(text[cursor:])
+    return [part.strip() for part in parts if part.strip()]
 
 
-def split_sentences(text: str) -> list[str]:
+def split_paragraphs(text: _Text) -> list[_Text]:
+    return _split_matches(text, re.compile(r"\n\s*\n"))
+
+
+def split_sentences(text: _Text) -> list[_Text]:
     """Split at sentence ends. Text without punctuation comes back as one sentence."""
-    return [s.strip() for s in SENTENCE_END_RE.split(text) if s.strip()]
+    return _split_matches(text, SENTENCE_END_RE)
 
 
-def pack_paragraphs(text: str, size: int, overlap: int) -> list[str]:
+def pack_paragraphs(text: _Text, size: int, overlap: int) -> list[_Text]:
     """Pack paragraphs (and, for long ones, sentences) into chunks of at most `size` characters."""
-    units: list[str] = []
+    units: list[_Text] = []
     for paragraph in split_paragraphs(text):
         if len(paragraph) <= size:
             units.append(paragraph)
@@ -247,9 +274,9 @@ def pack_paragraphs(text: str, size: int, overlap: int) -> list[str]:
     return _pack(units, size, overlap)
 
 
-def _split_long_paragraph(paragraph: str, size: int) -> list[str]:
+def _split_long_paragraph(paragraph: _Text, size: int) -> list[_Text]:
     """Sentences, and hard cuts for a sentence that alone is longer than `size`."""
-    units: list[str] = []
+    units: list[_Text] = []
     for sentence in split_sentences(paragraph):
         if len(sentence) <= size:
             units.append(sentence)
@@ -258,9 +285,9 @@ def _split_long_paragraph(paragraph: str, size: int) -> list[str]:
     return units
 
 
-def _hard_split(text: str, size: int) -> list[str]:
+def _hard_split(text: _Text, size: int) -> list[_Text]:
     """Cut a very long run of text at word boundaries, `size` characters at a time."""
-    pieces: list[str] = []
+    pieces: list[_Text] = []
     rest = text
     while len(rest) > size:
         cut = rest.rfind(" ", size // 2, size)
@@ -273,10 +300,10 @@ def _hard_split(text: str, size: int) -> list[str]:
     return pieces
 
 
-def _pack(units: list[str], size: int, overlap: int) -> list[str]:
+def _pack(units: list[_Text], size: int, overlap: int) -> list[_Text]:
     """Greedy: keep adding units while the chunk stays under `size`; then start a new chunk with an overlap."""
-    chunks: list[str] = []
-    current: list[str] = []  # the chunk being built; its first item may be the overlap tail
+    chunks: list[_Text] = []
+    current: list[_Text] = []  # the chunk being built; its first item may be the overlap tail
     new_units = 0  # how many of `current` are real (non-overlap) units
     for unit in units:
         if new_units and _joined_len(current + [unit]) > size:
@@ -292,27 +319,33 @@ def _pack(units: list[str], size: int, overlap: int) -> list[str]:
     return chunks
 
 
-def _join(units: list[str]) -> str:
-    return "\n\n".join(units)  # a blank line between paragraphs, like the source
+def _join_values(units: list[_Text], separator: str, rule: str):
+    if not units or isinstance(units[0], str):
+        return separator.join(units)
+    return units[0].join(units, separator, rule)
 
 
-def _joined_len(units: list[str]) -> int:
-    return len(_join(units))
+def _join(units: list[_Text]) -> _Text:
+    return _join_values(units, "\n\n", "paragraph-join-v1")
 
 
-def _overlap_tail(chunk: str, overlap: int) -> list[str]:
+def _joined_len(units: list[_Text]) -> int:
+    return sum(len(unit) for unit in units) + max(0, len(units) - 1) * 2
+
+
+def _overlap_tail(chunk: _Text, overlap: int) -> list[_Text]:
     """The last whole sentences of `chunk`, together at most `overlap` characters. Empty when overlap is 0."""
     if overlap <= 0:
         return []
     sentences = split_sentences(chunk.replace("\n", " "))
-    tail: list[str] = []
+    tail: list[_Text] = []
     length = 0
     for sentence in reversed(sentences):
         if length + len(sentence) + (1 if tail else 0) > overlap:
             break
         tail.insert(0, sentence)
         length += len(sentence) + 1
-    return [" ".join(tail)] if tail else []
+    return [_join_values(tail, " ", "overlap-join-v1")] if tail else []
 
 
 # ------------------------------------------------------------------- code
