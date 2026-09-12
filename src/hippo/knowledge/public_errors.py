@@ -150,6 +150,18 @@ _ROWS: tuple[tuple[type[BaseException], PublicFailure], ...] = (
 # `ready` and retires only the stage. Nothing is stale and nothing is incompatible; an
 # operation simply did not finish. Its nearest row is `build_cancelled`, the same event
 # with a different trigger and the same "Reindex to run it again", and that is 500.
+# The last two rows are not build-lane codes at all: they are this module's *own* public
+# codes, here so that `public_failure_for_code` is closed over the whole public vocabulary
+# and every `PublicFailure.code` round-trips to a failure carrying that same code. A caller
+# that has already rendered a failure once -- an eval replaying a stored result, a route
+# re-reading its own answer -- must not fall off the table and be told `operation_failed`
+# for something already classified as unavailable.
+#
+# One limit, and it is inherent rather than an omission: `INVALID_SOURCE_TYPE` (400) and
+# `INVALID_SOURCE_SIZE` (413) share the code `invalid_source`, so a code alone cannot say
+# which. `invalid_source` resolves to the 400, and a `source_too_large` row therefore
+# round-trips to the right code and the wrong status. The code is the stable contract; the
+# status is not recoverable from it, and a caller that needs the 413 has to keep it.
 _MANAGED_CODES: dict[str, PublicFailure | None] = {
     "build_cancelled": OPERATION_FAILED,
     "build_interrupted": OPERATION_FAILED,
@@ -157,6 +169,7 @@ _MANAGED_CODES: dict[str, PublicFailure | None] = {
     "authorization_changed": None,
     "model_unavailable": RETRIEVAL_UNAVAILABLE,
     "retrieval_rebuild_required": REBUILD_REQUIRED,
+    "retrieval_unavailable": RETRIEVAL_UNAVAILABLE,
     "source_too_large": INVALID_SOURCE_SIZE,
     "unsupported_source": INVALID_SOURCE_TYPE,
     "invalid_configuration": OPERATION_FAILED,
@@ -182,6 +195,11 @@ def public_failure_for_code(code: str) -> PublicFailure | None:
     `None` for `authorization_changed`, which keeps the existing permission
     response, and for any code this table does not know; a managed caller adds
     `or OPERATION_FAILED`, exactly as it does for `public_failure`.
+
+    Closed over its own output: every code a returned `PublicFailure` carries is
+    itself a key here, so rendering an already-rendered failure is a no-op rather
+    than a fall-through to `operation_failed`. The status is the one thing that
+    does not survive the trip for a `source_too_large` row -- see the table.
     """
     if type(code) is not str:
         return None

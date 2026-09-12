@@ -217,6 +217,8 @@ MANAGED_CODES = {
     "authorization_changed": None,
     "model_unavailable": UNAVAILABLE,
     "retrieval_rebuild_required": REBUILD,
+    # Not a build-lane code: this module's own, so the table is closed over its output.
+    "retrieval_unavailable": UNAVAILABLE,
     "source_too_large": SIZE,
     "unsupported_source": TYPE,
     "invalid_configuration": FAILED,
@@ -282,6 +284,52 @@ def test_a_code_the_store_writes_without_an_exception_still_has_an_answer():
     # and an interrupted refresh leaves the published generation serving throughout.
     assert failure.http_status == 500
     assert failure != module.public_failure_for_code("retrieval_rebuild_required")
+
+
+def test_every_public_code_round_trips_to_a_failure_carrying_that_code():
+    """The table is closed over its own output, so rendering twice is not a downgrade.
+
+    A caller that has already rendered a failure once -- an eval replaying a stored
+    result, a route re-reading its own answer -- would otherwise fall off the table and
+    be told `operation_failed` for something already classified as unavailable.
+    """
+    module = api()
+    every = (
+        module.REBUILD_REQUIRED,
+        module.RETRIEVAL_UNAVAILABLE,
+        module.INVALID_SOURCE_TYPE,
+        module.INVALID_SOURCE_SIZE,
+        module.OPERATION_FAILED,
+    )
+    for failure in every:
+        answer = module.public_failure_for_code(failure.code)
+        assert answer is not None, f"{failure.code} is not closed over its own output"
+        assert answer.code == failure.code
+
+
+@pytest.mark.parametrize("code", sorted(MANAGED_CODES))
+def test_the_code_mapping_is_idempotent(code):
+    """Applying it to its own result changes nothing -- with one inherent exception.
+
+    `INVALID_SOURCE_TYPE` (400) and `INVALID_SOURCE_SIZE` (413) share the code
+    `invalid_source`, so a code alone cannot say which, and `invalid_source` resolves to
+    the 400. A `source_too_large` row therefore round-trips to the right code and the
+    wrong *status*. That is a property of the vocabulary, not a gap in the table: the code
+    is the stable contract and the status is not recoverable from it. Pinned rather than
+    skipped, so that a caller who needs the 413 learns here that they must keep it.
+    """
+    module = api()
+    first = module.public_failure_for_code(code)
+    if first is None:  # authorization_changed keeps the response it already had
+        return
+    again = module.public_failure_for_code(first.code)
+    assert again is not None
+    assert again.code == first.code
+    if code == "source_too_large":
+        assert first.http_status == 413
+        assert again.http_status == 400, "the 413/400 collision moved; re-read the table comment"
+        return
+    assert again == first
 
 
 def test_an_unknown_or_malformed_code_falls_through_like_an_unknown_exception():

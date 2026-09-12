@@ -21,8 +21,8 @@ pair, because `test_cli.py`, `test_mcp_http.py` and `test_graph_surface_access.p
 |---|---|---|---|
 | 1 | Baseline, before any change: the brief's six files | **188 passed**, EXIT 0 | `/tmp/hippo-pa4cfix-baseline.log` |
 | 2 | RED: the six files plus `test_public_errors.py` | **31 failed**, 259 passed | `/tmp/hippo-pa4cfix-red.log` |
-| 3 | GREEN (Fake), the brief's command plus `test_public_errors.py` | **293 passed**, EXIT 0 | `/tmp/hippo-pa4cfix-fake-green.log` |
-| 4 | GREEN (Fake), adjacent sweep — see below | **290 passed, 1 skipped**, EXIT 0 | `/tmp/hippo-pa4cfix-sweep.log` |
+| 3 | GREEN (Fake), the brief's command plus `test_public_errors.py` | **307 passed**, EXIT 0 | `/tmp/hippo-pa4cfix-fake-green.log` |
+| 4 | GREEN (Fake), adjacent sweep — see below | **212 passed, 1 skipped**, EXIT 0 | `/tmp/hippo-pa4cfix-sweep.log` |
 | 5 | GREEN (Ladybug), `test_managed_transport_activation.py test_mcp_server.py test_public_errors.py` | **166 passed** in 212.77s, EXIT 0 | `/tmp/hippo-pa4cfix-ladybug-green.log` |
 
 The adjacent sweep (4) is not in the brief. `public_errors.py`, `cli.py`, `mcp_server.py` and
@@ -30,9 +30,10 @@ The adjacent sweep (4) is not in the brief. `public_errors.py`, `cli.py`, `mcp_s
 `test_managed_route_activation.py`, `test_web_auth.py`, `test_managed_pipeline_activation.py`,
 `test_status_access.py`, `test_managed_source_inventory.py`, `test_managed_source_lifecycle.py`,
 `test_source_snapshot_lifetime.py`, `test_query_snapshots.py` and `test_render_authorization.py`.
-Nothing regressed.
+(`test_public_errors.py` moved into row 3 once it gained tests of my own.) Nothing regressed.
 
-Ruff: `.venv/bin/ruff check` and `ruff format --check` over all eight changed files — clean.
+Ruff: `.venv/bin/ruff check` and `ruff format --check` over all eight changed files — clean,
+re-run after every addendum.
 (`ruff format` reformatted two over-long parametrise/signature lines in
 `test_managed_transport_activation.py` before the final check.)
 
@@ -275,9 +276,9 @@ there for. The reviewer's second observation is recorded too: the two modules or
 table differently and agree only because `AuthorizationChanged` appears in no row of the
 public table, so if it ever gains one they have to be re-read together.
 
-## Addenda from Task 3b: the tenth and eleventh managed failure codes
+## Addenda: the tenth and eleventh managed codes, and closing the table over its own output
 
-Two, routed mid-task by the orchestrator, with ownership of `public_errors.py` granted.
+Three, routed mid-task by the orchestrator, with ownership of `public_errors.py` granted.
 Both verified against `wp/pa3b` / `rag-it-all-tibs` before acting, and both confirmed
 genuinely unmapped: `public_failure_for_code` answered `None` for each.
 
@@ -291,7 +292,7 @@ real: a Source row storing `retrieval_rebuild_required: ...` fell through to `No
 its caller's `or OPERATION_FAILED` turned a 409 "reindex this source" into a 500 "look in
 the logs" — the wrong instruction as well as the wrong status.
 
-`src/hippo/knowledge/public_errors.py:128-150`: the row
+`src/hippo/knowledge/public_errors.py:117-178` (the table and its comment): the row
 `"retrieval_rebuild_required": REBUILD_REQUIRED` is added, making the round trip an
 identity. The comment above the table asserted the exact opposite of what 3b made true
 ("a build that failed on `EmbeddingProfileMismatch` ... is stored as `model_unavailable`")
@@ -341,6 +342,42 @@ the same reason `test_a_stored_code_and_its_own_exception_agree` spells out its 
 importing the store here would pull a driver. The literal is not yet importable from this
 base in any case (the sweep is in 3b's merge, not in `be6062a`).
 
+### The third: `public_failure_for_code` closed over its own output
+
+`src/hippo/knowledge/public_errors.py:153-172` (the two closure rows and the comment
+explaining the 400/413 limit) and `:192-207` (`public_failure_for_code`'s docstring).
+
+Asked for by the orchestrator because **Task 4f (eval wrap-up) depends on it**: a caller
+that re-renders an already-rendered failure must get the same answer rather than falling
+off the table into `operation_failed`.
+
+`retrieval_rebuild_required` was already added by the first addendum, so the missing row was
+`retrieval_unavailable` → `RETRIEVAL_UNAVAILABLE`. With it, every `PublicFailure.code` --
+all four -- resolves to a failure carrying that same code. Measured before and after rather
+than assumed; before, `public_failure_for_code("retrieval_unavailable")` answered `None`.
+
+**One limit, and 4f needs to know it.** The round trip is total on the **code** and total
+on the whole object for every row *except* `source_too_large`. `INVALID_SOURCE_TYPE` (400)
+and `INVALID_SOURCE_SIZE` (413) share the code `invalid_source`, so a code alone cannot say
+which, and `invalid_source` resolves to the 400. A `source_too_large` row therefore
+round-trips to the right code and the **wrong status**: 413 → 400.
+
+This is a property of the vocabulary, not a gap I could close by adding a row -- mapping
+`invalid_source` to the 413 instead would simply move the loss onto `unsupported_source`.
+The only real fixes would be splitting the code in two or having callers keep the status,
+and both are decisions above this slice.
+
+So the idempotence test asserts the true property and **pins the exception explicitly**
+rather than skipping it: `test_the_code_mapping_is_idempotent` is parametrised over every
+code, asserts `f(f(c).code) == f(c)` for all of them, and for `source_too_large` asserts the
+413 → 400 collision by name, with a message telling the next reader to re-read the table
+comment if it ever moves. A test asserting total object idempotence would have passed only
+by not looking, and 4f would have inherited a false guarantee.
+`test_every_public_code_round_trips_to_a_failure_carrying_that_code` pins the closure itself.
+
+**Flagged for the orchestrator / 4f:** if 4f needs to recover a 413 from a stored code, it
+cannot; the status has to travel with the code or be re-derived from the source row.
+
 **Ownership note:** the test went into `tests/unit/test_public_errors.py`, which is not in
 this brief's owned list. The addendum said "with a test" and that file is the only sensible
 home — it already holds the local `MANAGED_CODES` mirror and the pairing test. The edits
@@ -368,26 +405,30 @@ there: the two new keys, two rows in `test_a_stored_code_and_its_own_exception_a
    committed base and made a per-call import, which is what `cli.py` already does for the
    same reason. Back to 488 modules exactly, and `fastapi` still absent.
 
-## Merge order: 4b-i must land before or with this branch
+## Merge order: resolved during this task
 
-`git merge-base --is-ancestor 2377f7c rag-it-all-tibs` answers **NOT-YET** as of this
-writing, so stating it once rather than leaving it to be discovered.
+`4b-i` (`2377f7c`) was **NOT-YET** merged when I started and is **merged now** --
+`rag-it-all-tibs` has moved `be6062a → 640d20b → 0bc378c` while this branch was in flight.
+`web/app.py:110` now answers a denial as
+`{"error": "Permissions changed; repeat the query", "code": "authorization_changed"}`, which
+is exactly what `_refusal`'s first branch consumes, so a remote-CLI denial reads
+`authorization_changed: Permissions changed; repeat the query` -- the same string as MCP and
+the local CLI. F6 is closed on all three surfaces in fact, not just in the test that injects
+that body. No sequencing constraint remains.
 
-On `be6062a`, `web/app.py:72` still answers a denial as
-`409 {"error": "Permissions changed; repeat the query"}` with **no** `code`. `_refusal` now
-refuses a code-less `error` whatever the status, which is the ruling, so in the gap between
-these two branches a *remote* CLI denial reads
-`operation_failed: Operation failed; inspect local logs by operation ID (HTTP 409)` — bounded
-and honest, but less useful than the pre-fix `http://server/api/ask: 409 Permissions
-changed; repeat the query`. The moment 4b-i's body carries the code, the same condition reads
-`authorization_changed: Permissions changed; repeat the query` on all three surfaces, which
-is the point of F6.
+Two observations from checking:
 
-The brief accepted this by construction ("after 4b-i merges, `web/app.py`'s 409 body becomes
-... Your remote-client change must consume exactly that"), and the cross-surface test injects
-that body directly rather than waiting for the merge, so nothing here is red. It is a
-sequencing fact, not a defect: merge 4b-i before or together with `wp/pa4cfix`. The MCP and
-local-CLI denials are unaffected either way — they never went through `web/app.py`.
+- 4b-i defines `AUTHORIZATION_CHANGED = "authorization_changed"` locally in `web/app.py:51`,
+  the same duplication-with-a-comment pattern I used in `mcp_server.py` and `cli.py`. Three
+  copies of the string now. That is consistent, and consolidating them into `public_errors`
+  is a judgement call for whoever owns that decision -- `cli.py` deliberately keeps
+  `knowledge` out of its top-level imports, so it is not free.
+- **Base drift, checked across all eight owned files.**
+  `git diff --stat be6062a rag-it-all-tibs` over them reports exactly one change:
+  `tests/unit/test_graph_surface_access.py`, +4/-1, at line 82 -- 4b-i adding the `code` key
+  to the 409 body assertion in `test_graph_revocation_after_label_read_discards_payload`.
+  My edits to that file are at lines 128, 189-192 and 296 and touch no shared hunk, so the
+  merge is clean. The other seven files are untouched on the base.
 
 ## Not closed here (other slices' files)
 
