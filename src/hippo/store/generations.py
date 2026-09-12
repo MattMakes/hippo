@@ -600,18 +600,26 @@ class GenerationQueries:
         ):
             raise ValueError("Sealed assertion proof group cannot gain support")
 
-    def _native_rows(self, kind, *, ids=None, generation_id=None):
-        """Native rows of one kind, optionally scoped to an id set or to one generation.
+    def _native_rows(self, kind, *, ids=None, generation_id=None, source_id=None, untagged=False):
+        """Native rows of one kind, optionally scoped. Every combination is one bounded query.
 
-        Both keys push into a single query, so a caller that knows which rows it wants pays for
-        those rows rather than for the table. `ids` is the key for a write or a mutation, which
-        must still see rows of *other* generations to find a prior row and to refuse a crossing
-        edge; `generation_id` is the key for an inventory or a checksum, which wants exactly one
-        generation. Passing neither is still legal and still reads the table -- the legacy lane
-        and collection are correct that way and are not in this slice.
+        The keys push into a single statement, so a caller that knows which rows it wants pays
+        for those rows rather than for the table:
+
+        * `ids` is the key for a write or a mutation, which must still see rows of *other*
+          generations to find a prior row and to refuse a crossing edge.
+        * `generation_id` is the key for an inventory or a checksum, which wants exactly one
+          generation.
+        * `source_id` with `untagged=True` is the legacy lane's key under ruling 14: the rows of
+          a source that no generation owns. `untagged` alone asks the same question of the whole
+          store. It is a distinct key rather than `generation_id=None` because `None` already
+          means "do not filter", and an operator would never be able to tell the two apart.
+
+        Passing nothing is still legal and still reads the table, which collection relies on.
 
         Entity and Fact are the shared graph and carry no `generation_id` column, so scoping
-        them by generation is refused rather than silently answered with nothing.
+        them by generation or by taggedness is refused rather than silently answered with
+        nothing.
         """
         attribute = {
             "Passage": "passages",
@@ -621,19 +629,23 @@ class GenerationQueries:
             "Entity": "entities",
             "Fact": "facts",
         }[kind]
-        if generation_id is not None and kind in ("Entity", "Fact"):
+        if (generation_id is not None or untagged) and kind in ("Entity", "Fact"):
             raise ValueError(f"{kind} is shared and is not scoped by generation")
+        if generation_id is not None and untagged:
+            raise ValueError("A row cannot both belong to a generation and be untagged")
         if ids is not None:
             ids = list(dict.fromkeys(ids))
             if not ids:
                 return []
         if self.knowledge_backend == "fake":
             rows = getattr(self, attribute)
-            if ids is not None:
-                return [rows[rid] for rid in ids if rid in rows]
-            values = list(rows.values())
+            values = [rows[rid] for rid in ids if rid in rows] if ids is not None else list(rows.values())
             if generation_id is not None:
-                return [row for row in values if row.get("generation_id") == generation_id]
+                values = [row for row in values if row.get("generation_id") == generation_id]
+            if untagged:
+                values = [row for row in values if row.get("generation_id") is None]
+            if source_id is not None:
+                values = [row for row in values if row.get("source_id") == source_id]
             return values
         where, params = [], {}
         if ids is not None:
@@ -642,14 +654,29 @@ class GenerationQueries:
         if generation_id is not None:
             where.append("n.generation_id = $generation_id")
             params["generation_id"] = generation_id
+        if untagged:
+            where.append("n.generation_id IS NULL")
+        if source_id is not None and kind != "Passage":
+            where.append("n.source_id = $source_id")
+            params["source_id"] = source_id
         clause = (" WHERE " + " AND ".join(where)) if where else ""
         if kind == "Passage":
             # One statement, not one per row: the owning Source used to cost a lookup per passage.
-            rows = self.run(
-                f"MATCH (n:Passage){clause} OPTIONAL MATCH (n)-[:FROM]->(s:Source) "
-                "RETURN n AS n, s.id AS source_id",
-                **params,
-            )
+            # A Passage has no source_id column; ownership is the FROM edge, so scoping by source
+            # makes that edge required instead of optional.
+            if source_id is not None:
+                params["source_id"] = source_id
+                rows = self.run(
+                    f"MATCH (n:Passage){clause} MATCH (n)-[:FROM]->(s:Source {{id:$source_id}}) "
+                    "RETURN n AS n, s.id AS source_id",
+                    **params,
+                )
+            else:
+                rows = self.run(
+                    f"MATCH (n:Passage){clause} OPTIONAL MATCH (n)-[:FROM]->(s:Source) "
+                    "RETURN n AS n, s.id AS source_id",
+                    **params,
+                )
         else:
             rows = self.run(f"MATCH (n:{kind}){clause} RETURN n AS n", **params)
         result = []
@@ -883,6 +910,13 @@ class GenerationQueries:
                 ]
                 if not supports or any(("AssertionSupport", s.id) not in exact_ids for s in supports):
                     raise ValueError("Incomplete assertion proof group")
+        # Read once and index, not once per binding: this list is the same for every one of
+        # them, and rebuilding it inside the loop is quadratic in the generation.
+        observed_objects = {
+            self._knowledge_get("ObjectObservation", m.record_id).object_id
+            for m in exact
+            if m.record_kind == "ObjectObservation"
+        }
         for binding in bindings:
             native_row = self._knowledge_get(binding.native_kind, binding.native_id)
             span = self._knowledge_get("EvidenceSpan", binding.span_id)
@@ -893,12 +927,7 @@ class GenerationQueries:
                 or ("EvidenceSpan", span.id) not in exact_ids
             ):
                 raise ValueError("Binding native or evidence is outside generation closure")
-            observations = [
-                self._knowledge_get("ObjectObservation", m.record_id)
-                for m in exact
-                if m.record_kind == "ObjectObservation"
-            ]
-            if not any(o.object_id == binding.object_id for o in observations):
+            if binding.object_id not in observed_objects:
                 raise ValueError("Native binding object lacks a selected observation")
         dimensions = set()
         from ..knowledge.derivations import validate_prose
@@ -921,9 +950,10 @@ class GenerationQueries:
             if ("EvidenceSpan", row["span_id"]) not in exact_ids:
                 raise ValueError("Passage span missing from exact manifest")
             dimensions.add(len(row["embedding"]))
+        bound = {(b.native_kind, b.native_id) for b in bindings}
         for kind, row in native:
             self._validate_managed_native(kind, row, gen, selected=revisions)
-            if not any(b.native_kind == kind and b.native_id == row["id"] for b in bindings):
+            if (kind, row["id"]) not in bound:
                 raise ValueError("Native row lacks evidence binding")
             if row.get("embedding"):
                 dimensions.add(len(row["embedding"]))
@@ -1455,7 +1485,10 @@ def native_write(kind):
                         continue
                     if generation_id not in generations:
                         generations[generation_id] = store._generation(generation_id)
-                        selected[generation_id] = store._selected_revisions(generation_id)
+                        # Only the Passage branch reads it; the others never look.
+                        selected[generation_id] = (
+                            store._selected_revisions(generation_id) if kind == "Passage" else None
+                        )
                     gen = generations[generation_id]
                     store._validate_managed_native(kind, row, gen, selected=selected[generation_id])
                     if gen.status == "staging":

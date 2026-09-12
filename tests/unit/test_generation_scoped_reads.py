@@ -43,8 +43,6 @@ from tests.unit.test_generation_store import (
     seal,
 )
 
-NATIVE_KINDS = ("Passage", "Symbol", "DataObject", "Commit", "Entity", "Fact")
-
 
 class ReadLog:
     """Records every scoped read, so a test can assert on the key rather than the row count."""
@@ -228,6 +226,42 @@ def test_native_rows_scoped_by_generation_return_the_unscoped_rows_of_that_gener
         assert scoped, f"the {kind} fixture row must be in its own generation"
 
 
+def test_untagged_rows_of_a_source_are_one_bounded_query(store):
+    """Ruling 14's key for the legacy lane: the rows of a source that no generation owns."""
+    gen = generation(store)
+    job = claim(store, gen)
+    symbol, _ = native_fixture(store, gen, job)
+    legacy_source = store.create_source("code", "legacy")
+    legacy = dict(
+        id="sym-untagged",
+        source_id=legacy_source,
+        name="f",
+        qualname="f",
+        kind="function",
+        path="a.py",
+        embedding=[0.1, 0.2],
+    )
+    store.add_symbols([legacy])
+
+    untagged = store._native_rows("Symbol", source_id=legacy_source, untagged=True)
+    assert [row["id"] for row in untagged] == ["sym-untagged"]
+    # The managed source's staged row is not untagged, so it is invisible to the legacy lane.
+    assert store._native_rows("Symbol", source_id=gen.source_id, untagged=True) == []
+    assert symbol["id"] in {row["id"] for row in store._native_rows("Symbol", generation_id=gen.id)}
+    # Equal results: the same rows the unscoped read would have been filtered down to.
+    unscoped = store._native_rows("Symbol")
+    assert untagged == [
+        row for row in unscoped if row.get("generation_id") is None and row.get("source_id") == legacy_source
+    ]
+
+
+def test_a_row_cannot_be_both_tagged_and_untagged(store):
+    with pytest.raises(ValueError, match="both belong to a generation and be untagged"):
+        store._native_rows("Symbol", generation_id="g", untagged=True)
+    with pytest.raises(ValueError, match="shared and is not scoped by generation"):
+        store._native_rows("Entity", untagged=True)
+
+
 def test_knowledge_rows_scoped_by_generation_return_the_unscoped_records(store):
     gen = generation(store)
     job = claim(store, gen)
@@ -260,6 +294,21 @@ def test_knowledge_rows_refuse_a_where_field_outside_the_allow_list(store):
         store._knowledge_rows("IndexEvent", where={"payload_json": "x"})
     with pytest.raises(ValueError, match="not a scoped field"):
         store._knowledge_rows("Suppression", where={"nonexistent": "x"})
+
+
+def test_a_kind_specific_scoped_field_is_refused_on_another_kind(store):
+    """The allow-list is per kind because the v6 indexes are: one kind each, not all kinds."""
+    assert store._knowledge_rows("MaintenanceJob", where={"input_fingerprint": "g"}) == []
+    with pytest.raises(ValueError, match="not a scoped field"):
+        # SyncRun declares input_fingerprint too, but only MaintenanceJob's is indexed.
+        store._knowledge_rows("SyncRun", where={"input_fingerprint": "g"})
+
+
+def test_every_kind_scoped_field_has_an_index_in_the_v6_step(store):
+    from hippo.store.knowledge import KIND_SCOPED_FIELDS
+
+    indexed = {(label, field) for _, label, field in migrations.NATIVE_INDEXES}
+    assert {(label, field) for label, fields in KIND_SCOPED_FIELDS.items() for field in fields} <= indexed
 
 
 def test_native_relationships_scoped_by_generation_equal_the_id_selection(store):
@@ -422,6 +471,83 @@ def test_native_mutation_reads_only_the_kinds_of_its_argument_ids(store):
     assert log.native_whole_table() == [], "argument ids bound the membership lookup"
     scoped = [call for call in log.calls if call[0] == "native"]
     assert scoped and all(call[2].get("ids") is not None for call in scoped)
+
+
+def inject_generation(store, gen, revision, span, count):
+    """A generation of `count` symbols written straight into the Fake store's tables.
+
+    The write path has its own tests; this fixture exists to size the seal at the plan's ceiling,
+    where going through `add_symbols` would measure batching rather than checksums.
+    """
+    from hippo.codegraph.model import symbol_id
+    from hippo.knowledge.lifecycle import generation_namespace
+
+    workspace = store.get_source(gen.source_id)["workspace_id"]
+    namespace = generation_namespace(gen)
+    for index in range(count):
+        path = f"m{index}.py"
+        sid = symbol_id(gen.source_id, path, "f", "function", node_namespace=namespace)
+        store.symbols[sid] = dict(
+            id=sid,
+            source_id=gen.source_id,
+            generation_id=gen.id,
+            name="f",
+            qualname="f",
+            kind="function",
+            path=path,
+            embedding=[0.1, 0.2],
+        )
+        obj = k.KnowledgeObject(workspace_id=workspace, kind="symbol", canonical_key=f'["{path}","f"]')
+        observation = k.ObjectObservation(
+            object_id=obj.id,
+            revision_id=revision.id,
+            span_id=span.id,
+            evidence_class="declared",
+            recorded_from=NOW,
+        )
+        for record in (
+            obj,
+            observation,
+            k.GenerationEvidenceMember(
+                generation_id=gen.id, record_kind="ObjectObservation", record_id=observation.id
+            ),
+            k.NativeBinding(
+                generation_id=gen.id,
+                object_id=obj.id,
+                native_kind="Symbol",
+                native_id=sid,
+                span_id=span.id,
+            ),
+        ):
+            store._knowledge_data.setdefault(type(record).__name__, {})[record.id] = record
+
+
+def test_sealing_at_the_symbol_ceiling_completes(store):
+    """CD1: sealing a generation at the plan's section 8.3 ceiling is linear, not quadratic.
+
+    `CODE_MAX_SYMBOLS_PER_SOURCE` is 50,000. Before this slice the seal read a whole knowledge
+    table per row and rescanned the bindings per row, so this fixture did not finish; the
+    400-row measurement recorded in `evidence-cc2.md` already cost 1.69 s and grew about
+    eightfold per doubling, which is seven more doublings from here.
+    """
+    if store.knowledge_backend != "fake":
+        pytest.skip("the synthetic ceiling fixture is built through the Fake store's tables")
+    from hippo.codegraph.model import CODE_MAX_SYMBOLS_PER_SOURCE
+
+    gen = generation(store, key="ceiling")
+    job = claim(store, gen, key="job-ceiling")
+    with store.generation_write(gen.id, **authority(job)):
+        revision, span = evidence(store, gen)
+        store.add_passages([passage(gen, revision, span)])
+        inject_generation(store, gen, revision, span, CODE_MAX_SYMBOLS_PER_SOURCE)
+    start = time.process_time()
+    checksums = store.generation_checksums(gen.id)
+    elapsed = time.process_time() - start
+    assert {c.kind for c in checksums} == {"evidence", "dense", "native"}
+    assert next(c for c in checksums if c.kind == "native").row_count == CODE_MAX_SYMBOLS_PER_SOURCE
+    # Measured at 3.5 s. The bound is generous because this is a CPU-time assertion on shared
+    # hardware; it is three orders of magnitude below what the pre-slice code would have taken.
+    assert elapsed < 60, f"sealing {CODE_MAX_SYMBOLS_PER_SOURCE} symbols took {elapsed:.1f}s"
 
 
 def test_sealing_is_linear_in_the_generation(store):

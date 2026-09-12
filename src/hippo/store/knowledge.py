@@ -214,10 +214,14 @@ def _selected_principals(principal_ids):
     return sorted(set(selected))
 
 
-# The columns a scoped knowledge read may filter on. Every one of them carries a lookup index
-# on Neo4j (`migrations.schema_steps`' index list, plus the v6 step for the three below that the
-# CC1 serving predicate needs), so "one bounded query" is true of the database and not only of
-# the Python that calls it. Anything else is refused: see `_knowledge_rows`.
+# The columns a scoped knowledge read may filter on, and the only ones. Every entry carries a
+# lookup index on Neo4j, so "one bounded query" is true of the database and not only of the
+# Python that calls it; anything else is refused by `_knowledge_rows` rather than answered.
+#
+# `SCOPED_FIELDS` are indexed on every kind that declares them -- `id` by the uniqueness
+# constraint, the rest by `migrations.schema_steps`' index list, which emits one index per kind
+# per field. `KIND_SCOPED_FIELDS` are indexed on one kind only, by the v6 step, so allowing them
+# anywhere else would promise a bounded query the database cannot deliver.
 SCOPED_FIELDS = frozenset(
     {
         "id",
@@ -230,12 +234,13 @@ SCOPED_FIELDS = frozenset(
         "object_id",
         "recorded_from",
         "valid_from",
-        "aggregate_id",
-        "target_kind",
-        "target_id",
-        "input_fingerprint",
     }
 )
+KIND_SCOPED_FIELDS = {
+    "IndexEvent": frozenset({"aggregate_id"}),
+    "Suppression": frozenset({"target_kind", "target_id"}),
+    "MaintenanceJob": frozenset({"input_fingerprint"}),
+}
 
 
 def _json_field(model, field):
@@ -424,8 +429,9 @@ class KnowledgeQueries:
         selection = dict(where or {})
         if generation_id is not None:
             selection["generation_id"] = generation_id
+        allowed = SCOPED_FIELDS | KIND_SCOPED_FIELDS.get(name, frozenset())
         for field in selection:
-            if field not in SCOPED_FIELDS or field not in columns:
+            if field not in allowed or field not in columns:
                 raise ValueError(f"{name}.{field} is not a scoped field")
         if self.knowledge_backend == "fake":
             rows = self._knowledge_data.get(name, {})

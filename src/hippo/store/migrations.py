@@ -457,16 +457,34 @@ def _version(store, state: str, step: int, *, version=CURRENT_SCHEMA_VERSION) ->
 # predicate filters on. A store that is already current never re-runs `base.CONSTRAINTS` --
 # `migrate_store` returns before `_ensure_legacy_schema` once the journal says v6 -- so these
 # have to arrive as their own journaled version rather than as a new entry in that list.
-NATIVE_INDEXES = (
-    ("symbol_generation", "Symbol", "generation_id"),
-    ("data_object_generation", "DataObject", "generation_id"),
-    ("commit_generation", "Commit", "generation_id"),
-    ("passage_generation", "Passage", "generation_id"),
-    ("knowledge_indexevent_aggregate_id", "IndexEvent", "aggregate_id"),
-    ("knowledge_suppression_target_kind", "Suppression", "target_kind"),
-    ("knowledge_suppression_target_id", "Suppression", "target_id"),
-    ("knowledge_maintenancejob_input_fingerprint", "MaintenanceJob", "input_fingerprint"),
-)
+def _v6_indexes():
+    """The v6 index set: four native tables, plus every kind-specific scoped field.
+
+    The second half is derived from `knowledge.KIND_SCOPED_FIELDS` rather than repeated, so a
+    field cannot be added to the allow-list without the index that makes it a bounded query.
+    """
+    from .knowledge import KIND_SCOPED_FIELDS
+
+    native = [
+        (f"{name}_generation", label, "generation_id")
+        for label, name in (
+            ("Symbol", "symbol"),
+            ("DataObject", "data_object"),
+            ("Commit", "commit"),
+            ("Passage", "passage"),
+        )
+    ]
+    return tuple(
+        native
+        + [
+            (f"knowledge_{label.lower()}_{field}", label, field)
+            for label, fields in sorted(KIND_SCOPED_FIELDS.items())
+            for field in sorted(fields)
+        ]
+    )
+
+
+NATIVE_INDEXES = _v6_indexes()
 NATIVE_INDEX_STEPS = [
     f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON (n.{field})"
     for name, label, field in NATIVE_INDEXES
