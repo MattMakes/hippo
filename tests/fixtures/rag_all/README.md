@@ -72,6 +72,79 @@ group. Gold evidence must exist, stay in that group and be visible to the specif
 principal. Duplicate question IDs, duplicate evidence IDs, duplicate/empty alternative
 groups, missing quotes and artifact-group split leakage are rejected.
 
+## Temporal event log (`temporal_events.jsonl`)
+
+A separate fixture from the corpus above: 14 **recorded events**, one JSON object per
+line, covering the nine temporal scenarios of Task 5A (plan section 7 step 3). It is
+not a snapshot and not retrieval input. `hippo.evals.rag_all_temporal` replays it into
+a knowledge store; `tests/unit/test_temporal_conflicts.py` validates its shape and
+`tests/unit/test_temporal_fixture_loader.py` exercises every scenario through it.
+
+Three row shapes, distinguished by which key is present:
+
+- **claim** (`claim`): `case`, `source_id`, `provider_order`, `valid_from`, `valid_to`,
+  `recorded_from`, `precision`, `claim: {predicate, object}`, and optionally
+  `scope_key`, `content_hash`, `source_updated_at`, `source_precision`.
+- **suppression** (`suppression`): `case`, `source_id`, `recorded_from` and
+  `suppression: {view_applicability, reason, epoch}`. Ordering metadata is forbidden -
+  a suppression is not a revision of a claim.
+- **barrier** (`restoration_barrier`): `case`, `source_id`, `provider_order`,
+  `restoration_barrier`, `recorded_from`.
+
+Every instant is a timezone-aware ISO string. `precision: "instant"` and a non-null
+`valid_from` imply each other, so no row can turn an unknown effective time into a
+dated one. `provider_order` carries `adapter`, `version`, `kind`
+(`monotonic`/`equality_only`/`unknown`), `ordinal` (an integer exactly when
+`monotonic`) and `token` (nonempty exactly when `equality_only`, null when `unknown`).
+
+### What the loader does with a row
+
+`load_temporal_events(store, path, *, clock)` parses with `read_temporal_events`, sorts
+by `(recorded_from, file order)` and applies each event at or before `clock()` - the
+caller's statement of now, and the loader's only time input. Later events are returned
+in `deferred`, so an incremental replay is just a later clock.
+
+- A **claim** becomes one staged generation, published at that row's own
+  `recorded_from`. When the row's adapter ordering proves it retires an earlier claim
+  of the same source and series, the publication carries a `TemporalPublicationPlan`
+  closing the retired segment and appending the new one in one transaction. Nothing is
+  ever rewritten, and arrival order never supersedes: `select_same_source` and
+  `fully_superseded_version_ids` make every decision, so `old_imported_last` - old bytes
+  imported after everything else - closes nothing and stays retained history.
+- A **suppression** writes its `Suppression` at the row's instant. `current_only`
+  leaves authorized history readable; `all_history` denies it.
+- A **barrier** writes nothing of its own: it declares the authoritative
+  `restoration_barrier` that its source's suppressions carry. A `Suppression` is
+  immutable and `restoration_barrier` is not a mutable field, so barrier rows are
+  resolved before any suppression is written rather than by rewriting a committed one.
+  Sources with no barrier row get a per-reason default (`tombstone` → `refetch`,
+  `access_loss` → `reverify`, `purge` → `destroy`).
+
+### Conventions the rows do not carry
+
+The rows argue about one subject and never name it, so the loader supplies:
+
+- subject `service-a` (kind `service`), claim objects of kind `owner`;
+- `DEFAULT_SCOPE_KEY = "service-a:production"` for a row with no `scope_key`, which is
+  what makes `environment_collision`'s declared `service-a:staging` a genuinely
+  distinct scope and `independent_alternative` a genuine alternative;
+- `SourceOrder.series_key = source_id`: one ordered revision stream per fixture source.
+  The object is deliberately not part of it, so the equal-token pairs land in one series
+  and come out ambiguous with a canonical refetch requested;
+- `rule_version = "rag-all-temporal-v1:<source>"`, so two sources stating an identical
+  undated claim at the same instant do not collapse into one `AssertionVersion` whose
+  proof group the first publication already sealed. Cross-source corroboration is
+  expressed as separate candidates over the same `Assertion`.
+
+Because supersession is ordinal-only, the catalog series ends at its highest ordinal:
+`backdated_correction` (ordinal 3) closes `may_owner_bob` (2), which had itself closed
+`may_owner_alice` (1). Both closed segments stay queryable at a cutoff before their
+closure - which is exactly what "original before, corrected after" means.
+
+Replaying the same file into the same store is an exact retry: every record the loader
+writes is content addressed and an already-published row's generation is observed
+rather than republished.
+
 ## Deterministic baseline
 
 From the repository root:
