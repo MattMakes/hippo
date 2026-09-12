@@ -16,6 +16,8 @@ select_history(store, *, workspace_id: str, access, selector: k.TemporalSelector
                request_cutoff: datetime, clock=utc_now) -> HistorySelection
 pinned_selector(resolved: ResolvedTemporalSelector) -> k.TemporalSelector
 history_access(store, workspace_id: str, access, *, clock=utc_now) -> EvidenceAccess
+proof_covers_manifest(proof: AuthorizedEvidence,
+                     manifest: k.HistoryManifest) -> bool   # new after review
 
 @dataclass(frozen=True) HistoryDecision(record_id, record_kind, recorded_reason, match)
 @dataclass(frozen=True) HistorySelection(manifest, selector, resolved, selection, decisions,
@@ -183,7 +185,7 @@ the decisions in `ai_docs/handoffs/briefs/fix-t5a-int1.md`.
 |---|---|---|
 | F1 | `acquire_history_snapshot` rebuilds the proof for the CALLER: `history_access(store, manifest.workspace_id, access, clock=clock).build(history.selection)`, keeps the epoch check, and additionally requires the rebuilt proof to cover the manifest. The bundle stores that resolver, so every later `validate()` and every expiry check uses the caller's audience and the caller's clock. | `knowledge/snapshots.py:236-241` |
 | F2 | `select_history` runs the epoch read, both proofs, every row/scan read, the closure and the write inside one `store.transaction()`. Containment is `manifest ⊆ proof` **before** `put_knowledge`, the old `proof ⊆ broad` direction is kept beside it, and both proofs must carry the epoch captured at the start. | `knowledge/temporal.py:556-615`, `proof_covers_manifest` at `:502` |
-| F3 | `CurrentSelector` and `AtemporalSelector` gained `known_at: Instant | None = None`; `pinned_selector` binds the resolved cutoff unconditionally; `validate_knowledge_cutoff` now proves the agreement for all six modes. Plan section 4 note and Decision 1 above corrected. | `knowledge/model.py:1206,1238`, `knowledge/temporal.py:409-421` |
+| F3 | `CurrentSelector` and `AtemporalSelector` gained `known_at: Instant | None = None`; `pinned_selector` binds the resolved cutoff unconditionally; `validate_knowledge_cutoff` now proves the agreement for all six modes. `Record.identity_parts` omits a null `known_at` at any depth so the new field renames no stored record (see below). Plan section 4 note and Decision 1 above corrected. | `knowledge/model.py:115-143,1224,1256`, `knowledge/temporal.py:409-421` |
 | F4 | `HistoryManifest` and `ConflictSet` moved to `bookkeeping`, beside `QuerySnapshot`/`SnapshotReference`. A historical read is no longer fenced by a running rebuild's build lease and no longer advances `content_epoch`. | `store/authorization.py:143-161` |
 | F5 | The compare test is renamed `..._rejects_a_compare_selector_and_asks_for_one_manifest_per_side`, documents that both fixture sides *are* pinned, and asserts the remedy in the error text. No behavior change. | `tests/unit/test_temporal_evidence.py` |
 | F6 | The generation's `GenerationMember` scan and the purge barrier are resolved once per collection pass (the barrier cached per workspace, since one pass can span workspaces) and only when a durable history pin actually asks. `_snapshot_reaches` became `_history_reaches`; the `sources` fast path moved into the loop, so a pass with no history pin does no extra scan at all. | `store/snapshots.py:207-251` |
@@ -191,6 +193,32 @@ the decisions in `ai_docs/handoffs/briefs/fix-t5a-int1.md`.
 | F8 | `unavailable = earliest is not None and resolved.known_at < earliest`. An authorized audience with zero retained rows gets an empty manifest, proven 0 / contextual 0, and no code. | `knowledge/temporal.py:566` |
 | F9 | `purged_history_evidence(manifest_id, *, workspace_id, access)`. Per the orchestrator's decision, an unknown manifest, a foreign workspace and an audience that cannot prove the manifest all raise the same `SnapshotUnavailable`, so the markers are no oracle and existing raise-on-unknown behavior is unchanged. The gate is the manifest's revisions **minus** the purged ones: a purge removes exactly the rows the markers describe from every proof, so `manifest ⊆ proof` would deny precisely when markers exist. Residual, recorded deliberately: when *every* manifest revision is purged the gate is vacuous, so any caller holding that manifest ID learns which revisions it named — the ID is itself derived from those contents. A request path exposing markers must still audience-check first. | `store/snapshots.py:174-205` |
 | F10 | Decision 1 corrected above; the open-findings count reconciled to three (the fourth item was scope); the plan section 4 note amended. T5A6's stale EVIDENCE line and its CHECK line are the orchestrator's to refresh — the CHECK line should also cover `src/hippo/store/authorization.py` now. | this file, plan section 4 |
+
+### F3: the identity hazard the brief's option (a) did not cover
+
+`QuerySnapshot.identity_fields` contains `temporal` as a *nested model*, and
+`Record.canonical_id` recomputes the identity from `model_dump(mode="json")` on every load
+(`store/knowledge.py:379` rehydrates with `model_validate_json`). Adding `known_at` therefore put
+`"known_at": null` into the canonical parts of every current/atemporal snapshot, and a row written
+before this change raised `Stored identity key disagrees with canonical record fields` on load.
+`context.py:230,372` writes exactly those rows on every managed-source query, so an upgraded store
+that had run managed ingestion would have failed its next collection walk. Reported to the
+orchestrator, who chose the carve-out: `Record.identity_parts` drops a `known_at` whose value is
+`None` at any depth of the canonical parts. An unset cutoff is an absence, not a value; a pinned
+one still changes the identity.
+
+Proof, `tests/unit/test_knowledge_contracts.py::test_an_unset_knowledge_cutoff_keeps_the_identity_its_record_was_stored_with`:
+a `QuerySnapshot` JSON string captured from the tree at `043ca51` (before the field existed)
+rehydrates to `querysnapshot-ceb92845…` and compares equal to a freshly built one; pinning
+`known_at` on either implicit mode changes the ID.
+
+Scope of the carve-out: it also drops a null `known_at` from `as_of`/`during`/`changes`/`compare`
+selectors, which *did* carry the null before. No persisted row is affected, because the only two
+writers of a `QuerySnapshot.temporal` are `acquire_query_snapshots` (a bare `CurrentSelector()`)
+and `acquire_history_snapshot` (a pinned selector, whose `known_at` is always bound);
+`HistoryManifest` stores its selector as text, so its identity never saw the difference. A
+narrower rule keyed on the two modes was considered and rejected as a mode-dependent identity rule
+for no practical gain.
 
 ### F4: which other records could be misclassified
 

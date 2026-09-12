@@ -877,6 +877,52 @@ def test_history_manifest_requires_sorted_unique_ids_and_keeps_open_selectors():
             history_manifest(m, **{field: value})
 
 
+# Captured from a store at 043ca51, before `known_at` existed on `CurrentSelector`.
+LEGACY_CURRENT_SNAPSHOT = (
+    '{"id":"querysnapshot-ceb92845ec3ba826dbfbed926e06e11e937c0327b91f88b027cb706ed87b2ee3",'
+    '"identity_key":"[\\"w\\",[],[],null,\\"2026-05-12T00:00:00Z\\",'
+    '{\\"mode\\":\\"current\\",\\"snapshot_id\\":null,\\"timezone\\":\\"UTC\\"},\\"p\\",\\"s\\",\\"acl\\",0]",'
+    '"workspace_id":"w","sources":[],"history_manifest_ids":[],"link_generation_id":null,'
+    '"knowledge_cutoff":"2026-05-12T00:00:00Z",'
+    '"temporal":{"timezone":"UTC","snapshot_id":null,"mode":"current"},'
+    '"profile_fingerprint":"p","settings_fingerprint":"s","policy_fingerprint":"acl",'
+    '"suppression_epoch":0,"created_at":"2026-05-12T00:00:00Z"}'
+)
+
+
+def legacy_snapshot_fields(m):
+    pinned_at = datetime(2026, 5, 12, tzinfo=UTC)
+    return dict(
+        workspace_id="w",
+        sources=(),
+        knowledge_cutoff=pinned_at,
+        temporal=m.CurrentSelector(),
+        profile_fingerprint="p",
+        settings_fingerprint="s",
+        policy_fingerprint="acl",
+        suppression_epoch=0,
+        created_at=pinned_at,
+    )
+
+
+def test_an_unset_knowledge_cutoff_keeps_the_identity_its_record_was_stored_with():
+    """Null and absent are one value: adding the field renames nothing already written."""
+    m = model()
+    pinned_at = datetime(2026, 5, 12, tzinfo=UTC)
+    fields = legacy_snapshot_fields(m)
+    stored = m.QuerySnapshot.model_validate_json(LEGACY_CURRENT_SNAPSHOT)
+    fresh = m.QuerySnapshot(**fields)
+
+    assert stored == fresh
+    assert stored.id == "querysnapshot-ceb92845ec3ba826dbfbed926e06e11e937c0327b91f88b027cb706ed87b2ee3"
+    assert '"known_at"' not in fresh.identity_key
+    assert m.QuerySnapshot(**(fields | {"temporal": m.AtemporalSelector()})).id != fresh.id
+    for pinned in (m.CurrentSelector(known_at=pinned_at), m.AtemporalSelector(known_at=pinned_at)):
+        snapshot = m.QuerySnapshot(**(fields | {"temporal": pinned}))
+        assert snapshot.id != fresh.id
+        assert '"known_at":"2026-05-12T00:00:00Z"' in snapshot.identity_key
+
+
 def test_every_pinned_selector_mode_carries_the_knowledge_cutoff_it_was_resolved_at():
     m = model()
     later = NOW + timedelta(days=1)
