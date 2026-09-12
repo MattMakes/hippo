@@ -12,7 +12,7 @@ from hippo.hipporag.indexer import Chunk, index_source
 from hippo.knowledge.access import AuthorizationChanged
 from hippo.knowledge.public_errors import OPERATION_FAILED
 from hippo.knowledge.replay import view_fingerprint
-from hippo.mcp_server import DENIED
+from hippo.mcp_server import DENIED, DENIED_CODE
 from hippo.web.routes import api
 
 QUESTION = "Who designed the Orion arm?"
@@ -98,7 +98,9 @@ def test_model_failure_releases_graph_and_revocation_wins(observed, monkeypatch,
     elif surface.startswith("mcp"):
         with pytest.raises(ToolError) as raised:
             invoke(surface, ctx)
-        expected = DENIED if revoke else f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message}"
+        expected = (
+            f"{DENIED_CODE}: {DENIED}" if revoke else f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message}"
+        )
         assert str(raised.value) == expected
         assert "model failed" not in str(raised.value)
     else:
