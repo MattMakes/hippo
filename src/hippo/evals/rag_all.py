@@ -21,7 +21,7 @@ from ..context import AppContext
 from ..hipporag.indexer import index_source, passage_id
 from ..ingest.chunker import chunk_documents
 from ..ingest.readers import read_path
-from ..knowledge.query_access import query_session
+from ..knowledge.dense_session import retrieval_session
 from .metrics import passage_evidence_metrics
 
 SLICES = (
@@ -383,7 +383,9 @@ def evaluate(fixture: Fixture, ctx: AppContext, *, split: str, model_profile: st
             row.update(status="coverage_gap", missing_capabilities=list(dict.fromkeys(missing)))
         else:
             principal = fixture.manifest["principals"][q["principal"]]
-            with query_session(
+            # One owner per question, dispatched for dense retrieval before the search runs:
+            # the candidates below are read from the same activated view that ranked them.
+            with retrieval_session(
                 ctx, Access(rank=principal["legacy_rank"]), settings={"retrieval_top_k": 20}
             ) as session:
                 trace = search(
