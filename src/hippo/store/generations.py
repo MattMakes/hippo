@@ -71,16 +71,33 @@ class GenerationQueries:
         `IndexEvent` -- and a staging or failed generation leaves its source serving
         exactly the legacy graph it was already serving.
 
-        A pure read of the row plus the published events: no lock and no clock, so a query
+        A tombstone is the third term, and the only one that is not about publication. A
+        source tombstoned part way through its conversion has no pointer and no published
+        event, so publication alone would leave it serving its legacy graph -- but the
+        managed lane owns it for dispatch (it is `managed`), its suppression is enforced
+        where managed evidence is authorized, and legacy rows are not evidence. Withdrawn
+        means withdrawn: it serves neither lane. Only an all-principals suppression is
+        readable from a row; a principal-specific one stays the access layer's decision,
+        as it is for any legacy source.
+
+        A pure read of the row and the rows naming it: no lock and no clock, so a query
         path may call it per source. The pointer clause answers every published source
-        without touching the event rows.
+        without touching either table.
         """
         if not source_row or source_row.get("active_generation_id"):
             return False
         source_id = source_row.get("id")
-        return not any(
+        if any(
             event.kind == "published" and event.aggregate_id == source_id
             for event in self._knowledge_rows("IndexEvent")
+        ):
+            return False
+        return not any(
+            row.target_kind == "source"
+            and row.target_id == source_id
+            and row.all_principals
+            and row.workspace_id == source_row.get("workspace_id")
+            for row in self._knowledge_rows("Suppression")
         )
 
     def _source_fields(self, source_id, **fields):

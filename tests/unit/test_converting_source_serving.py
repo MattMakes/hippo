@@ -386,3 +386,19 @@ def test_a_ladybug_reopen_during_staging_still_serves_legacy(tmp_path):
         ]
     finally:
         reopened.close()
+
+
+def test_a_source_tombstoned_mid_conversion_appears_in_neither_lane(code_index):
+    """CD2: a denied or tombstoned source appears in neither lane, converting or not."""
+    from tests.unit.test_managed_source_inventory import tombstone
+
+    ctx, source = code_index
+    stage(ctx.store, source, profile=ctx.ollama.embed_model, vector=embed_text(MANAGED_TEXT))
+
+    tombstone(ctx.store, source)
+
+    view = source_view(ctx, EVERYTHING)
+    assert row_of(view, source) is None
+    assert source not in view.legacy_ids
+    assert not [row for row in view.graph.passages if row.source_id == source]
+    assert not search(ctx, CODE_QUESTION).passages

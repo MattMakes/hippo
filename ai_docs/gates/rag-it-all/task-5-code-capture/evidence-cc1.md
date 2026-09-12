@@ -14,10 +14,24 @@ orchestrator's rulings recorded below.
 def source_serves_legacy(self, source_row) -> bool: ...
 ```
 
-True iff the source row has no `active_generation_id` and no published `IndexEvent`
-(`kind="published"`, `aggregate_id` = the source). A pure read: no lock, no clock, no
-transaction. The pointer clause short-circuits before the event scan, so a published source
-never touches the event rows.
+True iff the source row has no `active_generation_id`, no published `IndexEvent`
+(`kind="published"`, `aggregate_id` = the source), and no all-principals `Suppression`
+targeting it in its workspace. A pure read: no lock, no clock, no transaction. The pointer
+clause short-circuits before either scan, so a published source touches neither table.
+
+The third term is **ruling 9's amendment**, settled after the shape-(b) rework. Plan ruling 8
+has a tombstoned converting source present "as managed for dispatch, in neither serving lane",
+and publication alone could not express that: a source tombstoned part way through its
+conversion has no pointer and no published event, so it stayed in the legacy lane and kept
+serving. Its suppression is enforced where managed evidence is authorized
+(`knowledge/access.py:273-282`), and legacy rows are not evidence, so nothing else withdrew it.
+With the term, such a source leaves the legacy lane, and the managed lane shows nothing for it:
+no pointer, so no pair, and no authorized evidence. The orchestrator chose this shape over
+subtracting suppressed ids at the three lane sites, so all three call sites stay unchanged and
+blocker A keeps its one narrow predicate. Only an all-principals suppression is readable from a
+row (`Suppression.all_principals` defaults to `True`, so every tombstone is one); a
+principal-specific suppression stays the access layer's decision, as it is for any legacy
+source.
 
 The `managed` flag is **not** a term of the predicate. Per review blocker B2 and the
 orchestrator's shape-(b) ruling, that flag keeps its existing meaning — "the managed lane owns
@@ -70,7 +84,7 @@ unchanged.
 
 ## New tests — `tests/unit/test_converting_source_serving.py`
 
-13 tests. Staging is written directly under a claimed fenced build (the plan's sanctioned
+14 tests. Staging is written directly under a claimed fenced build (the plan's sanctioned
 alternative to the coordinator's detached preparation); the legacy side of the serving tests is
 the real `code_index` fixture, indexed through the production pipeline.
 
@@ -87,6 +101,8 @@ the real `code_index` fixture, indexed through the production pipeline.
   unchanged audience `stats`.
 - Publication: the pair appears, exactly the generation's passage serves, no legacy passage or
   code node does, the row becomes the managed presentation, and the source leaves `legacy_ids`.
+- Tombstone: a source tombstoned mid-conversion appears in neither lane -- no inventory row, not
+  in `legacy_ids`, no passage in the held graph, and `search` returns nothing (ruling 8).
 - A held legacy session is refused (`AuthorizationChanged`) once the conversion starts, from the
   staging-start authorization-epoch bump.
 - Ladybug: a close/reopen mid-staging keeps the legacy lane, the staging status and both rows
@@ -104,11 +120,12 @@ not at module level.
 | --- | --- | --- | --- |
 | Baseline (before any change) | activation regression + `test_prose_generation.py test_generation_store.py test_structural_loading.py`, `-W error` + form (b) | 362 passed, 2 skipped | `/tmp/hippo-cc1-baseline.log` |
 | RED | `HIPPO_TEST_STORE=fake ... tests/unit/test_converting_source_serving.py -q -o addopts='' -W error` | 11 failed, 1 skipped | `/tmp/hippo-cc1-red.log` |
-| **CD2 (exact CHECK line)** | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_converting_source_serving.py tests/unit/test_managed_source_inventory.py tests/unit/test_status_access.py tests/unit/test_structural_loading.py -q -o addopts='' -W error` | **105 passed, 2 skipped** | `/tmp/hippo-cc1-cd2-fake.log` |
-| Wider Fake regression | CD2 files + `test_managed_route_activation.py test_managed_web_surfaces.py test_managed_web_ingress.py test_prose_generation.py test_generation_store.py`, form (b) | 374 passed, 3 skipped | `/tmp/hippo-cc1-regression4.log` |
-| Coordinator suite (brief requirement 3) | `HIPPO_TEST_STORE=fake ... tests/unit/test_managed_pipeline_activation.py`, form (b) | 106 passed, 2 skipped, **unchanged** | `/tmp/hippo-cc1-activation-fake.log` |
+| RED (tombstone, ruling 9) | same command, `-k tombstoned` | 1 failed: the row was still present and still in `legacy_ids` | `/tmp/hippo-cc1-tombstone.log` |
+| **CD2 (exact CHECK line)** | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_converting_source_serving.py tests/unit/test_managed_source_inventory.py tests/unit/test_status_access.py tests/unit/test_structural_loading.py -q -o addopts='' -W error` | **106 passed, 2 skipped** | `/tmp/hippo-cc1-cd2-fake.log` |
+| Wider Fake regression | CD2 files + `test_managed_route_activation.py test_managed_web_surfaces.py test_managed_web_ingress.py test_prose_generation.py test_generation_store.py test_managed_pipeline_activation.py`, form (b) | 481 passed, 5 skipped | `/tmp/hippo-cc1-regression-final.log` |
+| Coordinator suite (brief requirement 3) | `HIPPO_TEST_STORE=fake ... tests/unit/test_managed_pipeline_activation.py`, form (b) | 106 passed, 2 skipped, **unchanged** (also inside the sweep above) | `/tmp/hippo-cc1-activation-fake.log` |
 | Other `source_view` consumers | `test_inventory_snapshot_lifetime.py test_managed_transport_activation.py test_settings_and_safety.py test_web_analyze.py test_web_auth.py test_web_base.py test_web_library_evals.py test_mcp_server.py`, form (b) | 178 passed | `/tmp/hippo-cc1-consumers-fake.log` |
-| Ladybug — new file | `HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_converting_source_serving.py -q -o addopts='' -W error` | **13 passed** (includes the reopen assertion) | `/tmp/hippo-cc1-ladybug-new.log` |
+| Ladybug — new file | `HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_converting_source_serving.py -q -o addopts='' -W error` | **14 passed** (includes the reopen and tombstone assertions) | `/tmp/hippo-cc1-ladybug-new.log` |
 | Ladybug — prose reopen | `HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_prose_generation.py -k reopen -q -o addopts='' -W error` | 1 passed, 66 deselected | `/tmp/hippo-cc1-ladybug-prose.log` |
 | Ruff | `check` + `format --check` on every changed file and this document | clean | — |
 
@@ -128,13 +145,14 @@ alongside the other build controls (`test_managed_pipeline_activation.row_of` an
 2. **A converting source's lane and its controls now disagree by design.** Its inventory row is
    the legacy presentation while `row["managed"]` is `True`. That is the two-meanings split B2
    describes, and it is what keeps the cleanup guards armed.
-3. **`source_serves_legacy` is a per-source `IndexEvent` scan.** It is called once per source in
+3. **`source_serves_legacy` reads two whole tables per source.** It is called once per source in
    `_build_managed_graph`, `_build_structural_graph` and `source_view`, and every source without
-   an active pointer reads the whole `IndexEvent` table (one query per legacy source per graph
-   build on Ladybug and Neo4j). The classification it replaced was two whole-table scans in total.
+   an active pointer reads all of `IndexEvent` and then all of `Suppression` (two queries per
+   legacy source per graph build on Ladybug and Neo4j; the `Suppression` read is ruling 9's
+   amendment). The classification it replaced was two whole-table scans in total, not per source.
    Correct but unscoped, and squarely CC2's mandate (generation-scoped store reads, gate CD1):
    CC2 should parameterise this alongside `_native_rows`/`_knowledge_rows`, or the lane sites
-   should read one published-source set built per graph build.
+   should build one published-and-suppressed source set per graph build.
 4. **CD2's criteria should gain the destructive-operation line** the review asks for ("an
    actorless delete, reindex or bulk reindex of a converting source refuses rather than clearing
    it"). CC1 proves the three store-level refusals; the `pipeline`-level refusals
