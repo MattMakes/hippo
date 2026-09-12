@@ -240,6 +240,15 @@ def test_a_sql_file_keeps_line_windows_and_names_the_objects_they_declare(api):
     assert window.extract_text == ""
 
 
+def test_a_tree_with_no_code_graph_at_all_keeps_line_windows(api):
+    results = [provenance(CONFIG, "package.json"), provenance(ORDERS)]
+    settings = api.CodeChunkSettings(size_chars=200, overlap_chars=0)
+    prepared = api.prepare_code_chunks(results, facts=None, settings=settings, max_chunks=20_000)
+    assert prepared.to_chunks() == legacy(results, None, size=200, overlap=0)
+    assert {chunk.kind for chunk in prepared.chunks} == {"window"}
+    assert all(not chunk.defines and chunk.symbol_id is None for chunk in prepared.chunks)
+
+
 def test_an_unparsed_config_file_keeps_todays_line_windows(api):
     results = [provenance(CONFIG, "package.json")]
     prepared, code = prepare(api, results)
@@ -292,6 +301,19 @@ def test_a_commit_passage_is_generated_from_its_commit_record_alone(api):
     assert type(segment) is api.CommitSegment
     assert segment.rule_id == api.CODE_COMMIT_RULE and segment.text == first.text
     assert first.commit_sha == "0" * 40 and first.requires_view is True
+
+
+def test_a_commit_with_no_message_and_nothing_touched_is_an_empty_passage(api):
+    results = [provenance(ORDERS)]
+    code = history(graph_of(units_of(results)), count=1)
+    code.commits[0]["message"] = ""
+    code.modifies = []
+    prepared, _ = prepare(api, results, facts=code)
+    assert [chunk.to_chunk() for chunk in prepared.chunks] == legacy(results, code)
+    (commit,) = [chunk for chunk in prepared.chunks if chunk.kind == "commit"]
+    assert commit.title == "commit 0000000000: 0000000000" and commit.text == ""
+    assert commit.retrieval_segments == () and commit.segment_dependencies == ()
+    assert render(commit) == "" and commit.requires_view is True
 
 
 def test_commit_passages_come_last_and_keep_the_ordinal_run(api):

@@ -126,12 +126,12 @@ none was made.
 | --- | --- | --- | --- |
 | Baseline before RED | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_ingest_chunker.py tests/unit/test_managed_chunk_provenance.py tests/unit/test_code_provenance.py -q -o addopts='' -W error` | 163 passed | `/tmp/hippo-cc5-baseline.log` |
 | RED | the new test file | 1 failed, 30 errors, `ModuleNotFoundError: No module named 'hippo.ingest.prepared_code_chunks'` | `/tmp/hippo-cc5-red.log` |
-| GREEN, CD4 command | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_prepared_code_chunks.py tests/unit/test_ingest_chunker.py -q -o addopts='' -W error` | **93 passed** | `/tmp/hippo-cc5-cd4.log` |
+| GREEN, CD4 command | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_prepared_code_chunks.py tests/unit/test_ingest_chunker.py -q -o addopts='' -W error` | **95 passed** | `/tmp/hippo-cc5-cd4.log` |
 | GREEN, downstream | the CD4 files plus `test_managed_chunk_provenance.py test_code_provenance.py test_repo_capture.py test_ingest_readers.py test_layering.py test_managed_reader_provenance.py` | 337 passed | `/tmp/hippo-cc5-green.log` |
 | GREEN, consumers | `tests/unit/test_ingest_pipeline.py tests/unit/test_codegraph.py` | 122 passed | `/tmp/hippo-cc5-pipeline.log` |
 | Seeded parity alone | `tests/unit/test_prepared_code_chunks.py::test_two_thousand_seeded_units_match_the_committed_chunker` | 1 passed; 2,200 seeded files in 50 sources yield 2,118 units, the other 82 being the binary and empty refusals the generator also produces | `/tmp/hippo-cc5-seeded.log` |
 
-Per file: `test_prepared_code_chunks.py` 32 passed.
+Per file: `test_prepared_code_chunks.py` 34 passed.
 
 The CD4 CHECK line as the ledger spells it runs from `/Users/mascott/projects/hippo`; the command
 above is byte-identical but was run from `.worktrees/cc5`, so the gate checker's own run passes only
@@ -158,7 +158,8 @@ Ruff, over both files changed and over this document:
 | exact original line ranges plus explicitly marked generated segments | `test_every_chunk_reconstructs_from_its_own_segments`, `test_originals_close_over_every_declared_dependency`, `test_a_carriage_return_file_marks_each_line_join_as_generated` |
 | the context header | `test_a_header_places_one_generated_placeholder_per_member`, `test_every_placeholder_depends_on_lines_inside_the_member_it_stands_for` |
 | data-object mention passages | `test_a_sql_file_keeps_line_windows_and_names_the_objects_they_declare` — see finding 1: the committed chunker synthesizes no mention *text* |
-| commit passages | `test_a_commit_passage_is_generated_from_its_commit_record_alone`, `test_commit_passages_come_last_and_keep_the_ordinal_run`, `test_a_commit_that_touched_many_symbols_says_what_was_cut` |
+| commit passages | `test_a_commit_passage_is_generated_from_its_commit_record_alone`, `test_commit_passages_come_last_and_keep_the_ordinal_run`, `test_a_commit_that_touched_many_symbols_says_what_was_cut`, `test_a_commit_with_no_message_and_nothing_touched_is_an_empty_passage` |
+| a tree with no code graph at all, and an unparsed file, keep line windows | `test_a_tree_with_no_code_graph_at_all_keeps_line_windows`, `test_an_unparsed_config_file_keeps_todays_line_windows`, `test_an_extensionless_text_file_goes_through_the_reviewed_prose_lane` |
 | oversized bodies split at statement boundaries as today | `test_an_oversized_body_splits_at_statement_boundaries_as_today` |
 | a chunk byte-identical to one original region carries no generated segment | `test_a_pure_line_feed_body_is_one_original_region_with_nothing_generated`, `test_a_passage_that_is_exactly_its_source_lines_needs_no_view` |
 | remapped, rich and already-derived inputs reject | `test_a_remapped_unit_is_explicitly_unsupported`, `test_an_input_that_is_not_captured_code_is_rejected`, `test_two_inputs_claiming_one_logical_path_are_rejected` |
@@ -194,8 +195,9 @@ Ruff, over both files changed and over this document:
    and for any symbol passage whose lines name it. `PreparedCodeChunk.data_object_ids` carries that
    set so CC6 can write `DEFINED_IN` without re-deriving it, and `kind="data_object"` names the
    `.sql` **branch**, so a `.sql` window whose lines mention nothing still carries that kind.
-2. **`extract_text` is carried for parity but is not mapped to originals.** `title_dependencies` and
-   `extraction_segments` are empty for every code kind. A symbol passage's `extract_text` is
+2. **`extract_text` is carried for parity but is not mapped to originals.** `PreparedChunk`'s
+   `extraction_segments` field is deliberately **not** carried on `PreparedCodeChunk`, and
+   `title_dependencies` is empty for every code kind. A symbol passage's `extract_text` is
    `symbol.doc`, the walker's cleaned docstring, which is not a verbatim slice of any line range.
    Plan section 4 says code files record `openie: "skipped"` and produce no `ProseExtraction`, so
    nothing in the managed lane needs that mapping — but it is a live legacy/managed difference: the
