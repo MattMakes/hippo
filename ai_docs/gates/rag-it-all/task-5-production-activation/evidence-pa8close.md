@@ -228,7 +228,7 @@ the `mcp==2.1.1` pin) because the merge brought new modules.
 PA2 and PA5 gain a further test each over the pre-merge numbers, and PA6 six, from the merged
 CC1 fix's own tests; the six failures are gone.
 
-### Ladybug: 5 failed, 135 passed — and none of the five is this batch's
+### Ladybug: BLOCKED BY A BASE REGRESSION — 5 failed, 135 passed, none of them this batch's
 
 `HIPPO_TEST_STORE=ladybug`, the two files the brief names, verbatim, bare `-W error`:
 **5 failed, 135 passed in 1293.02s**, `/tmp/hippo-pa8close-ladybug-2.log`. A first run over
@@ -269,8 +269,18 @@ Every one has the same shape: the managed build does not publish, so the Source 
 exception=UnicodeDecodeError` (and `exception=ValueError` on the refresh cases). This is the
 **Ladybug lane only** — PA1, PA3 and PA5 run these same files on Fake and are green.
 
-Reported to the orchestrator. **PA7's ledger line names this file on Ladybug, so PA7 cannot be
-recorded until it is fixed**, and the fix is in store/ingest territory this brief forbids.
+Reported to the orchestrator, who confirmed it is not this batch's and spawned a dedicated fix
+worker for it (store/context territory). **This batch's Ladybug result is therefore recorded as
+BLOCKED BY A BASE REGRESSION, not as a pass and not as a failure of this work.** PA7's ledger
+line names this file on Ladybug, so PA7 cannot be recorded until the fix lands.
+
+The three logs a re-reviewer needs, in the order they were produced:
+
+| Log | What it is |
+|---|---|
+| `/tmp/hippo-pa8close-ladybug-2.log` | The full lane at `779d8c7`: 5 failed, 135 passed in 1293.02s |
+| `/tmp/hippo-pa8close-ladybug-subset.log` | The same five alone at `779d8c7`: 5 failed, 105 deselected — not an ordering artifact |
+| `/tmp/hippo-pa8close-ladybug-basecheck.log` | The same five with both touched files from `013317f`: 5 failed, 103 deselected — not this batch |
 
 ### Ruff
 
