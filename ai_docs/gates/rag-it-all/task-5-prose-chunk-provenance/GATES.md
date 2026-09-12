@@ -24,3 +24,5 @@ API: `prepare_prose_chunks(documents, *, size_chars, overlap_chars) -> tuple[Pre
 Materialization consumes `PreparedChunk.originals`: each `PreparedOriginal(unit_key, lines)` carries the exact OriginalLines text/locator and internal character bounds. The full `original_units` remain mapping context and must not be substituted for this minimal closure. `requires_view` is true for generated separators, changed text or multiple original dependencies. Code, history, rich readers and existing transformed input mappings fail explicitly in this new API. Existing legacy callers retain their current dispatch.
 
 No complete Task 5 chunk/parser or storage-binding parity is claimed by this bounded prose slice.
+
+Independent adaptive review: SPEC PASS / QUALITY PASS. The reviewer ran all 187 focused cases with warnings treated as errors, Ruff and formatting, plus 2,000 seeded comparisons against the committed legacy chunker covering headings, repeated text, Unicode, Python splitlines whitespace, sizes and overlap. No findings.
