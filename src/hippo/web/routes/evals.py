@@ -97,6 +97,7 @@ def evals_page(request: Request, source: str = "", error: str = ""):
         runs=_service(request).list_runs(),
         error=error,
         cards=SUMMARY_CARDS,
+        public_reason=public_reason,
     )
 
 
@@ -108,7 +109,12 @@ def evals_tables_partial(request: Request):
     runs = _service(request).list_runs()
     busy = any(qs["status"] == "generating" for qs in sets) or any(r["status"] == "running" for r in runs)
     return render(
-        request, "partials/evals_tables.html", sets=sets, runs=runs, status_code=200 if busy else STOP_POLLING
+        request,
+        "partials/evals_tables.html",
+        sets=sets,
+        runs=runs,
+        status_code=200 if busy else STOP_POLLING,
+        public_reason=public_reason,
     )
 
 

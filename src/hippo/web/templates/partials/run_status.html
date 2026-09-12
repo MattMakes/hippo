@@ -2,7 +2,7 @@
   <span class="pill warn"><span class="dot"></span>running {{ r.progress_done }}/{{ r.progress_total }}</span>
   <div class="progress"><span style="width: {{ r.progress_done | pct(r.progress_total) }}%"></span></div>
 {% elif r.status == 'failed' %}
-  <span class="pill bad" title="{{ r.error }}"><span class="dot"></span>failed</span>
+  <span class="pill bad" title="{{ public_reason(r.failure_code) }}"><span class="dot"></span>failed</span>
 {% else %}
   <span class="pill ok"><span class="dot"></span>done</span>
 {% endif %}

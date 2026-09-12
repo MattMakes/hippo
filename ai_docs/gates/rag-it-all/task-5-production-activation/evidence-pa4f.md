@@ -227,6 +227,40 @@ dispatch shows up in `record.dispatched` with no second patch point, and the dis
 other change: the promoted rule's borrow branches do not apply to it, and nothing about its behaviour
 moves. The one-liner is purely about observability.
 
+## Decision 5 (completed separately)
+
+Done by worker `sonnet-4`, root tree, no commit (the orchestrator commits). Files: `src/hippo/evals/rag_all.py:24,388`, `tests/unit/test_managed_eval_activation.py` (one new test).
+
+**Change.** `rag_all.py:24` now reads `from ..knowledge import dense_session`, and `:388` calls
+`dense_session.retrieval_session(...)` instead of the import-time-bound name, exactly as proposed
+above. `rag_all.py:388` still owns its session unchanged.
+
+**Test.** `test_the_static_evaluator_dispatches_dense_once_per_evaluated_question`
+(`tests/unit/test_managed_eval_activation.py`) loads the on-disk `tests/fixtures/rag_all` fixture
+(purely legacy per finding 5) with this file's conftest `ctx`, wraps it in `watch()`, and calls
+`rag_all.evaluate(fixture, ctx, split="dev", model_profile="fake-hash128-v1")`. It asserts
+`record.closed == record.acquired`, `len(record.acquired) == report["evaluated_count"]` (7 for the
+dev split), and `record.dispatched == ["tag_compatible"] * report["evaluated_count"]`.
+
+**Why `tag_compatible`, and why `verified` is untestable here.** `rag_all.evaluate` refuses a
+non-empty store (`rag_all.py:347`) and its own `_index` indexes strictly through
+`index_source`/`store.add_passages` — the plain legacy vector path that never writes a `Generation`
+row. So `_classification` always returns `(profile=None, tags=set(), legacy=True)` for this
+evaluator's own corpus: `strict` is always false (nothing passes `resolved_profile`, `spec`, or a
+profile), the graph is non-empty (it has real code/prose nodes), so `dense_session.py:256-270`'s
+`else` branch runs and reports `tag_compatible` from the legacy vectors' one consistent dimension.
+`verified` needs a `Generation` whose `embedding_mode` is `verified_v1`, which nothing in
+`rag_all.py` ever creates, and the empty-store precondition blocks pre-publishing one before
+`evaluate()` runs. Confirmed with the orchestrator (option (a)): one test, legacy fixture only, no
+second test that monkeypatches around the precondition — that would exercise `dense_session`'s
+existing, already-tested logic rather than anything specific to `rag_all`.
+
+RED: `/tmp/hippo-ragall-red.log` (`test_rag_eval.py`, `test_rag_eval_session.py`,
+`test_managed_eval_activation.py`, Fake, `-W error`) — 1 failed, 77 passed; the new test fails with
+`record.dispatched == []` because `watch()` cannot see the import-time binding. GREEN: same command,
+`/tmp/hippo-ragall-green.log` — 78 passed. Ruff `check` + `format --check` on both changed files:
+clean.
+
 ---
 
 ## Runs
@@ -349,3 +383,71 @@ edited, one assertion, reported to the orchestrator rather than assumed.
 * **`summarize`'s gold means still skip a failed question**, so a run of nothing but routing failures
   reports `accuracy: None` beside `errors: N`. That is the pre-existing and correct behaviour; it is
   recorded because the new `errors` card makes the pairing visible for the first time.
+
+## Addendum (completed separately by sonnet-4)
+
+Done in the root tree, no commit (the orchestrator commits). Resolves the two open findings above
+about `run_status.html`/`set_status.html` rendering the raw stored string, and the two remaining
+unbounded `log.exception` calls.
+
+**Files:** `src/hippo/web/templates/partials/run_status.html:5`,
+`src/hippo/web/templates/partials/set_status.html:5`, `src/hippo/web/routes/evals.py`
+(`evals_page`, `evals_tables_partial`), `tests/unit/test_web_busy_pages.py` (two assertions);
+`src/hippo/evals/question_maker.py:140-141`, `src/hippo/evals/runner.py:116-118`,
+`tests/unit/test_evals_question_maker.py` (one new test), `tests/unit/test_evals_runner.py` (one
+new test).
+
+**Public reason on the two list pages.** `run_status.html`'s and `set_status.html`'s failed-pill
+`title` now read `public_reason(r.failure_code)` / `public_reason(qs.failure_code)` instead of the
+raw `r.error` / `qs.error` — both fields `EvalAccess.get_run`/`get_question_set` already populate.
+`evals_page` and `evals_tables_partial` (`web/routes/evals.py`) now pass `public_reason=public_reason`
+into `render(...)`; both templates that include `run_status.html`/`set_status.html`
+(`evals.html`, `partials/evals_tables.html`, `eval_set.html`) already pass context down through
+`{% include %}` without `without context`, so no other route needed a change.
+`test_web_busy_pages.py::test_pages_render_while_a_run_is_running_or_after_it_failed` now asserts
+`"Operation failed"` is present and `"Ollama went away"` is absent from `/evals` and
+`/evals/sets/{set_id}`, replacing the old assertion that the raw string leaked through
+(the comment explaining *why* it used to leak is removed along with it).
+
+**Bounding the two remaining `log.exception` calls.** Both now compute the closed code first (as
+decision 3 already does) and log via `log.warning` with no `exc_info`, the identifiers available at
+each site, and `type(exc).__name__` — never the exception's `str()`:
+`question_maker.py:141`: `"Question generation failed: source=%s set=%s code=%s exception=%s"`;
+`runner.py:118`: `"Evaluation run failed: run=%s code=%s exception=%s"` (no per-question id exists
+at this scope — landing here means the store itself failed, not one question).
+
+Tests mirror decision 3's shape with a poisoned string
+(`"sk-live-DEADBEEF 'Acme Robotics is headquartered in Boulder.'"`):
+`test_evals_question_maker.py::test_a_failing_generation_logs_the_source_and_set_but_not_the_exception`
+monkeypatches `question_maker.shared_entity_pairs` to raise and asserts the source id, the set id and
+the closed code (`retrieval_rebuild_required`) and exception type name are present, the poison string
+is absent, and no record carries `exc_info`.
+`test_evals_runner.py::test_a_failing_run_logs_its_id_and_code_but_not_the_exception` calls `_run_all`
+directly (bypassing `ctx.jobs`, matching `test_saved_snapshot_retention.py`'s existing precedent for
+this function) and monkeypatches `runner.save_evaluation_result` to raise; asserted the same way.
+Calling `_run_all` directly matters: through `ctx.jobs.start`, `_run_all`'s `raise` after logging
+also reaches `hippo.jobs`'s own crash handler (`jobs.py:37`, `log.exception("Background job %s
+crashed", ...)`), which logs the full traceback including the poison text — a second, pre-existing
+leak outside every file this addendum owns, recorded below rather than fixed.
+
+RED: `/tmp/hippo-addendum2-red.log` (`test_evals_runner.py test_evals_question_maker.py`, Fake,
+`-W error`) — 2 failed (both new tests), 17 passed; the runner one additionally proves the pre-fix
+poison leak (`caplog.text` contained the full traceback via both `runner.py:118` and, through
+`ctx.jobs`, `jobs.py:37`). GREEN: same command, `/tmp/hippo-addendum2-green.log` — 19 passed.
+**Deviation:** the public-reason template swap (item 1) was made together with its test's two
+updated assertions rather than as a separate RED/GREEN pair — `/tmp/hippo-addendum1-red.log` is a
+single post-change run (`test_web_busy_pages.py test_web_library_evals.py`, Fake, `-W error` plus
+the sanctioned anyio filter) — 19 passed — not a failing-first capture. Ruff `check` +
+`format --check` on all eight touched files: clean. Broader sweep (`test_rag_eval.py
+test_rag_eval_session.py test_managed_eval_activation.py test_evals_runner.py
+test_evals_question_maker.py test_eval_access.py test_web_library_evals.py test_web_busy_pages.py
+test_managed_route_activation.py`, Fake, `-W error` plus the sanctioned anyio filter for the two
+module-level `TestClient` importers): `/tmp/hippo-addendum-sweep.log` — 184 passed.
+
+**New open finding, not fixed (out of scope for this addendum).** `hippo.jobs`'s background-job
+crash handler (`jobs.py:37`) logs the full exception traceback — including `str(exc)` — for any job
+that raises after its own internal logging, which now includes `_run_all` after decision 3/this
+addendum's line runs. This is pre-existing behaviour (the RED log above shows it firing before this
+addendum's change too) and applies to every background job, not just evaluation runs; fixing it is a
+`hippo.jobs`-level decision about whether background-job crashes may ever quote `str(exc)`, which is
+outside every file this slice or this addendum owns.

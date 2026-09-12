@@ -138,10 +138,18 @@ def generate_questions(
                 set_id, status="ready", stage="done", progress_done=total, progress_total=total
             )
         except Exception as exc:
-            log.exception("Question generation for source %s failed", source_id)
             # The closed code first, so the set page has a public reason to render; the rest
-            # of the string stays the operator's. See `eval_access.failure_code_of`.
+            # of the string stays the operator's. See `eval_access.failure_code_of`. Bounded
+            # like `runner._run_all`: the source and set ids locate it, the closed code says
+            # what happened, and neither the generated questions nor `str(exc)` are logged.
             code = (public_failure(exc) or OPERATION_FAILED).code
+            log.warning(
+                "Question generation failed: source=%s set=%s code=%s exception=%s",
+                source_id,
+                set_id,
+                code,
+                type(exc).__name__,
+            )
             store.update_question_set(
                 set_id, status="failed", stage="failed", error=f"{code}: {type(exc).__name__}: {exc}"
             )

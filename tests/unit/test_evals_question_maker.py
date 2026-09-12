@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
+from hippo.evals import question_maker
 from hippo.evals.question_maker import generate_questions, shared_entity_pairs, start_generation_job
 from hippo.hipporag.indexer import Chunk, index_source
+from hippo.knowledge.embedding_profile import EmbeddingProfileMismatch
 
 
 def index_sample(ctx, sample_text: str) -> str:
@@ -99,3 +103,28 @@ def test_source_without_passages_fails_cleanly(ctx):
 def test_unknown_source_is_an_error(ctx):
     with pytest.raises(ValueError):
         generate_questions(ctx, "nope")
+
+
+def test_a_failing_generation_logs_the_source_and_set_but_not_the_exception(
+    ctx, source_id, monkeypatch, caplog
+):
+    """The generation-failure log line is bounded the same way as the runner's per-question one."""
+    poison = "sk-live-DEADBEEF 'Acme Robotics is headquartered in Boulder.'"
+
+    def exploding(*args, **kwargs):
+        raise EmbeddingProfileMismatch(poison)
+
+    monkeypatch.setattr(question_maker, "shared_entity_pairs", exploding)
+    with caplog.at_level(logging.DEBUG, logger="hippo.evals.question_maker"):
+        with pytest.raises(EmbeddingProfileMismatch):
+            generate_questions(ctx, source_id)
+
+    sets = ctx.store.list_question_sets()
+    assert len(sets) == 1 and sets[0]["status"] == "failed"
+    assert caplog.records, "a failed generation must not fail silently either"
+    assert source_id in caplog.text
+    assert sets[0]["id"] in caplog.text
+    assert "retrieval_rebuild_required" in caplog.text
+    assert "EmbeddingProfileMismatch" in caplog.text
+    assert poison not in caplog.text
+    assert not [record for record in caplog.records if record.exc_info]

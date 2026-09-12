@@ -220,6 +220,38 @@ def test_a_failing_question_logs_its_id_and_code_but_neither_its_text_nor_the_ex
     assert not [record for record in caplog.records if record.exc_info]
 
 
+def test_a_failing_run_logs_its_id_and_code_but_not_the_exception(ctx, set_id, monkeypatch, caplog):
+    """The whole-run log line is bounded the same way as the per-question one.
+
+    Landing in `_run_all`'s own `except` means the store itself failed, not one question, so
+    there is no single question id to log -- but the exception is still private material and
+    must not reach the logger any more than a per-question failure would. Calls `_run_all`
+    directly rather than through `ctx.jobs`: the background job runner has its own crash
+    logger that reports the full traceback, which is `hippo.jobs`'s concern, not this line's.
+    """
+    from hippo.evals.runner import _run_all
+
+    run_id = ctx.store.create_run(set_id, "run", ctx.store.get_settings())
+    poison = "sk-live-DEADBEEF 'Acme Robotics is headquartered in Boulder.'"
+
+    def exploding_save(*args, **kwargs):
+        raise EmbeddingProfileMismatch(poison)
+
+    monkeypatch.setattr(runner, "save_evaluation_result", exploding_save)
+    with caplog.at_level(logging.DEBUG, logger="hippo.evals.runner"):
+        with pytest.raises(EmbeddingProfileMismatch):
+            _run_all(ctx, run_id, set_id, ctx.store.get_settings())
+
+    run = ctx.store.get_run(run_id)
+    assert run["status"] == "failed"
+    assert caplog.records, "a failed run must not fail silently either"
+    assert run_id in caplog.text
+    assert "retrieval_rebuild_required" in caplog.text
+    assert "EmbeddingProfileMismatch" in caplog.text
+    assert poison not in caplog.text
+    assert not [record for record in caplog.records if record.exc_info]
+
+
 def test_start_run_rejects_unknown_set(ctx):
     with pytest.raises(ValueError):
         start_run(ctx, "nope")

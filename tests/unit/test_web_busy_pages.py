@@ -70,13 +70,13 @@ def test_pages_render_while_a_run_is_running_or_after_it_failed(client, ctx):
     assert client.get("/evals").text.count("–") >= 5  # every empty metric cell is a dash, not a crash
 
     ctx.store.update_run(run_id, status="failed", error="Ollama went away")
-    # This set was created straight on the store, so it carries no owner metadata and
-    # `EvalAccess` leaves its `error` alone for an open audience -- which is why the raw string
-    # still reaches the two list pages through `partials/run_status.html`'s title attribute.
+    # `partials/run_status.html`'s title attribute renders the closed public reason too, the
+    # same as the run page, so the raw string never reaches either list page.
     for path in ("/evals", f"/evals/sets/{set_id}"):
         response = client.get(path)
         assert response.status_code == 200, path
-        assert "Ollama went away" in response.text, path
+        assert "Operation failed" in response.text, path
+        assert "Ollama went away" not in response.text, path
     # The run page reports the failure from the closed code instead, so a row written by the
     # runner (`"<code>: <private text>"`) says the same thing to every audience. A string with
     # no code prefix is still presenting a failure, so it takes the `operation_failed` sentence

@@ -32,6 +32,7 @@ from hippo import ask as ask_module
 from hippo.access import EVERYTHING
 from hippo.analysis.simulate import Overrides, simulate
 from hippo.codegraph.model import commit_id, symbol_id
+from hippo.evals import rag_all
 from hippo.evals import runner as runner_module
 from hippo.evals.question_maker import generate_questions, shared_entity_pairs
 from hippo.evals.runner import run_question, start_run
@@ -48,6 +49,7 @@ from tests.fakes.fake_ollama import DIM
 from tests.unit.test_dense_session import verified
 from tests.unit.test_managed_route_activation import watch
 from tests.unit.test_managed_source_inventory import empty_published
+from tests.unit.test_rag_eval import FIXTURE
 from tests.unit.test_staged_prose_writer import publish, setup, write
 from tests.unit.test_structural_loading import published, unembedded_code
 
@@ -375,6 +377,26 @@ def test_hidden_wrong_profile_evidence_cannot_change_evaluation_routing(ctx, tmp
     assert not [path for path, _ in added if path == "/api/show"], (
         "hidden verified evidence must not make the tag lane resolve a profile"
     )
+
+
+# --------------------------------------------------------------- static evaluator
+
+
+def test_the_static_evaluator_dispatches_dense_once_per_evaluated_question(ctx, monkeypatch):
+    """`rag_all.evaluate` is the third model/dense owner; its own fixture corpus is legacy-only.
+
+    `_index` writes plain legacy vectors through `index_source`, never a managed generation, so
+    the mode this dispatches is `tag_compatible` (a non-empty graph with no managed evidence),
+    not `legacy` (reserved for an empty graph) and never `verified` (which needs a generation
+    this evaluator's own indexing never creates).
+    """
+    fixture = rag_all.load_fixture(FIXTURE)
+    record = watch(ctx, monkeypatch)
+    report = rag_all.evaluate(fixture, ctx, split="dev", model_profile="fake-hash128-v1")
+    assert report["evaluated_count"] > 0
+    assert record.closed == record.acquired
+    assert len(record.acquired) == report["evaluated_count"]
+    assert record.dispatched == ["tag_compatible"] * report["evaluated_count"]
 
 
 # ------------------------------------------------------- graph-only evaluation owners

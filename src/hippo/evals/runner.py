@@ -115,8 +115,10 @@ def _run_all(
         )
     except Exception as exc:
         # run_question catches per-question trouble; landing here means the store itself failed.
-        log.exception("Eval run %s failed", run_id)
+        # Bounded like the per-question line below: the run's id locates it, the closed code
+        # says what happened, and neither the run's questions nor `str(exc)` are logged.
         code = (public_failure(exc) or OPERATION_FAILED).code
+        log.warning("Evaluation run failed: run=%s code=%s exception=%s", run_id, code, type(exc).__name__)
         store.update_run(
             run_id, status="failed", finished_at=now_iso(), error=f"{code}: {type(exc).__name__}: {exc}"
         )
