@@ -711,3 +711,212 @@ def test_the_source_dropdown_a_light_up_returns_comes_from_the_same_held_owner(c
         assert client.post("/api/graph/light-up", json={"question": QUESTION}).status_code == 200
     record.once()
     assert record.dispatched == ["tag_compatible"]
+
+
+# ------------------------------- 4e: a 4xx `detail` comes from an exact validator type
+
+
+# Every managed, retrieval and ingest failure is a `ValueError` *subclass*, and several of
+# them name a path or quote stored text by construction. `RepoError` stands for the whole
+# family here: it is a `ValueError` the closed table does not list, so a route that catches
+# `ValueError` by isinstance prints it, and a route that catches the exact validator type
+# hands it to the mapper.
+LEAKY_PATH = "/Users/someone/checkout/.git"
+
+
+def test_a_code_payload_value_error_subclass_is_mapped_rather_than_printed_as_a_400(
+    ctx, monkeypatch, code_index
+):
+    """`_answer`'s 400 is for the caller's own mistake, which is an exact `ValueError`.
+
+    `test_a_code_payload_failure_is_a_public_code_and_not_the_callers_fault` proves the
+    same thing for a subclass the closed table knows. This one uses a subclass it does
+    *not* know, which is what separates an exact-type catch from asking the table.
+    """
+    from hippo.ingest.repos import RepoError
+
+    context, _ = code_index
+
+    def refuse(*args, **kwargs):
+        raise RepoError(LEAKY_PATH)
+
+    monkeypatch.setattr(code_routes, "symbol_rows", refuse)
+    with web(context) as client:
+        response = client.get("/api/code/symbols?q=place")
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "error": "Operation failed; inspect local logs by operation ID",
+        "code": "operation_failed",
+    }
+    assert LEAKY_PATH not in response.text
+
+
+def test_a_blank_required_code_argument_is_still_the_callers_mistake(ctx, code_index):
+    """The exact-type catch must not take the 400 vocabulary with it."""
+    context, _ = code_index
+    with web(context) as client:
+        response = client.get("/api/code/blast-radius?symbol=%20")
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "symbol is required"
+
+
+@pytest.mark.parametrize(
+    "kind,status,code",
+    [("projection", 500, "operation_failed"), ("read", 400, "invalid_source")],
+    ids=["projection", "read"],
+)
+def test_a_settings_write_that_fails_is_mapped_rather_than_quoted_back_as_a_400(
+    ctx, monkeypatch, kind, status, code
+):
+    """`PUT /api/settings` answers the validator's own message and nothing else's.
+
+    The caller's numbers are refused with the store validator's sentence, which the plan
+    protects. Anything the *write* raises is a storage failure carrying whatever it was
+    reading, so it belongs to the closed table.
+    """
+    from hippo.ingest.readers import ReadError
+
+    failure = ProjectionError if kind == "projection" else ReadError
+
+    def refuse(changes):
+        raise failure(LEAKY_PATH)
+
+    monkeypatch.setattr(ctx.store, "update_settings", refuse)
+    with web(ctx) as client:
+        response = client.put("/api/settings", json={"damping": 0.6})
+    assert response.status_code == status, response.text
+    assert response.json()["code"] == code
+    assert LEAKY_PATH not in response.text
+
+
+def test_an_invalid_setting_keeps_the_store_validators_own_sentence(ctx):
+    """The one 4xx `detail` the plan protects: the caller's own number, named."""
+    with web(ctx) as client:
+        response = client.put("/api/settings", json={"damping": 9})
+    assert response.status_code == 400, response.text
+    assert "damping must be between" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("route", ["/api/ask", "/api/search"])
+def test_a_settings_precheck_failure_that_is_not_the_validator_is_mapped(ctx, monkeypatch, route):
+    """`checked_settings` guards the caller's numbers; it may not print a subclass's words."""
+    from hippo.web.routes import api as api_routes
+
+    def refuse(changes):
+        raise ProjectionError(LEAKY_PATH)
+
+    monkeypatch.setattr(api_routes, "validate_settings", refuse)
+    with web(ctx) as client:
+        response = client.post(route, json={"question": QUESTION, "settings": {"damping": 0.6}})
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "error": "Operation failed; inspect local logs by operation ID",
+        "code": "operation_failed",
+    }
+    assert LEAKY_PATH not in response.text
+
+
+@pytest.mark.parametrize("route", ["/api/ask", "/api/search"])
+def test_a_callers_own_bad_setting_is_still_a_400_naming_it(ctx, route):
+    with web(ctx) as client:
+        response = client.post(route, json={"question": QUESTION, "settings": {"damping": 9}})
+    assert response.status_code == 400, response.text
+    assert "damping must be between" in response.json()["detail"]
+
+
+# --------------------- 4e: an incoherent selection is a mapped failure on every transport
+
+
+# The real refusal `canonical_selected_generations` raises, driven through the real
+# function. `test_a_bare_selection_failure_is_operation_failed_not_a_client_error` above
+# patches the function out, so it cannot see the exception's type change; this drives it.
+TWO_GENERATIONS_FOR_ONE_SOURCE = (("source-1", "generation-a"), ("source-1", "generation-b"))
+
+
+def incoherent_selection(ctx, monkeypatch):
+    """Acquisition fails the way `GraphIndex.__post_init__` fails on an incoherent selection."""
+    from hippo.hipporag import graph_index
+
+    def refuse(*args, **kwargs):
+        return graph_index.canonical_selected_generations(TWO_GENERATIONS_FOR_ONE_SOURCE)
+
+    monkeypatch.setattr(ctx, "graph_for", refuse)
+
+
+def test_an_incoherent_selection_is_a_projection_failure_not_a_bare_value_error(ctx):
+    """The type is the fix: a bare `ValueError` is what every transport has to special-case."""
+    from hippo.hipporag.graph_index import canonical_selected_generations
+
+    with pytest.raises(ProjectionError):
+        canonical_selected_generations(TWO_GENERATIONS_FOR_ONE_SOURCE)
+    with pytest.raises(ProjectionError):
+        canonical_selected_generations(("not-a-pair",))
+
+
+def test_an_incoherent_selection_is_the_closed_body_on_a_route_that_holds_no_catch(ctx, monkeypatch):
+    """`/api/entities` composes a view and maps nothing of its own (4b-i).
+
+    Before the type changed this answered a code-less 500 from the server itself, which a
+    client cannot branch on and a page's JavaScript cannot read.
+    """
+    incoherent_selection(ctx, monkeypatch)
+    with web(ctx) as client:
+        response = client.get("/api/entities?q=orion")
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "error": "Operation failed; inspect local logs by operation ID",
+        "code": "operation_failed",
+    }
+
+
+def test_an_incoherent_selection_keeps_its_mapped_body_on_a_route_that_holds_one(ctx, monkeypatch):
+    """`/api/graph/full` already mapped it (4b-ii); the new type must not change that."""
+    incoherent_selection(ctx, monkeypatch)
+    with web(ctx) as client:
+        response = client.get("/api/graph/full")
+    assert response.status_code == 500, response.text
+    assert response.json()["code"] == "operation_failed"
+
+
+def test_an_incoherent_selection_reaches_an_mcp_code_tool_as_a_mapped_failure(ctx, monkeypatch):
+    """MCP renders an exact `ValueError`'s own words on purpose, so the type is what protects it.
+
+    `tool_failure` passes `type(exc) is ValueError` through verbatim for the closed input
+    validators. A bare `ValueError` from the selection therefore reached an MCP client as
+    its own internals; a `ProjectionError` is mapped by the closed table instead.
+    """
+    from hippo import mcp_server
+
+    incoherent_selection(ctx, monkeypatch)
+    with pytest.raises(ProjectionError) as raised:
+        mcp_server.blast_radius_tool(ctx, "anything")
+    assert str(mcp_server.tool_failure(raised.value)) == (
+        "operation_failed: Operation failed; inspect local logs by operation ID"
+    )
+
+
+# ----------------------------- 4e: one definition of the settings a query actually runs on
+
+
+def test_effective_settings_is_the_stored_knobs_under_the_callers_own(ctx):
+    """`query_session` and light-up's pre-validation must merge and validate identically.
+
+    Two copies of the same expression are only correct while they stay identical, and
+    nothing made them; this is the one definition both now call.
+    """
+    from hippo.knowledge.query_access import effective_settings
+
+    ctx.store.update_settings({"damping": 0.4})
+    assert effective_settings(ctx, None)["damping"] == 0.4
+    assert effective_settings(ctx, {"damping": 0.7})["damping"] == 0.7
+    # Validated, not merely merged: an out-of-range value is refused here, not at search time.
+    with pytest.raises(ValueError):
+        effective_settings(ctx, {"damping": 9})
+
+
+def test_light_up_and_query_session_agree_on_the_effective_settings(ctx, monkeypatch, prose):
+    """Light-up's merged-dict pre-validation is the same call `query_session` makes."""
+    from hippo.knowledge import query_access
+    from hippo.web.routes import graph as graph_module
+
+    assert graph_module.effective_settings is query_access.effective_settings

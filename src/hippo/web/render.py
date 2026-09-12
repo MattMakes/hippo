@@ -89,6 +89,20 @@ def retrieval_failure(exc: BaseException) -> PublicFailure:
     return public_failure(exc) or OPERATION_FAILED
 
 
+def caller_error(exc: BaseException) -> bool:
+    """True only for the exact `ValueError` the closed input validators raise.
+
+    Every managed, retrieval and ingest exception is a `ValueError` *subclass* --
+    `ReadError` names the file it was reading, `ProjectionError` describes a selection,
+    `ManagedDispatchError` a lane -- so an `except ValueError` that answers
+    `HTTPException(4xx, str(exc))` prints any of them at the caller. The exact-type test
+    is what keeps them out of a 4xx `detail` and hands them to `retrieval_failure`
+    instead. `mcp_server.tool_failure` applies the same rule, so a client moving between
+    HTTP and MCP is told the same thing by the same rule.
+    """
+    return type(exc) is ValueError
+
+
 def public_failure_response(failure: PublicFailure) -> JSONResponse:
     """One JSON body for every public failure: the `error` clients already read, plus `code`.
 

@@ -385,3 +385,51 @@ def test_light_up_holds_one_graph_through_source_inventory_and_releases(
     assert len(acquired) == 1
     assert released == acquired
     assert response.json()["settings"]["qa_top_k"] == 1
+
+
+# ---------------- 4e: a preview of a managed corpus says what it is not showing
+
+# `EvidenceAccess._identity()` returns None for a preview audience, so `Principal.as_role`
+# draws managed evidence as empty whatever the previewed tier can actually see. Preview
+# audiences stay on legacy evidence for this increment (no change to `knowledge/access.py`),
+# so the page has to say so rather than show an admin something false about a tier.
+PREVIEW_NOTICE = (
+    "Preview shows evidence available to open readers; managed sources require a signed-in member of the tier"
+)
+
+
+def preview_admin(ctx, client):
+    ctx.store.ensure_roles()
+    user = ctx.store.create_user("notice-admin", "secret1", "arch-admin")
+    client.headers["Authorization"] = "Bearer " + ctx.store.get_user(user)["token"]
+    return user
+
+
+def test_a_preview_of_a_workspace_with_managed_evidence_says_it_shows_legacy_only(ctx, client, public_source):
+    """One managed source and one legacy source: the preview draws the legacy one and says so."""
+    from tests.unit.test_structural_loading import published
+
+    published(ctx.store, "managed", profile=ctx.ollama.embed_model, dimension=2)
+    preview_admin(ctx, client)
+    response = client.get("/graph?as_role=individual")
+    assert response.status_code == 200, response.text
+    assert PREVIEW_NOTICE in response.text
+
+
+def test_a_preview_of_a_workspace_with_no_managed_evidence_says_nothing_extra(ctx, client, public_source):
+    """The notice is about a real gap; on a legacy-only workspace there is none to report."""
+    preview_admin(ctx, client)
+    response = client.get("/graph?as_role=individual")
+    assert response.status_code == 200, response.text
+    assert PREVIEW_NOTICE not in response.text
+
+
+def test_the_graph_page_of_a_reader_who_is_not_previewing_carries_no_notice(ctx, client, public_source):
+    """A signed-in reader sees their own evidence, managed included; nothing is withheld."""
+    from tests.unit.test_structural_loading import published
+
+    published(ctx.store, "managed", profile=ctx.ollama.embed_model, dimension=2)
+    preview_admin(ctx, client)
+    response = client.get("/graph")
+    assert response.status_code == 200, response.text
+    assert PREVIEW_NOTICE not in response.text

@@ -101,6 +101,17 @@ def query_access(ctx, access, *, settings: dict[str, Any] | None = None, structu
     return graph, AuthorizedModel(ctx.ollama, validate), validate
 
 
+def effective_settings(ctx, settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The knobs a query actually runs on: the caller's own over the operator's stored ones.
+
+    One definition, because the callers that pre-validate this merge before opening a
+    session (`web/routes/graph.py`'s light-up) are only correct while their copy stays
+    character-for-character identical to the one `query_session` uses, and nothing made
+    them. Validated as well as merged: the returned dict is the coerced one.
+    """
+    return validate_settings({**ctx.store.get_settings(), **(settings or {})})
+
+
 @dataclass(frozen=True)
 class QuerySession:
     """The graph, guarded model and live authorization proof for one query."""
@@ -121,8 +132,7 @@ def query_session(
     forwarded verbatim: an explicit `structural=False` must reach the lower layer
     rather than fall through to its default.
     """
-    effective_settings = validate_settings({**ctx.store.get_settings(), **(settings or {})})
-    captured_settings = MappingProxyType(effective_settings)
+    captured_settings = MappingProxyType(effective_settings(ctx, settings))
     graph, model, validate = query_access(
         ctx, access, settings=dict(captured_settings), structural=structural
     )

@@ -26,6 +26,7 @@ from hippo.hipporag.graph_index import (
     Fact,
     GraphIndex,
     Passage,
+    ProjectionError,
     _community_labels,
     _name_index,
     _path_index,
@@ -60,9 +61,10 @@ from .identity import canonical_json, make_identity, normalize_relative_path
 from .lifecycle import generation_passage_id
 from .predicates import PREDICATES
 
-
-class ProjectionError(ValueError):
-    """The supplied graph/evidence cannot establish a coherent current view."""
+# `ProjectionError` is imported above rather than defined here: `canonical_selected_generations`
+# raises it and this module imports that one, so the exception has to live on the side of the
+# dependency that has no way back. Every existing `from .projection import ProjectionError`
+# keeps working and names the same class.
 
 
 def _current_generations(store, authorized, embedding_profile, snapshot_bundle=None, source_profiles=None):
