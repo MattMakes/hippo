@@ -210,14 +210,23 @@ def test_model_failure_without_revocation_preserves_original_error(ctx, monkeypa
 
 def test_graph_expiry_callback_blocks_model_output_without_epoch_write(ctx, monkeypatch):
     restricted_query_fixture(ctx)
-    graph = ctx.graph_for(None)
     expired = False
 
     def check_expiry():
         if expired:
             raise AuthorizationChanged("The evidence proof expired")
 
-    graph.authorization_check = check_expiry
+    # The callback has to sit on the graph the query will actually run on. A structural
+    # selection builds a fresh view per query, so stamping a separately acquired object
+    # would install the check on a graph nothing ever reads.
+    build = ctx._build_structural_graph
+
+    def stamping(*args, **kwargs):
+        graph = build(*args, **kwargs)
+        graph.authorization_check = check_expiry
+        return graph
+
+    monkeypatch.setattr(ctx, "_build_structural_graph", stamping)
     original = ctx.ollama.chat_text
     epoch = ctx.store.authorization_epoch()
 
