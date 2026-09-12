@@ -13,7 +13,7 @@ another worker; nothing in this branch activates a production route.
 |---|---|
 | `5f6b7e9` | Map live local users into the reviewed default workspace |
 | `8b056aa` | Tombstone a managed source instead of deleting its evidence |
-| `THIRD` | Prove the managed tombstone survives a Ladybug reopen |
+| `771aac0` | Prove the managed tombstone survives a Ladybug reopen |
 
 ## Public contract as implemented
 
@@ -73,7 +73,7 @@ Working directory `/Users/mascott/projects/hippo/.worktrees/pa1` for every run.
 | 4 | strict Fake regression, see below | EXIT 0, **367 passed, 8 skipped** — `/tmp/hippo-pa1-fake-green.log` |
 | 5 | filtered Fake regression, see below | EXIT 0, **44 passed** — `/tmp/hippo-pa1-fake-web-green.log` |
 | 6 | Ladybug acceptance, see below | EXIT 0, **191 passed** in 71s — `/tmp/hippo-pa1-ladybug-green.log` |
-| 7 | `.venv/bin/ruff check src/hippo && .venv/bin/ruff format --check src/hippo` plus every changed test file | All checks passed; 115 files already formatted |
+| 7 | `.venv/bin/ruff check src/hippo && .venv/bin/ruff format --check src/hippo` plus every changed test file | All checks passed; 122 files already formatted |
 
 RED note for run 3: exactly one test passed in RED,
 `test_legacy_delete_still_removes_an_unmanaged_source`. It is a regression guard
