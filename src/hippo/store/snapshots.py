@@ -3,7 +3,9 @@
 from dataclasses import dataclass
 from typing import Literal
 
+from ..access import Access
 from ..knowledge import model as k
+from ..knowledge.access import EvidenceSelection
 
 
 class SnapshotUnavailable(ValueError):
@@ -169,30 +171,45 @@ class SnapshotQueries:
                     purged.add(revision.id)
         return frozenset(purged)
 
-    def purged_history_evidence(self, manifest_id):
-        """Name a pinned manifest's purged evidence so a reader gets markers, not text."""
+    def purged_history_evidence(self, manifest_id, *, workspace_id: str, access):
+        """Name a pinned manifest's purged evidence so a reader gets markers, not text.
+
+        The answer is scoped to the caller: a manifest in another workspace, one
+        that does not exist and one this audience cannot prove are all the same
+        `SnapshotUnavailable`, so the markers can never become an oracle for a
+        manifest someone else selected.
+
+        The audience gate is the manifest minus its purged revisions, because a
+        purge removes exactly the rows the markers describe from every proof;
+        requiring the full manifest would deny precisely when markers exist.
+        """
+        if not isinstance(access, Access) or not workspace_id:
+            raise TypeError("Purged history reads require explicit workspace and Access")
         history = self._knowledge_get("HistoryManifest", manifest_id)
-        if history is None:
+        if history is None or history.workspace_id != workspace_id:
             raise SnapshotUnavailable("Unknown history manifest")
         purged = self._purged_revisions(history.workspace_id)
+        retained = frozenset(history.revision_ids) - purged
+        if access.audience_kind != "internal":
+            engine, proof = self._reader_proof(
+                workspace_id,
+                access,
+                selection=EvidenceSelection(revision_ids=retained, query_mode="history"),
+            )
+            engine.validate_current(proof)
+            if not retained <= proof.revision_ids:
+                raise SnapshotUnavailable("Unknown history manifest")
         return tuple(
             PurgedEvidence("revision", revision_id)
             for revision_id in sorted(set(history.revision_ids) & purged)
         )
 
-    def _snapshot_reaches(self, snapshot, generation_id):
-        if any(item.generation_id == generation_id for item in snapshot.sources):
-            return True
-        if not snapshot.history_manifest_ids:
-            return False
-        revision_ids = {
-            r.artifact_revision_id
-            for r in self._knowledge_rows("GenerationMember")
-            if r.generation_id == generation_id
-        }
-        # A purge barrier outranks retained-history reachability: purged evidence
-        # must resolve to `evidence_purged`, so it cannot keep a generation alive.
-        purged = self._purged_revisions(snapshot.workspace_id)
+    def _history_reaches(self, snapshot, *, revision_ids, purged):
+        """Whether a durable history pin still keeps these generation revisions alive.
+
+        A purge barrier outranks retained-history reachability: purged evidence
+        must resolve to `evidence_purged`, so it cannot keep a generation alive.
+        """
         for history_id in snapshot.history_manifest_ids:
             history = self._knowledge_get("HistoryManifest", history_id)
             if history and revision_ids.intersection(set(history.revision_ids) - purged):
@@ -207,11 +224,29 @@ class SnapshotQueries:
         ):
             return "active_generation"
         now = self._now()
+        # The membership scan belongs to the generation and the purge barrier to a
+        # workspace, not to the reference being examined, so one collection pass
+        # resolves each at most once and only when a history pin actually asks.
+        members, purged = None, {}
         for ref in self._knowledge_rows("SnapshotReference"):
             if ref.released_at is not None or (ref.kind == "active_query" and ref.lease_expires_at <= now):
                 continue
             snapshot = self._knowledge_get("QuerySnapshot", ref.snapshot_id)
-            if snapshot and self._snapshot_reaches(snapshot, generation_id):
+            if snapshot is None:
+                continue
+            if any(item.generation_id == generation_id for item in snapshot.sources):
+                return "snapshot_reference"
+            if not snapshot.history_manifest_ids:
+                continue
+            if members is None:
+                members = {
+                    r.artifact_revision_id
+                    for r in self._knowledge_rows("GenerationMember")
+                    if r.generation_id == generation_id
+                }
+            if snapshot.workspace_id not in purged:
+                purged[snapshot.workspace_id] = self._purged_revisions(snapshot.workspace_id)
+            if self._history_reaches(snapshot, revision_ids=members, purged=purged[snapshot.workspace_id]):
                 return "snapshot_reference"
         return None
 

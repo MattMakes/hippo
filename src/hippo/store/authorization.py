@@ -128,14 +128,12 @@ RECORD_EPOCHS = {
             "GenerationEvidenceMember",
             "IndexManifest",
             "LinkGeneration",
-            "HistoryManifest",
             "DerivedRecord",
             "DerivedDependency",
             "RetrievalView",
             "ProseExtraction",
             "Section",
             "SectionMember",
-            "ConflictSet",
             "Alias",
         ),
         "content",
@@ -152,6 +150,12 @@ RECORD_EPOCHS = {
             "ConsumerAck",
             "QuerySnapshot",
             "SnapshotReference",
+            # A manifest and a conflict set NAME evidence instead of being it, exactly
+            # like the two above. Classifying them as content fenced a read-only
+            # historical query behind the build lease of a source it only cites, and
+            # advanced `content_epoch` for a query that changed no content.
+            "HistoryManifest",
+            "ConflictSet",
         ),
         "bookkeeping",
     ),

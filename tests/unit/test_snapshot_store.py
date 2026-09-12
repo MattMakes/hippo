@@ -245,9 +245,9 @@ def test_history_manifest_and_its_pin_survive_ladybug_reopen(tmp_path):
                 restoration_barrier="destroy",
             )
         )
-        assert reopened.purged_history_evidence(history.manifest.id) == (
-            PurgedEvidence("revision", world.revision_one.id),
-        )
+        assert reopened.purged_history_evidence(
+            history.manifest.id, workspace_id=world.workspace, access=EVERYTHING
+        ) == (PurgedEvidence("revision", world.revision_one.id),)
         assert reopened.collect_generation(world.first.id).blocked_reason is None
     finally:
         reopened.close()

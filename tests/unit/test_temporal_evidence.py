@@ -1,5 +1,6 @@
 """Pure bitemporal selector and evidence-clock behavior."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -8,15 +9,17 @@ import pytest
 from hippo.access import EVERYTHING, Access
 from hippo.knowledge import model as k
 from hippo.knowledge import snapshots as snapshot_service
-from hippo.knowledge.access import AuthorizationChanged
+from hippo.knowledge.access import AuthorizationChanged, EvidenceAccess
 from hippo.knowledge.temporal import (
     ResolvedTemporalSelector,
     TemporalInputs,
+    history_access,
     match_temporal,
     resolve_selector,
     select_history,
     serialize_temporal_evidence,
 )
+from hippo.store.snapshots import PurgedEvidence, SnapshotUnavailable
 from tests.unit.test_store_knowledge import reader
 
 MAY_1 = datetime(2026, 5, 1, tzinfo=UTC)
@@ -670,14 +673,19 @@ def test_history_manifest_selects_retired_evidence_at_a_fixed_knowledge_cutoff(s
     assert store._knowledge_get("HistoryManifest", old.manifest.id) == old.manifest
 
 
-def test_history_manifest_rejects_a_compare_selector_without_pinned_sides(store):
+def test_history_manifest_rejects_a_compare_selector_and_asks_for_one_manifest_per_side(store):
+    """Compare is rejected in part 1, even with two independently pinned sides.
+
+    Each side is its own historical question with its own authorization proof,
+    so the remedy is one manifest per side, which the error names explicitly.
+    """
     world = history_world(store)
     compare = k.CompareSelector(
         left=k.AsOfSelector(valid_at=MAY_1, known_at=MAY_5),
         right=k.AsOfSelector(valid_at=MAY_10, known_at=MAY_12),
     )
 
-    with pytest.raises(ValueError, match="compare"):
+    with pytest.raises(ValueError, match="one independently pinned manifest per side"):
         select(world, selector=compare)
 
 
@@ -857,7 +865,9 @@ def test_purge_history_overrides_retained_snapshot_roots(store):
             )
         )
         assert store.collect_generation(world.first.id).blocked_reason is None
-        markers = store.purged_history_evidence(old.manifest.id)
+        markers = store.purged_history_evidence(
+            old.manifest.id, workspace_id=world.workspace, access=EVERYTHING
+        )
         assert [(item.target_kind, item.target_id, item.code) for item in markers] == [
             ("revision", world.revision_one.id, "evidence_purged")
         ]
@@ -866,3 +876,242 @@ def test_purge_history_overrides_retained_snapshot_roots(store):
             bundle.validate()
     finally:
         bundle.close()
+
+
+def _suppress(
+    world, *, target_kind, target_id, reason, epoch, applicability="all_history", barrier="reverify"
+):
+    world.store.put_knowledge(
+        k.Suppression(
+            workspace_id=world.workspace,
+            target_kind=target_kind,
+            target_id=target_id,
+            scope_key="source:" + world.source,
+            view_applicability=applicability,
+            reason=reason,
+            epoch=epoch,
+            created_at=MAY_12,
+            restoration_barrier=barrier,
+        )
+    )
+
+
+def test_history_manifest_is_written_inside_the_transaction_that_read_it(store, monkeypatch):
+    """The proof, the closure and the persisted manifest are one atomic decision."""
+    world = history_world(store)
+    ambient = []
+    original = type(store).put_knowledge
+
+    def watched(self, record, *args, **kwargs):
+        if isinstance(record, k.HistoryManifest):
+            ambient.append(self.in_ambient_transaction())
+        return original(self, record, *args, **kwargs)
+
+    monkeypatch.setattr(type(store), "put_knowledge", watched)
+
+    select(world)
+
+    assert ambient == [True]
+
+
+def test_history_manifest_is_never_persisted_outside_its_final_proof(store, monkeypatch):
+    """Containment runs on the manifest before the write, not on the proof after it."""
+    world = history_world(store)
+    original = EvidenceAccess.build
+
+    def narrowed(self, selection=None):
+        proof = original(self, selection)
+        if selection is not None and selection.revision_ids:
+            return replace(proof, revision_ids=frozenset())
+        return proof
+
+    monkeypatch.setattr(EvidenceAccess, "build", narrowed)
+
+    with pytest.raises(AuthorizationChanged):
+        select(world)
+
+    assert store._knowledge_rows("HistoryManifest") == []
+
+
+def test_history_manifest_refuses_an_authorization_epoch_that_moved_mid_read(store, monkeypatch):
+    """A bump between the broad proof and the final one invalidates both."""
+    world = history_world(store)
+    original = EvidenceAccess.build
+
+    def moved(self, selection=None):
+        proof = original(self, selection)
+        if selection is not None and selection.revision_ids:
+            return replace(proof, authorization_epoch=proof.authorization_epoch + 1)
+        return proof
+
+    monkeypatch.setattr(EvidenceAccess, "build", moved)
+
+    with pytest.raises(AuthorizationChanged):
+        select(world)
+
+    assert store._knowledge_rows("HistoryManifest") == []
+
+
+def test_history_manifest_pin_proves_the_calling_audience_not_the_selecting_one(store):
+    """The bundle's proof, fingerprint and later revalidations belong to the caller."""
+    world = history_world(store)
+    principal = reader(store, world.workspace, "bystander")
+    caller = Access(user_id=principal)
+    internal = select(world)
+
+    bundle = snapshot_service.acquire_history_snapshot(
+        store, caller, history=internal, settings_fingerprint="settings", clock=lambda: MAY_12
+    )
+    try:
+        resolver, proof = bundle.proofs[0]
+        own = history_access(store, world.workspace, caller, clock=lambda: MAY_12).build(internal.selection)
+        assert world.secret_span.id in internal.proof.span_ids
+        assert world.secret_span.id not in proof.span_ids
+        assert resolver.access == caller
+        assert proof.policy_fingerprint == own.policy_fingerprint
+        assert bundle.snapshots[0].policy_fingerprint == own.policy_fingerprint
+    finally:
+        bundle.close()
+
+
+def test_history_manifest_pin_denies_a_caller_who_cannot_reprove_it(store):
+    """Acquisition, not first use, is where a lost grant stops a historical pin."""
+    world = history_world(store)
+    old = select(world)
+    _suppress(world, target_kind="artifact", target_id=world.artifact.id, reason="access_loss", epoch=2)
+
+    with pytest.raises(AuthorizationChanged):
+        snapshot_service.acquire_history_snapshot(
+            store, EVERYTHING, history=old, settings_fingerprint="settings", clock=lambda: MAY_12
+        )
+
+
+def test_history_manifest_pins_an_implicit_cutoff_for_current_and_atemporal_modes(store):
+    """All six modes round-trip: a pinned selector re-resolves to the pinned instant."""
+    world = history_world(store)
+    later = datetime(2026, 6, 1, tzinfo=UTC)
+
+    for selection in (
+        select(world, selector=k.CurrentSelector()),
+        select(world, selector=k.AtemporalSelector()),
+    ):
+        assert selection.selector.known_at == MAY_12
+        assert '"known_at":"2026-05-12T00:00:00Z"' in selection.manifest.temporal_selector_json
+        again = resolve_selector(selection.selector, latest_known_at=later)
+        assert (again.known_at, again.known_at_source) == (MAY_12, "explicit")
+
+    current = select(world, selector=k.CurrentSelector())
+    bundle = snapshot_service.acquire_history_snapshot(
+        store, EVERYTHING, history=current, settings_fingerprint="settings", clock=lambda: MAY_12
+    )
+    try:
+        assert bundle.snapshots[0].temporal.known_at == MAY_12
+    finally:
+        bundle.close()
+
+
+def test_history_manifest_reads_through_a_running_rebuild_of_its_source(store):
+    """Naming retained evidence is bookkeeping; it never needs the build lease."""
+    world = history_world(store)
+    third = _generation(store, world.source, "gen-three", world.second)
+    _claim(store, third)
+
+    old = select(world)
+
+    assert old.manifest.revision_ids == (world.revision_one.id,)
+    assert old.manifest.assertion_version_ids == (world.version_one.id,)
+
+
+def test_history_manifest_read_leaves_the_content_epoch_where_it_found_it(store):
+    """A read may not advance content state, for the manifest or a conflict set."""
+    world = history_world(store)
+    before = store.content_epoch()
+
+    old = select(world)
+    store.put_knowledge(
+        k.ConflictSet(
+            workspace_id=world.workspace,
+            scope_key="prod",
+            assertion_version_ids=tuple(sorted((world.version_one.id, world.version_two.id))),
+            resolution_status="possible",
+            support_span_ids=tuple(sorted((world.span_one.id, world.secret_span.id))),
+        )
+    )
+
+    assert store._knowledge_get("HistoryManifest", old.manifest.id) == old.manifest
+    assert store.content_epoch() == before
+
+
+def test_history_manifest_conflict_set_persists_through_a_running_rebuild(store):
+    """Part 2 persists conflict sets on a read path; a build lease must not fence it."""
+    world = history_world(store)
+    third = _generation(store, world.source, "gen-three", world.second)
+    _claim(store, third)
+
+    conflict = k.ConflictSet(
+        workspace_id=world.workspace,
+        scope_key="prod",
+        assertion_version_ids=tuple(sorted((world.version_one.id, world.version_two.id))),
+        resolution_status="possible",
+        support_span_ids=tuple(sorted((world.span_one.id, world.secret_span.id))),
+    )
+    store.put_knowledge(conflict)
+
+    assert store._knowledge_get("ConflictSet", conflict.id) == conflict
+
+
+def test_history_manifest_is_empty_rather_than_unavailable_without_authorized_rows(store):
+    """`history_unavailable` is a statement about retention, not about permission."""
+    world = history_world(store)
+    _suppress(world, target_kind="artifact", target_id=world.artifact.id, reason="access_loss", epoch=2)
+
+    empty = select(world)
+
+    assert empty.codes == ()
+    assert empty.manifest.revision_ids == ()
+    assert empty.manifest.assertion_version_ids == ()
+    assert empty.coverage["proven"] == {"observations": 0, "assertion_versions": 0}
+    assert empty.coverage["contextual"] == {"observations": 0, "assertion_versions": 0}
+
+
+def test_purge_history_evidence_answers_only_an_audience_that_proves_the_manifest(store):
+    """Unknown, foreign-workspace and unauthorized all get one indistinguishable answer."""
+    world = history_world(store)
+    principal = reader(store, world.workspace, "bystander")
+    revoked = reader(store, world.workspace, "revoked")
+    store.update_knowledge(
+        k.WorkspaceMembership(
+            workspace_id=world.workspace,
+            principal_id=revoked,
+            enabled=False,
+            mapping_authority="reviewed",
+            policy_epoch=3,
+        )
+    )
+    now = select(world, valid_at=MAY_12, known_at=MAY_12)
+    _suppress(
+        world,
+        target_kind="revision",
+        target_id=world.revision_one.id,
+        reason="purge",
+        epoch=3,
+        barrier="destroy",
+    )
+    markers = (PurgedEvidence("revision", world.revision_one.id),)
+
+    assert world.revision_two.id in now.manifest.revision_ids
+    for audience in (EVERYTHING, Access(user_id=principal)):
+        assert (
+            store.purged_history_evidence(now.manifest.id, workspace_id=world.workspace, access=audience)
+            == markers
+        )
+    for call in (
+        dict(workspace_id="workspace-elsewhere", access=EVERYTHING),
+        dict(workspace_id=world.workspace, access=Access(user_id=revoked)),
+    ):
+        with pytest.raises(SnapshotUnavailable):
+            store.purged_history_evidence(now.manifest.id, **call)
+    with pytest.raises(SnapshotUnavailable):
+        store.purged_history_evidence(
+            "historymanifest-absent", workspace_id=world.workspace, access=EVERYTHING
+        )
