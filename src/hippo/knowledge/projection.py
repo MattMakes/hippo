@@ -41,6 +41,7 @@ from .citations import (
     provenance_payload,
     resolve_citations,
 )
+from .dense import DenseCapability, composed_dense_capability, fingerprint_vectors
 from .derivations import validate_prose, validate_view
 from .embedding_cache import _vectors
 from .identity import canonical_json, make_identity, normalize_relative_path
@@ -569,6 +570,8 @@ def _assemble(
     original_citations=(),
     prose_provenance=(),
     managed_passage_ids=frozenset(),
+    dense_capability=None,
+    dense_vectors=(),
 ):
     nodes = sorted(nodes, key=lambda node: CODE_KINDS.index(node.kind))
     identities = list(entities) + [node.id for node in nodes] + [passage.id for passage in passages]
@@ -615,15 +618,17 @@ def _assemble(
     else:
         for identity, (boost, specific) in statistics.items():
             boosts[index[identity]], specificity[index[identity]] = boost, specific
+    capability = dense_capability or DenseCapability()
+    width = capability.dimension if capability.mode == "verified" else 0
     passage_matrix = (
         np.stack([passage_vectors[p.id] for p in passages]).astype(np.float32)
-        if passages
-        else np.zeros((0, 0), dtype=np.float32)
+        if passages and capability.mode != "unavailable"
+        else np.zeros((len(passages), width), dtype=np.float32)
     )
     fact_matrix = (
         np.stack([fact_vectors[f.id] for f in facts]).astype(np.float32)
-        if facts
-        else np.zeros((0, 0), dtype=np.float32)
+        if facts and capability.mode != "unavailable"
+        else np.zeros((len(facts), width), dtype=np.float32)
     )
     payload = [
         entities,
@@ -664,7 +669,10 @@ def _assemble(
         original_citations=original_citations,
         prose_provenance=prose_provenance,
         managed_passage_ids=managed_passage_ids,
+        dense_capability=capability,
+        dense_vectors=dense_vectors,
     )
+    payload[3], payload[5] = fingerprint_vectors(result)
     try:
         resolve_citations(result, tuple(sorted(managed_passage_ids)))
     except ValueError as exc:
@@ -681,6 +689,8 @@ def compose_graphs(*graphs: GraphIndex) -> GraphIndex:
     This deliberately does not copy authorization callbacks. The caller attaches
     a callback validating all input proofs together. No cross-lane edge is inferred.
     """
+    capability = composed_dense_capability(graphs)
+    dense_vectors = tuple(row for graph in graphs for row in graph.dense_vectors)
     entities, nodes, passages, facts, passage_vectors, fact_vectors, edges, arrows = (
         {},
         [],
@@ -726,12 +736,21 @@ def compose_graphs(*graphs: GraphIndex) -> GraphIndex:
         )
         passages.extend(deepcopy(graph.passages))
         facts.extend(deepcopy(graph.facts))
+        canonical_rows = {(row.lane, row.projected_id): row.values for row in graph.dense_vectors}
         for i, passage in enumerate(graph.passages):
-            vector = graph.passage_embeddings[i].copy()
+            vector = (
+                np.array(canonical_rows["passage", passage.id], dtype=np.float32)
+                if canonical_rows
+                else graph.passage_embeddings[i].copy()
+            )
             dimensions.add(len(vector))
             passage_vectors[passage.id] = vector
         for i, fact in enumerate(graph.facts):
-            vector = graph.fact_embeddings[i].copy()
+            vector = (
+                np.array(canonical_rows["fact", fact.id], dtype=np.float32)
+                if canonical_rows
+                else graph.fact_embeddings[i].copy()
+            )
             dimensions.add(len(vector))
             if fact.id in fact_vectors:
                 raise ProjectionError("Cannot compose colliding fact identities")
@@ -750,7 +769,7 @@ def compose_graphs(*graphs: GraphIndex) -> GraphIndex:
                         deepcopy(arrow.extra),
                     )
                 )
-    if len(dimensions) > 1:
+    if len(dimensions) > 1 and capability.mode != "unavailable":
         raise ProjectionError("Cannot compose graphs with incompatible vector dimensions")
     result = _assemble(
         entities,
@@ -766,6 +785,8 @@ def compose_graphs(*graphs: GraphIndex) -> GraphIndex:
         original_citations=tuple(original_citations[key] for key in sorted(original_citations)),
         prose_provenance=tuple(sorted(prose_provenance, key=lambda item: item.fact_id)),
         managed_passage_ids=frozenset(managed_passage_ids),
+        dense_capability=capability,
+        dense_vectors=dense_vectors,
     )
     populated = [graph for graph in graphs if graph.num_nodes]
     if len(populated) == 1:

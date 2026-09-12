@@ -274,6 +274,13 @@ class Retriever:
         """
         started = time.time()
         index = self.index
+        index.validate_authorization()
+        profile = (
+            getattr(self.ollama, "profile_fingerprint", None)
+            if index.dense_capability.mode == "verified"
+            else None
+        )
+        index.require_dense(profile)
         timing: dict[str, float] = {}
         trace = Trace(question=question, settings=dict(settings), graph_version=index.version)
         if index.is_empty():

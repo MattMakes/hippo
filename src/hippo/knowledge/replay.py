@@ -13,11 +13,13 @@ from hippo.hipporag.retriever import Trace
 from hippo.store.base import validate_settings
 
 from .citations import provenance_payload
+from .dense import fingerprint_vectors
 from .identity import canonical_json
 
 
 def view_fingerprint(graph) -> str:
     graph.validate_authorization()
+    passage_vectors, fact_vectors = fingerprint_vectors(graph)
     payload = [
         graph.node_ids,
         graph.node_kind,
@@ -25,8 +27,8 @@ def view_fingerprint(graph) -> str:
         [asdict(passage) for passage in graph.passages],
         [asdict(node) for node in graph.code_nodes],
         [asdict(fact) for fact in graph.facts],
-        graph.passage_embeddings.tolist(),
-        graph.fact_embeddings.tolist(),
+        passage_vectors,
+        fact_vectors,
         graph.entity_boost.tolist(),
         graph.specificity.tolist(),
         [(list(pair), asdict(edge)) for pair, edge in sorted(graph.edges.items())],

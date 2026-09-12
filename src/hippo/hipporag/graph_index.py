@@ -41,6 +41,13 @@ import igraph as ig
 import numpy as np
 
 from ..knowledge.citations import OriginalCitation, ProseProvenance, RetrievalEvidence, scoped_provenance
+from ..knowledge.dense import (
+    DenseCapability,
+    DenseUnavailable,
+    DenseVector,
+    canonical_dense_vectors,
+    validate_dense_graph,
+)
 from ..store.code import SPECIFICITY_KINDS
 from .text import split_identifier
 
@@ -217,11 +224,27 @@ class GraphIndex:
     original_citations: tuple[OriginalCitation, ...] = ()
     prose_provenance: tuple[ProseProvenance, ...] = ()
     managed_passage_ids: frozenset[str] = frozenset()
+    dense_capability: DenseCapability = field(default_factory=DenseCapability)
+    dense_vectors: tuple[DenseVector, ...] = ()
     # One rebuilt igraph per non-default code_structural_scale; see graph_for_scale.
     _scaled: dict[float, ig.Graph] = field(default_factory=dict, repr=False, compare=False)
     # vertex -> its display name, filled by `paths.display_at`; a walk asks for it per edge.
     display_cache: dict[int, str] = field(default_factory=dict, repr=False, compare=False)
     authorization_check: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self.dense_vectors = canonical_dense_vectors(self.dense_vectors)
+        validate_dense_graph(self)
+
+    def require_dense(self, profile_fingerprint: str | None = None) -> None:
+        """Reject structural or mismatched dense execution before any model call."""
+        self.validate_authorization()
+        validate_dense_graph(self)
+        capability = self.dense_capability
+        if capability.mode == "unavailable":
+            raise DenseUnavailable("This structural graph is unavailable for dense retrieval")
+        if capability.mode == "verified" and profile_fingerprint != capability.fingerprint:
+            raise DenseUnavailable("Dense retrieval requires the matching verified model profile")
 
     def validate_authorization(self) -> None:
         """Reject output from an expired audience view before model calls or release."""
@@ -565,6 +588,7 @@ class GraphIndex:
         symbol whose defining passages are all hidden has no vertex at all. That is one rule, not
         two: a node is visible when a visible passage reaches it, for every kind.
         """
+        validate_dense_graph(self)
         visible = set(visible_sources)
         keep_passages = [p for p in self.passages if p.source_id in visible]
         keep_passage_ids = {p.id for p in keep_passages}
@@ -705,6 +729,21 @@ class GraphIndex:
         # Copy each node so this view cannot mutate the shared, unrestricted graph.
         code_nodes = [replace(node, in_degree=in_degree.get(idx_of[node.id], 0)) for node in code_nodes]
 
+        if self.dense_capability.mode == "verified":
+            if not keep_passages:
+                passage_embeddings = np.zeros((0, self.dense_capability.dimension), dtype=np.float32)
+            if not facts:
+                fact_embeddings = np.zeros((0, self.dense_capability.dimension), dtype=np.float32)
+        dense_vectors = tuple(
+            row
+            for row in self.dense_vectors
+            if (
+                row.lane == "passage"
+                and row.projected_id in keep_passage_ids
+                or row.lane == "fact"
+                and row.projected_id in fact_index_of
+            )
+        )
         return GraphIndex(
             version=self.version,
             node_ids=node_ids,
@@ -731,6 +770,8 @@ class GraphIndex:
             path_index=self.path_index,
             communities=_community_labels(code_nodes),
             authorization_check=self.authorization_check,
+            dense_capability=self.dense_capability,
+            dense_vectors=dense_vectors,
             **scoped_provenance(self, keep_passage_ids, set(fact_index_of)),
         )
 
