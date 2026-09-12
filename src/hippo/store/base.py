@@ -164,6 +164,7 @@ class Neo4jBase:
         self.database = database
         self._lock = threading.RLock()
         self._transaction = None
+        self._transaction_owner = None
         self._schema_checked = False
         self._migration_blocked = False
         self._migrating = False
@@ -222,6 +223,12 @@ class Neo4jBase:
 
     # ------------------------------------------------------------- schema
 
+    def in_ambient_transaction(self) -> bool:
+        """True only when the calling thread has an open transaction on this store."""
+        # Deliberately lock-free: the holder keeps `_lock` for its whole transaction body, so
+        # taking it here would block every other thread instead of answering them.
+        return self._transaction_owner == threading.get_ident()
+
     @contextmanager
     def transaction(self):
         with self._lock:
@@ -240,6 +247,7 @@ class Neo4jBase:
                 with session.begin_transaction() as transaction:
                     self._transaction = transaction
                     self._transaction_failed = False
+                    self._transaction_owner = threading.get_ident()
                     try:
                         yield self
                         if self._transaction_failed:
@@ -254,6 +262,7 @@ class Neo4jBase:
                     finally:
                         self._transaction = None
                         self._transaction_failed = False
+                        self._transaction_owner = None
 
     def ensure_schema(self) -> None:
         from .migrations import migrate_store
