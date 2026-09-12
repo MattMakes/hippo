@@ -230,18 +230,20 @@ def _seed_symbol_sources(index, trace: Trace) -> dict[str, str]:
 def changesets_page(request: Request, open: str = ""):
     require(request, "edit_graph")
     ctx = ctx_of(request)
-    view = ChangesetAccess(ctx, principal_of(request).access)
-    items = view.list()
-    for item in items:
-        item["described"] = describe_ops(ctx, item["ops"], index=view.graph)
-    return render(
-        request,
-        "changesets.html",
-        nav="changesets",
-        changesets=items,
-        open_id=open,
-        authorization_check=view.validate,
-    )
+    with query_session(ctx, principal_of(request).access) as session:
+        view = ChangesetAccess(ctx, principal_of(request).access, session=session)
+        items = view.list()
+        for item in items:
+            item["described"] = describe_ops(ctx, item["ops"], index=view.graph)
+        return render(
+            request,
+            "changesets.html",
+            nav="changesets",
+            changesets=items,
+            open_id=open,
+            authorization_check=view.validate,
+            session=session,
+        )
 
 
 # ------------------------------------------------------------------ JSON
