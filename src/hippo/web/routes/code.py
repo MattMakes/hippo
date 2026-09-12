@@ -32,6 +32,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -51,6 +52,7 @@ from ...hipporag.paths import (
     shortest_code_path,
     triple_rows,
 )
+from ...knowledge.public_errors import public_failure
 from ...knowledge.query_access import query_session
 from ...ollama import OllamaError
 from ..auth import principal_of
@@ -200,7 +202,7 @@ def _code_response(request: Request, build: Callable[[GraphIndex, float], Any]) 
     try:
         with _graph(request) as (index, theta):
             return _answer(lambda: build(index, theta), index.validate_authorization)
-    except (ValueError, OllamaError) as exc:
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
         return public_failure_response(retrieval_failure(exc))
 
 
@@ -214,6 +216,13 @@ def _answer(build: Callable[[], Any], validate: Callable[[], None]) -> Any:
     except UnknownSymbol as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
+        # `ProjectionError`, `DenseUnavailable` and every other row of the closed table are
+        # `ValueError`s too. They are not the caller's mistake wherever they are raised, so
+        # the separation is by type rather than by "it can only happen at acquisition":
+        # re-raised here, the mapper outside the view owns them. `mcp_server.tool_failure`
+        # orders the same two vocabularies the same way.
+        if public_failure(exc) is not None:
+            raise
         raise HTTPException(400, str(exc)) from exc
     finally:
         validate()

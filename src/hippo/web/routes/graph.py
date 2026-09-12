@@ -42,7 +42,7 @@ from ...ollama import OllamaError
 from ...status import source_view
 from ...store.base import validate_settings
 from ..auth import principal_of
-from ..render import ctx_of, public_failure_response, render, retrieval_failure
+from ..render import ctx_of, public_failure_page, public_failure_response, render, retrieval_failure
 
 router = APIRouter()
 api = APIRouter(prefix="/api/graph")
@@ -149,32 +149,39 @@ def graph_page(request: Request, as_role: str = "", q: str = ""):
         viewer(request, as_role) if as_role else (actor, None, validate_actor)
     )
     manager = query_session(ctx, principal.access) if ctx.store.ping() else nullcontext(None)
-    with manager as session:
-        view = source_view(ctx, principal.access, session=session) if session is not None else None
+    try:
+        with manager as session:
+            view = source_view(ctx, principal.access, session=session) if session is not None else None
 
-        def validate():
-            validate_actor()
-            validate_viewer()
-            if view:
-                view.validate()
+            def validate():
+                validate_actor()
+                validate_viewer()
+                if view:
+                    view.validate()
 
-        roles = ctx.store.list_roles() if ctx.store.ping() else []
-        can_preview = actor.can("manage_users") or actor.can("manage_roles")
-        previewable = [r for r in roles if actor.is_open or r["rank"] <= actor.rank] if can_preview else []
-        return render(
-            request,
-            "graph.html",
-            session=session if not preview else None,
-            nav="graph",
-            principal=principal,
-            preview_role=preview,
-            previewable=previewable,
-            sources=view.sources if view else [],
-            authorization_check=validate,
-            roles=roles,
-            initial_query=q,
-            default_limit=DEFAULT_LIMIT,
-        )
+            roles = ctx.store.list_roles() if ctx.store.ping() else []
+            can_preview = actor.can("manage_users") or actor.can("manage_roles")
+            previewable = (
+                [r for r in roles if actor.is_open or r["rank"] <= actor.rank] if can_preview else []
+            )
+            return render(
+                request,
+                "graph.html",
+                session=session if not preview else None,
+                nav="graph",
+                principal=principal,
+                preview_role=preview,
+                previewable=previewable,
+                sources=view.sources if view else [],
+                authorization_check=validate,
+                roles=roles,
+                initial_query=q,
+                default_limit=DEFAULT_LIMIT,
+            )
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        # The page draws a view it composes itself, so it maps its own failure: the same
+        # tuple `light_up` maps, and the same `AuthorizationChanged` left uncaught.
+        return public_failure_page(request, retrieval_failure(exc), "graph.html", nav="graph")
 
 
 # ------------------------------------------------------------ full graph
@@ -308,6 +315,10 @@ def full_graph(
             view.validate()
             validate_viewer()
             return payload
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        # The browse API answers the same closed body `light_up` does: the page's own
+        # JavaScript reads JSON here and cannot branch on a bare Starlette error.
+        return public_failure_response(retrieval_failure(exc))
     finally:
         validate_viewer()
 
@@ -333,11 +344,22 @@ def light_up(request: Request, body: LightUpBody):
     # The caller's own settings are checked here, exactly as the session would check
     # them, so that the only `ValueError`s left inside the scope below are activation
     # failures. Otherwise a bad slider value and an incoherent view would answer alike.
+    #
+    # The caller's own values are checked *alone* first, because `validate_settings`
+    # names the value it refused: on the merged dict that value can be a stored knob the
+    # caller never sent, and a 400 would then blame the request and read the operator's
+    # configuration out loud. A stored knob out of range is the operator's problem, which
+    # is the same reading `public_errors` gives `invalid_configuration`.
+    try:
+        validate_settings(dict(body.settings or {}))
+    except (ValueError, TypeError) as exc:
+        validate_viewer()
+        raise HTTPException(400, str(exc)) from exc
     try:
         validate_settings({**ctx.store.get_settings(), **(body.settings or {})})
     except (ValueError, TypeError) as exc:
         validate_viewer()
-        raise HTTPException(400, str(exc)) from exc
+        return public_failure_response(retrieval_failure(exc))
     try:
         with retrieval_session(ctx, principal.access, settings=body.settings) as session:
             return _light_up_response(ctx, principal, body, session, validate_viewer)
@@ -490,6 +512,8 @@ def node_details(request: Request, node_id: str, as_role: str = ""):
             view.validate()
             validate_viewer()
             return out
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        return public_failure_response(retrieval_failure(exc))
     finally:
         validate_viewer()
 

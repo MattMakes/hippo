@@ -2,6 +2,10 @@
 {% block title %}Graph{% endblock %}
 {% block head %}<script src="/static/vendor/3d-force-graph.min.js" defer></script><script src="/static/graph.js" defer></script>{% endblock %}
 {% block content %}
+{% if error %}
+<div class="page-head"><h1>The graph</h1></div>
+<div class="callout bad">{{ error }}</div>
+{% else %}
 <div class="page-head row spread">
   <div>
     <h1>The graph{% if preview_role %} <span class="muted">as {{ preview_role.name }}</span>{% endif %}</h1>
@@ -76,4 +80,5 @@
   "asRole": preview_role.id if preview_role else "",
   "initialQuery": initial_query
 } | tojson }}</script>
+{% endif %}
 {% endblock %}

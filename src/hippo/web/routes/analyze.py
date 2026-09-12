@@ -47,7 +47,7 @@ from ...ollama import OllamaError
 from ...store.base import SETTING_RULES
 from ..adhoc import ADHOC_LIMIT, recall_adhoc, remember_adhoc
 from ..auth import principal_of, require
-from ..render import ctx_of, public_failure_response, render, retrieval_failure
+from ..render import ctx_of, public_failure_page, public_failure_response, render, retrieval_failure
 
 router = APIRouter()
 api = APIRouter(prefix="/api")
@@ -60,35 +60,41 @@ api = APIRouter(prefix="/api")
 def analyze_adhoc(request: Request, question: str = "", key: str = ""):
     """Show the analysis cached under `key` (from the Ask page). Never runs the model: see analyze_submit."""
     principal = principal_of(request)
-    with query_session(ctx_of(request), principal.access) as session:
-        index, validate = session.graph, session.validate
-        cached = recall_adhoc(key, principal.user_id, graph=index) if key else None
-        if cached is None:
-            question = question.strip()
-            if not question:
-                return RedirectResponse("/ask", status_code=303)
-            return render(
+    try:
+        with query_session(ctx_of(request), principal.access) as session:
+            index, validate = session.graph, session.validate
+            cached = recall_adhoc(key, principal.user_id, graph=index) if key else None
+            if cached is None:
+                question = question.strip()
+                if not question:
+                    return RedirectResponse("/ask", status_code=303)
+                return render(
+                    request,
+                    "analyze.html",
+                    nav="ask",
+                    error=f"That analysis is no longer in memory (hippo keeps the last {ADHOC_LIMIT}, until it restarts).",
+                    question=question,
+                    retry_question=question,
+                    status_code=404,
+                    session=session,
+                )
+            trace = trace_from_dict(cached["trace"])
+            return _render_analysis(
                 request,
-                "analyze.html",
-                nav="ask",
-                error=f"That analysis is no longer in memory (hippo keeps the last {ADHOC_LIMIT}, until it restarts).",
-                question=question,
-                retry_question=question,
-                status_code=404,
+                trace,
+                result=None,
+                answer=cached["answer"],
+                history=[],
+                trace_key=key,
+                index=index,
+                authorization_check=validate,
                 session=session,
             )
-        trace = trace_from_dict(cached["trace"])
-        return _render_analysis(
-            request,
-            trace,
-            result=None,
-            answer=cached["answer"],
-            history=[],
-            trace_key=key,
-            index=index,
-            authorization_check=validate,
-            session=session,
-        )
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        # The page composes its own view, so it maps its own failure, exactly as the
+        # form below does and at the status the mapper gives it. `AuthorizationChanged`
+        # is a `RuntimeError` and stays uncaught, so a revocation still answers 409.
+        return public_failure_page(request, retrieval_failure(exc), "analyze.html", nav="ask")
 
 
 @router.post("/analyze")
@@ -103,9 +109,18 @@ def analyze_submit(request: Request, question: str = Form("")):
         trace, answer = ask_service.ask(ctx, question, access=principal.access)
     except (ValueError, OllamaError, httpx.TransportError) as exc:
         # The provider's own words can name a file, quote source text or carry a token.
-        # The page says the one bounded sentence the mapper allows and nothing else.
-        error = retrieval_failure(exc).message
-        return render(request, "analyze.html", nav="ask", error=error, question=question)
+        # The page says the one bounded sentence the mapper allows and nothing else, at
+        # the status the mapper gives it: a failure rendered at 200 tells a client, a
+        # cache and a crawler that the question was answered.
+        failure = retrieval_failure(exc)
+        return render(
+            request,
+            "analyze.html",
+            nav="ask",
+            error=failure.message,
+            question=question,
+            status_code=failure.http_status,
+        )
     key = remember_adhoc(trace, {"answer": answer.answer, "thought": answer.thought}, owner=principal.user_id)
     # The question rides along so an expired key can offer "analyze it again".
     return RedirectResponse(f"/analyze?key={key}&question={quote(question)}", status_code=303)
@@ -116,29 +131,32 @@ def analyze_result(request: Request, result_id: str):
     require(request, "run_evals")  # stored results belong to the Evals section
     ctx = ctx_of(request)
     principal = principal_of(request)
-    with query_session(ctx, principal.access) as session:
-        index, validate = session.graph, session.validate
-        evaluation = EvalAccess(ctx, principal.access, session=session)
-        result = evaluation.get_result(result_id)
-        if result is None:
-            raise HTTPException(404, "no such result")
-        validate = _saved_result_check(session, evaluation, result_id)
-        trace = trace_from_dict(result.get("trace") or {})
-        if not trace.question:
-            trace.question = result["question"]
-        history = evaluation.results_for_question(result["question_id"])
-        answer = {"answer": result.get("answer", ""), "thought": result.get("thought", "")}
-        return _render_analysis(
-            request,
-            trace,
-            result=result,
-            answer=answer,
-            history=history,
-            trace_key="",
-            index=index,
-            authorization_check=validate,
-            session=session,
-        )
+    try:
+        with query_session(ctx, principal.access) as session:
+            index, validate = session.graph, session.validate
+            evaluation = EvalAccess(ctx, principal.access, session=session)
+            result = evaluation.get_result(result_id)
+            if result is None:
+                raise HTTPException(404, "no such result")
+            validate = _saved_result_check(session, evaluation, result_id)
+            trace = trace_from_dict(result.get("trace") or {})
+            if not trace.question:
+                trace.question = result["question"]
+            history = evaluation.results_for_question(result["question_id"])
+            answer = {"answer": result.get("answer", ""), "thought": result.get("thought", "")}
+            return _render_analysis(
+                request,
+                trace,
+                result=result,
+                answer=answer,
+                history=history,
+                trace_key="",
+                index=index,
+                authorization_check=validate,
+                session=session,
+            )
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        return public_failure_page(request, retrieval_failure(exc), "analyze.html", nav="evals")
 
 
 def _saved_result_check(session, evaluation, result_id):
@@ -241,20 +259,23 @@ def _seed_symbol_sources(index, trace: Trace) -> dict[str, str]:
 def changesets_page(request: Request, open: str = ""):
     require(request, "edit_graph")
     ctx = ctx_of(request)
-    with query_session(ctx, principal_of(request).access) as session:
-        view = ChangesetAccess(ctx, principal_of(request).access, session=session)
-        items = view.list()
-        for item in items:
-            item["described"] = describe_ops(ctx, item["ops"], index=view.graph)
-        return render(
-            request,
-            "changesets.html",
-            nav="changesets",
-            changesets=items,
-            open_id=open,
-            authorization_check=view.validate,
-            session=session,
-        )
+    try:
+        with query_session(ctx, principal_of(request).access) as session:
+            view = ChangesetAccess(ctx, principal_of(request).access, session=session)
+            items = view.list()
+            for item in items:
+                item["described"] = describe_ops(ctx, item["ops"], index=view.graph)
+            return render(
+                request,
+                "changesets.html",
+                nav="changesets",
+                changesets=items,
+                open_id=open,
+                authorization_check=view.validate,
+                session=session,
+            )
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        return public_failure_page(request, retrieval_failure(exc), "changesets.html", nav="changesets")
 
 
 # ------------------------------------------------------------------ JSON

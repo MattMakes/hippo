@@ -34,12 +34,15 @@ from fastapi.testclient import TestClient
 from hippo.access import EVERYTHING
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.ingest.managed_activation import record_build_failure
+from hippo.knowledge.dense import DenseUnavailable
+from hippo.knowledge.projection import ProjectionError
 from hippo.knowledge.public_errors import public_failure_for_code
 from hippo.knowledge.query_access import query_session
 from hippo.ollama import OllamaError
 from hippo.status import source_view
 from hippo.web.app import create_app
 from hippo.web.routes import analyze as analyze_routes
+from hippo.web.routes import code as code_routes
 from hippo.web.routes import graph as graph_routes
 from tests.fakes.fake_ollama import DIM
 from tests.unit.test_dense_session import verified
@@ -297,16 +300,29 @@ def test_code_only_and_relation_only_support_do_not_change_light_up_dispatch(ctx
     assert record.dispatched == ["tag_compatible"]
 
 
-def test_an_empty_authorized_corpus_lights_up_without_one_model_call(ctx, monkeypatch):
+# The two model surfaces and what an empty answer from each still carries. Both are
+# parametrized because an empty authorized corpus is the one composition that dispatches
+# `legacy`, which `ask._DISPATCHED` does not contain: `simulate` hands `run_simulation` the
+# owner it already dispatched and `ask._dispatch` re-enters `retrieval_session` over it. The
+# re-entry must borrow -- one acquisition, one release, and still no model call.
+EMPTY_SURFACES = {
+    "light-up": (graph_routes, "/api/graph/light-up", lambda payload: payload["seeds"]),
+    "simulate": (analyze_routes, "/api/simulate", lambda payload: payload["trace"]["passages"]),
+}
+
+
+@pytest.mark.parametrize("surface", sorted(EMPTY_SURFACES))
+def test_an_empty_authorized_corpus_answers_without_one_model_call(ctx, monkeypatch, surface):
+    module, url, emptied = EMPTY_SURFACES[surface]
     empty_published(ctx.store, "empty", profile=ctx.ollama.embed_model)
     headers = reader(ctx)
-    record = watch(ctx, monkeypatch, graph_routes)
+    record = watch(ctx, monkeypatch, module)
     with web(ctx, headers) as client, offline(ctx):
-        response = client.post("/api/graph/light-up", json={"question": QUESTION})
+        response = client.post(url, json={"question": QUESTION, "overrides": {}})
     assert response.status_code == 200, response.text
     record.once()
     assert record.dispatched == ["legacy"]
-    assert response.json()["seeds"] == []
+    assert emptied(response.json()) == []
 
 
 def test_a_purely_legacy_corpus_lights_up_and_pins_no_snapshot(ctx, monkeypatch, prose):
@@ -364,7 +380,9 @@ def test_the_analyze_form_reports_an_unavailable_model_without_its_words(ctx, mo
     monkeypatch.setattr(ctx.ollama, "chat_json", refuse)
     with web(ctx) as client:
         response = client.post("/analyze", data={"question": QUESTION}, follow_redirects=False)
-    assert response.status_code == 200, response.text
+    # The page carries the mapper's status as well as its sentence: a failure rendered at
+    # 200 tells a client, a cache and a crawler that the question was answered.
+    assert response.status_code == 503, response.text
     assert "Retrieval service is unavailable" in response.text
     for secret in (*SECRETS, MODEL_BODY):
         assert secret not in response.text
@@ -383,6 +401,133 @@ def test_a_bare_selection_failure_is_operation_failed_not_a_client_error(ctx, mo
     assert response.status_code == 500, response.text
     assert response.json()["code"] == "operation_failed"
     assert "SELECTED GENERATION INTERNALS" not in response.text
+
+
+# ------------------------------------------ a view that cannot be composed at all
+
+PRIVATE = "SELECTED GENERATION INTERNALS"
+
+# The two structural-loading failures `ctx.graph_for` raises, with the public row each
+# maps to. They differ in status on purpose: a surface that answered both at 500 would be
+# discarding the mapper's own status rather than carrying it.
+UNLOADABLE = {
+    "projection": (
+        ProjectionError,
+        500,
+        {"error": "Operation failed; inspect local logs by operation ID", "code": "operation_failed"},
+    ),
+    "profile": (
+        DenseUnavailable,
+        409,
+        {"error": "Rebuild compatible sources before retrieval", "code": "retrieval_rebuild_required"},
+    ),
+}
+
+# Every route in these files that composes a view. `light_up` and the `/api/code/*` group
+# already mapped theirs; these are the ones that answered `500 text/plain`.
+JSON_SURFACES = ("/api/graph/full", "/api/graph/node/passage-0", "/api/code/symbols?q=orion")
+PAGE_SURFACES = ("/graph", "/changesets", "/analyze?question=x", "/analyze/result-0")
+
+
+def unloadable(ctx, monkeypatch, kind):
+    """No view composes at all, the way an incoherent generation selection fails.
+
+    `ctx.graph_for` is the single acquisition point every one of these routes reaches
+    through `query_session`, so patching it puts the failure exactly where
+    `GraphIndex.__post_init__` puts a bare `ValueError` from
+    `canonical_selected_generations`: inside the `with`, before any payload exists.
+    """
+
+    def refuse(*args, **kwargs):
+        raise kind(PRIVATE)
+
+    monkeypatch.setattr(ctx, "graph_for", refuse)
+
+
+@pytest.mark.parametrize("url", JSON_SURFACES)
+@pytest.mark.parametrize("failure", sorted(UNLOADABLE))
+def test_a_view_that_cannot_be_composed_is_the_closed_json_body_on_every_json_route(
+    ctx, monkeypatch, failure, url
+):
+    kind, status, body = UNLOADABLE[failure]
+    unloadable(ctx, monkeypatch, kind)
+    with web(ctx) as client:
+        response = client.get(url)
+    assert response.status_code == status, response.text
+    assert response.headers["content-type"].startswith("application/json"), response.text
+    assert response.json() == body
+    assert PRIVATE not in response.text
+
+
+@pytest.mark.parametrize("url", PAGE_SURFACES)
+@pytest.mark.parametrize("failure", sorted(UNLOADABLE))
+def test_a_view_that_cannot_be_composed_is_the_bounded_sentence_on_every_page(ctx, monkeypatch, failure, url):
+    """A page says the mapper's sentence at the mapper's status, never a bare 500."""
+    kind, status, body = UNLOADABLE[failure]
+    unloadable(ctx, monkeypatch, kind)
+    with web(ctx) as client:
+        response = client.get(url)
+    assert response.status_code == status, response.text
+    assert response.headers["content-type"].startswith("text/html"), response.text
+    assert body["error"] in response.text
+    assert PRIVATE not in response.text
+
+
+def test_the_analyze_form_answers_the_bounded_sentence_when_no_view_composes(ctx, monkeypatch):
+    """POST /analyze maps the failure itself, then `render` must survive its own acquisition.
+
+    The form's `except` renders a page with no session of its own, so `render` opens one
+    (`render.py:118`) and meets the same failure a second time. That second site is the
+    reason this goes through the form rather than through a GET.
+    """
+    unloadable(ctx, monkeypatch, ProjectionError)
+    with web(ctx) as client:
+        response = client.post("/analyze", data={"question": QUESTION}, follow_redirects=False)
+    assert response.status_code == 500, response.text
+    assert "Operation failed; inspect local logs by operation ID" in response.text
+    assert PRIVATE not in response.text
+
+
+def test_a_code_payload_failure_is_a_public_code_and_not_the_callers_fault(ctx, monkeypatch, code_index):
+    """`_answer`'s 400 vocabulary is separated from the public mapper by type, not by timing.
+
+    Every structural failure fires at acquisition today, so `_answer`'s `except ValueError`
+    never sees one. A payload builder that touched a lazily composed path would make an
+    incoherent view a 400 that blames the request; the separation must not depend on that.
+    """
+    context, _ = code_index
+
+    def refuse(*args, **kwargs):
+        raise ProjectionError(PRIVATE)
+
+    monkeypatch.setattr(code_routes, "symbol_rows", refuse)
+    with web(context) as client:
+        response = client.get("/api/code/symbols?q=place")
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "error": "Operation failed; inspect local logs by operation ID",
+        "code": "operation_failed",
+    }
+    assert PRIVATE not in response.text
+
+
+def test_an_out_of_range_stored_setting_does_not_blame_the_caller_or_quote_itself(ctx, monkeypatch, prose):
+    """Light-up's 400 pre-validation checks the caller's own values, not the operator's.
+
+    `validate_settings` names the value it refused. On the merged dict that value can be a
+    *stored* knob the caller never sent, so a 400 would blame the request and print the
+    operator's configuration back at it.
+    """
+    stored = dict(ctx.store.get_settings())
+    monkeypatch.setattr(ctx.store, "get_settings", lambda *a, **k: {**stored, "damping": 5.0})
+    with web(ctx) as client:
+        response = client.post("/api/graph/light-up", json={"question": QUESTION})
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "error": "Operation failed; inspect local logs by operation ID",
+        "code": "operation_failed",
+    }
+    assert "damping" not in response.text and "5.0" not in response.text
 
 
 def test_a_malformed_client_request_keeps_its_own_bounded_400(ctx, client, prose):
