@@ -1,4 +1,11 @@
-"""The `hippo` command line: argument parsing for every subcommand, and the commands that run on the fakes."""
+"""The `hippo` command line: argument parsing for every subcommand, and the commands that run on the fakes.
+
+The fourteen tests that reach a running server carry one filter marker each. Importing
+`starlette.testclient` raises `DeprecationWarning: The anyio.abc.BlockingPortal alias is
+deprecated` from anyio itself, and the import happens inside `behind_server`, so under
+`-W error` it errors in fixture setup. The marker is the sanctioned per-test form; the
+import stays local so the rest of the file needs nothing.
+"""
 
 from __future__ import annotations
 
@@ -191,6 +198,7 @@ def code_cli(request):
     return request.getfixturevalue("code_cli_ctx" if request.param == "local" else "code_cli_behind_server")
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_path_prints_the_relations_that_connect_two_symbols(code_cli, capsys):
     assert cli.main(["path", "pyapp.cli.main", "pyapp.billing.total"]) == 0
     assert capsys.readouterr().out.splitlines()[-2:] == [
@@ -199,11 +207,13 @@ def test_path_prints_the_relations_that_connect_two_symbols(code_cli, capsys):
     ]
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_path_says_so_when_nothing_connects_them(code_cli, capsys):
     assert cli.main(["path", PLACE, "table customers"]) == 0
     assert "No relations connect" in capsys.readouterr().out
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_blast_prints_the_levels_and_the_subsystems(code_cli, capsys):
     assert cli.main(["blast", "pyapp.billing.total", "--depth", "1"]) == 0
     out = capsys.readouterr().out
@@ -211,6 +221,7 @@ def test_blast_prints_the_levels_and_the_subsystems(code_cli, capsys):
     assert "Level 1: pyapp.billing, pyapp.orders.OrderService.place" in out
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_raises_prints_the_route_to_the_exception(code_cli, capsys):
     # Both names in full: the Rust tree has an `OrderService.save` and an `OrderError` too, and a
     # name that means several things is an error the CLI reports rather than a guess it makes.
@@ -222,16 +233,19 @@ def test_raises_prints_the_route_to_the_exception(code_cli, capsys):
     )
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_history_prints_the_commits_that_touched_a_symbol(code_cli, capsys):
     assert cli.main(["history", PLACE]) == 0
     assert "b2b2b2b 2026-01-02 Total the order in place" in capsys.readouterr().out
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_history_of_an_untouched_symbol_says_so(code_cli, capsys):
     assert cli.main(["history", "pyapp.billing.send_invoice"]) == 0
     assert "No commits" in capsys.readouterr().out
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_an_ambiguous_name_exits_two_and_lists_the_candidates(code_cli, capsys):
     assert cli.main(["history", "log"]) == 2
     err = capsys.readouterr().err
@@ -240,16 +254,19 @@ def test_an_ambiguous_name_exits_two_and_lists_the_candidates(code_cli, capsys):
         assert f"  {candidate}" in err
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_an_unknown_name_exits_two(code_cli, capsys):
     assert cli.main(["blast", "no_such_thing"]) == 2
     assert "no_such_thing" in capsys.readouterr().err
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_a_blank_name_exits_two(code_cli, capsys):
     assert cli.main(["path", "  ", PLACE]) == 2
     assert "required" in capsys.readouterr().err
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_the_remote_branch_really_went_to_the_server(code_cli_behind_server, capsys):
     assert cli.main(["history", PLACE]) == 0
     assert "asking the server at http://localhost" in capsys.readouterr().err
@@ -263,6 +280,10 @@ def behind_server(ctx: AppContext, monkeypatch: pytest.MonkeyPatch):
     The embedded database is open in another process (the web server): AppContext.from_env() raises
     StoreLockedError, and the CLI must fall back to that server's JSON API. The "server" here is the real
     app on the test fixtures, reached through Starlette's TestClient (an httpx.Client).
+
+    A TestClient refuses a per-request `timeout` argument, which is why `RemoteHippo` bounds
+    the liveness probe only on the client it builds itself: a client handed in this way owns
+    its own transport settings.
     """
     from starlette.testclient import TestClient
 
@@ -286,6 +307,7 @@ def cli_behind_server(ctx: AppContext, sample_text: str, monkeypatch: pytest.Mon
     yield from behind_server(ctx, monkeypatch)
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_ask_uses_the_running_server_when_the_database_is_locked(cli_behind_server, capsys):
     assert cli.main(["ask", "Where is Acme Robotics headquartered?"]) == 0
     captured = capsys.readouterr()
@@ -293,6 +315,7 @@ def test_ask_uses_the_running_server_when_the_database_is_locked(cli_behind_serv
     assert "asking the server at http://localhost" in captured.err
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_sources_and_settings_use_the_running_server(cli_behind_server, capsys):
     assert cli.main(["sources"]) == 0
     assert "Acme guide" in capsys.readouterr().out
@@ -301,6 +324,7 @@ def test_sources_and_settings_use_the_running_server(cli_behind_server, capsys):
     assert "server       = http://localhost" in out and "damping = " in out
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_index_uploads_to_the_running_server(cli_behind_server: AppContext, tmp_path: Path, capsys):
     note = tmp_path / "zed.md"
     note.write_text("Zed Labs is located in Lisbon. Zed Labs builds drones.\n")
@@ -349,6 +373,7 @@ def test_user_commands_manage_the_ladder(cli_ctx: AppContext, capsys):
     assert cli.main(["user", "token", "nobody"]) == 2
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_user_commands_go_through_the_running_server(
     cli_behind_server: AppContext, monkeypatch: pytest.MonkeyPatch, capsys
 ):

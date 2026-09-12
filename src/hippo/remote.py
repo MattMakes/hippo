@@ -10,6 +10,13 @@ see docs/MCP.md).
 Once users exist the server wants a token: the CLI sends the HIPPO_TOKEN
 environment variable as `Authorization: Bearer`, the same variable stdio MCP
 uses. Without it, a 401 is turned into a message that says where to get one.
+
+A refusal is printed, so what this client raises has to be fit to print. When the
+server sends a public failure (`code` plus `error`, the shape every JSON route
+uses) the error carries exactly that code and that bounded sentence, so the same
+condition reads the same whether the caller reached hippo through the CLI, the API
+or MCP. Nothing else from the body travels: an unparseable error page could hold
+anything, so its text is dropped rather than printed.
 """
 
 from __future__ import annotations
@@ -23,6 +30,16 @@ import httpx
 from .config import Config
 
 TOKEN_ENV = "HIPPO_TOKEN"
+PROBE_SECONDS = 3.0  # "is a hippo listening there?" must answer fast or not at all
+
+
+def _body(response: httpx.Response) -> dict[str, Any]:
+    """The response's JSON object, or `{}` for anything else. Never the raw text."""
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 class RemoteError(RuntimeError):
@@ -57,6 +74,10 @@ class RemoteHippo:
         self.base_url = base_url.rstrip("/")
         # `client` lets tests hand in Starlette's TestClient (an httpx.Client aimed at the app in-process).
         self._client = client or httpx.Client(base_url=self.base_url, timeout=timeout)
+        # A client we were given owns its own transport settings, so the liveness probe below
+        # bounds only the one we built. Starlette's TestClient refuses a per-request `timeout`
+        # outright, and overriding a caller's deadline would be presumptuous in any case.
+        self._probe_timeout = None if client is not None else PROBE_SECONDS
         token = token if token is not None else os.environ.get(TOKEN_ENV, "")
         if token:
             self._client.headers["Authorization"] = f"Bearer {token}"
@@ -69,8 +90,9 @@ class RemoteHippo:
 
     def is_up(self) -> bool:
         """Does a hippo answer there? A 401 counts: the server is up, it just wants a token (see _json)."""
+        bound = {} if self._probe_timeout is None else {"timeout": self._probe_timeout}
         try:
-            return self._client.get("/api/status", timeout=3.0).status_code in (200, 401)
+            return self._client.get("/api/status", **bound).status_code in (200, 401)
         except httpx.HTTPError:
             return False
 
@@ -81,19 +103,29 @@ class RemoteHippo:
                 "to your token (Account page, /account) and run the command again"
             )
         if response.status_code >= 400:
-            detail = response.text
-            body = None
-            try:
-                body = response.json()
-                detail = body.get("detail") or body.get("error") or detail
-            except (ValueError, AttributeError):
-                pass
+            body = _body(response)
             # A 409 from /api/code carries what the name could have meant; that list is the whole
             # point of the status code, so it is raised as itself rather than flattened into text.
-            if isinstance(body, dict) and body.get("candidates"):
-                raise RemoteAmbiguous(str(detail), list(body["candidates"]))
-            raise RemoteError(f"{self.base_url}{response.request.url.path}: {response.status_code} {detail}")
+            candidates = body.get("candidates")
+            if candidates:
+                raise RemoteAmbiguous(str(body.get("detail") or body.get("error") or ""), list(candidates))
+            raise RemoteError(self._refusal(response, body))
         return response.json()
+
+    def _refusal(self, response: httpx.Response, body: dict[str, Any]) -> str:
+        """What the caller may be told about a refusal, in order of how much the server said.
+
+        A `code` means the server classified this itself, and that classification is the
+        whole message: the same two strings a ToolError and the local CLI would print.
+        Without one the route is a legacy validator, whose bounded `detail` is still its
+        own text. A body that is neither is not shown at all.
+        """
+        code, message = body.get("code"), body.get("error")
+        if type(code) is str and type(message) is str:
+            return f"{code}: {message}"
+        detail = body.get("detail") or body.get("error")
+        where = f"{self.base_url}{response.request.url.path}: {response.status_code}"
+        return f"{where} {detail}" if type(detail) is str else where
 
     def ask(self, question: str) -> dict[str, Any]:
         return self._json(self._client.post("/api/ask", json={"question": question}))
