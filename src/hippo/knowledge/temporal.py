@@ -413,22 +413,27 @@ def pinned_selector(resolved: ResolvedTemporalSelector) -> k.TemporalSelector:
     `known_at` with `resolved_known_at` and therefore is not a `TemporalSelector`.
     A stored manifest instead has to reparse as one, so the resolved cutoff is
     written back into the selector's own field and validated against the manifest.
+
+    Every single-side mode carries `known_at`, so this binds for all of them: a
+    `current` or `atemporal` pin that kept an empty cutoff would re-resolve to
+    whatever "now" a replay happened to inject.
     """
-    selector = resolved.selector
-    if "known_at" in type(selector).model_fields:
-        return selector.replace(known_at=resolved.known_at)
-    return selector
+    return resolved.selector.replace(known_at=resolved.known_at)
 
 
 def history_access(store, workspace_id: str, access, *, clock=utc_now) -> EvidenceAccess:
-    """One `EvidenceAccess` over the configured reviewed authorities, not a fork."""
-    authorities = store.get_meta("reviewed_mapping_authorities") or []
-    if not isinstance(authorities, list) or any(
-        not isinstance(item, str) or not item for item in authorities
-    ):
-        raise RuntimeError("Invalid reviewed membership authority configuration")
+    """One `EvidenceAccess` over the configured reviewed authorities, not a fork.
+
+    The authority configuration is read through the store's own accessor, so a
+    later tightening of that contract cannot apply to the reader path and miss
+    this one. The only delta from `_reader_proof` is the injectable clock.
+    """
     return EvidenceAccess(
-        store, workspace_id, access, mapping_authorities=frozenset(authorities), clock=clock
+        store,
+        workspace_id,
+        access,
+        mapping_authorities=frozenset(store._reviewed_mapping_authorities()),
+        clock=clock,
     )
 
 
@@ -494,6 +499,19 @@ def _retention_gaps(store, revisions: set[str]):
     return sorted(revisions - retained)
 
 
+def proof_covers_manifest(proof: AuthorizedEvidence, manifest: k.HistoryManifest) -> bool:
+    """True when every ID the manifest asserts is still inside this audience's proof.
+
+    This is the invariant that protects a persisted manifest, and the one a later
+    pin has to re-establish for its own audience: containment of the *manifest* in
+    the proof, not of the proof in some earlier, broader one.
+    """
+    return (
+        frozenset(manifest.revision_ids) <= proof.revision_ids
+        and frozenset(manifest.assertion_version_ids) <= proof.assertion_version_ids
+    )
+
+
 def _counts(decisions, disposition):
     return {
         "observations": sum(
@@ -524,66 +542,84 @@ def select_history(
     then narrow it by time. Nothing may enter the manifest that the proof did not
     already contain, and a cutoff older than the earliest retained recorded
     interval returns an empty `history_unavailable` manifest, never current rows.
+
+    Every read, the whole closure and the write happen inside one transaction
+    against one authorization epoch, so a persisted manifest always describes a
+    state the store really held: a publication or a collection interleaved with
+    these reads can no longer produce a row no consistent view ever supported.
+    Nothing in the block calls a model, the filesystem, a remote or a caller
+    callback, and the only clock is the injected one `EvidenceAccess` reads.
     """
     resolved = resolve_selector(selector, latest_known_at=request_cutoff)
     if isinstance(resolved, tuple):
         raise ValueError("A compare selector needs one independently pinned manifest per side")
-    resolver = history_access(store, workspace_id, access, clock=clock)
-    broad = resolver.build_history()
-    rows = _authorized_temporal_rows(store, broad)
-    decisions = tuple(_decide(kind, record, resolved) for kind, record in rows)
-    earliest = min((record.recorded_from for _, record in rows), default=None)
-    unavailable = earliest is None or resolved.known_at < earliest
+    with store.transaction():
+        epoch = store.authorization_epoch()
+        resolver = history_access(store, workspace_id, access, clock=clock)
+        broad = resolver.build_history()
+        rows = _authorized_temporal_rows(store, broad)
+        decisions = tuple(_decide(kind, record, resolved) for kind, record in rows)
+        earliest = min((record.recorded_from for _, record in rows), default=None)
+        # An audience that can prove nothing is not a statement about retention:
+        # `history_unavailable` is reserved for a cutoff before the earliest
+        # retained recorded interval among the rows this audience may see.
+        unavailable = earliest is not None and resolved.known_at < earliest
 
-    revisions = _revision_closure(store, decisions, broad, rows)
-    versions = {
-        item.record_id
-        for item in decisions
-        if item.match.disposition == "proven" and item.record_kind == "AssertionVersion"
-    }
-    links, incomplete = _link_generations(store, workspace_id, versions)
-    gaps = _retention_gaps(store, revisions)
-    codes = sorted(
-        ({"history_unavailable"} if unavailable else set())
-        | ({"retention_gap"} if gaps else set())
-        | ({"link_coverage_incomplete"} if incomplete else set())
-    )
-    pinned = pinned_selector(resolved)
-    manifest = k.HistoryManifest(
-        workspace_id=workspace_id,
-        revision_ids=tuple(sorted(revisions)),
-        assertion_version_ids=tuple(sorted(versions)),
-        link_generation_ids=tuple(links),
-        knowledge_cutoff=resolved.known_at,
-        temporal_selector_json=canonical_json(pinned.model_dump(mode="json")),
-        coverage_json=canonical_json(
-            {
-                "proven": _counts(decisions, "proven"),
-                "contextual": _counts(decisions, "contextual"),
-                "codes": codes,
-            }
-        ),
-        retention_gaps=tuple(gaps),
-    )
-    store.put_knowledge(manifest)
-    selection = EvidenceSelection(
-        revision_ids=frozenset(manifest.revision_ids),
-        assertion_version_ids=frozenset(manifest.assertion_version_ids),
-        query_mode="history",
-    )
-    proof = resolver.build(selection)
-    if not (
-        proof.revision_ids <= broad.revision_ids
-        and proof.assertion_version_ids <= broad.assertion_version_ids
-    ):
-        raise AuthorizationChanged("History selection left its authorization proof")
-    return HistorySelection(
-        manifest=manifest,
-        selector=pinned,
-        resolved=resolved,
-        selection=selection,
-        decisions=decisions,
-        resolver=resolver,
-        broad=broad,
-        proof=proof,
-    )
+        revisions = _revision_closure(store, decisions, broad, rows)
+        versions = {
+            item.record_id
+            for item in decisions
+            if item.match.disposition == "proven" and item.record_kind == "AssertionVersion"
+        }
+        links, incomplete = _link_generations(store, workspace_id, versions)
+        gaps = _retention_gaps(store, revisions)
+        codes = sorted(
+            ({"history_unavailable"} if unavailable else set())
+            | ({"retention_gap"} if gaps else set())
+            | ({"link_coverage_incomplete"} if incomplete else set())
+        )
+        pinned = pinned_selector(resolved)
+        manifest = k.HistoryManifest(
+            workspace_id=workspace_id,
+            revision_ids=tuple(sorted(revisions)),
+            assertion_version_ids=tuple(sorted(versions)),
+            link_generation_ids=tuple(links),
+            knowledge_cutoff=resolved.known_at,
+            temporal_selector_json=canonical_json(pinned.model_dump(mode="json")),
+            coverage_json=canonical_json(
+                {
+                    "proven": _counts(decisions, "proven"),
+                    "contextual": _counts(decisions, "contextual"),
+                    "codes": codes,
+                }
+            ),
+            retention_gaps=tuple(gaps),
+        )
+        selection = EvidenceSelection(
+            revision_ids=frozenset(manifest.revision_ids),
+            assertion_version_ids=frozenset(manifest.assertion_version_ids),
+            query_mode="history",
+        )
+        proof = resolver.build(selection)
+        if broad.authorization_epoch != epoch or proof.authorization_epoch != epoch:
+            raise AuthorizationChanged("Authorization changed during the evidence read")
+        # Both directions, before the write: the manifest may assert nothing the
+        # final proof lost, and that proof may reach nothing the broad one denied.
+        if not proof_covers_manifest(proof, manifest):
+            raise AuthorizationChanged("History manifest left its authorization proof")
+        if not (
+            proof.revision_ids <= broad.revision_ids
+            and proof.assertion_version_ids <= broad.assertion_version_ids
+        ):
+            raise AuthorizationChanged("History selection left its authorization proof")
+        store.put_knowledge(manifest)
+        return HistorySelection(
+            manifest=manifest,
+            selector=pinned,
+            resolved=resolved,
+            selection=selection,
+            decisions=decisions,
+            resolver=resolver,
+            broad=broad,
+            proof=proof,
+        )
