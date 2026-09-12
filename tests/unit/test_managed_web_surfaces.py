@@ -1124,8 +1124,9 @@ STR_EXC_SITES = {
     # guarded by the PA8 closure batch (wrap-up finding 18 and `evidence-cleanup4.md`'s
     # residual C1): the user, role and account writes. The store validators these wrap
     # raise the plain `ValueError` their own rules raise, which is the caller's own field;
-    # a subclass is re-raised to the mapper. Nothing in `src/hippo/web` prints an
-    # exception's own words behind an isinstance catch any more.
+    # a subclass is re-raised to the mapper. The two role forms carry one clause more,
+    # because they build their pydantic model inside the `try` and a `ValidationError` is
+    # that form's own field rules. `analyze.py`'s two below are still the deferred family.
     ("routes/users.py", "raise HTTPException(400, str(exc)) from exc"): 5,
     ("routes/users.py", 'return _back(getattr(exc, "detail", str(exc)))'): 2,
     ("auth.py", 'return RedirectResponse("/account?error=" + quote(str(exc)), status_code=303)'): 1,

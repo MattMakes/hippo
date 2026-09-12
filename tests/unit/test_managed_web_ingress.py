@@ -796,3 +796,82 @@ def test_the_index_job_closure_captures_nothing_request_scoped(web):
     )
     assert type(captured["actor"]).__name__ in ("BuildActor", "NoneType")
     assert isinstance(captured["source_id"], str) and isinstance(captured["operation"], str)
+
+
+# ---------- T3 (`task4-notes.md:91,96`): the verified lane, over HTTP, as a real reader
+
+
+# `test_managed_web_surfaces.py` proves verified dense dispatch at
+# `test_light_up_over_verified_managed_evidence_dispatches_verified_dense_once`, but through
+# `internal_request(ctx)` -- a direct call with the internal audience -- and its own fixture's
+# docstring records why: the staged-writer fixture's generation is not one a reader audience
+# can prove, so the same request over HTTP came back as an empty `legacy` corpus. That was
+# read as a fixture-building task and deferred.
+#
+# It is not one here. This module's `managed_source` builds through the *real* coordinator
+# over the real route, and `ingest/prose_generation.py` stamps `origin="local_curated"`,
+# which is exactly the origin `knowledge/access.py` accepts for a workspace reader. So the
+# two cases the 4b-ii review called fixture-blocked are two tests: a reader reaching verified
+# dense over the transport, and a revocation landing on that lane rather than on a
+# structural one.
+
+
+def dispatched(monkeypatch) -> list[str]:
+    """Every dense mode a request routes to, seen at the one module attribute."""
+    from contextlib import contextmanager
+
+    from hippo.knowledge import dense_session as module
+
+    modes: list[str] = []
+    real = module.retrieval_session
+
+    @contextmanager
+    def observed(*args, **kwargs):
+        with real(*args, **kwargs) as session:
+            # A pass-through is not a dispatch: an already routed session is handed back.
+            if session is not kwargs.get("session"):
+                modes.append(session.graph.dense_capability.mode)
+            yield session
+
+    monkeypatch.setattr(module, "retrieval_session", observed)
+    return modes
+
+
+def test_a_reader_reaches_verified_dense_over_http(web, monkeypatch):
+    """The audience is the point: a reader, a cookie-less bearer token, a real transport."""
+    managed_source(web)
+    modes = dispatched(monkeypatch)
+
+    response = web.client.post("/api/graph/light-up", json={"question": QUESTION}, headers=web.reader_headers)
+
+    assert response.status_code == 200, response.text
+    assert modes == ["verified"], "a reader over HTTP must reach the verified lane exactly once"
+    say_nothing_private(response.text)
+
+
+def test_revoking_during_a_verified_dispatch_is_the_generic_permission_answer(web, monkeypatch):
+    """The revocation half: the epoch moves while the *verified* owner is held.
+
+    The existing revocation tests all land on a structural owner. This one fires after the
+    dispatcher has routed the session to verified dense, which is the lane an activated
+    managed corpus actually serves from, and the answer must still be the permission one --
+    not a half-built result and not a dense failure wearing a retrieval code.
+    """
+    managed_source(web)
+    from contextlib import contextmanager
+
+    from hippo.knowledge import dense_session as module
+
+    real = module.retrieval_session
+
+    @contextmanager
+    def revoked(*args, **kwargs):
+        with real(*args, **kwargs) as session:
+            assert session.graph.dense_capability.mode == "verified"
+            web.store._bump_authorization_epoch()
+            yield session
+
+    monkeypatch.setattr(module, "retrieval_session", revoked)
+    response = web.client.post("/api/graph/light-up", json={"question": QUESTION}, headers=web.reader_headers)
+    assert response.status_code == 409, response.text
+    assert response.json() == PERMISSION_RESPONSE

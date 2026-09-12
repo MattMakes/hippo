@@ -332,6 +332,35 @@ def test_compose_unions_pairs_and_refuses_two_generations_for_one_source():
         compose_graphs(lane((("source-a", "gen-1"),)), lane((("source-a", "gen-2"),)))
 
 
+def test_a_lane_holding_only_an_empty_generation_still_owns_the_composed_version():
+    """PA2 finding 6: the `populated` shortcut's own reason, as an assertion.
+
+    `compose_graphs` copies a single contributing lane's `version` onto the result, and the
+    comment at that line says an empty selected generation counts as a contributor -- if it
+    did not, a composition whose only real lane is the empty one would report the version of
+    the *other*, node-less lane. That is the sentence the shortcut exists for, and the pair
+    assertions above pass whichever version comes out, so nothing held it.
+
+    The plan's adversarial case ("empty publication changes the audience view fingerprint")
+    is downstream of exactly this: a version that follows the wrong lane is a fingerprint
+    that does not move when the empty publication does.
+    """
+
+    def lane(pairs, version):
+        graph = _assemble({}, [], [], {}, [], {}, {}, [], selected_managed_generations=pairs)
+        graph.version = version
+        return graph
+
+    empty_only = lane((("source-a", "gen-1"),), 7)
+    nothing = lane((), 11)
+    assert empty_only.num_nodes == 0, "the point of the case: identity without nodes"
+    assert compose_graphs(empty_only, nothing).version == 7
+    assert compose_graphs(nothing, empty_only).version == 7
+    # Two contributors is no longer one lane's version to give, and neither is none.
+    assert compose_graphs(empty_only, lane((("source-b", "gen-2"),), 13)).version not in (7, 13)
+    assert compose_graphs(nothing, lane((), 13)).version not in (11, 13)
+
+
 def test_structural_to_dense_activation_retains_the_selected_pairs(ctx, tmp_path, monkeypatch):
     from hippo.knowledge.dense_session import dense_session
     from tests.unit.test_dense_session import observe, verified
