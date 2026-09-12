@@ -130,6 +130,29 @@ Untouched, as the brief requires: `knowledge/conflicts.py`, `knowledge/lifecycle
    test asserts this explicitly rather than asserting a revision-level retirement that no record
    claims.
 
+## Open findings for root / part 2
+
+1. **A historical read is fenced by a write lease it does not use.** `RECORD_EPOCHS`
+   (`src/hippo/store/authorization.py:130`) classifies `HistoryManifest` as `content`, so
+   `_check_knowledge_write` walks `_record_revisions` through the manifest's `revision_ids` to the
+   source and demands build authority whenever that source has a running rebuild. Verified: with a
+   claimed rebuild on the source, `select_history` raises
+   `ValueError: Managed evidence write requires build authority`. Every test world here is fully
+   published before selection, so nothing in this slice hits it, but a production history query
+   concurrent with a rebuild would fail. `store/authorization.py` is outside this brief's
+   ownership; the suggested fix is reclassifying `HistoryManifest` as `bookkeeping`, since it
+   names evidence rather than being evidence. Root or part 2 should decide.
+2. **T5A6's CHECK line is narrower than this slice.** It still lists only the four pure-module
+   files. The orchestrator should widen it to also cover `src/hippo/knowledge/access.py`,
+   `src/hippo/knowledge/model.py`, `src/hippo/knowledge/snapshots.py`,
+   `src/hippo/store/snapshots.py`, `tests/unit/test_snapshot_store.py` and
+   `tests/unit/test_knowledge_contracts.py`. All ten are Ruff clean today.
+3. **"Revalidate before release" is inherited, not added here.** `QuerySnapshotBundle.close()`
+   releases its references without rechecking authorization; that is the reviewed pre-existing
+   behavior and this slice did not change it. Part 2 should not assume a release-time recheck
+   exists. Revalidation before each *dispatch* is covered by `validate()`, which this slice does
+   exercise for history pins.
+
 ## What part 2 still owes
 
 `recorded_correction` (section 5 `TemporalPublicationPlan` and `publish_staged_generation`
