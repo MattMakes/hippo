@@ -31,6 +31,7 @@ from hippo.hipporag.graph_index import (
     _path_index,
     add_code_kind,
     build_igraph,
+    canonical_arrows,
     canonical_fact_order,
 )
 from hippo.hipporag.text import split_identifier
@@ -843,6 +844,13 @@ def _assemble(
         arrow = DirectedEdge(index[a], index[b], kind, weight, provenance, deepcopy(extra))
         outgoing[arrow.src].append(arrow)
         incoming[arrow.dst].append(arrow)
+    # The flat sort above is by string identity; each bucket must hold the same per-vertex
+    # order `GraphIndex.load` and `scoped` impose, or composing a graph with an empty one
+    # would reorder its arrows.
+    for arrows in outgoing.values():
+        arrows[:] = canonical_arrows(arrows)
+    for arrows in incoming.values():
+        arrows[:] = canonical_arrows(arrows)
     graph = build_igraph(len(identities), edges)
     boosts = np.ones(len(identities))
     specificity = np.zeros(len(identities))
