@@ -80,10 +80,31 @@ class SameSourceSelection:
     current: tuple[ConflictCandidate, ...]
     superseded_version_ids: tuple[str, ...]
     ambiguous_series: tuple[str, ...]
+    superseded_by_series: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    """Supersession keyed by its series, because it was only ever decided there.
+
+    `superseded_version_ids` is the flat sorted-unique union and answers "was this
+    version superseded anywhere". It is not a retirement list: the same version ID
+    can be superseded under one source's series and still be the current claim
+    under another's, so a caller that persists closures must use
+    `fully_superseded_version_ids`, never this tuple.
+    """
 
     @property
     def requires_refetch(self) -> bool:
         return bool(self.ambiguous_series)
+
+
+def fully_superseded_version_ids(selection: SameSourceSelection) -> tuple[str, ...]:
+    """The version IDs no series still carries as current, so nothing else claims them.
+
+    This is the only set an append-only correction may close: a version superseded
+    inside one series while remaining the current same-source candidate in another
+    is still being asserted, and closing its recorded interval would retire a claim
+    no adapter retired.
+    """
+    current = {candidate.version.id for candidate in selection.current}
+    return tuple(sorted(set(selection.superseded_version_ids) - current))
 
 
 def compare_orders(a: SourceOrder, b: SourceOrder) -> OrderingRelation:
@@ -144,7 +165,7 @@ def select_same_source(candidates) -> SameSourceSelection:
     grouped = defaultdict(list)
     for candidate in _deduplicate(tuple(candidates)):
         grouped[_series_key(candidate)].append(candidate)
-    current, superseded, ambiguous = [], [], []
+    current, superseded, ambiguous, by_series = [], set(), [], []
     for series, members in sorted(grouped.items()):
         newest = [
             member
@@ -153,13 +174,19 @@ def select_same_source(candidates) -> SameSourceSelection:
         ]
         retained = {_candidate_key(member) for member in newest}
         current.extend(newest)
-        superseded.extend(member.version.id for member in members if _candidate_key(member) not in retained)
+        # One source can contribute the same version under two support groups, so
+        # collapse to version IDs before recording the series' supersession.
+        dropped = sorted({member.version.id for member in members if _candidate_key(member) not in retained})
+        if dropped:
+            by_series.append((canonical_json(series), tuple(dropped)))
+            superseded.update(dropped)
         if len({member.version.id for member in newest}) > 1:
             ambiguous.append(canonical_json(series))
     return SameSourceSelection(
         current=tuple(sorted(current, key=_candidate_key)),
         superseded_version_ids=tuple(sorted(superseded)),
         ambiguous_series=tuple(sorted(ambiguous)),
+        superseded_by_series=tuple(sorted(by_series)),
     )
 
 
