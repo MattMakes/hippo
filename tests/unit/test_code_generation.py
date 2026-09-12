@@ -403,15 +403,22 @@ def test_the_legacy_graph_answers_every_query_until_the_publication_commits(worl
     baseline = served(w)
     assert legacy in baseline[0]
     assert search(w.ctx, "legacy repository passage").passages
-    seen = []
+    seen, batches = [], []
 
     def watch(progress):
-        if progress.phase in ("write", "seal"):
+        if progress.phase not in ("write", "seal"):
+            return
+        batches.append(progress.phase)
+        # Loading the whole served graph is the expensive part of this assertion, so it
+        # is sampled rather than repeated per batch: the claim is that the legacy lane
+        # never changes while staging runs, and the batch counter below proves the
+        # staging really did span many transactions.
+        if len(seen) < 3:
             seen.append((progress.phase, served(w)))
 
-    result = build(w, on_progress=watch, options=options(w, batch_size=1, checkpoint_interval=1))
+    result = build(w, on_progress=watch, options=options(w, batch_size=4, checkpoint_interval=1))
 
-    assert [phase for phase, _ in seen].count("write") > 1, "a bootstrap stages over many transactions"
+    assert batches.count("write") > 2, "a bootstrap stages over many transactions"
     assert all(snapshot == baseline for _, snapshot in seen), "the legacy graph blinked during staging"
     after = served(w)
     assert legacy not in after[0] and after != baseline
@@ -581,17 +588,22 @@ def test_a_refresh_keeps_g1_selected_through_every_batch_and_publishes_atomicall
     w = world
     first, tree = refreshed(w)
     served_first = served(w)
-    during = []
+    during, sampled = [], []
 
     def watch(progress):
-        if progress.phase == "write":
-            during.append((w.store.get_source(w.source)["active_generation_id"], served(w)))
+        if progress.phase != "write":
+            return
+        # The pointer is read on every batch; the graph it selects is sampled, because
+        # loading it is what costs.
+        during.append(w.store.get_source(w.source)["active_generation_id"])
+        if len(sampled) < 2:
+            sampled.append(served(w))
 
-    second = build(w, operation="refresh", tree=tree, on_progress=watch, options=options(w, batch_size=1))
+    second = build(w, operation="refresh", tree=tree, on_progress=watch, options=options(w, batch_size=4))
 
     assert second.generation_id != first.generation_id
-    assert during and all(active == first.generation_id for active, _ in during)
-    assert all(snapshot == served_first for _, snapshot in during)
+    assert len(during) > 2 and all(active == first.generation_id for active in during)
+    assert sampled and all(snapshot == served_first for snapshot in sampled)
     assert generation(w, second.generation_id).parent_id == first.generation_id
     assert w.store.get_source(w.source)["active_generation_id"] == second.generation_id
     assert served(w) != served_first

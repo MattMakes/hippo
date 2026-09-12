@@ -426,7 +426,9 @@ def _coverage(captured, chunks, facts, reasons, *, unbound, dropped, truncated, 
         "capture_kind": captured.kind,
         "files_accepted": len(captured.accepted.inputs),
         "files_excluded": excluded,
-        "files_refused": {item.reason: item.logical_path for item in chunks.refusals},
+        # Keyed by path, not by reason: two binary files are two facts, and a
+        # reason-keyed map would silently keep only the last of them.
+        "files_refused": {item.logical_path: item.reason for item in chunks.refusals},
         "openie": OPENIE_SKIPPED,
         "openie_reasons": dict(sorted(reasons.items())),
         "passages": kinds,
