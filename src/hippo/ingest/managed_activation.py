@@ -35,6 +35,7 @@ from ..knowledge.embedding_profile import (
 from ..knowledge.raw_artifacts import RawArtifactStore
 from ..knowledge.source_lifecycle import OPERATION_ID
 from ..ollama import EMBED_PREFIXES, OllamaError, _base_name
+from ..store.generations import REFRESHING_PREFIX
 from .accepted_inputs import CaptureLimits, FileInput, InputCaptureError
 from .chunker import MIN_CHUNK_CHARS
 from .prose_generation import (
@@ -80,6 +81,16 @@ class ManagedConfigurationError(ManagedDispatchError):
 
 class ManagedIngressError(ManagedDispatchError):
     """The saved bytes of this source cannot be offered to a managed build."""
+
+
+class ManagedPreflightRefused(ManagedDispatchError):
+    """One managed lane of this bulk cannot be built; which one is not disclosed.
+
+    A bulk that refuses and a bulk with nothing to do both used to return `0`, so a route
+    could not tell "this workspace is empty" from "one lane's authority failed" without
+    re-reading the inventory it had just been refused. This is the global signal the plan's
+    "no hidden per-source breakdown" leaves open: it names no source and carries no count.
+    """
 
 
 # ------------------------------------------------------------- eligibility
@@ -138,15 +149,26 @@ class Dispatch:
     operation_id: str | None = None
 
 
+def check_operation_id(operation_id: str | None) -> str | None:
+    """An omitted identity is fine; anything that is not a bounded printable token is not.
+
+    Closed validation of a caller-supplied token, so it can be echoed in a receipt. It is
+    separate from `plan_dispatch` because `delete_source` has to apply it even when there
+    is no Source row left to classify.
+    """
+    if operation_id is not None and (
+        type(operation_id) is not str or OPERATION_ID.match(operation_id) is None
+    ):
+        raise ManagedDispatchError("Operation identity must be a bounded printable token")
+    return operation_id
+
+
 def plan_dispatch(
     source: Source, *, actor: BuildActor | None = None, operation_id: str | None = None
 ) -> Dispatch:
     """Decide the lane for one source. Raises before a managed source can reach legacy."""
     check_actor(actor)
-    if operation_id is not None and (
-        type(operation_id) is not str or OPERATION_ID.match(operation_id) is None
-    ):
-        raise ManagedDispatchError("Operation identity must be a bounded printable token")
+    check_operation_id(operation_id)
     eligibility = managed_eligibility(source)
     if eligibility == "tombstoned":
         return Dispatch("skip", eligibility)
@@ -310,7 +332,7 @@ def _present_progress(ctx, source_id: str, progress: BuildProgress, *, refresh: 
     the build's own authority is bound to.
     """
     token = _stage_token(progress)
-    fields: dict[str, Any] = {"stage": f"refreshing: {token}" if refresh else token}
+    fields: dict[str, Any] = {"stage": _refreshing_stage(token) if refresh else token}
     if refresh:
         fields["status"] = "ready"  # the current generation keeps serving throughout
     if progress.total > 0:
@@ -319,9 +341,20 @@ def _present_progress(ctx, source_id: str, progress: BuildProgress, *, refresh: 
     present(ctx, source_id, **fields)
 
 
+def _refreshing_stage(token: str) -> str:
+    """The stage a refresh writes, built from the prefix the restart sweep matches.
+
+    The store's sweep finds an abandoned refresh by `stage STARTS WITH REFRESHING_PREFIX`.
+    Spelling the prefix here as well would let the two drift, and the drift is silent: the
+    sweep would stop matching, `refreshing: ...` would stay on the row for ever, and every
+    test would still be green.
+    """
+    return f"{REFRESHING_PREFIX} {token}"
+
+
 def _starting_fields(refresh: bool) -> dict[str, Any]:
     if refresh:
-        return {"status": "ready", "stage": "refreshing: capture", "error": None}
+        return {"status": "ready", "stage": _refreshing_stage("capture"), "error": None}
     return {"status": "indexing", "stage": "capture", "progress_done": 0, "progress_total": 0, "error": None}
 
 

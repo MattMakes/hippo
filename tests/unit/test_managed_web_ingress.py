@@ -525,3 +525,40 @@ def test_bulk_reindex_holds_one_owner_across_the_pipeline_call(web, monkeypatch)
     assert during == [(1, 0)]
     assert len(seen) == 1 and len(closed) == 1
     wait(web.ctx)
+
+
+# ------------------------------------- 4e: a bulk that started nothing says so
+
+
+def test_a_bulk_whose_managed_preflight_refuses_answers_a_closed_refusal_code(web, monkeypatch):
+    """`{"accepted": true}` has to keep meaning that something was accepted.
+
+    A refused preflight clears nothing and starts nothing, and the only trace used to be a
+    local log line: an operator was told their bulk was accepted and had to read the server
+    log to find out it was not. The refusal carries no source id and no count, so the body
+    names the condition and nothing about the inventory.
+    """
+    from hippo.ingest.managed_activation import ManagedPreflightRefused
+
+    def refuse(ctx, **kwargs):
+        raise ManagedPreflightRefused("One managed lane of this bulk cannot be built")
+
+    monkeypatch.setattr(pipeline, "reindex_all", refuse)
+    response = web.client.post("/api/sources/reindex-all", headers=web.admin_headers)
+    assert response.status_code == 409, response.text
+    assert response.json() == {"error": "Bulk reindex refused", "code": "bulk_refused"}
+
+
+def test_a_bulk_over_a_managed_inventory_with_no_actor_is_the_generic_permission_answer(web, monkeypatch):
+    """A managed operation an identity may not perform is a permission answer, not a report."""
+
+    def refuse(ctx, **kwargs):
+        raise ManagedActorRequired("A managed source cannot be rebuilt without a build actor")
+
+    monkeypatch.setattr(pipeline, "reindex_all", refuse)
+    response = web.client.post("/api/sources/reindex-all", headers=web.admin_headers)
+    assert response.status_code == 409, response.text
+    assert response.json() == {
+        "error": "Permissions changed; repeat the query",
+        "code": "authorization_changed",
+    }

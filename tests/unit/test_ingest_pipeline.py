@@ -164,7 +164,8 @@ def test_a_source_with_no_text_fails_with_a_message(ctx: AppContext) -> None:
     wait(ctx)
     source = ctx.store.get_source(source_id)
     assert source["status"] == "failed"
-    assert "no readable text" in source["error"]
+    # The row keeps the class and the fixed sentence; "no readable text" stays in the log.
+    assert source["error"] == "ValueError: indexing failed; inspect local logs"
 
 
 # --------------------------------------------------------------- repos
@@ -186,7 +187,7 @@ def test_add_repo_records_clone_failures(ctx: AppContext) -> None:
     assert source["kind"] == "repo" and source["name"] == "acme/robots"
     assert source["meta"]["url"] == "https://127.0.0.1:9/acme/robots.git"
     assert source["status"] == "failed"
-    assert "could not clone" in source["error"]
+    assert source["error"] == "RepoError: indexing failed; inspect local logs"
 
 
 def test_add_repo_indexes_a_checkout(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -547,3 +548,33 @@ def test_a_symbol_carries_the_commits_that_touched_it_all_the_way_to_an_answer(g
     line = next(ln for ln in answer.context_block.splitlines() if ln.startswith("Commits: "))
     assert line == f"Commits: {row['sha'][:7]} 2024-01-02 Total, invoice and log in place"
     assert row["sha"] not in answer.context_block  # shortened for the page, whole in the trace
+
+
+# ----------------------------------- 4e: a legacy failure is bounded on the row
+
+
+LEGACY_FAILURE = "indexing failed; inspect local logs"
+READING_PRIVATE = "/Users/someone/data/private/notes.md: 'Acme Robotics is in Boulder.'"
+
+
+def test_a_legacy_failure_stores_its_class_and_a_fixed_sentence(
+    ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Source row is a public surface; the exception's own words are not bounded.
+
+    `ReadError` names the file it was reading and a build failure can quote source text,
+    so the row keeps the class name -- which is what an operator greps the logs by -- and
+    a sentence that says where the rest of it is.
+    """
+    from hippo.ingest.readers import ReadError
+
+    def refuse(*args, **kwargs):
+        raise ReadError(READING_PRIVATE)
+
+    monkeypatch.setattr(pipeline, "_read_chunk_index", refuse)
+    source_id = pipeline.add_text(ctx, "Notes", "Some text to index.")
+    wait(ctx)
+    source = ctx.store.get_source(source_id)
+    assert source["status"] == "failed"
+    assert source["error"] == f"ReadError: {LEGACY_FAILURE}"
+    assert READING_PRIVATE not in source["error"]

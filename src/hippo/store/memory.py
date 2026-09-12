@@ -22,22 +22,17 @@ from ..access import ACCESS_WHERE, Access, access_params
 from .authorization import permission_mutation
 from .base import Neo4jBase, new_id, now_iso, with_defaults
 from .code import SYNONYM_LABELS, grouped_by_labels
-from .generations import legacy_source_cleanup, native_mutation, native_write
+from .generations import (
+    INTERRUPTED_REFRESH_ERROR,
+    INTERRUPTED_REFRESH_STAGE,
+    REFRESHING_PREFIX,
+    legacy_source_cleanup,
+    native_mutation,
+    native_write,
+)
 from .migrations import DEFAULT_WORKSPACE_ID
 
 BATCH = 200  # rows per write query; keeps transactions small and progress visible
-
-# A managed refresh leaves the source `ready` with a `refreshing: ...` stage, because its
-# published generation keeps serving throughout. A restart therefore cannot mark it failed
-# the way an interrupted legacy job is marked failed: only the stage has to be retired, or
-# the row claims a refresh that no longer has a worker. The code and message are the same
-# bounded shape the managed build's own failures use; saying it here keeps the store from
-# importing the pipeline to recover from a crash.
-REFRESHING_PREFIX = "refreshing:"
-INTERRUPTED_REFRESH_STAGE = "refresh_failed"
-INTERRUPTED_REFRESH_ERROR = (
-    "build_interrupted: The build was interrupted by a restart. Reindex to run it again."
-)
 
 
 def _batches(rows: list[Any], size: int = BATCH):
@@ -204,18 +199,28 @@ class MemoryQueries(Neo4jBase):
             """,
             message=message,
         )
-        refreshing = self.run_one(
-            """
-            MATCH (s:Source) WHERE s.status = 'ready' AND s.stage STARTS WITH $prefix
-            SET s.stage = $stage, s.error = $error, s.updated_at = $now
-            RETURN count(s) AS n
-            """,
-            prefix=REFRESHING_PREFIX,
-            stage=INTERRUPTED_REFRESH_STAGE,
-            error=INTERRUPTED_REFRESH_ERROR,
-            now=now,
-        )
-        return sum(int((row or {}).get("n", 0)) for row in (sources, runs, sets, refreshing))
+        # Read the ids before the rewrite: past it the predicate no longer matches, and the
+        # build holder each one is still carrying has to be released or the reindex the new
+        # error asks for is refused with `BuildBusy` until its lease expires.
+        refreshing = "s.status = 'ready' AND s.stage STARTS WITH $prefix"
+        interrupted = [
+            row["id"]
+            for row in self.run(
+                f"MATCH (s:Source) WHERE {refreshing} RETURN s.id AS id", prefix=REFRESHING_PREFIX
+            )
+        ]
+        if interrupted:
+            self.run(
+                f"MATCH (s:Source) WHERE {refreshing} "
+                "SET s.stage = $stage, s.error = $error, s.updated_at = $now",
+                prefix=REFRESHING_PREFIX,
+                stage=INTERRUPTED_REFRESH_STAGE,
+                error=INTERRUPTED_REFRESH_ERROR,
+                now=now,
+            )
+            for source_id in interrupted:
+                self.release_interrupted_build(source_id)
+        return len(interrupted) + sum(int((row or {}).get("n", 0)) for row in (sources, runs, sets))
 
     def remove_orphans(self) -> None:
         self.run("MATCH (f:Fact) WHERE NOT (f)<-[:STATES]-() DETACH DELETE f")

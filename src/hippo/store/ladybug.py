@@ -81,15 +81,17 @@ from .code import (
     symbol_write_row,
 )
 from .evals import _result_row, _run_row, _set_row
-from .generations import GenerationQueries, legacy_source_cleanup, native_mutation, native_write
-from .knowledge import KnowledgeQueries
-from .memory import (
+from .generations import (
     INTERRUPTED_REFRESH_ERROR,
     INTERRUPTED_REFRESH_STAGE,
     REFRESHING_PREFIX,
-    _passage_row,
-    _source_row,
+    GenerationQueries,
+    legacy_source_cleanup,
+    native_mutation,
+    native_write,
 )
+from .knowledge import KnowledgeQueries
+from .memory import _passage_row, _source_row
 from .migrations import DEFAULT_WORKSPACE_ID
 from .snapshots import SnapshotQueries
 from .users import _role_row, _user_row, clean_capabilities, clean_rank, clean_username, slug
@@ -713,9 +715,12 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 total += count
         refreshing = f"n.status = 'ready' AND n.stage STARTS WITH '{REFRESHING_PREFIX}'"
         with self._lock:
-            row = self.run_one(f"MATCH (n:Source) WHERE {refreshing} RETURN count(n) AS n")
-            count = int(row["n"]) if row else 0
-            if count:
+            # The ids, not a count: past the rewrite the predicate no longer matches, and each
+            # retired row is still carrying the build holder its crash left behind.
+            interrupted = [
+                row["id"] for row in self.run(f"MATCH (n:Source) WHERE {refreshing} RETURN n.id AS id")
+            ]
+            if interrupted:
                 self.run(
                     f"MATCH (n:Source) WHERE {refreshing} "
                     "SET n.stage = decode($stage), n.error = decode($error), n.updated_at = $now",
@@ -723,7 +728,9 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                     error=text(INTERRUPTED_REFRESH_ERROR),
                     now=now,
                 )
-            total += count
+            total += len(interrupted)
+        for source_id in interrupted:
+            self.release_interrupted_build(source_id)
         return total
 
     def remove_orphans(self) -> None:

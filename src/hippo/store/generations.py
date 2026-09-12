@@ -11,6 +11,25 @@ from .authorization import bump_epoch, epoch
 
 MANDATORY_REPRESENTATIONS = ("evidence", "dense", "native")
 
+# A managed refresh leaves the source `ready` with a `refreshing: ...` stage, because its
+# published generation keeps serving throughout. A restart therefore cannot mark it failed
+# the way an interrupted legacy job is marked failed: only the stage has to be retired, or
+# the row claims a refresh that no longer has a worker. The code and message are the same
+# bounded shape the managed build's own failures use; saying it here keeps the store from
+# importing the pipeline to recover from a crash.
+#
+# They live in this module rather than in `memory.py`, which is the Neo4j backend and not a
+# shared base: two other backends importing a domain constant from a third backend's module
+# made them depend on it for vocabulary rather than for row shape. `managed_activation`
+# writes the stage this prefix matches and reads the prefix from here, so the sweep's
+# predicate and the writer of the value it matches cannot drift apart.
+REFRESHING_PREFIX = "refreshing:"
+INTERRUPTED_REFRESH_STAGE = "refresh_failed"
+INTERRUPTED_REFRESH_CODE = "build_interrupted"
+INTERRUPTED_REFRESH_ERROR = (
+    f"{INTERRUPTED_REFRESH_CODE}: The build was interrupted by a restart. Reindex to run it again."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SourceTombstone:
@@ -66,6 +85,27 @@ class GenerationQueries:
             if not self.source_is_managed(source_id):
                 self._source_fields(source_id, managed=True)
                 self._bump_authorization_epoch()
+
+    def release_interrupted_build(self, source_id) -> None:
+        """Release the build holder a crash left on a source the restart sweep is retiring.
+
+        Without this the sweep's own sentence is a lie: `active_build_id` still names a
+        `MaintenanceJob` the crash left `running` with a lease up to the whole lease
+        duration in the future, `_install` refuses a new build while that holder is live
+        (`BuildBusy`), and "Reindex to run it again" is refused for that window. The
+        expired-lease recovery clears it eventually; the sweep already holds the right row.
+
+        The same transition the delete path performs above, minus the suppression: only the
+        exact job this source was holding ends, and the published active generation, every
+        other job and every count are untouched.
+        """
+        source = self.get_source(source_id)
+        if not source or not source.get("active_build_id"):
+            return
+        job = self._knowledge_get("MaintenanceJob", source["active_build_id"])
+        if job is not None and job.kind == "rebuild" and job.status == "running":
+            self._write_knowledge(job.replace(status="cancelled", error_code=INTERRUPTED_REFRESH_CODE))
+        self._source_fields(source_id, active_build_id=None)
 
     def apply_source_tombstone(self, source_id, *, operation_id, created_at):
         """Fence the builder and suppress the current view of a managed source.

@@ -43,13 +43,16 @@ from hippo.store.code import (
     refers_to_write_rows,
     symbol_write_row,
 )
-from hippo.store.generations import GenerationQueries, legacy_source_cleanup, native_mutation, native_write
-from hippo.store.knowledge import KnowledgeQueries
-from hippo.store.memory import (
+from hippo.store.generations import (
     INTERRUPTED_REFRESH_ERROR,
     INTERRUPTED_REFRESH_STAGE,
     REFRESHING_PREFIX,
+    GenerationQueries,
+    legacy_source_cleanup,
+    native_mutation,
+    native_write,
 )
+from hippo.store.knowledge import KnowledgeQueries
 from hippo.store.migrations import DEFAULT_WORKSPACE_ID
 from hippo.store.snapshots import SnapshotQueries
 from hippo.store.users import clean_capabilities, clean_rank, clean_username, slug
@@ -317,6 +320,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
     def mark_interrupted_jobs(self) -> int:
         message = "interrupted by a restart; run it again"
         total = 0
+        interrupted = []
         for s in self.sources.values():
             if s["status"] in ("reading", "indexing"):
                 s.update(status="failed", error=message, updated_at=now_iso())
@@ -326,7 +330,12 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 s.update(
                     stage=INTERRUPTED_REFRESH_STAGE, error=INTERRUPTED_REFRESH_ERROR, updated_at=now_iso()
                 )
+                interrupted.append(s["id"])
                 total += 1
+        for source_id in interrupted:
+            # The crash's build holder goes with the stage, or the reindex the new error
+            # asks for is refused until the abandoned lease expires.
+            self.release_interrupted_build(source_id)
         for r in self.runs.values():
             if r["status"] == "running":
                 r.update(status="failed", error=message, finished_at=now_iso())

@@ -136,14 +136,19 @@ def test_a_job_whose_source_row_vanished_sweeps_its_own_orphans(ctx, gate: Gate)
 
 
 def test_a_failed_job_clears_the_passages_it_wrote(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    private = "model fell over reading /Users/someone/private/notes.md"
+
     def explode(*args, **kwargs):
-        raise RuntimeError("model fell over")
+        raise RuntimeError(private)
 
     monkeypatch.setattr(indexer.openie, "extract_many", explode)
     source_id = pipeline.add_sample(ctx)
     ctx.jobs.wait_all(WAIT)
     source = ctx.store.get_source(source_id)
-    assert source["status"] == "failed" and "model fell over" in source["error"]
+    # The row is a public surface: the class an operator greps by, and nothing it was reading.
+    assert source["status"] == "failed"
+    assert source["error"] == "RuntimeError: indexing failed; inspect local logs"
+    assert private not in source["error"]
     assert source["passages"] == 0
     assert counts(ctx) == (0, 0, 0)
 

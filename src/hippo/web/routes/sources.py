@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from ...access import Principal, roles_at_or_below
 from ...hipporag import paths
 from ...ingest import pipeline
+from ...ingest.managed_activation import ManagedPreflightRefused
 from ...ingest.pipeline import Busy
 from ...ingest.repos import RepoError
 from ...knowledge.access import AuthorizationChanged
@@ -35,6 +36,11 @@ from ..render import STOP_POLLING, ctx_of, render
 from . import graph as graph_routes
 
 router = APIRouter()
+
+# The stable code for a bulk that was refused before it started anything. It is not one of
+# the closed retrieval codes -- nothing failed and nothing is stale -- so it lives with the
+# route that answers it, like `web/app.py`'s `authorization_changed`.
+BULK_REFUSED = "bulk_refused"
 
 PASSAGES_PER_PAGE = 25
 BUSY_STATUSES = {"queued", "reading", "indexing"}  # a source in one of these still changes on its own
@@ -508,6 +514,16 @@ def reindex_all(request: Request):
             pipeline.reindex_all(ctx, build_actor=build_actor_of(principal))
         except Busy as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
+        except ManagedPreflightRefused:
+            # A refused preflight clears nothing and starts nothing, so `{"accepted": true}`
+            # would be untrue and the only other trace is a local log line. The refusal
+            # names no source and carries no count, and neither does this: the caller learns
+            # that the bulk did not run, not which lane stopped it.
+            view.validate()
+            return JSONResponse({"error": "Bulk reindex refused", "code": BULK_REFUSED}, status_code=409)
+        # `ManagedActorRequired` is deliberately not caught: a managed operation this
+        # identity may not perform is a permission answer, and `web/app.py` already gives
+        # every route the same one.
         view.validate()
         # The pipeline reports only a global count, without per-source outcomes.
         # Acknowledge acceptance without claiming which visible jobs started.
