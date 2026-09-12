@@ -29,10 +29,7 @@ def evaluation(ctx, monkeypatch):
         ],
     )[0]
     question = ctx.store.get_question(question_id)
-    # Setup may acquire its own short-lived graphs; observe only evaluation work.
-    for reference in ctx.store._knowledge_rows("SnapshotReference"):
-        if reference.released_at is None:
-            ctx.store.release_snapshot_reference(reference.id, lease_owner=reference.lease_owner)
+    assert not active_references(ctx)
     acquired = []
     original = ctx.graph_for
 

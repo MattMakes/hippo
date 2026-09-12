@@ -230,7 +230,8 @@ def test_owner_metadata_survives_ladybug_reopen(tmp_path):
     def context(current):
         return SimpleNamespace(
             store=current,
-            graph_for=lambda access: GraphIndex.load(current).scoped(
+            ollama=SimpleNamespace(),
+            graph_for=lambda access, **kwargs: GraphIndex.load(current).scoped(
                 {row["id"] for row in current.list_sources(access)}
             ),
         )
@@ -362,13 +363,14 @@ def test_runner_never_releases_partial_output_after_its_input_proof_changes(ctx,
     alice, _ = readers(ctx)
     source(ctx)
     service, _, question_id = owned(ctx, alice)
-    graph = service.graph()
-    trace = Trace(
-        question="owned question",
-        settings={},
-        graph_version=graph.version,
-        evidence_fingerprint=view_fingerprint(graph),
-    )
+    with service.read_scope():
+        graph = service.graph()
+        trace = Trace(
+            question="owned question",
+            settings={},
+            graph_version=graph.version,
+            evidence_fingerprint=view_fingerprint(graph),
+        )
     monkeypatch.setattr(runner, "search", lambda *args, **kwargs: trace)
 
     def answer(*args, **kwargs):

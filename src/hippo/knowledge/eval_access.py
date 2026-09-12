@@ -11,6 +11,7 @@ import json
 from contextlib import contextmanager
 from copy import deepcopy
 from functools import wraps
+from types import MappingProxyType
 
 from hippo.access import EVERYTHING, Access, Principal
 from hippo.hipporag.retriever import Trace, trace_from_dict
@@ -19,7 +20,7 @@ from hippo.store.migrations import DEFAULT_WORKSPACE_ID
 
 from .access import AuthorizationChanged
 from .identity import canonical_json
-from .query_access import QuerySession, current_access, query_session
+from .query_access import QuerySession, current_access, query_access, query_session
 from .replay import reconstruct_trace, view_fingerprint
 from .saved_snapshots import release_saved_evaluations
 
@@ -35,6 +36,22 @@ def _guarded_collection(function):
     def guarded(self, *args, **kwargs):
         with self.read_scope():
             return function(self, *args, **kwargs)
+
+    return guarded
+
+
+def _guarded_item(function):
+    """Keep absent-item behavior for a principal already denied before the read."""
+    guarded_read = _guarded_collection(function)
+
+    @wraps(function)
+    def guarded(self, *args, **kwargs):
+        if self._session is None:
+            try:
+                self._current()
+            except AuthorizationChanged:
+                return None
+        return guarded_read(self, *args, **kwargs)
 
     return guarded
 
@@ -61,10 +78,9 @@ class EvalAccess:
             self._current()
             self._session.validate()
             return self._session.graph
-        graph = self.ctx.graph_for(self._current())
-        graph.validate_authorization()
-        return graph
+        raise RuntimeError("Evaluation graph requires an active read scope")
 
+    @_guarded_collection
     def get_source(self, source_id):
         """Resolve source presentation exclusively from the current audience view."""
         from hippo.status import source_view
@@ -93,6 +109,26 @@ class EvalAccess:
         finally:
             self._session.validate()
             self._boundary(epoch)
+
+    @contextmanager
+    def _creation_scope(self, *, evidence):
+        # Set creation deliberately advances the epoch. Own a short, no-model
+        # view outside the mutation transaction; close only after it exits.
+        if self._session is not None:
+            raise RuntimeError("Evaluation creation requires its own evidence scope")
+        if not evidence:
+            yield
+            return
+        settings = self.store.get_settings()
+        graph, model, validate = query_access(self.ctx, self._current(), settings=settings)
+        self._session = QuerySession(graph, model, validate, MappingProxyType(settings))
+        try:
+            yield
+        finally:
+            self._session = None
+            close = getattr(graph, "close_snapshot", None)
+            if close is not None:
+                close()
 
     def _boundary(self, epoch):
         self._current()
@@ -188,6 +224,7 @@ class EvalAccess:
         except AuthorizationChanged:
             return None
 
+    @_guarded_collection
     def require_set(self, set_id):
         authorized = self._authorized(set_id)
         if authorized is None:
@@ -201,6 +238,7 @@ class EvalAccess:
         if self._authorized(set_id, for_deletion=True) is None:
             raise EvalAccessDenied("unknown question set or access denied")
 
+    @_guarded_collection
     def require_generation_target(self, set_id, source_id):
         authorized = self._authorized(set_id)
         if (
@@ -248,6 +286,7 @@ class EvalAccess:
         }[kind]
         return self.store.run_one(query, id=identity)
 
+    @_guarded_item
     def get_question_set(self, set_id):
         authorized = self._authorized(set_id)
         if authorized is None:
@@ -288,6 +327,7 @@ class EvalAccess:
         self._boundary(authorized[2])
         return rows
 
+    @_guarded_item
     def get_question(self, question_id):
         refs = self._refs("question", question_id)
         authorized = self._authorized(refs["set_id"]) if refs else None
@@ -301,6 +341,7 @@ class EvalAccess:
         self._boundary(authorized[2])
         return deepcopy(row)
 
+    @_guarded_item
     def get_result(self, result_id):
         refs = self._refs("result", result_id)
         run_refs = self._refs("run", refs["run_id"]) if refs else None
@@ -367,6 +408,7 @@ class EvalAccess:
             if (row := self.get_result(identity)) is not None
         ]
 
+    @_guarded_item
     def get_run(self, run_id):
         refs = self._refs("run", run_id)
         authorized = self._authorized(refs["set_id"]) if refs else None
@@ -414,8 +456,13 @@ class EvalAccess:
     def create_question_set(self, name, source_id=None, origin="manual"):
         if origin not in {"manual", "generated"}:
             raise ValueError("Unknown evaluation origin")
-        with self.store.transaction():
+        with (
+            self._creation_scope(evidence=bool(source_id) or origin == "generated"),
+            self.store.transaction(),
+        ):
             lock_authorization(self.store)
+            if self._session is not None:
+                self._session.validate()
             access = self._current()
             if access.audience_kind not in {"reader", "open", "internal"} or (
                 access.audience_kind == "reader" and not access.user_id
@@ -439,20 +486,24 @@ class EvalAccess:
                 origin=origin,
                 evidence_fingerprint=fingerprint,
             )
+            if self._session is not None:
+                self._session.validate()
             identity = self.store.create_question_set(name, source_id, origin)
             self.store.set_meta("eval_owner:" + identity, canonical_json(metadata))
             self.store._bump_authorization_epoch()
             return identity
 
     def add_questions(self, set_id, questions):
-        with self.store.transaction():
+        with self.read_scope(), self.store.transaction():
             lock_authorization(self.store)
             self.require_set(set_id)
             graph = self.graph()
             if any(not self._question_visible(row, graph) for row in questions):
                 raise EvalAccessDenied("Question evidence is not available")
             graph.validate_authorization()
-            return self.store.add_questions(set_id, questions)
+            result = self.store.add_questions(set_id, questions)
+            self._session.validate()
+            return result
 
     def delete_question_set(self, set_id):
         with self.store.transaction():
@@ -489,7 +540,9 @@ class EvalAccess:
             self.store.delete_run(run_id)
 
     def create_run(self, set_id, name, settings):
-        with self.store.transaction():
+        with self.read_scope(), self.store.transaction():
             lock_authorization(self.store)
             self.require_set(set_id)
-            return self.store.create_run(set_id, name, settings)
+            result = self.store.create_run(set_id, name, settings)
+            self._session.validate()
+            return result
