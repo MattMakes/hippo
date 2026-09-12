@@ -18,12 +18,11 @@ from ... import ask as ask_service
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import answer_sources
 from ...knowledge.query_access import QuerySession, query_session
-from ...ollama import OllamaError
 from ...status import system_status
 from ...store.base import DEFAULT_SETTINGS, SETTING_RULES, validate_settings
 from ..adhoc import remember_adhoc
 from ..auth import principal_of, require
-from ..render import ctx_of, render
+from ..render import ctx_of, render, retrieval_failure
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -100,6 +99,20 @@ def ask_page(request: Request, q: str = ""):
         )
 
 
+def failure_text(exc: BaseException) -> str:
+    """What the answer fragment may say about a failure: one closed code, never its words.
+
+    The same helper the JSON routes and the app's handlers use, rendered as the one sentence
+    a reader can act on plus the code they can quote. The exception itself goes to the local
+    log at DEBUG, where a public-level capture cannot pick up the model's reply body or an
+    absolute path.
+    """
+    failure = retrieval_failure(exc)
+    log.warning("ask failed: %s", type(exc).__name__)
+    log.debug("ask failure detail", exc_info=True)
+    return f"{failure.message} [{failure.code}]"
+
+
 @router.post("/ask")
 def ask_submit(request: Request, question: str = Form("")):
     ctx = ctx_of(request)
@@ -113,13 +126,8 @@ def ask_submit(request: Request, question: str = Form("")):
                 trace, answer = ask_service.ask(ctx, question, access=principal.access, session=session)
             except AuthorizationChanged:
                 raise
-            except OllamaError as exc:
-                return render(request, "partials/answer.html", error=str(exc), session=session)
             except Exception as exc:  # noqa: BLE001 - HTMX needs a visible error fragment
-                log.exception("ask failed")
-                return render(
-                    request, "partials/answer.html", error=f"{type(exc).__name__}: {exc}", session=session
-                )
+                return render(request, "partials/answer.html", error=failure_text(exc), session=session)
             passages = answer_sources(session.graph, trace, answer)
             session.validate()
             # Keep the trace so "Analyze this question" explains this answer without asking again.
@@ -140,8 +148,7 @@ def ask_submit(request: Request, question: str = Form("")):
     except AuthorizationChanged:
         raise
     except Exception as exc:  # noqa: BLE001 - includes failures acquiring the query session
-        log.exception("ask failed")
-        return render(request, "partials/answer.html", error=f"{type(exc).__name__}: {exc}")
+        return render(request, "partials/answer.html", error=failure_text(exc))
 
 
 # --------------------------------------------------------------- settings

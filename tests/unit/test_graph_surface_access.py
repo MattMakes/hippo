@@ -79,7 +79,10 @@ def test_graph_revocation_after_label_read_discards_payload(ctx, client, public_
     response = client.get(url)
     assert changed
     assert response.status_code == 409
-    assert response.json() == {"error": "Permissions changed; repeat the query"}
+    assert response.json() == {
+        "error": "Permissions changed; repeat the query",
+        "code": "authorization_changed",
+    }
 
 
 def test_graph_page_revocation_during_template_render_discards_html(ctx, client, public_source, monkeypatch):

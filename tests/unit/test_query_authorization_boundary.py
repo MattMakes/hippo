@@ -45,7 +45,10 @@ def test_http_query_returns_retryable_error_after_revocation(ctx, monkeypatch):
     with TestClient(create_app(ctx), base_url="http://localhost", raise_server_exceptions=False) as client:
         response = client.post("/api/ask", json={"question": "anything"})
     assert response.status_code == 409
-    assert response.json() == {"error": "Permissions changed; repeat the query"}
+    assert response.json() == {
+        "error": "Permissions changed; repeat the query",
+        "code": "authorization_changed",
+    }
 
 
 @pytest.mark.parametrize("method", ["embed_one", "chat_json", "chat_text"])
