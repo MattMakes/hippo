@@ -50,22 +50,32 @@ def managed_fixture(store):
     return workspace, user, span
 
 
+def local_mapping(store, workspace_id, user):
+    """The reviewed local membership `create_user` writes for every live principal."""
+    return next(
+        row
+        for row in store._knowledge_rows("WorkspaceMembership")
+        if row.workspace_id == workspace_id and row.principal_id == user
+    )
+
+
 def test_store_read_requires_explicit_reviewed_workspace_membership(store):
     workspace, user, span = managed_fixture(store)
     access = Access(user_id=user)
+    store.update_knowledge(local_mapping(store, workspace.id, user).replace(enabled=False, policy_epoch=2))
     assert store.get_knowledge("EvidenceSpan", span.id, workspace_id=workspace.id, access=access) is None
     membership = k.WorkspaceMembership(
         workspace_id=workspace.id,
         principal_id=user,
         enabled=True,
         mapping_authority="reviewed",
-        policy_epoch=1,
+        policy_epoch=3,
     )
-    store.put_knowledge(membership)
+    store.update_knowledge(membership)
     assert store.list_knowledge("EvidenceSpan", workspace_id=workspace.id, access=access) == []
     store.set_meta("reviewed_mapping_authorities", ["reviewed"])
     assert store.get_knowledge("EvidenceSpan", span.id, workspace_id=workspace.id, access=access) == span
-    store.update_knowledge(membership.replace(enabled=False, policy_epoch=2))
+    store.update_knowledge(membership.replace(enabled=False, policy_epoch=4))
     assert store.list_knowledge("EvidenceSpan", workspace_id=workspace.id, access=access) == []
 
 
@@ -80,13 +90,13 @@ def test_revoking_a_mapping_authority_invalidates_an_existing_proof(store):
     from hippo.knowledge.access import AuthorizationChanged
 
     workspace, user, _ = managed_fixture(store)
-    store.put_knowledge(
+    store.update_knowledge(
         k.WorkspaceMembership(
             workspace_id=workspace.id,
             principal_id=user,
             enabled=True,
             mapping_authority="reviewed",
-            policy_epoch=1,
+            policy_epoch=2,
         )
     )
     store.set_meta("reviewed_mapping_authorities", ["reviewed"])
@@ -101,13 +111,13 @@ def test_mapping_revocation_during_configuration_read_cannot_build_stale_proof(s
     from hippo.knowledge.access import AuthorizationChanged
 
     workspace, user, _ = managed_fixture(store)
-    store.put_knowledge(
+    store.update_knowledge(
         k.WorkspaceMembership(
             workspace_id=workspace.id,
             principal_id=user,
             enabled=True,
             mapping_authority="reviewed",
-            policy_epoch=1,
+            policy_epoch=2,
         )
     )
     store.set_meta("reviewed_mapping_authorities", ["reviewed"])
@@ -135,9 +145,9 @@ def test_membership_control_records_are_not_public_evidence(store, state):
         principal_id=user,
         enabled=True,
         mapping_authority="reviewed",
-        policy_epoch=1,
+        policy_epoch=2,
     )
-    store.put_knowledge(membership)
+    store.update_knowledge(membership)
     store.set_meta("reviewed_mapping_authorities", ["reviewed"])
     if state == "disabled":
         store.update_user(user, disabled=True)
@@ -149,9 +159,15 @@ def test_membership_control_records_are_not_public_evidence(store, state):
         is None
     )
     assert store.list_knowledge("WorkspaceMembership", workspace_id=workspace.id, access=access) == []
+    # Removing the user retires its local mapping as audit state rather than deleting it.
+    retained = (
+        membership.replace(enabled=False, mapping_authority="local", policy_epoch=3)
+        if state == "deleted"
+        else membership
+    )
     assert (
         store.get_knowledge(
             "WorkspaceMembership", membership.id, workspace_id=workspace.id, access=EVERYTHING
         )
-        == membership
+        == retained
     )

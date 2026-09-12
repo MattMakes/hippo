@@ -363,6 +363,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
     def on_first_connection(self) -> None:
         self.ensure_schema()
         self.ensure_roles()
+        self.ensure_local_workspace_memberships()
         interrupted = self.mark_interrupted_jobs()
         if interrupted:
             log.warning("%d job(s) were interrupted by the last shutdown and are marked failed", interrupted)

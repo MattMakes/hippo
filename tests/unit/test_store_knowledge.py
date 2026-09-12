@@ -51,13 +51,13 @@ def reader(store, workspace_id, name):
     store.ensure_roles()
     user = store.create_user(name, "secret1", "individual")
     store.set_meta("reviewed_mapping_authorities", ["reviewed"])
-    store.put_knowledge(
+    store.update_knowledge(
         k.WorkspaceMembership(
             workspace_id=workspace_id,
             principal_id=user,
             enabled=True,
             mapping_authority="reviewed",
-            policy_epoch=1,
+            policy_epoch=2,
         )
     )
     return user
@@ -290,9 +290,9 @@ def test_every_required_lifecycle_record_persists_and_roundtrips(store):
     store.ensure_roles()
     user = store.create_user("typed-user", "test-password", "individual")
     group = put(k.KnowledgeObject(workspace_id=w.id, kind="group", canonical_key='["group"]'))
-    put(
+    store.update_knowledge(
         k.WorkspaceMembership(
-            workspace_id=w.id, principal_id=user, enabled=True, mapping_authority="reviewed", policy_epoch=1
+            workspace_id=w.id, principal_id=user, enabled=True, mapping_authority="reviewed", policy_epoch=2
         )
     )
     put(
@@ -764,9 +764,9 @@ def test_membership_control_records_require_internal_access(store):
         principal_id=user,
         enabled=True,
         mapping_authority="reviewed",
-        policy_epoch=1,
+        policy_epoch=2,
     )
-    store.put_knowledge(membership)
+    store.update_knowledge(membership)
     assert (
         store.get_knowledge(
             "WorkspaceMembership", membership.id, workspace_id=workspace.id, access=Access(user_id=user)

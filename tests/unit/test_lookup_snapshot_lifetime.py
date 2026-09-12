@@ -9,7 +9,6 @@ from mcp.server.mcpserver.exceptions import ToolError
 from hippo import mcp_server
 from hippo.access import Principal
 from hippo.knowledge.access import AuthorizationChanged
-from hippo.knowledge.model import WorkspaceMembership
 from hippo.web.routes import api, code
 from tests.unit.test_query_snapshots import build
 
@@ -21,15 +20,7 @@ def managed(ctx, monkeypatch):
     ctx.store.set_meta("reviewed_mapping_authorities", ["local"])
     uid = ctx.store.create_user("lookup-reader", "secret1", "individual")
     principal = Principal.for_user(ctx.store.get_user(uid), ctx.store.get_role("individual"))
-    ctx.store.put_knowledge(
-        WorkspaceMembership(
-            workspace_id=ctx.store.get_source(generation.source_id)["workspace_id"],
-            principal_id=uid,
-            enabled=True,
-            mapping_authority="local",
-            policy_epoch=0,
-        )
-    )
+    # create_user now maps the principal into the local workspace itself.
     acquired = []
     original = ctx.graph_for
 

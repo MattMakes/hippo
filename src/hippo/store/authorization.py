@@ -59,6 +59,10 @@ def safer_connector(existing, candidate) -> bool:
     )
 
 
+def _mutated_user(args, kwargs):
+    return kwargs["user_id"] if "user_id" in kwargs else args[0]
+
+
 def permission_mutation(function):
     """Legacy permission writers participate in the same atomic revocation barrier."""
 
@@ -67,7 +71,12 @@ def permission_mutation(function):
         with store.transaction():
             lock_authorization(store)
             had_users = store.count_users() > 0
+            if function.__name__ == "delete_user":
+                # Retire the mapping while its User still exists, under this bump.
+                store._disable_local_workspace_memberships_locked([_mutated_user(args, kwargs)])
             result = function(store, *args, **kwargs)
+            if function.__name__ == "create_user":
+                store._ensure_local_workspace_memberships_locked([result])
             if had_users or function.__name__ == "create_user":
                 # Persist across last-user removal, including upgraded stores
                 # whose existing users predate this marker. Failed writes roll

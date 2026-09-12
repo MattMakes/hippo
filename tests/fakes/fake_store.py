@@ -107,6 +107,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             self._bootstrapped = True
             self.ensure_schema()
             self.ensure_roles()
+            self.ensure_local_workspace_memberships()
             self.mark_interrupted_jobs()
         return True
 

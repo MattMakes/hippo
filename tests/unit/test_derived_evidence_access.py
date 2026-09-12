@@ -66,13 +66,13 @@ def world(store, *, private_secondary=False, derived=True):
     workspace = store.get_source(gen.source_id)["workspace_id"]
     store.ensure_roles()
     user = store.create_user("alice", "correct-password", "arch-admin")
-    store.put_knowledge(
+    store.update_knowledge(
         k.WorkspaceMembership(
             workspace_id=workspace,
             principal_id=user,
             enabled=True,
             mapping_authority="reviewed",
-            policy_epoch=1,
+            policy_epoch=2,
         )
     )
     policy = k.AccessPolicy(

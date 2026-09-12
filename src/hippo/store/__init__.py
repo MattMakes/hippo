@@ -78,6 +78,7 @@ class Store(
         """Runs once, the first time Neo4j answers: create the schema, then tidy up after any crash."""
         self.ensure_schema()
         self.ensure_roles()
+        self.ensure_local_workspace_memberships()
         interrupted = self.mark_interrupted_jobs()
         if interrupted:
             log.warning("%d job(s) were interrupted by the last shutdown and are marked failed", interrupted)

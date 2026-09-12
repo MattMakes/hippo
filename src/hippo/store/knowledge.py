@@ -8,12 +8,16 @@ write validation uses private lookups and does not expose a bypass transport.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import get_args, get_origin
 
 from ..access import Access
 from ..knowledge import model as k
 from ..knowledge.identity import canonical_json
+
+LOCAL_MAPPING_AUTHORITY = "local"
+"""The one identity mapping this application reviews itself: its own local User records."""
 
 # Typed scalar references, validated on write and materialized where traversal needs them.
 REFERENCES = {
@@ -174,6 +178,18 @@ MUTABLE_FIELDS = {
 }
 
 
+def _selected_principals(principal_ids):
+    """The explicit selection, sorted and unique; None means every live local User."""
+    if principal_ids is None:
+        return None
+    if isinstance(principal_ids, (str, bytes)) or not isinstance(principal_ids, Iterable):
+        raise TypeError("Selected principals must be an iterable of identities")
+    selected = list(principal_ids)
+    if any(type(value) is not str or not value for value in selected):
+        raise ValueError("Selected principals must be nonempty identity strings")
+    return sorted(set(selected))
+
+
 def _json_field(model, field):
     from pydantic import BaseModel
 
@@ -203,6 +219,119 @@ class KnowledgeQueries:
         from .authorization import lock_authorization
 
         lock_authorization(self)
+
+    # ------------------------------------------- the local workspace mapping
+
+    def ensure_local_workspace_memberships(self, principal_ids: Iterable[str] | None = None) -> int:
+        """Map this installation's live local Users into its one default workspace.
+
+        Idempotent: an unchanged mapping writes nothing and bumps no epoch. One
+        change or many commit under a single authorization bump, so a startup
+        that repairs several principals never invalidates readers more than once.
+        """
+        with self.transaction():
+            self._lock_authorization()
+            changes = self._ensure_local_workspace_memberships_locked(principal_ids)
+            if changes:
+                self._bump_authorization_epoch()
+            return changes
+
+    def _ensure_local_workspace_memberships_locked(self, principal_ids: Iterable[str] | None = None) -> int:
+        """The mapping repair itself; the caller owns the transaction, lock and epoch bump."""
+        from .migrations import DEFAULT_WORKSPACE_ID
+
+        selected = _selected_principals(principal_ids)
+        if not self._local_mapping_available():
+            return 0
+        changes = 0
+        authorities = self._reviewed_mapping_authorities()
+        reviewed = sorted(set(authorities) | {LOCAL_MAPPING_AUTHORITY})
+        if reviewed != authorities:
+            self._set_meta_locked("reviewed_mapping_authorities", reviewed)
+            changes += 1
+        live = {row["id"] for row in self.list_users()}
+        if selected is None:
+            selected = sorted(live)
+        elif not set(selected) <= live:
+            raise ValueError("Unknown local principal cannot be mapped into the workspace")
+        for principal_id in selected:
+            changes += self._apply_local_membership(DEFAULT_WORKSPACE_ID, principal_id, enabled=True)
+        return changes
+
+    def _disable_local_workspace_memberships_locked(self, principal_ids: Iterable[str]) -> int:
+        """Retire a principal's mapping as audit state, keeping the record and its history.
+
+        Called while the User still exists, so the retained membership reference
+        stays valid. The caller owns the transaction, lock and epoch bump.
+        """
+        from .migrations import DEFAULT_WORKSPACE_ID
+
+        selected = _selected_principals(principal_ids)
+        if selected is None:
+            raise ValueError("Retiring a local mapping requires explicit principals")
+        return sum(
+            self._apply_local_membership(DEFAULT_WORKSPACE_ID, principal_id, enabled=False)
+            for principal_id in selected
+        )
+
+    def _apply_local_membership(self, workspace_id: str, principal_id: str, *, enabled: bool) -> int:
+        """One reviewed local membership per principal; repair moves `policy_epoch` forward."""
+        record = k.WorkspaceMembership(
+            workspace_id=workspace_id,
+            principal_id=principal_id,
+            enabled=enabled,
+            mapping_authority=LOCAL_MAPPING_AUTHORITY,
+            policy_epoch=1,
+        )
+        existing = self._knowledge_get("WorkspaceMembership", record.id)
+        if existing is None:
+            if not enabled:
+                return 0  # Nothing was ever mapped here; do not invent audit state.
+            self._validate_knowledge(record)
+            self._check_knowledge_write(record)
+            self._write_knowledge(record, create_only=True)
+            return 1
+        if (existing.enabled, existing.mapping_authority) == (enabled, LOCAL_MAPPING_AUTHORITY):
+            return 0
+        repaired = existing.replace(
+            enabled=enabled,
+            mapping_authority=LOCAL_MAPPING_AUTHORITY,
+            policy_epoch=existing.policy_epoch + 1,
+        )
+        self._validate_knowledge(repaired)
+        self._check_knowledge_write(repaired, existing)
+        self._write_knowledge(repaired)
+        return 1
+
+    def _local_mapping_available(self) -> bool:
+        """A store still on an older physical schema has no mapping to maintain yet.
+
+        Migration creates the membership records and then the application maps its
+        users; a permission mutation against a pre-schema-5 file must not fail.
+        """
+        from .migrations import CURRENT_SCHEMA_VERSION
+
+        row = self.schema_version()
+        return bool(row and row.get("version") == CURRENT_SCHEMA_VERSION and row.get("state") == "complete")
+
+    def _reviewed_mapping_authorities(self) -> list[str]:
+        authorities = self.get_meta("reviewed_mapping_authorities") or []
+        if not isinstance(authorities, list) or any(
+            not isinstance(item, str) or not item for item in authorities
+        ):
+            raise RuntimeError("Invalid reviewed membership authority configuration")
+        return authorities
+
+    def _set_meta_locked(self, key: str, value) -> None:
+        """Write metadata without `metadata_mutation`'s own bump; the caller owns exactly one.
+
+        The value is built from an already validated list, so skipping that
+        decorator skips no check that this caller has not already made.
+        """
+        writer = getattr(type(self).set_meta, "__wrapped__", None)
+        if writer is None:
+            raise RuntimeError("Metadata writer is not a reviewed authorization mutation")
+        writer(self, key, value)
 
     def _ensure_knowledge_ready(self):
         if not getattr(self, "_schema_checked", False) and not self._migrating:
