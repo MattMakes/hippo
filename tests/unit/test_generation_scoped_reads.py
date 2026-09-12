@@ -25,7 +25,10 @@ three guards rather than fail them.
 
 from __future__ import annotations
 
+import ast
+import re
 import time
+from pathlib import Path
 
 import pytest
 
@@ -204,6 +207,25 @@ def symbol_rows(store, gen, count, *, start=0):
 # --------------------------------------------------------------- equal results
 
 
+# A managed passage id is a `sha256` of its binding and a legacy one an `md5` of its chunk, so
+# the two lanes leave rows of two different lengths in one table. That difference is what made
+# the store defect below visible rather than silent.
+LEGACY_PASSAGE_ID = "passage-" + "1" * 32
+MANAGED_PASSAGE_ID = "passage-" + "2" * 64
+SCRATCH_PASSAGE_ID = "passage-" + "9" * 32
+
+
+def raw_passage(passage_id, source_id, title):
+    return dict(
+        id=passage_id,
+        source_id=source_id,
+        ordinal=0,
+        title=title,
+        text="ACME builds Robot.",
+        embedding=[0.1, 0.2],
+    )
+
+
 def test_native_rows_scoped_by_ids_return_the_unscoped_rows_for_those_ids(store):
     gen = generation(store)
     job = claim(store, gen)
@@ -260,6 +282,115 @@ def test_a_row_cannot_be_both_tagged_and_untagged(store):
         store._native_rows("Symbol", generation_id="g", untagged=True)
     with pytest.raises(ValueError, match="shared and is not scoped by generation"):
         store._native_rows("Entity", untagged=True)
+
+
+def deleted_row_then_two_lanes(store):
+    """The three-row shape the managed lane meets: a deleted row, a legacy row, one to write.
+
+    A reindex deletes and rewrites the legacy passages, so by the time a managed build runs,
+    the Passage table holds a hole. The managed row is written inside the build's own
+    transaction and read back before it commits. Both facts are needed to reach the defect
+    `test_an_id_scoped_read_answers_from_the_wanted_row...` pins.
+    """
+    scratch = store.create_source("text", "reindexed")
+    legacy_source = store.create_source("text", "legacy")
+    managed_source = store.create_source("text", "managed")
+    store.add_passages([raw_passage(SCRATCH_PASSAGE_ID, scratch, "Reindexed")])
+    store.delete_passages_for_source(scratch)
+    store.add_passages([raw_passage(LEGACY_PASSAGE_ID, legacy_source, "Legacy")])
+    return managed_source
+
+
+def test_an_id_scoped_read_answers_from_the_wanted_row_while_its_transaction_is_open(store):
+    """The id list may not be a `WHERE` predicate: LadybugDB answers it from another row.
+
+    Probed on real_ladybug 0.15.3: when a node table holds a deleted row *and* the wanted row
+    was written inside the open transaction, `MATCH (n:Passage) WHERE n.id IN $ids` selects the
+    right row but projects its STRING properties from a different one -- a foreign `title`, an
+    `id` cut to another row's length, and `*_json` bytes that are not valid UTF-8, which the
+    Python binding raises `UnicodeDecodeError` on while materialising the row. `n.id = $id`,
+    `MATCH (n:Kind {id: $id})` and `UNWIND $ids AS rid MATCH (n:Kind {id: rid})` all answer
+    correctly in the same state, so every id selection is spelled as a primary-key lookup
+    (`base.by_ids`). Merge `c461c9c` pointed `_knowledge_get("Passage", id)` at the `IN` form
+    and took the whole managed lane down on Ladybug with it.
+    """
+    managed_source = deleted_row_then_two_lanes(store)
+    with store.transaction():
+        store.add_passages([raw_passage(MANAGED_PASSAGE_ID, managed_source, "text.md")])
+        rows = store._native_rows("Passage", ids=[MANAGED_PASSAGE_ID])
+        assert [row["id"] for row in rows] == [MANAGED_PASSAGE_ID]
+        assert rows[0]["title"] == "text.md"
+        assert rows[0]["source_id"] == managed_source
+        # The reference read that `_knowledge_get` makes for every managed native validation.
+        assert store._knowledge_get("Passage", MANAGED_PASSAGE_ID)["title"] == "text.md"
+        # Scoping by source must not confuse the two lanes' rows either.
+        legacy = store._native_rows("Passage", ids=[LEGACY_PASSAGE_ID])
+        assert [row["id"] for row in legacy] == [LEGACY_PASSAGE_ID]
+        assert legacy[0]["title"] == "Legacy"
+
+
+def test_the_public_id_reads_answer_from_the_wanted_row_in_the_same_state(store):
+    """The same rule holds for the reads a caller can reach, not only the internal ones."""
+    managed_source = deleted_row_then_two_lanes(store)
+    with store.transaction():
+        store.add_passages([raw_passage(MANAGED_PASSAGE_ID, managed_source, "text.md")])
+        found = store.get_passages([MANAGED_PASSAGE_ID])
+        assert [row["id"] for row in found] == [MANAGED_PASSAGE_ID]
+        assert found[0]["title"] == "text.md"
+        assert store.get_passages([MANAGED_PASSAGE_ID, LEGACY_PASSAGE_ID])[1]["title"] == "Legacy"
+
+
+def code_lines(path):
+    """The module's lines with its docstrings and comments removed.
+
+    The rule below is about the Cypher a module builds, and the same words have to be legible
+    in the prose that explains the rule -- `base.by_ids` and the LadybugDB module header both
+    spell the forbidden shape out. Reading the docstrings out of the file is what lets the
+    tripwire quote the defect instead of writing around it.
+    """
+    source = path.read_text(encoding="utf-8")
+    documented = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        first = node.body[0] if node.body else None
+        if isinstance(first, ast.Expr) and isinstance(getattr(first.value, "value", None), str):
+            documented.update(range(first.lineno, first.end_lineno + 1))
+    return [
+        (number, line)
+        for number, line in enumerate(source.splitlines(), 1)
+        if number not in documented and not line.lstrip().startswith("#")
+    ]
+
+
+# `r.kind` binds a CODE_EDGE, not a node, and the relationship tables were not shown to have
+# the defect: two attempts to build a CODE_EDGE that the trigger could reach came back empty
+# (`/tmp/hippo-lbfix-probe-relkind.log`), so `store/code.py` and `ladybug.py`'s in-degree read
+# keep their list predicate rather than being rewritten on a guess. Delete this entry the day
+# one of them is either proven exposed or rewritten anyway.
+UNPROVEN_RELATIONSHIP_LIST_PREDICATES = {"r.kind"}
+
+
+def test_no_query_builder_selects_node_rows_with_a_list_predicate(store):
+    """A tripwire, because the defect is silent: the wrong row comes back, not an error.
+
+    `IN $ids` reads correctly almost everywhere, so a new query written that way passes review
+    and passes its own test. Only the three conditions above expose it, and by then the row has
+    already entered a checksum. The rule is therefore checked at the source rather than argued,
+    over both packages that build Cypher: the store and the knowledge projection that reads
+    passages back by generation. `label IN $labels` in `migrations` is a comprehension over
+    `labels(n)` rather than a stored column and is not this shape.
+    """
+    roots = (Path(base.__file__).parent, Path(k.__file__).parent)
+    offenders = [
+        f"{path.name}:{number} ({match.group(1)} IN ...)"
+        for root in roots
+        for path in sorted(root.glob("*.py"))
+        for number, line in code_lines(path)
+        for match in re.finditer(r"\b(\w+\.\w+) IN \$", line)
+        if match.group(1) not in UNPROVEN_RELATIONSHIP_LIST_PREDICATES
+    ]
+    assert offenders == [], f"node lists must drive the MATCH (see base.by_ids): {offenders}"
 
 
 def test_knowledge_rows_scoped_by_generation_return_the_unscoped_records(store):

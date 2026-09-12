@@ -154,6 +154,37 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
+def by_ids(label: str, variable: str = "n", *, param: str = "ids", bind: str = "wanted_id") -> str:
+    """The MATCH that selects the rows named by `$param`: one primary-key lookup per id.
+
+    Never `WHERE <variable>.id IN $param`. Probed on real_ladybug 0.15.3: when a node table
+    holds a deleted row *and* the wanted row was written inside the open transaction, that
+    predicate selects the right row but projects its STRING properties from a different one --
+    a foreign `title`, an `id` cut to another row's length, `*_json` bytes that are not UTF-8
+    and raise `UnicodeDecodeError` in the binding. The engine's own selection and `count()` stay
+    correct, so the read comes back *wrong* rather than empty or raised, which is why the rule
+    is a tripwire test (`test_no_query_builder_selects_node_rows_with_a_list_predicate`) and not
+    a comment. Driving the match from the primary key is correct on both Cypher backends, and on
+    Neo4j it is an index seek per id rather than a label scan carrying a list predicate -- which
+    is the form `memory.py` already used, so this is the Ladybug store rejoining it.
+
+    The defect is the list predicate, not the `id` column: `WHERE p.generation_id IN $gens`
+    answers from the wrong row in the same state, and `= $gen` answers correctly. Anything that
+    selects rows of a node table by a set of string values wants this shape, not `IN`.
+
+    Rows come back in the order of `$param` (with `IN` they came back in storage order), which
+    is what every caller that cares already re-imposes with `_in_asked_order`. The one thing the
+    caller owes this form is `unique_ids`: a repeated id is a repeated binding here where `IN`
+    collapsed it, and a query that aggregates over the match would count it twice.
+    """
+    return f"UNWIND ${param} AS {bind} MATCH ({variable}:{label} {{id: {bind}}})"
+
+
+def unique_ids(ids) -> list[str]:
+    """The ids a `by_ids` match binds once each, in the order they were asked for."""
+    return list(dict.fromkeys(ids))
+
+
 class Neo4jBase:
     knowledge_backend = "neo4j"
 
