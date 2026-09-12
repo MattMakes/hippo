@@ -191,6 +191,10 @@ class SnapshotQueries:
         purged = self._purged_revisions(history.workspace_id)
         retained = frozenset(history.revision_ids) - purged
         if access.audience_kind != "internal":
+            if not retained and history.revision_ids:
+                # An empty `retained` makes the subset check below vacuously true for
+                # any principal; a fully purged manifest must deny like an unknown one.
+                raise SnapshotUnavailable("Unknown history manifest")
             engine, proof = self._reader_proof(
                 workspace_id,
                 access,

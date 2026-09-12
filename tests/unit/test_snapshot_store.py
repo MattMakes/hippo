@@ -251,3 +251,53 @@ def test_history_manifest_and_its_pin_survive_ladybug_reopen(tmp_path):
         assert reopened.collect_generation(world.first.id).blocked_reason is None
     finally:
         reopened.close()
+
+
+def test_purge_history_evidence_denies_every_non_internal_audience_when_fully_purged(store):
+    """The audience gate must not go vacuous once every named revision is purged (N2)."""
+    from hippo.access import EVERYTHING, Access
+    from hippo.store.snapshots import SnapshotUnavailable
+    from tests.unit.test_store_knowledge import reader
+    from tests.unit.test_temporal_evidence import MAY_12, _suppress, history_world, select
+
+    world = history_world(store)
+    now = select(world, valid_at=MAY_12, known_at=MAY_12)
+    assert set(now.manifest.revision_ids) == {world.revision_one.id, world.revision_two.id}
+
+    disabled = reader(store, world.workspace, "disabled-n2")
+    store.update_knowledge(
+        k.WorkspaceMembership(
+            workspace_id=world.workspace,
+            principal_id=disabled,
+            enabled=False,
+            mapping_authority="reviewed",
+            policy_epoch=9,
+        )
+    )
+
+    for revision_id, epoch in ((world.revision_one.id, 5), (world.revision_two.id, 6)):
+        _suppress(
+            world,
+            target_kind="revision",
+            target_id=revision_id,
+            reason="purge",
+            epoch=epoch,
+            barrier="destroy",
+        )
+
+    for audience in (
+        Access(user_id=disabled),
+        Access(user_id="principal-nobody-n2"),
+        Access(audience_kind="open"),
+        Access(audience_kind="preview"),
+    ):
+        with pytest.raises(SnapshotUnavailable):
+            store.purged_history_evidence(now.manifest.id, workspace_id=world.workspace, access=audience)
+
+    internal_markers = {
+        marker.target_id
+        for marker in store.purged_history_evidence(
+            now.manifest.id, workspace_id=world.workspace, access=EVERYTHING
+        )
+    }
+    assert internal_markers == {world.revision_one.id, world.revision_two.id}
