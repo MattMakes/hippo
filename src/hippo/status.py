@@ -18,7 +18,7 @@ from .codegraph.model import CODE_EDGE_KINDS
 from .context import AppContext
 from .hipporag.graph_index import GraphIndex
 from .knowledge.access import AuthorizationChanged
-from .knowledge.query_access import QuerySession, current_access
+from .knowledge.query_access import QuerySession, current_access, query_session
 from .ollama import OllamaError
 
 CACHE_SECONDS = 8.0
@@ -199,6 +199,9 @@ def _audience_inventory(
     )
     if access.audience_kind == "preview":
         return stats, _code_card(stats, []), []
+    if session is None:
+        with query_session(ctx, access) as owned:
+            return _audience_inventory(ctx, access, session=owned)
     view = source_view(ctx, access, session=session)
     graph = view.graph
     legacy_sources = [source for source in view.sources if source["id"] in view.legacy_ids]

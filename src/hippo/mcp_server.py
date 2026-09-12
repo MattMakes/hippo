@@ -425,24 +425,25 @@ def remember_tool(
 def sources_tool(ctx: AppContext, principal: Principal | None = None) -> list[dict[str, Any]]:
     from .status import source_view
 
-    view = source_view(ctx, (principal or Principal.open()).access)
-    return [
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "kind": row["kind"],
-            "status": row["status"],
-            "stage": row.get("stage"),
-            "progress_done": row.get("progress_done", 0),
-            "progress_total": row.get("progress_total", 0),
-            "passages": row.get("passages", 0),
-            "visible_to": row.get("access_role_name", "Everyone"),
-            "owner": row.get("owner_name") or None,
-            "error": row.get("error"),
-            "created_at": row.get("created_at"),
-        }
-        for row in view.sources
-    ]
+    with query_session(ctx, (principal or Principal.open()).access) as session:
+        view = source_view(ctx, (principal or Principal.open()).access, session=session)
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "kind": row["kind"],
+                "status": row["status"],
+                "stage": row.get("stage"),
+                "progress_done": row.get("progress_done", 0),
+                "progress_total": row.get("progress_total", 0),
+                "passages": row.get("passages", 0),
+                "visible_to": row.get("access_role_name", "Everyone"),
+                "owner": row.get("owner_name") or None,
+                "error": row.get("error"),
+                "created_at": row.get("created_at"),
+            }
+            for row in view.sources
+        ]
 
 
 def whoami_tool(ctx: AppContext, principal: Principal | None = None) -> dict[str, Any]:

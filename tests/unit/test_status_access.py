@@ -1,7 +1,7 @@
 """Status inventory follows the caller's graph, independently of cached health."""
 
 from types import SimpleNamespace as NS
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import pytest
 
@@ -23,6 +23,7 @@ def status_context():
     public = {"id": "public", "meta": {"code": {"languages": ["python"], "unresolved_calls_total": 2}}}
     store = NS(
         ping=Mock(return_value=True),
+        get_settings=Mock(return_value={}),
         stats=Mock(return_value={"passages": 99, "sources": 9, "symbols": 99}),
         get_meta=Mock(return_value="hidden-profile"),
         list_sources=Mock(return_value=[public]),
@@ -69,7 +70,7 @@ def test_private_corpus_cannot_change_reader_counts_cards_or_jobs():
     assert after["embed_model_built"] is None
     assert after["embed_model_mismatch"] is False
     ctx.store.stats.assert_not_called()
-    ctx.graph_for.assert_called_with(access)
+    ctx.graph_for.assert_called_with(access, settings=ANY)
 
 
 def test_generation_only_source_is_hidden_until_authorized_evidence_is_projected():
@@ -123,7 +124,7 @@ def test_cache_is_per_context_and_never_caches_audience_inventory():
     first.graph_for.return_value.passages.append(NS(source_id="public"))
     assert system_status(first, access=access)["stats"]["passages"] == 2
     first.ollama.is_up.assert_called_once()
-    first.graph_for.assert_called_with(access)
+    first.graph_for.assert_called_with(access, settings=ANY)
 
 
 def test_cache_cannot_be_poisoned_by_mutating_a_previous_response():
@@ -183,7 +184,7 @@ def test_status_route_and_page_header_pass_the_request_audience(monkeypatch):
     )
     page = render.render(request, "unused.html")
     assert page["status"]["stats"]["passages"] == 1
-    ctx.graph_for.assert_called_with(access)
+    ctx.graph_for.assert_called_with(access, settings=ANY)
     request.state.principal = None
     assert render.render(request, "unused.html")["status"]["stats"]["passages"] == 0
 

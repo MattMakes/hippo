@@ -18,6 +18,7 @@ others can pick a role and see the graph as that tier would.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -140,30 +141,33 @@ def graph_page(request: Request, as_role: str = "", q: str = ""):
     principal, preview, validate_viewer = (
         viewer(request, as_role) if as_role else (actor, None, validate_actor)
     )
-    view = source_view(ctx, principal.access) if ctx.store.ping() else None
+    manager = query_session(ctx, principal.access) if ctx.store.ping() else nullcontext(None)
+    with manager as session:
+        view = source_view(ctx, principal.access, session=session) if session is not None else None
 
-    def validate():
-        validate_actor()
-        validate_viewer()
-        if view:
-            view.validate()
+        def validate():
+            validate_actor()
+            validate_viewer()
+            if view:
+                view.validate()
 
-    roles = ctx.store.list_roles() if ctx.store.ping() else []
-    can_preview = actor.can("manage_users") or actor.can("manage_roles")
-    previewable = [r for r in roles if actor.is_open or r["rank"] <= actor.rank] if can_preview else []
-    return render(
-        request,
-        "graph.html",
-        nav="graph",
-        principal=principal,
-        preview_role=preview,
-        previewable=previewable,
-        sources=view.sources if view else [],
-        authorization_check=validate,
-        roles=roles,
-        initial_query=q,
-        default_limit=DEFAULT_LIMIT,
-    )
+        roles = ctx.store.list_roles() if ctx.store.ping() else []
+        can_preview = actor.can("manage_users") or actor.can("manage_roles")
+        previewable = [r for r in roles if actor.is_open or r["rank"] <= actor.rank] if can_preview else []
+        return render(
+            request,
+            "graph.html",
+            session=session if not preview else None,
+            nav="graph",
+            principal=principal,
+            preview_role=preview,
+            previewable=previewable,
+            sources=view.sources if view else [],
+            authorization_check=validate,
+            roles=roles,
+            initial_query=q,
+            default_limit=DEFAULT_LIMIT,
+        )
 
 
 # ------------------------------------------------------------ full graph

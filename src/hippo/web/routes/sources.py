@@ -12,6 +12,7 @@ changing who may see a source need `manage_sources` or ownership.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 from urllib.parse import quote
 
@@ -25,6 +26,7 @@ from ...ingest import pipeline
 from ...ingest.pipeline import Busy
 from ...ingest.repos import RepoError
 from ...knowledge.eval_access import EvalAccess
+from ...knowledge.query_access import QuerySession, query_session
 from ...status import source_view
 from ..auth import principal_of, require
 from ..render import STOP_POLLING, ctx_of, render
@@ -63,22 +65,24 @@ def with_manage_flags(sources: list[dict[str, Any]], principal: Principal) -> li
 def library(request: Request, error: str = ""):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    view = source_view(ctx, principal.access) if ctx.store.ping() else None
-    sources = view.sources if view else []
-    return render(
-        request,
-        "library.html",
-        nav="library",
-        sources=with_manage_flags(sources, principal),
-        error=error,
-        busy_ids=busy_source_ids(ctx, view),
-        principal=principal,
-        can_add=principal.can("add_sources"),
-        visibility_choices=visibility_choices(ctx, principal),
-        default_visibility=default_visibility(principal),
-        total_sources=len(sources),
-        authorization_check=view.validate if view else None,
-    )
+    with query_session(ctx, principal.access) if ctx.store.ping() else nullcontext(None) as session:
+        view = source_view(ctx, principal.access, session=session) if session is not None else None
+        sources = view.sources if view else []
+        return render(
+            request,
+            "library.html",
+            session=session,
+            nav="library",
+            sources=with_manage_flags(sources, principal),
+            error=error,
+            busy_ids=busy_source_ids(ctx, view),
+            principal=principal,
+            can_add=principal.can("add_sources"),
+            visibility_choices=visibility_choices(ctx, principal),
+            default_visibility=default_visibility(principal),
+            total_sources=len(sources),
+            authorization_check=view.validate if view else None,
+        )
 
 
 @router.get("/partials/sources")
@@ -86,19 +90,21 @@ def sources_partial(request: Request):
     """The sources table, polled by the Library page while something is being indexed."""
     ctx = ctx_of(request)
     principal = principal_of(request)
-    view = source_view(ctx, principal.access)
-    sources = view.sources
-    busy = any(s["status"] in BUSY_STATUSES for s in sources)
-    return render(
-        request,
-        "partials/source_rows.html",
-        sources=with_manage_flags(sources, principal),
-        busy_ids=busy_source_ids(ctx, view),
-        principal=principal,
-        visibility_choices=visibility_choices(ctx, principal),
-        status_code=200 if busy else STOP_POLLING,
-        authorization_check=view.validate,
-    )
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        sources = view.sources
+        busy = any(s["status"] in BUSY_STATUSES for s in sources)
+        return render(
+            request,
+            "partials/source_rows.html",
+            session=session,
+            sources=with_manage_flags(sources, principal),
+            busy_ids=busy_source_ids(ctx, view),
+            principal=principal,
+            visibility_choices=visibility_choices(ctx, principal),
+            status_code=200 if busy else STOP_POLLING,
+            authorization_check=view.validate,
+        )
 
 
 def busy_source_ids(ctx, view) -> set[str]:
@@ -110,9 +116,14 @@ def busy_source_ids(ctx, view) -> set[str]:
     return ids & view.legacy_ids
 
 
-def visible_source(request: Request, source_id: str) -> dict[str, Any]:
+def visible_source(
+    request: Request, source_id: str, *, session: QuerySession | None = None
+) -> dict[str, Any]:
     """The source, if the caller may see it; a hidden source looks exactly like a missing one."""
-    view = source_view(ctx_of(request), principal_of(request).access)
+    if session is None:
+        with query_session(ctx_of(request), principal_of(request).access) as owned:
+            return visible_source(request, source_id, session=owned)
+    view = source_view(ctx_of(request), principal_of(request).access, session=session)
     source = next((row for row in view.sources if row["id"] == source_id), None)
     if source is None:
         raise HTTPException(404, "no such source")
@@ -133,64 +144,71 @@ def manageable_source(request: Request, source_id: str) -> dict[str, Any]:
 def source_page(request: Request, source_id: str, page: int = 1):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    view = source_view(ctx, principal.access)
-    source = next((row for row in view.sources if row["id"] == source_id), None)
-    if source is None:
-        raise HTTPException(404, "no such source")
-    page = max(1, page)
-    if source.get("managed"):
-        passages = [
-            {
-                "id": passage.id,
-                "title": passage.title,
-                "text": passage.text,
-                "ordinal": passage.ordinal,
-                "triples": [],
-                "entities": [],
-                "extraction_error": "",
-            }
-            for passage in view.graph.passages
-            if passage.source_id == source_id
-        ][(page - 1) * PASSAGES_PER_PAGE : page * PASSAGES_PER_PAGE]
-    else:
-        passages = ctx.store.passages_for_source(
-            source_id, limit=PASSAGES_PER_PAGE, offset=(page - 1) * PASSAGES_PER_PAGE, access=principal.access
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        source = next((row for row in view.sources if row["id"] == source_id), None)
+        if source is None:
+            raise HTTPException(404, "no such source")
+        page = max(1, page)
+        if source.get("managed"):
+            passages = [
+                {
+                    "id": passage.id,
+                    "title": passage.title,
+                    "text": passage.text,
+                    "ordinal": passage.ordinal,
+                    "triples": [],
+                    "entities": [],
+                    "extraction_error": "",
+                }
+                for passage in view.graph.passages
+                if passage.source_id == source_id
+            ][(page - 1) * PASSAGES_PER_PAGE : page * PASSAGES_PER_PAGE]
+        else:
+            passages = ctx.store.passages_for_source(
+                source_id,
+                limit=PASSAGES_PER_PAGE,
+                offset=(page - 1) * PASSAGES_PER_PAGE,
+                access=principal.access,
+            )
+        question_sets = (
+            [
+                qs
+                for qs in EvalAccess(ctx, principal.access, session=session).list_question_sets()
+                if qs.get("source_id") == source_id
+            ]
+            if principal.can("run_evals")
+            else []
         )
-    question_sets = (
-        [
-            qs
-            for qs in EvalAccess(ctx, principal.access).list_question_sets()
-            if qs.get("source_id") == source_id
-        ]
-        if principal.can("run_evals")
-        else []
-    )
-    pages = max(1, -(-source["passages"] // PASSAGES_PER_PAGE))
-    code_details = code_details_for(ctx, principal, passages)
-    busy = source_id in busy_source_ids(ctx, view)
-    view.validate()
-    return render(
-        request,
-        "source.html",
-        nav="library",
-        source=with_manage_flags([source], principal)[0],
-        passages=passages,
-        code_details=code_details,
-        question_sets=question_sets,
-        page=page,
-        pages=pages,
-        busy=busy,
-        principal=principal,
-        visibility_choices=visibility_choices(ctx, principal),
-        can_evals=principal.can("run_evals"),
-        authorization_check=view.validate,
-    )
+        pages = max(1, -(-source["passages"] // PASSAGES_PER_PAGE))
+        code_details = code_details_for(ctx, principal, passages, session=session)
+        busy = source_id in busy_source_ids(ctx, view)
+        view.validate()
+        return render(
+            request,
+            "source.html",
+            session=session,
+            nav="library",
+            source=with_manage_flags([source], principal)[0],
+            passages=passages,
+            code_details=code_details,
+            question_sets=question_sets,
+            page=page,
+            pages=pages,
+            busy=busy,
+            principal=principal,
+            visibility_choices=visibility_choices(ctx, principal),
+            can_evals=principal.can("run_evals"),
+            authorization_check=view.validate,
+        )
 
 
 CODE_COMMITS_SHOWN = 5
 
 
-def code_details_for(ctx, principal: Principal, passages: list[dict[str, Any]]) -> dict[str, Any]:
+def code_details_for(
+    ctx, principal: Principal, passages: list[dict[str, Any]], *, session: QuerySession | None = None
+) -> dict[str, Any]:
     """
     Per passage id: the symbols written down in it and their corner of the code graph.
 
@@ -201,10 +219,14 @@ def code_details_for(ctx, principal: Principal, passages: list[dict[str, Any]]) 
     `is_commit` and `touched` are for the one passage kind that is not code: a commit's own
     passage, which the template introduces by what it changed rather than by what it "defines".
     """
-    index = ctx.graph_for(principal.access)
+    if session is None:
+        with query_session(ctx, principal.access) as owned:
+            return code_details_for(ctx, principal, passages, session=owned)
+    session.validate()
+    index = session.graph
     if not index.code_nodes:
         return {}
-    theta = float(ctx.store.get_settings().get("code_theta", 0.0))
+    theta = float(session.settings["code_theta"])
     out: dict[str, Any] = {}
     for passage in passages:
         vertex = index.idx_of.get(passage["id"])
@@ -250,21 +272,24 @@ def code_details_for(ctx, principal: Principal, passages: list[dict[str, Any]]) 
 
 @router.get("/partials/sources/{source_id}/status")
 def source_status_partial(request: Request, source_id: str):
-    view = source_view(ctx_of(request), principal_of(request).access)
-    source = next((row for row in view.sources if row["id"] == source_id), None)
-    if source is None:
-        raise HTTPException(404, "no such source")
-    busy = source["status"] in BUSY_STATUSES
-    return render(
-        request,
-        "partials/source_status.html",
-        source=source,
-        status_code=200 if busy else STOP_POLLING,
-        authorization_check=view.validate,
-    )
+    ctx = ctx_of(request)
+    principal = principal_of(request)
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        source = next((row for row in view.sources if row["id"] == source_id), None)
+        if source is None:
+            raise HTTPException(404, "no such source")
+        busy = source["status"] in BUSY_STATUSES
+        return render(
+            request,
+            "partials/source_status.html",
+            session=session,
+            source=source,
+            status_code=200 if busy else STOP_POLLING,
+            authorization_check=view.validate,
+        )
 
-
-# ----------------------------------------------------------- page forms
+    # ----------------------------------------------------------- page forms
 
 
 def too_big(request: Request, ctx) -> str | None:
@@ -397,7 +422,8 @@ class AccessBody(BaseModel):
 
 @api.get("")
 def list_sources(request: Request) -> list[dict[str, Any]]:
-    return source_view(ctx_of(request), principal_of(request).access).sources
+    with query_session(ctx_of(request), principal_of(request).access) as session:
+        return source_view(ctx_of(request), principal_of(request).access, session=session).sources
 
 
 @api.post("/text")
