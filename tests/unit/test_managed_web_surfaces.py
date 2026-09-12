@@ -302,9 +302,10 @@ def test_code_only_and_relation_only_support_do_not_change_light_up_dispatch(ctx
 
 # The two model surfaces and what an empty answer from each still carries. Both are
 # parametrized because an empty authorized corpus is the one composition that dispatches
-# `legacy`, which `ask._DISPATCHED` does not contain: `simulate` hands `run_simulation` the
-# owner it already dispatched and `ask._dispatch` re-enters `retrieval_session` over it. The
-# re-entry must borrow -- one acquisition, one release, and still no model call.
+# `legacy`, which is not one of the routed modes `retrieval_session` passes through: the
+# route hands `run_simulation` the owner it already dispatched and the dispatch rule
+# re-enters over it. The re-entry must borrow -- one acquisition, one release, and still
+# no model call.
 EMPTY_SURFACES = {
     "light-up": (graph_routes, "/api/graph/light-up", lambda payload: payload["seeds"]),
     "simulate": (analyze_routes, "/api/simulate", lambda payload: payload["trace"]["passages"]),

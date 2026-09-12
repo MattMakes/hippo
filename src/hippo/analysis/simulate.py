@@ -22,7 +22,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..access import Access
-from ..ask import _answer_from_trace, _dispatch
+from ..ask import _answer_from_trace
 from ..context import AppContext
 from ..hipporag.answerer import Answer
 from ..hipporag.graph_index import EdgeEdit
@@ -35,6 +35,7 @@ from ..hipporag.retriever import (
     Trace,
     trace_from_dict,
 )
+from ..knowledge import dense_session
 from ..knowledge.query_access import AuthorizedModel, QuerySession
 from ..knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from ..store.base import validate_settings
@@ -150,11 +151,15 @@ def simulate(
     Run the search again with `overrides` and diff it against `baseline` (or a fresh plain search).
     `access` keeps the simulation inside the caller's slice of the graph (hippo/access.py).
 
-    The owner is acquired (or the caller's is borrowed) through `ask`'s dense dispatch, so the
-    retriever below runs on evidence this audience proved, and an already dispatched session is
-    passed straight through rather than re-resolving its embedding profile.
+    The owner is acquired (or the caller's is borrowed) through the public dense dispatch, so
+    the retriever below runs on evidence this audience proved, and an already dispatched
+    session is passed straight through rather than re-resolving its embedding profile. A
+    borrowed session carries its own audience, so `access` is only forwarded when this call
+    owns the session; the dispatcher refuses the two together.
     """
-    with _dispatch(ctx, access, session, None) as query:
+    with dense_session.retrieval_session(
+        ctx, None if session is not None else access, session=session
+    ) as query:
         return _simulate(question, overrides, baseline, query, authorization_check)
 
 

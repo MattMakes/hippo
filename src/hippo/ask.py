@@ -19,7 +19,7 @@ in place, and never reacquired below this layer.
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 
@@ -29,17 +29,11 @@ from .context import AppContext
 from .hipporag import paths
 from .hipporag.answerer import Answer, answer_question
 from .hipporag.retriever import Retriever, Trace
+from .knowledge import dense_session
 from .knowledge.citations import resolve_citations
-from .knowledge.dense_session import retrieval_session
 from .knowledge.query_access import AuthorizedModel, QuerySession
 from .knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from .store.base import validate_settings
-
-# The two modes `retrieval_session` yields once it has chosen a route. Anything else
-# is an owner that has not been dispatched yet (a structural graph reports
-# "unavailable"; an activated empty one reports "legacy" and re-wrapping it is a
-# no-op that makes no model call).
-_DISPATCHED = frozenset({"verified", "tag_compatible"})
 
 
 def search(
@@ -58,23 +52,6 @@ def search(
         return trace
 
 
-def _dispatch(ctx, access, session, settings):
-    """One structural owner, routed to the dense evidence this audience actually proved.
-
-    Owned: `retrieval_session` acquires the structural session itself, so no graph is
-    reacquired below it. Borrowed: the caller's own session is dispatched in place -- or
-    passed straight through when the caller already dispatched it, because re-resolving
-    would cost a second `/api/show` and probe embedding for the same profile.
-    """
-    if session is None:
-        return retrieval_session(ctx, access, settings=settings)
-    if type(session) is QuerySession and session.graph.dense_capability.mode in _DISPATCHED:
-        return nullcontext(session)
-    # Settings were already compared against the held session; passing them again would
-    # only replace that message with the dispatcher's own.
-    return retrieval_session(ctx, session=session)
-
-
 @contextmanager
 def _retrieval_scope(ctx, access, authorization_check, session, settings):
     if authorization_check is not None:
@@ -83,7 +60,14 @@ def _retrieval_scope(ctx, access, authorization_check, session, settings):
         overrides = validate_settings(settings or {})
         if any(session.settings.get(key) != value for key, value in overrides.items()):
             raise ValueError("Query settings do not match the active session")
-    with _dispatch(ctx, access, session, settings) as query:
+    # One structural owner, routed to the dense evidence this audience actually proved.
+    # `retrieval_session` owns the whole own/borrow/pass-through rule; a caller that holds
+    # a session has already proved its audience, and forwarding `access` beside it is what
+    # the dispatcher refuses, so only the owned branch passes one. Looked up on the module
+    # at call time, so one patch point observes every promoted caller.
+    with dense_session.retrieval_session(
+        ctx, None if session is not None else access, settings=settings, session=session
+    ) as query:
 
         def validate():
             if authorization_check is not None:

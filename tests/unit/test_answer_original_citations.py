@@ -108,11 +108,11 @@ def _dispatch_the_fixture(ctx, index, monkeypatch):
     """
     from contextlib import nullcontext
 
-    from hippo import ask
+    from hippo.knowledge import dense_session
     from hippo.knowledge.query_access import QuerySession
 
     session = QuerySession(index, ctx.ollama, lambda: None, {})
-    monkeypatch.setattr(ask, "_dispatch", lambda *a, **kw: nullcontext(session))
+    monkeypatch.setattr(dense_session, "retrieval_session", lambda *a, **kw: nullcontext(session))
 
 
 @pytest.mark.parametrize("surface", ["http", "mcp", "html"])
