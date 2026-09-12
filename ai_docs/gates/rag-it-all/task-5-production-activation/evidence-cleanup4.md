@@ -27,7 +27,9 @@ Form (a) was not needed anywhere in this batch.
 | 3 | First run of the web/transport set, form (b) | **2 failed**, 297 passed | `/tmp/hippo-cleanup4-run2.log` |
 | 4 | The same set after the two corrections below, form (b) | **299 passed**, EXIT 0 | `/tmp/hippo-cleanup4-run3.log` |
 | 5 | GREEN (Fake), all twenty-one affected and adjacent files, form (b) | **677 passed**, EXIT 0 | `/tmp/hippo-cleanup4-green-fake.log` |
-| 6 | GREEN (Ladybug), `test_managed_web_surfaces.py test_managed_web_ingress.py`, form (b) | see "Ladybug" below | `/tmp/hippo-cleanup4-green-ladybug.log` |
+| 6 | GREEN (Ladybug), `test_managed_web_surfaces.py test_managed_web_ingress.py`, form (b) | **152 passed** in 666.10s, EXIT 0 | `/tmp/hippo-cleanup4-green-ladybug.log` |
+
+No Neo4j was used and the disposable container was never claimed by this session.
 
 Run 3's two failures are worth recording because both were the new tests telling the truth
 rather than defects:
