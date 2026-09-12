@@ -18,6 +18,7 @@ MODULES = [
     "hippo.knowledge.public_errors",
     "hippo.knowledge.temporal",
     "hippo.ingest",
+    "hippo.ingest.build_run",
     "hippo.ingest.pipeline",
     "hippo.ingest.managed_activation",
     "hippo.ingest.prose_generation",
