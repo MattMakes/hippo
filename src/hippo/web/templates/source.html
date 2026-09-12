@@ -119,7 +119,17 @@
   {% for p in passages %}
   <article class="passage">
     <header><span class="rank">#{{ p.ordinal + 1 }}</span><b>{{ p.title }}</b><span class="muted">{{ p.text | length }} chars · {{ p.triples | length }} facts</span></header>
+    {% set evidence = passage_evidence.get(p.id, {}) %}
+    {% if evidence.get('is_derived') %}<p class="muted small">Derived retrieval text</p>{% endif %}
     <p class="pre">{{ p.text }}</p>
+    {% if evidence.get('is_derived') %}
+    <details><summary>Original evidence</summary>
+      {% for original in evidence.originals %}
+      <p class="muted small">{{ original.title }} · {{ original.location }}</p>
+      <p class="pre">{{ original.text }}</p>
+      {% endfor %}
+    </details>
+    {% endif %}
     {% if p.extraction_error %}<div class="callout bad small">Extraction failed: {{ p.extraction_error }}</div>{% endif %}
     {% if p.triples or p.entities %}
     <details>

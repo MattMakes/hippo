@@ -25,6 +25,7 @@ from ...hipporag import paths
 from ...ingest import pipeline
 from ...ingest.pipeline import Busy
 from ...ingest.repos import RepoError
+from ...knowledge.answer_evidence import retrieval_fields
 from ...knowledge.eval_access import EvalAccess
 from ...knowledge.query_access import QuerySession, query_session
 from ...status import source_view
@@ -171,6 +172,17 @@ def source_page(request: Request, source_id: str, page: int = 1):
                 offset=(page - 1) * PASSAGES_PER_PAGE,
                 access=principal.access,
             )
+        passage_evidence = {}
+        if source.get("managed"):
+            evidence = retrieval_fields(session.graph, [p["id"] for p in passages])
+            originals = {row["id"]: row for row in evidence["citations"]}
+            passage_evidence = {
+                item["passage_id"]: {
+                    "is_derived": item["is_derived"],
+                    "originals": [originals[identity] for identity in item["citation_ids"]],
+                }
+                for item in evidence["retrieval_evidence"]
+            }
         question_sets = (
             [
                 qs
@@ -192,6 +204,7 @@ def source_page(request: Request, source_id: str, page: int = 1):
             source=with_manage_flags([source], principal)[0],
             passages=passages,
             code_details=code_details,
+            passage_evidence=passage_evidence,
             question_sets=question_sets,
             page=page,
             pages=pages,

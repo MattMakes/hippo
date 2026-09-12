@@ -31,6 +31,7 @@ from ...analysis.explain import explain
 from ...hipporag import paths as path_tools
 from ...hipporag.graph_index import CODE_KINDS, DATA, ENTITY, PASSAGE, SYMBOL, GraphIndex
 from ...knowledge.access import AuthorizationChanged
+from ...knowledge.answer_evidence import retrieval_fields
 from ...knowledge.query_access import AuthorizedModel, current_access, query_session
 from ...ollama import OllamaError
 from ...status import source_view
@@ -442,6 +443,9 @@ def node_details(request: Request, node_id: str, as_role: str = ""):
             }
             if kind == PASSAGE:
                 p = index.passages[index.passage_position(vertex)]
+                evidence = retrieval_fields(index, [p.id])
+                item = evidence["retrieval_evidence"][0]
+                out.update(is_derived=item["is_derived"], citation_ids=item["citation_ids"], **evidence)
                 out.update(
                     title=p.title,
                     source_id=p.source_id,

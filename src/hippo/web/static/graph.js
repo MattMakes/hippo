@@ -389,7 +389,8 @@
       <h4>${esc(n.label)}</h4>
       <p class="small muted">${what} · visible to <b>${esc(n.tier)} +</b> · ${n.degree} neighbours</p>
       ${hit ? `<p class="small">${hit.seed ? `<span class="pill warn">seed · ${hit.seedWeight.toFixed(3)}</span> ` : ''}${hit.rank ? `<span class="pill ok">ranked #${hit.rank}</span> ` : ''}${hit.score ? `<span class="pill">activation ${hit.score.toFixed(3)}</span>` : ''}</p>` : ''}
-      ${n.kind === 'passage' ? `<details open><summary class="small">Text</summary><p class="pre small">${esc(n.text)}</p></details>` : ''}
+      ${n.kind === 'passage' ? `<details open><summary class="small">${n.is_derived ? 'Derived retrieval text' : 'Text'}</summary><p class="pre small">${esc(n.text)}</p></details>` : ''}
+      ${n.is_derived ? `<details open><summary class="small">Original evidence</summary>${(n.citations || []).map((c) => `<p class="small muted">${esc(c.title)} · ${esc(c.location)}</p><p class="pre small">${esc(c.text)}</p>`).join('')}</details>` : ''}
       ${code ? codePanel(n) : `<details ${n.kind === 'entity' ? 'open' : ''}><summary class="small">Facts (${n.fact_count ?? (n.facts || []).length})</summary><ul class="facts small">${facts || '<li class="muted">none</li>'}</ul></details>`}
       ${n.kind === 'entity' && n.passages ? `<details><summary class="small">Passages (${n.passages.length})</summary><ul class="small g-list">${n.passages.map((p) => `<li><a href="#" data-focus="${esc(p.id)}">${esc(p.title)}</a></li>`).join('')}</ul></details>` : ''}
       ${code && n.defined_in && n.defined_in.length ? block(`Written down in (${n.defined_in.length})`, n.defined_in.map((p) => `<li><a href="#" data-focus="${esc(p.id)}">${esc(p.title)}</a></li>`).join('')) : ''}
