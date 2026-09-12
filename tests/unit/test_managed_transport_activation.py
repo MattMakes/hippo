@@ -46,6 +46,26 @@ from tests.unit.test_structural_loading import published
 QUESTION = "who builds the thing?"
 SECRETS = ("sk-live-DEADBEEF", "/Users/someone", "Acme Robotics", "embed:latest")
 
+# The one denial every surface prints, spelled out rather than composed from the constants
+# under test: `web/app.py` answers 409 with this sentence and this code, and the point of the
+# assertion is that MCP and the CLI say the same words, not that they agree with themselves.
+DENIAL = "authorization_changed: Permissions changed; repeat the query"
+
+# The four code-graph tools and an argument list each, so a failure contract can be
+# parametrised over the whole surface rather than over `blast_radius_tool` alone.
+CODE_TOOLS = ("explain_path", "blast_radius", "exception_path", "history")
+CODE_ARGS = {
+    "explain_path": ("a_symbol", "b_symbol"),
+    "blast_radius": ("a_symbol",),
+    "exception_path": ("a_symbol", "SomeError"),
+    "history": ("a_symbol",),
+}
+
+
+def code_tool(ctx, name: str, principal: Principal):
+    """Call one of the four code-graph tools with the arguments it wants."""
+    return getattr(mcp_server, f"{name}_tool")(ctx, *CODE_ARGS[name], principal=principal)
+
 
 def anyone(ctx) -> Principal:
     """The open principal an ungated transport resolves."""
@@ -240,6 +260,81 @@ def test_a_gated_local_index_really_reaches_the_managed_lane(cli_ctx, tmp_path, 
     assert captured.err.strip() == f"error: {source['error']}"
     assert "status: failed" in captured.out
     assert_clean(captured.out + captured.err)
+
+
+@pytest.mark.parametrize("code", ["model_unavailable", "retrieval_rebuild_required", "authorization_changed"])
+def test_cli_index_prints_a_closed_stored_error_unchanged(cli_ctx, tmp_path, monkeypatch, capsys, code):
+    """Every code `managed_activation` can store is already the public rendering.
+
+    `authorization_changed` is the one the public table maps to `None` on purpose, and
+    `retrieval_rebuild_required` is the tenth, added when the managed table learned to tell
+    a stale embedding profile from an unreachable model. Neither may be swallowed.
+    """
+    stored = f"{code}: The build could not be completed."
+    note = _failing_index(cli_ctx, tmp_path, monkeypatch, stored)
+    assert cli.main(["index", str(note)]) == 1
+    assert capsys.readouterr().err.strip() == f"error: {stored}"
+
+
+def test_cli_index_never_prints_an_unclosed_stored_error(cli_ctx, tmp_path, monkeypatch, capsys):
+    """F3: the legacy lane stores `f"{type(err).__name__}: {err}"`, which is not a rendering.
+
+    `map_build_failure` never sees a legacy build, so the row can hold a model's reply body,
+    an absolute path or a sentence of the source itself. `cmd_index` printed it verbatim.
+    """
+    stored = f"OllamaError: {POISON}"
+    note = _failing_index(cli_ctx, tmp_path, monkeypatch, stored)
+    assert cli.main(["index", str(note)]) == 1
+    captured = capsys.readouterr()
+    source_id = cli_ctx.store.list_sources()[0]["id"]
+    assert captured.err.strip() == f"error: indexing failed; inspect local logs for source {source_id}"
+    assert_clean(captured.err + captured.out)
+
+
+def _failing_index(cli_ctx, tmp_path, monkeypatch, stored: str):
+    """An open-mode `hippo index` whose source row ends up carrying `stored`."""
+    monkeypatch.delenv(mcp_server.TOKEN_ENV, raising=False)
+    note = tmp_path / "zed.md"
+    note.write_text("Zed Labs is located in Lisbon. Zed Labs builds drones.\n")
+    original = cli_ctx.jobs.wait_all
+
+    def fail_the_build(*args, **kwargs):
+        original(*args, **kwargs)
+        source = cli_ctx.store.list_sources()[0]
+        cli_ctx.store.update_source(source["id"], status="failed", stage="failed", error=stored)
+
+    monkeypatch.setattr(cli_ctx.jobs, "wait_all", fail_the_build)
+    return note
+
+
+def test_a_gated_local_index_is_owned_by_its_creator_and_kept_to_their_tier(
+    cli_ctx, tmp_path, monkeypatch, capsys
+):
+    """F4: `hippo index` resolves an identity and then has to use it for visibility too.
+
+    `hippo_remember` passes `owner_id` and `access_role_id`; `cmd_index` passed neither, so
+    both defaulted to `None` and `min_rank` fell to `EVERYONE_RANK`. A low tier's own file
+    was therefore published to every role, and its creator could not manage what they made.
+    """
+    cli_ctx.store.ensure_roles()
+    creator = cli_ctx.store.get_user(cli_ctx.store.create_user("assistant", "secret1", "local-assistant"))
+    below = cli_ctx.store.get_user(cli_ctx.store.create_user("everyone-else", "secret1", "individual"))
+    monkeypatch.setenv(mcp_server.TOKEN_ENV, creator["token"])
+    note = tmp_path / "zed.md"
+    note.write_text("Zed Labs is located in Lisbon.\n")
+    assert cli.main(["index", str(note)]) in (0, 1)  # the build may fail; the row is the point
+    capsys.readouterr()
+
+    row = cli_ctx.store.list_sources()[0]
+    assert row["owner_id"] == creator["id"]
+    assert row["min_rank"] == 10, "the row did not take the creator's own tier"
+
+    them = Principal.for_user(creator, cli_ctx.store.get_role("local-assistant"))
+    lower = Principal.for_user(below, cli_ctx.store.get_role("individual"))
+    assert them.may_manage_source(row), "the creator cannot manage what they indexed"
+    assert them.access.can_see_source(row)
+    assert not lower.access.can_see_source(row), "a tier below the creator was shown their file"
+    assert not lower.may_manage_source(row)
 
 
 @pytest.mark.parametrize("token", [None, "hippo_not-a-real-token"])
@@ -470,6 +565,113 @@ def test_mcp_model_failure_is_a_stable_code_with_no_private_text(ctx, monkeypatc
     assert_clean(message)
 
 
+# The four code tools were outside the mapper entirely (4c review F2): they called
+# `_code_graph` bare, so everything `query_session` does on acquisition and release, and
+# `_code_answer`'s two `validate()` calls, escaped with their own text. Each test below is
+# one of those escapes.
+
+
+@pytest.mark.parametrize("tool", CODE_TOOLS)
+def test_mcp_code_tool_session_acquisition_failure_is_a_stable_code(ctx, monkeypatch, tool):
+    """Acquiring the view is inside the mapper: this is the half of F2 that really leaked."""
+
+    def explode(*args, **kwargs):
+        raise OllamaError(POISON)
+
+    monkeypatch.setattr(ctx, "graph_for", explode)
+    with pytest.raises(ToolError) as caught:
+        code_tool(ctx, tool, anyone(ctx))
+    message = str(caught.value)
+    assert message == "retrieval_unavailable: Retrieval service is unavailable"
+    assert_clean(message)
+
+
+@pytest.mark.parametrize("tool", CODE_TOOLS)
+def test_mcp_code_tool_denial_before_the_build_reads_as_the_shared_denial(code_index, monkeypatch, tool):
+    """`_code_answer`'s leading `validate()` used to sit outside the try and escape raw."""
+    code_ctx, _ = code_index
+    original = code_ctx.graph_for
+
+    def revoke_after_acquiring(*args, **kwargs):
+        graph = original(*args, **kwargs)
+        code_ctx.store._bump_authorization_epoch()
+        return graph
+
+    monkeypatch.setattr(code_ctx, "graph_for", revoke_after_acquiring)
+    with pytest.raises(ToolError) as caught:
+        code_tool(code_ctx, tool, anyone(code_ctx))
+    assert str(caught.value) == DENIAL
+
+
+def test_mcp_code_tool_denial_outranks_a_mapped_build_failure(code_index, monkeypatch):
+    """A `finally` that raises replaces what is in flight, so the mapper has to see it.
+
+    The build fails on a poisoned model error *and* the epoch moves. Before the fix the
+    mapped `ToolError` was swallowed by the trailing `validate()` and the caller got a
+    masked crash (`Error executing tool ...`) plus a full traceback in the server log.
+    """
+    code_ctx, _ = code_index
+
+    def revoked_and_failed(*args, **kwargs):
+        code_ctx.store._bump_authorization_epoch()
+        raise OllamaError(POISON)
+
+    monkeypatch.setattr(mcp_server, "path_payload", revoked_and_failed)
+    with pytest.raises(ToolError) as caught:
+        mcp_server.explain_path_tool(code_ctx, "a", "b", principal=anyone(code_ctx))
+    message = str(caught.value)
+    assert message == DENIAL
+    assert_clean(message)
+
+
+def test_mcp_code_tool_build_failure_survives_a_view_that_is_still_valid(code_index, monkeypatch):
+    """Nothing moved, so the mapped code is what the caller gets: the denial does not win by default."""
+    code_ctx, _ = code_index
+
+    def explode(*args, **kwargs):
+        raise OllamaError(POISON)
+
+    monkeypatch.setattr(mcp_server, "blast_payload", explode)
+    with pytest.raises(ToolError) as caught:
+        mcp_server.blast_radius_tool(code_ctx, "a", principal=anyone(code_ctx))
+    message = str(caught.value)
+    assert message == "retrieval_unavailable: Retrieval service is unavailable"
+    assert_clean(message)
+
+
+def test_mcp_code_tool_ambiguity_still_carries_its_candidates(code_index):
+    """The carve-out survives the nesting: a name and what it could have meant are the answer."""
+    code_ctx, _ = code_index
+    with pytest.raises(ToolError) as caught:
+        mcp_server.history_tool(code_ctx, "log", principal=anyone(code_ctx))
+    message = str(caught.value)
+    assert "could mean any of" in message
+    assert "pyapp.store.Base.log" in message
+
+
+def test_mcp_source_listing_validates_its_view_like_the_cli(ctx, monkeypatch):
+    """F7: `_sources_locally` calls `view.validate()` after building its rows; `sources_tool` did not.
+
+    `source_view` keeps its own `authorization_epoch` comparison, which the session's exit
+    check never runs, so skipping it is a real gap between two surfaces of the same slice.
+    """
+    import hippo.status as status
+
+    ctx.store.create_source("text", "a note")
+    calls = []
+    original = status.source_view
+
+    def recorded(app_ctx, access, *, session=None):
+        view = original(app_ctx, access, session=session)
+        inner = view.validate
+        view.validate = lambda: (calls.append(len(view.sources)), inner())[1]
+        return view
+
+    monkeypatch.setattr(status, "source_view", recorded)
+    rows = mcp_server.sources_tool(ctx, principal=anyone(ctx))
+    assert calls == [len(rows)], "the MCP source listing did not validate the view it just rendered"
+
+
 def test_mcp_remember_maps_an_unknown_failure_to_operation_failed(ctx, monkeypatch):
     def explode(*args, **kwargs):
         raise RuntimeError(POISON)
@@ -535,8 +737,13 @@ def test_an_administrative_command_keeps_its_own_errors(cli_ctx, monkeypatch):
         cli.main(["pull-models"])
 
 
-def test_an_authorization_change_reads_the_same_on_both_surfaces(ctx, monkeypatch, capsys):
-    """No code: a permission change keeps the existing generic denial, as the mapper says."""
+def test_an_authorization_change_reads_the_same_on_all_three_surfaces(ctx, monkeypatch, capsys):
+    """One sentence and one code, and they are the web app's own (4c review F6).
+
+    The three surfaces used to say three different things for the same condition: the web
+    app answered 409 `Permissions changed; repeat the query`, MCP and the CLI shared a
+    longer sentence of their own, and the remote client printed the URL and status on top.
+    """
     from hippo import ask as ask_module
     from hippo.knowledge.access import AuthorizationChanged
 
@@ -548,13 +755,93 @@ def test_an_authorization_change_reads_the_same_on_both_surfaces(ctx, monkeypatc
     monkeypatch.setattr(ask_module, "ask", revoked)
     monkeypatch.setattr(AppContext, "from_env", classmethod(lambda cls, ollama=None: ctx))
 
+    # The sentence is the web app's; the code is the managed lane's own for the same event.
+    assert mcp_server.DENIED == cli.DENIED == "Permissions changed; repeat the query"
+    assert mcp_server.DENIED_CODE == cli.DENIED_CODE == "authorization_changed"
+
     with pytest.raises(ToolError) as caught:
         mcp_server.ask_tool(ctx, QUESTION, principal=anyone(ctx))
-    assert str(caught.value) == mcp_server.DENIED
+    assert str(caught.value) == DENIAL
 
     assert cli.main(["ask", QUESTION]) == 2
     captured = capsys.readouterr()
-    assert captured.err.strip() == f"error: {mcp_server.DENIED}"
+    assert captured.err.strip() == f"error: {DENIAL}"
+    assert_clean(captured.err)
+
+    # ...and the third surface, from the body `web/app.py` sends for the same condition.
+    def denied(request):
+        return httpx.Response(409, json={"error": mcp_server.DENIED, "code": mcp_server.DENIED_CODE})
+
+    with pytest.raises(RemoteError) as remote_caught:
+        remote_for(denied).ask(QUESTION)
+    assert str(remote_caught.value) == DENIAL
+
+
+def test_a_code_tool_denial_reads_the_same_on_both_surfaces(code_index, monkeypatch, capsys):
+    """The same contract on a code tool, where 4c pinned it for `ask_tool` alone."""
+    from hippo.web.routes import code as code_routes
+
+    code_ctx, _ = code_index
+    monkeypatch.setattr(AppContext, "from_env", classmethod(lambda cls, ollama=None: code_ctx))
+
+    def revoked(*args, **kwargs):
+        code_ctx.store._bump_authorization_epoch()
+        return {"found": False, "a": "a", "b": "b", "lines": []}
+
+    monkeypatch.setattr(mcp_server, "path_payload", revoked)
+    with pytest.raises(ToolError) as caught:
+        mcp_server.explain_path_tool(code_ctx, "a", "b", principal=anyone(code_ctx))
+    assert str(caught.value) == DENIAL
+
+    monkeypatch.setattr(code_routes, "path_payload", revoked)
+    assert cli.main(["path", "a", "b"]) == 2
+    assert capsys.readouterr().err.strip() == f"error: {DENIAL}"
+
+
+def test_a_closed_validators_own_text_reads_the_same_on_both_surfaces(cli_ctx, tmp_path, monkeypatch, capsys):
+    """F5: an exact-type `ValueError` is closed input validation the caller can act on.
+
+    `tool_failure` already passed it through; `cli._refusal` did not, so the same upload
+    limit read as its own sentence over MCP and as `operation_failed` on the CLI.
+    """
+    bounded = "note.md is too big (9000000 bytes); the limit is 1000000 bytes (HIPPO_MAX_UPLOAD_BYTES)"
+
+    def too_big(*args, **kwargs):
+        raise ValueError(bounded)
+
+    monkeypatch.setattr(pipeline, "add_text", too_big)
+    monkeypatch.setattr(pipeline, "add_upload", too_big)
+    with pytest.raises(ToolError) as caught:
+        mcp_server.remember_tool(cli_ctx, "Note", "some text", principal=Principal.open())
+    assert str(caught.value) == bounded
+
+    note = tmp_path / "note.md"
+    note.write_text("Zed Labs is located in Lisbon.\n")
+    assert cli.main(["index", str(note)]) == 2
+    assert capsys.readouterr().err.strip() == f"error: {bounded}"
+
+
+def test_a_value_error_subclass_is_still_operation_failed_on_both_surfaces(
+    cli_ctx, tmp_path, monkeypatch, capsys
+):
+    """The exact-type check is what keeps the managed `ValueError` subclasses out."""
+    from hippo.knowledge.projection import ProjectionError
+
+    def explode(*args, **kwargs):
+        raise ProjectionError(POISON)
+
+    monkeypatch.setattr(pipeline, "add_text", explode)
+    monkeypatch.setattr(pipeline, "add_upload", explode)
+    failed = f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message}"
+    with pytest.raises(ToolError) as caught:
+        mcp_server.remember_tool(cli_ctx, "Note", "some text", principal=Principal.open())
+    assert str(caught.value) == failed
+
+    note = tmp_path / "note.md"
+    note.write_text("Zed Labs is located in Lisbon.\n")
+    assert cli.main(["index", str(note)]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.strip() == f"error: {failed}"
     assert_clean(captured.err)
 
 
@@ -627,6 +914,67 @@ def test_remote_client_never_dumps_a_response_body():
     with pytest.raises(RemoteError) as caught:
         remote_for(handler).sources()
     assert_clean(str(caught.value))
+    assert str(caught.value) == f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message} (HTTP 500)"
+
+
+def test_remote_client_never_prints_a_code_less_server_error():
+    """F1: a *parseable* body holding a raw `error` string is the shape that leaked.
+
+    `/api/ask` still answers the pre-activation `{"error": str(exc)}` with no code, and an
+    `OllamaError` carries 300 characters of the model's reply body by construction. The old
+    `_refusal` fell through to `body.get("error")` and printed it.
+    """
+    for status in (502, 500, 503):
+
+        def handler(request, status=status):
+            return httpx.Response(status, json={"error": POISON})
+
+        with pytest.raises(RemoteError) as caught:
+            remote_for(handler).ask(QUESTION)
+        message = str(caught.value)
+        assert_clean(message)
+        assert message == f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message} (HTTP {status})"
+
+
+def test_remote_client_never_prints_a_code_less_error_key_on_a_4xx_either():
+    """A code-less `error` is the un-migrated route shape whatever its status; only `detail` is bounded."""
+
+    def handler(request):
+        return httpx.Response(409, json={"error": POISON})
+
+    with pytest.raises(RemoteError) as caught:
+        remote_for(handler).ask(QUESTION)
+    message = str(caught.value)
+    assert_clean(message)
+    assert message == f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message} (HTTP 409)"
+
+
+def test_remote_client_keeps_a_legacy_validators_bounded_detail_on_a_4xx():
+    """The symbol the caller named is the one actionable fact, and it is their own input.
+
+    `/api/code` answers `HTTPException(404, str(UnknownSymbol))`, which FastAPI renders as a
+    code-less `detail`. Printing it is what makes `hippo blast no_such_thing` read the same
+    behind a server as it does locally.
+    """
+
+    def handler(request):
+        return httpx.Response(404, json={"detail": "no_such_thing is not a symbol in this memory"})
+
+    with pytest.raises(RemoteError) as caught:
+        remote_for(handler).code_blast_radius("no_such_thing", 2)
+    assert str(caught.value) == "no_such_thing is not a symbol in this memory"
+
+
+def test_remote_ambiguity_is_never_an_empty_line():
+    """F8: a 409 carrying `candidates` but neither text key printed a bare `error:` header."""
+
+    def handler(request):
+        return httpx.Response(409, json={"candidates": ["a.log", "b.log"]})
+
+    with pytest.raises(RemoteAmbiguous) as caught:
+        remote_for(handler).code_history("log", 3)
+    assert str(caught.value).strip(), "the candidate list was printed under an empty message"
+    assert caught.value.candidates == ["a.log", "b.log"]
 
 
 def test_remote_client_keeps_the_token_message_and_the_candidate_list():

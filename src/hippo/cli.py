@@ -66,10 +66,18 @@ NO_TOKEN = (
     "(Account page, /account) and run the command again"
 )
 STORE_DOWN = "hippo cannot reach its database, so nobody can be signed in right now"
-# The same sentence `mcp_server.DENIED` prints, and for the same reason: `public_errors`
-# maps an authorization change to no code at all, so a denial keeps the generic response
-# it already had rather than becoming a fifth public code.
-DENIED = "your permissions changed; check who you are signed in as and repeat the request"
+# The same two strings `mcp_server.DENIED` and `mcp_server.DENIED_CODE` hold, and the same
+# two the web app answers 409 with: one permission change, one wording, whichever surface
+# the caller reached hippo through. `public_errors` maps an authorization change to no
+# *public* code (it keeps the response it already had rather than becoming a fifth one),
+# but the managed lane has its own stable name for the event and this is it.
+DENIED = "Permissions changed; repeat the query"
+DENIED_CODE = "authorization_changed"
+
+# What a failed Source row may be printed as when its stored `error` is not already a
+# rendering. The row is not re-derivable from an exception hours later, so the id is all
+# a reader gets; the local log holds the rest.
+INDEXING_FAILED = "indexing failed; inspect local logs for source {source_id}"
 
 
 class Denied(RuntimeError):
@@ -191,19 +199,38 @@ def _refusal(exc: Exception, *, command: str) -> str | None:
     everywhere. An evidence command adds `or OPERATION_FAILED`, which is the caller rule
     `knowledge/public_errors.py` documents: a pure mapper cannot tell where an exception
     was raised, so the path that could have touched stored text says so itself. An
-    administrative command touches no managed evidence and keeps its own errors.
+    administrative command touches no managed evidence and keeps its own errors -- with
+    one deliberate exception, below.
+
+    The two modules order the same table differently: `mcp_server.tool_failure` asks
+    `public_failure` first, this asks about a permission change first. They agree only
+    because `AuthorizationChanged` is a bare `RuntimeError` and appears in no row of the
+    public table; if it ever gains one, these two have to be re-read together.
     """
     from .knowledge.access import AuthorizationChanged
     from .knowledge.public_errors import OPERATION_FAILED, public_failure
 
     if isinstance(exc, AuthorizationChanged):
-        # No code, one sentence: the mapper leaves a permission change to the response it
-        # already had, and this is the CLI's. `mcp_server.DENIED` is the same string.
-        return DENIED
+        # Mapped for *every* command, administrative ones included, and deliberately so:
+        # a permission change is the one condition that is about the caller rather than
+        # about the work, and no command should answer it with a traceback. Nothing
+        # administrative raises it today; `cmd_settings` growing a capability check is
+        # exactly the case this ordering is here for.
+        return f"{DENIED_CODE}: {DENIED}"
     if command not in EVIDENCE_COMMANDS:
         return None
-    failure = public_failure(exc) or OPERATION_FAILED
-    return f"{failure.code}: {failure.message}"
+    failure = public_failure(exc)
+    if failure is not None:
+        return f"{failure.code}: {failure.message}"
+    # Closed input validation the caller can act on, raised before any managed work and
+    # never interpolating stored text: the same exact-type rule, for the same reason, as
+    # `mcp_server.tool_failure`. Every managed exception is a *subclass* of ValueError
+    # (ReadError, ManagedDispatchError, ProjectionError), so `isinstance` would let those
+    # out as `str(exc)`; the two surfaces have to agree on this or the same upload limit
+    # reads as its own sentence over MCP and as `operation_failed` here.
+    if type(exc) is ValueError:
+        return str(exc)
+    return f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message}"
 
 
 def _principal(ctx: AppContext):
@@ -294,16 +321,28 @@ def cmd_index(args: argparse.Namespace) -> int:
     principal = _principal(ctx)
     _require(principal, "add_sources")
     actor = _build_actor(principal)
+    # The identity this command just resolved decides who may see the result and who may
+    # manage it, exactly as it does for `hippo_remember` (`mcp_server.remember_tool`).
+    # Leaving these to their `None` defaults published a low tier's own file to every role
+    # and left its creator unable to rename or delete what they had made.
+    owner_id = principal.user_id
+    role_id = None if principal.is_open else principal.role_id
     target: str = args.target
     if repos.is_git_url(target):
         # A repository is not an accepted managed input, so it has no actor to take.
-        source_id = pipeline.add_repo(ctx, target)
+        source_id = pipeline.add_repo(ctx, target, owner_id=owner_id, access_role_id=role_id)
     else:
         path = Path(target)
         if not path.exists():
             print(f"{target} does not exist and is not a git URL", file=sys.stderr)
             return 1
-        source_id = pipeline.add_upload(ctx, *_upload_for_path(path), build_actor=actor)
+        source_id = pipeline.add_upload(
+            ctx,
+            *_upload_for_path(path),
+            owner_id=owner_id,
+            access_role_id=role_id,
+            build_actor=actor,
+        )
     if args.name:
         ctx.store.update_source(source_id, name=args.name)
 
@@ -312,9 +351,33 @@ def cmd_index(args: argparse.Namespace) -> int:
     source = ctx.store.get_source(source_id) or {}
     print(f"status: {source.get('status')} ({source.get('stage')}), passages: {source.get('passages', 0)}")
     if source.get("error"):
-        print(f"error: {source['error']}", file=sys.stderr)
+        print(f"error: {_stored_error(source_id, source)}", file=sys.stderr)
         return 1
     return 0
+
+
+def _stored_error(source_id: str, source: dict[str, Any]) -> str:
+    """What a Source row's stored `error` may be printed as.
+
+    The managed lane classifies a build failure once, where it happens, and stores its own
+    closed `code: message` on the row (`ingest/managed_activation.record_build_failure`).
+    That string *is* the public rendering, so it is printed unchanged - re-deriving it here
+    would be a second opinion about an event this process did not see.
+
+    The legacy lane stores `f"{type(err).__name__}: {err}"` instead, which is not a
+    rendering at all: an `OllamaError` carries 300 characters of the model's reply body by
+    construction, and a read error names the file it was reading. Open-mode `hippo index`
+    and `hippo index <git-url>` both still take that lane, so anything whose leading token
+    is not one of the closed codes is replaced rather than printed.
+    """
+    from .knowledge.public_errors import public_failure_for_code
+
+    stored = str(source.get("error") or "")
+    code, separator, message = stored.partition(": ")
+    closed = public_failure_for_code(code) is not None or code == DENIED_CODE
+    if separator and message and closed:
+        return stored
+    return INDEXING_FAILED.format(source_id=source_id)
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
@@ -568,7 +631,8 @@ def _index_remotely(remote: RemoteHippo, args: argparse.Namespace) -> int:
     source = remote.wait_for_source(source_id, WAIT_SECONDS)
     print(f"status: {source.get('status')} ({source.get('stage')}), passages: {source.get('passages', 0)}")
     if source.get("error"):
-        print(f"error: {source['error']}", file=sys.stderr)
+        # The server's Source row is the same row with the same two lanes in it.
+        print(f"error: {_stored_error(source_id, source)}", file=sys.stderr)
         return 1
     return 0
 

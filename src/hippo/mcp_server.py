@@ -36,9 +36,12 @@ evidence. No tool ever manufactures a trusted-local actor.
 
 What a caller may *learn from a failure* is closed too: every tool answers with the
 stable code and bounded sentence in `knowledge/public_errors.py`, which is what the
-HTTP routes and the CLI print for the same condition. A symbol name the caller
-supplied, and the candidates it could have meant, are the exceptions - they are the
-answer rather than a leak.
+HTTP routes and the CLI print for the same condition. That covers the whole body of
+every tool, including acquiring and releasing the caller's view and the authorization
+re-checks around a code-graph answer, because a failure there can carry stored evidence
+just as readily as the answer itself can. A symbol name the caller supplied, and the
+candidates it could have meant, are the exceptions - they are the answer rather than a
+leak - and an authorization change outranks both.
 
 The same server can be reached two ways:
 
@@ -163,10 +166,14 @@ def reader_actor(principal: Principal) -> BuildActor | None:
 # which answers with the same closed code and bounded sentence the HTTP routes and the
 # CLI use for the same condition.
 
-# One sentence and no code: `public_errors` maps an authorization change to `None` on
-# purpose, so that a permission denial keeps the response it already had rather than
-# becoming a fifth public code. The CLI prints this same string (`cli.DENIED`).
-DENIED = "your permissions changed; check who you are signed in as and repeat the request"
+# One denial, one wording, on every surface. `public_errors` maps an authorization change
+# to `None` on purpose, so it never becomes a fifth *public* code; but the managed lane has
+# always had its own stable name for the same event (`managed_activation.FAILURES`), and a
+# client that meets it over MCP, over the CLI and over the JSON API should not have to learn
+# three sentences for it. So the sentence is the web app's own 409 body (`web/app.py`) and
+# the code is the managed lane's. `cli.DENIED` and `cli.DENIED_CODE` hold the same two.
+DENIED = "Permissions changed; repeat the query"
+DENIED_CODE = "authorization_changed"
 
 
 def tool_failure(exc: Exception) -> ToolError:
@@ -180,7 +187,7 @@ def tool_failure(exc: Exception) -> ToolError:
     if failure is not None:
         return ToolError(f"{failure.code}: {failure.message}")
     if isinstance(exc, AuthorizationChanged):
-        return ToolError(DENIED)
+        return ToolError(f"{DENIED_CODE}: {DENIED}")
     # Closed input validation the caller can act on, raised before any managed work and
     # never interpolating stored text. Every managed exception is a *subclass* of
     # ValueError (ReadError, ManagedDispatchError, ProjectionError), so the exact-type
@@ -425,29 +432,37 @@ def _code_answer(build: Callable[[], dict[str, Any]], validate: Callable[[], Non
     A name is the caller's own input and its candidates are the answer, so those two keep
     their text. Everything else here is a graph read that could carry stored evidence, and
     goes out as the closed public failure instead.
+
+    Both `validate()` calls are inside the mapper, which is what the nesting is for. The
+    trailing one runs in a `finally`, and a `finally` that raises *replaces* whatever is
+    already in flight: outside the mapper it would hand the caller a raw
+    `AuthorizationChanged` (which mcp masks as a crash and logs with its traceback) and it
+    would swallow a `ToolError` the handlers had already built correctly. Inside it, a
+    denial mid-answer simply outranks a partly built answer, which is the right order.
     """
-    validate()
     try:
-        return build()
-    except (AmbiguousSymbol, UnknownSymbol) as exc:
-        raise ToolError(str(exc)) from exc
+        validate()
+        try:
+            return build()
+        except (AmbiguousSymbol, UnknownSymbol) as exc:
+            raise ToolError(str(exc)) from exc
+        finally:
+            validate()
     except ToolError:
         raise
     except Exception as exc:
         raise tool_failure(exc) from exc
-    finally:
-        validate()
 
 
 def explain_path_tool(ctx: AppContext, a: str, b: str, principal: Principal | None = None) -> dict[str, Any]:
-    with _code_graph(ctx, principal) as (index, theta):
+    with _answering(), _code_graph(ctx, principal) as (index, theta):
         return _code_answer(lambda: path_payload(index, a, b, theta=theta), index.validate_authorization)
 
 
 def blast_radius_tool(
     ctx: AppContext, symbol: str, depth: int = DEFAULT_DEPTH, principal: Principal | None = None
 ) -> dict[str, Any]:
-    with _code_graph(ctx, principal) as (index, theta):
+    with _answering(), _code_graph(ctx, principal) as (index, theta):
         return _code_answer(
             lambda: blast_payload(index, symbol, theta=theta, depth=depth), index.validate_authorization
         )
@@ -456,7 +471,7 @@ def blast_radius_tool(
 def exception_path_tool(
     ctx: AppContext, symbol: str, exception: str, principal: Principal | None = None
 ) -> dict[str, Any]:
-    with _code_graph(ctx, principal) as (index, theta):
+    with _answering(), _code_graph(ctx, principal) as (index, theta):
         return _code_answer(
             lambda: exception_payload(index, symbol, exception, theta=theta), index.validate_authorization
         )
@@ -468,7 +483,7 @@ def history_tool(
     limit: int = DEFAULT_HISTORY_LIMIT,
     principal: Principal | None = None,
 ) -> dict[str, Any]:
-    with _code_graph(ctx, principal) as (index, _theta):
+    with _answering(), _code_graph(ctx, principal) as (index, _theta):
         return _code_answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)
 
 
@@ -523,7 +538,7 @@ def sources_tool(ctx: AppContext, principal: Principal | None = None) -> list[di
     access = (principal or Principal.open()).access
     with _answering(), query_session(ctx, access) as session:
         view = source_view(ctx, access, session=session)
-        return [
+        rows = [
             {
                 "id": row["id"],
                 "name": row["name"],
@@ -540,6 +555,11 @@ def sources_tool(ctx: AppContext, principal: Principal | None = None) -> list[di
             }
             for row in view.sources
         ]
+        # `_sources_locally` does the same, and for a reason the session's own exit check
+        # does not cover: `source_view` keeps its own `authorization_epoch` comparison
+        # (`status.py`), which nothing else runs.
+        view.validate()
+        return rows
 
 
 def whoami_tool(ctx: AppContext, principal: Principal | None = None) -> dict[str, Any]:
