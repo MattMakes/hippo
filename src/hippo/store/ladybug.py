@@ -83,7 +83,13 @@ from .code import (
 from .evals import _result_row, _run_row, _set_row
 from .generations import GenerationQueries, legacy_source_cleanup, native_mutation, native_write
 from .knowledge import KnowledgeQueries
-from .memory import _passage_row, _source_row
+from .memory import (
+    INTERRUPTED_REFRESH_ERROR,
+    INTERRUPTED_REFRESH_STAGE,
+    REFRESHING_PREFIX,
+    _passage_row,
+    _source_row,
+)
 from .migrations import DEFAULT_WORKSPACE_ID
 from .snapshots import SnapshotQueries
 from .users import _role_row, _user_row, clean_capabilities, clean_rank, clean_username, slug
@@ -681,6 +687,8 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             self.remove_orphans()
 
     def mark_interrupted_jobs(self) -> int:
+        """See `MemoryQueries.mark_interrupted_jobs`: a managed refresh keeps serving, so a
+        restart retires its stage alone."""
         message = text("interrupted by a restart; run it again")
         now = now_iso()
         total = 0
@@ -703,6 +711,19 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 if count:
                     self.run(f"MATCH (n:{label}) WHERE {condition} SET {sets}", message=message, now=now)
                 total += count
+        refreshing = f"n.status = 'ready' AND n.stage STARTS WITH '{REFRESHING_PREFIX}'"
+        with self._lock:
+            row = self.run_one(f"MATCH (n:Source) WHERE {refreshing} RETURN count(n) AS n")
+            count = int(row["n"]) if row else 0
+            if count:
+                self.run(
+                    f"MATCH (n:Source) WHERE {refreshing} "
+                    "SET n.stage = decode($stage), n.error = decode($error), n.updated_at = $now",
+                    stage=text(INTERRUPTED_REFRESH_STAGE),
+                    error=text(INTERRUPTED_REFRESH_ERROR),
+                    now=now,
+                )
+            total += count
         return total
 
     def remove_orphans(self) -> None:
