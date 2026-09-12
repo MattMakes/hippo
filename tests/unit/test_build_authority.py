@@ -23,12 +23,12 @@ def api():
         pytest.fail("Prospective build authority is missing")
 
 
-def world(store, *, existing=False):
+def world(store, *, existing=False, kind="file"):
     module = api()
     store.ensure_schema()
     store.ensure_roles()
     user = store.create_user("builder", "password", "individual")
-    source = store.create_source("file", "Notes", {"file": "notes.md"}, owner_id=user)
+    source = store.create_source(kind, "Notes", {"file": "notes.md"}, owner_id=user)
     workspace = store.get_source(source)["workspace_id"]
     membership = k.WorkspaceMembership(
         workspace_id=workspace, principal_id=user, mapping_authority="local", enabled=True, policy_epoch=1
@@ -433,3 +433,246 @@ def test_captured_epochs_are_readonly_and_do_not_follow_store_changes(store):
     assert (value.expected_authorization_epoch, value.expected_suppression_epoch) == initial
     with pytest.raises(AuthorizationChanged):
         value.check_local()
+
+
+# --------------------------------------------- CC8: code sources and long builds
+
+
+@pytest.mark.parametrize("kind", ["text", "file", "repo", "archive"])
+def test_every_managed_capture_kind_can_hold_build_authority(store, kind):
+    """Design review B3: `repo` and `archive` were refused outright before CC8."""
+    w = world(store, kind=kind)
+    assert guard(w).source_control.kind == kind
+
+
+@pytest.mark.parametrize("kind", ["url", "unknown"])
+def test_an_unsupported_source_kind_keeps_the_identical_denial(store, kind):
+    w = world(store, kind=kind)
+    with pytest.raises(AuthorizationChanged, match="^Build actor cannot manage source$"):
+        guard(w)
+
+
+def test_the_managed_term_is_the_row_alone_and_reads_no_record_table(store, monkeypatch):
+    """B3's second half: the Artifact/Generation presence scan ran on every batch."""
+    w = world(store, existing=True)
+    seen = []
+    original = store._knowledge_rows
+
+    def rows(kind, **kwargs):
+        seen.append(kind)
+        return original(kind, **kwargs)
+
+    monkeypatch.setattr(store, "_knowledge_rows", rows)
+    assert w.module._source_control(store, w.source).managed is True
+    assert "Artifact" not in seen and "Generation" not in seen, "no record table is scanned"
+    # Ruling 9 keeps the store's own flag flipping at staging start, so the answer is the
+    # same; what changed is that it is read from the Source row instead of rediscovered.
+    store._source_fields(w.source, managed=False)
+    assert w.module._source_control(store, w.source).managed is False
+
+
+def test_the_managed_term_follows_the_row_flag_and_the_active_pointer(store):
+    w = world(store)
+    module = w.module
+    assert module._source_control(store, w.source).managed is False
+    store._source_fields(w.source, managed=True)
+    assert module._source_control(store, w.source).managed is True
+    store._source_fields(w.source, managed=False, active_generation_id="generation-1")
+    assert module._source_control(store, w.source).managed is True
+
+
+def test_a_stale_meta_managed_marker_no_longer_classifies_a_source(store):
+    """CC1 retired `meta['managed']` as a lane marker; nothing writes it."""
+    w = world(store)
+    store.update_source(w.source, meta_json='{"file":"notes.md","managed":true}')
+    assert w.module._source_control(store, w.source).managed is False
+
+
+def _pair(w, **changes):
+    artifact = w.artifact.replace(**changes)
+    return artifact, w.revision.replace(artifact_id=artifact.id)
+
+
+@pytest.mark.parametrize("kind", ["repository", "history_event"])
+def test_a_code_accepted_artifact_kind_is_an_active_local_input(store, kind):
+    """A captured tree and a commit are accepted inputs as much as a file is."""
+    w = world(store)
+    accepted = w.module.AcceptedBuildInputs(pairs=(_pair(w, kind=kind),), planned_policies=(w.policy,))
+    guard(w, accepted)
+
+
+def test_an_artifact_kind_outside_the_code_and_prose_set_still_refuses(store):
+    w = world(store)
+    accepted = w.module.AcceptedBuildInputs(pairs=(_pair(w, kind="ticket"),), planned_policies=(w.policy,))
+    with pytest.raises(AuthorizationChanged, match="not an active local input"):
+        guard(w, accepted)
+
+
+def test_a_planned_policy_may_carry_the_code_scope_key(store):
+    w = world(store)
+    module = w.module
+    policy = w.policy.replace(scope_key=f"source:{w.source}:{module.MANAGED_CODE_SCOPE}")
+    artifact, revision = _pair(w, policy_id=policy.id)
+    span = w.span.replace(revision_id=revision.id, policy_id=policy.id)
+    accepted = module.AcceptedBuildInputs(
+        pairs=((artifact, revision),), spans=(span,), planned_policies=(policy,)
+    )
+    guard(w, accepted)
+    assert module.PLANNED_POLICY_SCOPES == (module.PLAIN_PROSE_SCOPE, module.MANAGED_CODE_SCOPE)
+
+
+def test_a_planned_policy_scope_key_outside_the_closed_set_refuses(store):
+    w = world(store)
+    policy = w.policy.replace(scope_key=f"source:{w.source}:invented-v1")
+    artifact, revision = _pair(w, policy_id=policy.id)
+    span = w.span.replace(revision_id=revision.id, policy_id=policy.id)
+    accepted = w.module.AcceptedBuildInputs(
+        pairs=((artifact, revision),), spans=(span,), planned_policies=(policy,)
+    )
+    with pytest.raises(AuthorizationChanged, match="explicit local source grant"):
+        guard(w, accepted)
+
+
+def bump(store, name):
+    from hippo.store.authorization import bump_epoch
+
+    bump_epoch(store, name)
+
+
+def test_rebaseline_adopts_an_unrelated_authorization_epoch_and_freezes_the_rest(store):
+    w = world(store, existing=True)
+    value = guard(w)
+    frozen = value.expected_suppression_epoch
+    bump(store, "authorization_epoch")
+    child = value.rebaseline()
+    assert child is not value
+    assert child.expected_authorization_epoch == store.authorization_epoch()
+    assert child.expected_suppression_epoch == frozen
+    assert child.source_control == value.source_control
+    assert child.check_local() is None
+    assert value.expected_authorization_epoch != child.expected_authorization_epoch
+
+
+def test_a_rebaseline_must_precede_the_failing_check_not_follow_it(store):
+    """`check_local` latches its own refusal, so the coordinator rebaselines first.
+
+    An epoch mismatch seen through `check_local()` is a sticky failure by design, and
+    ruling 2 forbids a rebaseline after one. The coordinator therefore compares the
+    store's authorization epoch with `expected_authorization_epoch` between batches and
+    rebaselines *before* its next external check.
+    """
+    w = world(store, existing=True)
+    value = guard(w)
+    bump(store, "authorization_epoch")
+    assert store.authorization_epoch() != value.expected_authorization_epoch
+    with pytest.raises(AuthorizationChanged):
+        value.check_local()
+    with pytest.raises(AuthorizationChanged):
+        value.rebaseline()
+
+
+def test_rebaseline_refuses_after_a_capability_loss_and_latches(store):
+    w = world(store, existing=True)
+    value = guard(w)
+    store.update_role("individual", capabilities=[])
+    store._source_fields(w.source, owner_id=None)
+    with pytest.raises(AuthorizationChanged):
+        value.rebaseline()
+    with pytest.raises(AuthorizationChanged):
+        value.rebaseline()
+
+
+def test_rebaseline_refuses_any_suppression_epoch_change(store):
+    w = world(store, existing=True)
+    value = guard(w)
+    bump(store, "suppression_epoch")
+    with pytest.raises(AuthorizationChanged, match="suppression"):
+        value.rebaseline()
+
+
+@pytest.mark.parametrize("field", ["access_role_id", "min_rank", "owner_id"])
+def test_rebaseline_refuses_a_changed_source_control_even_with_every_capability(store, field):
+    """Design review M6: `source_control` is frozen at capture and never adopted."""
+    w = world(store, existing=True)
+    value = guard(w)
+    store.update_role("individual", capabilities=["manage_sources"])
+    if field == "owner_id":
+        store._source_fields(w.source, owner_id=None)
+    elif field == "min_rank":
+        store._source_fields(w.source, min_rank=1)
+    else:
+        store._source_fields(w.source, access_role_id="individual")
+    with pytest.raises(AuthorizationChanged, match="Source controls changed"):
+        value.rebaseline()
+
+
+def test_rebaseline_refuses_after_a_sticky_failure(store):
+    w = world(store, existing=True)
+    value = guard(w)
+    store.update_user(w.user, disabled=True)
+    with pytest.raises(AuthorizationChanged):
+        value.check_local()
+    store.update_user(w.user, disabled=False)
+    with pytest.raises(AuthorizationChanged):
+        value.rebaseline()
+
+
+def test_rebaseline_refuses_inside_an_ambient_transaction(store):
+    w = world(store, existing=True)
+    value = guard(w)
+    with store.transaction():
+        with pytest.raises(RuntimeError, match="no ambient transaction"):
+            value.rebaseline()
+    assert value.rebaseline() is not value
+
+
+def test_rebaseline_refuses_on_a_closed_authority(store):
+    w = world(store, existing=True)
+    value = guard(w)
+    value.close()
+    with pytest.raises(AuthorizationChanged, match="closed"):
+        value.rebaseline()
+
+
+def test_rebaseline_holds_the_authorization_and_source_locks(store, monkeypatch):
+    w = world(store, existing=True)
+    value = guard(w)
+    order = []
+    original_source, original_auth = store._lock_source, store._lock_authorization
+
+    def lock_source(identity):
+        order.append("source")
+        return original_source(identity)
+
+    def lock_auth():
+        order.append("authorization")
+        return original_auth()
+
+    monkeypatch.setattr(store, "_lock_source", lock_source)
+    monkeypatch.setattr(store, "_lock_authorization", lock_auth)
+    bump(store, "authorization_epoch")
+    value.rebaseline()
+    assert order[:2] == ["authorization", "source"]
+
+
+def test_a_failed_rebaseline_closes_the_child_it_built(store, monkeypatch):
+    w = world(store, existing=True)
+    value = guard(w)
+    module = w.module
+    built = []
+    original = module.BuildAuthority.check_local
+
+    def failing(self):
+        built.append(self)
+        if self is not value:
+            raise AuthorizationChanged("child refused")
+        return original(self)
+
+    monkeypatch.setattr(module.BuildAuthority, "check_local", failing)
+    bump(store, "authorization_epoch")
+    with pytest.raises(AuthorizationChanged, match="child refused"):
+        value.rebaseline()
+    monkeypatch.undo()
+    child = next(item for item in built if item is not value)
+    with pytest.raises(AuthorizationChanged, match="closed"):
+        child.check_local()

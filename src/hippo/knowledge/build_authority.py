@@ -13,6 +13,21 @@ from . import model as k
 from .access import AuthorizationChanged, EvidenceAccess, EvidenceSelection, utc_now
 from .identity import canonical_json
 
+# Every source kind a managed build can be captured for. `repo` and `archive` joined the
+# set with CC8 (design review B3): `capture_build_authority` calls `_source_control`
+# first, so before that a repository build could not take its first step.
+BUILD_SOURCE_KINDS = frozenset({"text", "file", "repo", "archive"})
+
+# The accepted-artifact kinds a build may present. `repository` is the captured tree and
+# `history_event` is one commit; both are generation members that carry evidence.
+ACCEPTED_ARTIFACT_KINDS = frozenset({"file", "manifest", "repository", "history_event"})
+
+# A planned policy is an explicit local source grant for one lane and nothing else, so
+# the suffix set is closed rather than free text.
+PLAIN_PROSE_SCOPE = "plain-prose-v1"
+MANAGED_CODE_SCOPE = "managed-code-v1"
+PLANNED_POLICY_SCOPES = (PLAIN_PROSE_SCOPE, MANAGED_CODE_SCOPE)
+
 
 @dataclass(frozen=True, slots=True)
 class BuildActor:
@@ -61,21 +76,16 @@ class SourceControl:
 
 def _source_control(store, source_id):
     source = store.get_source(source_id)
-    if not source or source.get("kind") not in {"text", "file"} or not source.get("workspace_id"):
+    if not source or source.get("kind") not in BUILD_SOURCE_KINDS or not source.get("workspace_id"):
         # Deliberately the same text as the denial in `_actor_access`: a caller with no
         # standing must not be able to tell an absent source from one it may not touch.
         raise AuthorizationChanged("Build actor cannot manage source")
     meta = source.get("meta") or {}
-    managed = bool(
-        source.get("managed")
-        or source.get("active_generation_id")
-        or meta.get("managed")
-        or any(
-            r.source_id == source_id
-            for kind in ("Artifact", "Generation")
-            for r in store._knowledge_rows(kind)
-        )
-    )
+    # The Source row alone. The Artifact/Generation presence scan this used to run was a
+    # third copy of the classification CC1 retired, and `check_local` re-ran it on every
+    # batch -- a whole-table read per write. `meta["managed"]` went with it: nothing
+    # writes it, and CC1 proved it is no longer a lane marker.
+    managed = bool(source.get("managed") or source.get("active_generation_id"))
     return SourceControl(
         source_id,
         source["workspace_id"],
@@ -217,14 +227,17 @@ class BuildAuthority:
         policies = {p.id: p for p in store._knowledge_rows("AccessPolicy")}
         used_policies = {a.policy_id for a, _ in accepted.pairs} | {s.policy_id for s in accepted.spans}
         for policy in accepted.planned_policies:
-            expected = k.AccessPolicy(
-                workspace_id=control.workspace_id,
-                origin="local_curated",
-                scope_key=f"source:{control.source_id}:plain-prose-v1",
-                mode="workspace",
-                verified_at=policy.verified_at,
-            )
-            if policy != expected or policy.id not in used_policies:
+            expected = [
+                k.AccessPolicy(
+                    workspace_id=control.workspace_id,
+                    origin="local_curated",
+                    scope_key=f"source:{control.source_id}:{scope}",
+                    mode="workspace",
+                    verified_at=policy.verified_at,
+                )
+                for scope in PLANNED_POLICY_SCOPES
+            ]
+            if policy not in expected or policy.id not in used_policies:
                 raise AuthorizationChanged("Planned policy is not an explicit local source grant")
             if policy.id in policies and policies[policy.id] != policy:
                 raise AuthorizationChanged("Planned policy cannot replace existing policy")
@@ -233,7 +246,7 @@ class BuildAuthority:
             if (
                 artifact.source_id != control.source_id
                 or artifact.workspace_id != control.workspace_id
-                or artifact.kind not in {"file", "manifest"}
+                or artifact.kind not in ACCEPTED_ARTIFACT_KINDS
                 or artifact.connector_id is not None
                 or artifact.deleted_at is not None
                 or revision.lifecycle != "active"
@@ -331,6 +344,62 @@ class BuildAuthority:
                 child.close()
                 raise
             return child
+
+    def rebaseline(self):
+        """Re-prove the actor in full and adopt only a new *authorization* epoch.
+
+        A repository build outlives many unrelated permission mutations, and a frozen
+        epoch equality would abort it whenever any operator logs a role change. So the
+        guard may, between batches, ask for a child authority carrying the store's
+        current authorization epoch -- but only after `check_local()` re-proves the actor
+        and every accepted input's policy in full, under the authorization and source
+        locks, exactly as `bind_inputs` does.
+
+        This is the `check_local()` proof, not a reset. Three things are frozen at
+        capture and never adopted (design review M6/M7, ruling 2):
+
+        * the suppression epoch. Any change refuses. `publish_staged_generation` checks
+          the same epoch against the generation's whole reachable closure and would
+          refuse at the end anyway, so continuing is wasted work -- which is why this
+          needs no closure computation of its own.
+        * `source_control`. It carries `access_role_id`, `min_rank` and `owner_id`, so
+          adopting a changed one would let an operator re-target the finished
+          generation's audience mid-build even though the actor kept every capability.
+        * the actor and the accepted inputs, which are the child's by construction.
+
+        Refused inside an ambient transaction, after any sticky failure, and once
+        closed. `check_local()` itself is unchanged: it refuses on an epoch mismatch as
+        its first act, which is the very condition this exists to clear, so the parent's
+        own `check_local()` is never called here.
+        """
+        if self._store.in_ambient_transaction():
+            raise RuntimeError("A rebaseline requires no ambient transaction")
+        self._latched()
+        try:
+            with self._store.transaction():
+                self._store._lock_authorization()
+                self._store._lock_source(self.source_control.source_id)
+                if self._store.suppression_epoch() != self.expected_suppression_epoch:
+                    raise AuthorizationChanged("Build suppression changed during rebaseline")
+                if _source_control(self._store, self.source_control.source_id) != self.source_control:
+                    raise AuthorizationChanged("Source controls changed during build")
+                child = BuildAuthority(
+                    self._store,
+                    self._actor,
+                    self._accepted,
+                    self.source_control,
+                    (self._store.authorization_epoch(), self.expected_suppression_epoch),
+                    self._clock,
+                )
+                try:
+                    child.check_local()
+                except BaseException:
+                    child.close()
+                    raise
+                return child
+        except BaseException as exc:
+            self._fail(exc)
+            raise
 
     def close(self):
         with self._lock:
