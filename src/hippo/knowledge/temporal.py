@@ -19,7 +19,7 @@ from .access import (
     EvidenceSelection,
     utc_now,
 )
-from .identity import canonical_json
+from .identity import canonical_json, text_hash
 
 TemporalDisposition: TypeAlias = Literal["proven", "contextual", "excluded"]
 TemporalReason: TypeAlias = Literal[
@@ -622,4 +622,78 @@ def select_history(
             resolver=resolver,
             broad=broad,
             proof=proof,
+        )
+
+
+@dataclass(frozen=True)
+class RecordedSegment:
+    """One recorded evidence row named by kind and ID, and nothing else.
+
+    A plan carries these instead of records or callables so that everything it
+    asks for is decided before the write transaction opens: the store resolves
+    each ID itself, under its own locks, and can never be handed behavior.
+    """
+
+    record_kind: TemporalRecordKind
+    record_id: str
+
+    def __post_init__(self):
+        if self.record_kind not in {"ObjectObservation", "AssertionVersion"}:
+            raise ValueError("Only recorded evidence rows carry a closable interval")
+        if not isinstance(self.record_id, str) or not self.record_id.strip():
+            raise ValueError("A recorded segment requires a nonempty record ID")
+
+
+def _segments(values, *, label: str) -> tuple[RecordedSegment, ...]:
+    items = tuple(values)
+    if any(not isinstance(item, RecordedSegment) for item in items):
+        raise TypeError(f"{label} must be RecordedSegment segments")
+    keys = [(item.record_kind, item.record_id) for item in items]
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"{label} must be unique")
+    return tuple(sorted(items, key=lambda item: (item.record_kind, item.record_id)))
+
+
+@dataclass(frozen=True)
+class TemporalPublicationPlan:
+    """The exact append-only correction one publication is allowed to perform.
+
+    Frozen, canonical and prepared outside the write transaction: `closures` names
+    the open recorded intervals to close at `published_at`, `appends` names the
+    already-staged corrected segments that replace them. No predicate, callback or
+    clock lives here - `published_at` is the caller's fixed publication instant,
+    and the store refuses a publication whose own clock disagrees with it.
+
+    `appends` may be empty: a correction that only retracts a segment closes it
+    and appends nothing. `closures` may not, because a plan with no closure is a
+    plain publication and must not travel this path at all.
+    """
+
+    published_at: datetime
+    closures: tuple[RecordedSegment, ...]
+    appends: tuple[RecordedSegment, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "published_at", _utc(self.published_at, field="Publication instant"))
+        object.__setattr__(self, "closures", _segments(self.closures, label="Plan closures"))
+        object.__setattr__(self, "appends", _segments(self.appends, label="Plan appends"))
+        if not self.closures:
+            raise ValueError("A correction plan closes at least one recorded interval")
+        overlap = {(item.record_kind, item.record_id) for item in self.closures} & {
+            (item.record_kind, item.record_id) for item in self.appends
+        }
+        if overlap:
+            raise ValueError("A closure target cannot also be appended by the same plan")
+
+    @property
+    def fingerprint(self) -> str:
+        """The plan's identity in the publication receipt, so a retry must match it."""
+        return text_hash(
+            canonical_json(
+                {
+                    "published_at": _iso(self.published_at),
+                    "closures": [[item.record_kind, item.record_id] for item in self.closures],
+                    "appends": [[item.record_kind, item.record_id] for item in self.appends],
+                }
+            )
         )

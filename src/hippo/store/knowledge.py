@@ -19,6 +19,9 @@ from ..knowledge.identity import canonical_json
 LOCAL_MAPPING_AUTHORITY = "local"
 """The one identity mapping this application reviews itself: its own local User records."""
 
+CLOSABLE_RECORD_KINDS = ("AssertionVersion", "ObjectObservation")
+"""The two bitemporal rows whose `recorded_to` an append-only correction may close."""
+
 # Typed scalar references, validated on write and materialized where traversal needs them.
 REFERENCES = {
     "WorkspaceMembership": {"workspace_id": "Workspace", "principal_id": "User"},
@@ -678,6 +681,57 @@ class KnowledgeQueries:
 
                 record_mutation(self, record, existing)
         return record.id
+
+    # ------------------------------------------ append-only recorded corrections
+
+    def _authorized_recorded_closure(self, record, existing) -> bool:
+        """True only for the exact interval close a publication plan authorized.
+
+        The authority is installed by `_close_recorded_intervals` for the length of
+        one publication transaction and names both the row and the instant, so it
+        widens nothing the plan did not already prove: every other field must stay
+        byte-identical and the row must still be open.
+        """
+        authorized = getattr(self, "_recorded_closures", None) or {}
+        instant = authorized.get((type(record).__name__, record.id))
+        return (
+            instant is not None
+            and isinstance(existing, k.TemporalRecord)
+            and existing.recorded_to is None
+            and record == existing.replace(recorded_to=instant)
+        )
+
+    def _close_recorded_intervals(self, segments, *, recorded_to: datetime) -> tuple[str, ...]:
+        """Close each named open recorded interval once, in the caller's transaction.
+
+        The batch half of the append-only correction rule, and the only sanctioned
+        way a *published* interpretation changes at all. Every row still goes
+        through `update_knowledge`, so the only-once monotonic rule and the
+        immutability of every other historical field remain the reviewed ones; the
+        single thing relaxed for the named rows is the published-interpretation
+        guard, which is exactly what an append-only correction exists to move.
+
+        The publication primitive is the sole coordinator: without its transaction
+        this refuses to run, so no caller acquires the relaxation on its own.
+        """
+        if not self.in_ambient_transaction():
+            raise RuntimeError("Recorded closure requires the publication transaction")
+        authority = {}
+        for kind, record_id in segments:
+            if kind not in CLOSABLE_RECORD_KINDS:
+                raise ValueError("Only recorded evidence rows carry a closable interval")
+            authority[(kind, record_id)] = recorded_to
+        previous = getattr(self, "_recorded_closures", None)
+        self._recorded_closures = authority
+        try:
+            for kind, record_id in sorted(authority):
+                record = self._knowledge_get(kind, record_id)
+                if record is None:
+                    raise ValueError("Cannot close a missing recorded interval")
+                self.update_knowledge(record.replace(recorded_to=recorded_to))
+        finally:
+            self._recorded_closures = previous
+        return tuple(record_id for _, record_id in sorted(authority))
 
     def _reader_proof(self, workspace_id: str, access: Access, *, expected_epoch=None, selection=None):
         from ..knowledge.access import AuthorizationChanged, EvidenceAccess

@@ -13,6 +13,7 @@ from hippo.knowledge.conflicts import (
     SourceOrder,
     build_conflict_sets,
     compare_orders,
+    fully_superseded_version_ids,
     select_same_source,
 )
 
@@ -632,3 +633,48 @@ def test_candidate_rejects_mismatched_version_and_duplicate_support():
             support_span_ids=("span-a", "span-a"),
             order=valid.order,
         )
+
+
+# --- Integration part 2: supersession that a correction publication can act on ---
+
+
+def test_recorded_correction_supersession_names_each_version_once_per_series():
+    """One source, two support groups, one version: one closure, not two."""
+    first = candidate(
+        "alice", source_id="catalog", order_kind="monotonic", ordinal=1, support_suffix="direct"
+    )
+    mirrored = candidate(
+        "alice", source_id="catalog", order_kind="monotonic", ordinal=1, support_suffix="inferred"
+    )
+    newer = candidate("bob", source_id="catalog", order_kind="monotonic", ordinal=2, support_suffix="bob")
+
+    selection = select_same_source((first, mirrored, newer))
+
+    assert first.version.id == mirrored.version.id
+    assert selection.superseded_version_ids == (first.version.id,)
+    assert fully_superseded_version_ids(selection) == (first.version.id,)
+
+
+def test_recorded_correction_supersession_is_keyed_by_series_not_globally():
+    """A version superseded in one series but current in another is never closed."""
+    superseded_here = candidate(
+        "alice", source_id="catalog-a", order_kind="monotonic", ordinal=1, support_suffix="a"
+    )
+    newer = candidate("bob", source_id="catalog-a", order_kind="monotonic", ordinal=2, support_suffix="bob")
+    current_there = candidate(
+        "alice", source_id="catalog-b", order_kind="monotonic", ordinal=1, support_suffix="b"
+    )
+
+    selection = select_same_source((superseded_here, newer, current_there))
+
+    assert selection.superseded_version_ids == (superseded_here.version.id,)
+    assert {item.version.id for item in selection.current} == {
+        newer.version.id,
+        current_there.version.id,
+    }
+    by_series = dict(selection.superseded_by_series)
+    assert len(by_series) == 1
+    assert next(iter(by_series.values())) == (superseded_here.version.id,)
+    assert '"catalog-a"' in next(iter(by_series))
+    # Still current under catalog-b, so nothing may close it.
+    assert fully_superseded_version_ids(selection) == ()
