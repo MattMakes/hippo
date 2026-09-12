@@ -1200,6 +1200,10 @@ class SelectorBase(Contract):
 
 class CurrentSelector(SelectorBase):
     mode: Literal["current"] = "current"
+    # A pinned historical read has to round-trip: `None` still means "the latest
+    # knowledge available", and a persisted selector carries the instant it was
+    # resolved at, so replaying one never silently resolves to a later "now".
+    known_at: Instant | None = None
 
 
 class AsOfSelector(SelectorBase):
@@ -1231,6 +1235,7 @@ class ChangesSelector(SelectorBase):
 
 class AtemporalSelector(SelectorBase):
     mode: Literal["atemporal"] = "atemporal"
+    known_at: Instant | None = None
 
 
 SingleSelector = Annotated[
@@ -1266,6 +1271,8 @@ TemporalSelector = Annotated[
 def validate_knowledge_cutoff(selector: TemporalSelector, cutoff: datetime) -> None:
     """A pinned manifest has one knowledge cutoff; implicit latest resolves to it.
 
+    Every mode carries `known_at`, so this proves the agreement for all six rather
+    than passing vacuously on the two that once had no field to disagree with.
     Comparisons that intentionally use different knowledge cutoffs require their
     own side manifests rather than silently overriding an explicit selector.
     """

@@ -877,6 +877,23 @@ def test_history_manifest_requires_sorted_unique_ids_and_keeps_open_selectors():
             history_manifest(m, **{field: value})
 
 
+def test_every_pinned_selector_mode_carries_the_knowledge_cutoff_it_was_resolved_at():
+    m = model()
+    later = NOW + timedelta(days=1)
+    for pinned in (m.CurrentSelector(known_at=NOW), m.AtemporalSelector(known_at=NOW)):
+        assert TypeAdapter(m.TemporalSelector).validate_json(pinned.model_dump_json()) == pinned
+        manifest = history_manifest(m, temporal_selector_json=pinned.model_dump_json())
+        assert manifest.knowledge_cutoff == NOW
+        snapshot = m.QuerySnapshot(**(record_values()["QuerySnapshot"] | {"temporal": pinned}))
+        assert snapshot.temporal.known_at == NOW
+        with pytest.raises(ValidationError, match="contradicts its temporal selector"):
+            history_manifest(m, temporal_selector_json=pinned.model_dump_json(), knowledge_cutoff=later)
+        with pytest.raises(ValidationError, match="contradicts its temporal selector"):
+            m.QuerySnapshot(
+                **(record_values()["QuerySnapshot"] | {"temporal": pinned, "knowledge_cutoff": later})
+            )
+
+
 def conflict_set(m, **changes):
     fields = dict(
         workspace_id="w",
