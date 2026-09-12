@@ -19,3 +19,11 @@ Tree: `a9512a2` or later (Task 5A parts 1 and 2 with both review fix rounds).
 Files: `test_temporal_evidence.py`, `test_temporal_conflicts.py`, `test_snapshot_store.py`, `test_query_snapshots.py`, `test_generation_store.py`.
 
 Result: `160 passed in 320.68s`, exit 0. Log `/tmp/hippo-orch-neo4j-parity-2.log`. This is the root-only disposable-Neo4j repeat the Task 5A ledger required for the publication/CAS/conflict cases (T5A3) and the snapshot/generation contracts.
+
+## Run 3 — restart sweep, bulk and tombstone dispatch (2026-09-12)
+
+Tree: `65fbcab` (Task 3b, Task 4e's `release_interrupted_build` and sweep constants).
+
+Files: `test_managed_pipeline_activation.py`, `test_ingest_concurrency.py` with `-k "interrupted or sweep or restart or bulk or tombstone"`.
+
+Result: `16 passed, 2 skipped, 102 deselected in 483.39s`, exit 0. Log `/tmp/hippo-orch-neo4j-parity-3.log`. The Neo4j lane of `mark_interrupted_jobs` (`store/memory.py`) and the managed bulk/tombstone dispatch are proven on the disposable container; the two skips are Ladybug-only close/reopen contracts.
