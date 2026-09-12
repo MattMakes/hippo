@@ -10,7 +10,8 @@ Commits:
 | `4adf4e8` | Account for every low-level graph and session call before flipping the default |
 | `d6696ce` | Say one bounded sentence about a failure instead of the exception's own words |
 | `33cd4dc` | Make structural selection the query default and route ask through dense dispatch |
-| `0abb01c` | Record what the structural default broke and who owns each repair |
+| `885d04f` | Record what the structural default broke and who owns each repair |
+| `d87c2de` | Read the managed lane's stored code instead of re-classifying its exception |
 
 Files created: `src/hippo/knowledge/public_errors.py`, `tests/unit/test_public_errors.py`,
 `tests/unit/test_managed_route_activation.py`,
@@ -33,6 +34,11 @@ shared `GATES.md` or the checkpoint was touched.
 2. `query_access(..., structural=True)` and `query_session(..., structural=True)` are the defaults.
    `AppContext.graph_for(..., structural=False)` is unchanged.
 3. `ask.search` / `ask.ask` / `ask.answer_from_trace` acquire or borrow through `retrieval_session`.
+4. `public_failure_for_code(code)` beside `public_failure(exc)`, for the failure the managed lane
+   already classified. Added after the Task 3a review
+   (`ai_docs/reports/2026-09-11-pa3a-review.md`, "Notes for the consumers") asked Task 4 to consume
+   `ManagedFailure.code` rather than re-derive from the exception, so a route rendering a stored
+   Source row does not need an exception it no longer has.
 
 ## Commands and results
 
@@ -43,10 +49,13 @@ All runs used the standard invocation with the log captured, never piped to `tai
 | 0 | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_query_session.py tests/unit/test_query_snapshots.py tests/unit/test_ask.py tests/unit/test_dense_session.py -q -o addopts='' -W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"` (baseline, before any change) | 88 passed | `/tmp/hippo-pa4a-baseline.log` |
 | 1 | RED: `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_public_errors.py tests/unit/test_managed_route_activation.py -q -o addopts='' -W error`, then `test_public_errors.py` alone | collection error (`No module named 'hippo.knowledge.public_errors'`); 55 failed alone | `/tmp/hippo-pa4a-red.log` |
 | 1b | RED for the flip itself, with `public_errors.py` present but `query_access.py` and `ask.py` restored to `d6696ce`: `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_route_activation.py -q -o addopts='' -W error` | 18 failed, 4 passed. The four that already passed are the low-level `graph_for` default, the authorization-change denial, the settings mismatch and the caller's own authorization guard — the three behaviours the flip does not change plus one it preserves. | `/tmp/hippo-pa4a-red-flip.log` |
-| 2 | GREEN Fake, owned + adjacent: `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_query_session.py tests/unit/test_query_snapshots.py tests/unit/test_ask.py tests/unit/test_dense_session.py tests/unit/test_public_errors.py tests/unit/test_managed_route_activation.py tests/unit/test_answer_original_citations.py tests/unit/test_managed_source_inventory.py tests/unit/test_status_access.py tests/unit/test_core_context.py -q -o addopts='' -W error -W "ignore:…BlockingPortal…"` | 234 passed, 1 skipped, **6 failed — all in files this slice does not own** (table below) | `/tmp/hippo-pa4a-fake-green.log` |
-| 3 | Owned files only: `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_public_errors.py tests/unit/test_managed_route_activation.py tests/unit/test_query_session.py tests/unit/test_query_snapshots.py tests/unit/test_ask.py -q -o addopts='' -W error` | 142 passed | `/tmp/hippo-pa4a-mine.log`, rerun after formatting |
+| 2 | GREEN Fake, owned + adjacent: `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_query_session.py tests/unit/test_query_snapshots.py tests/unit/test_ask.py tests/unit/test_dense_session.py tests/unit/test_public_errors.py tests/unit/test_managed_route_activation.py tests/unit/test_answer_original_citations.py tests/unit/test_managed_source_inventory.py tests/unit/test_status_access.py tests/unit/test_core_context.py -q -o addopts='' -W error -W "ignore:…BlockingPortal…"` | 247 passed, 1 skipped, **6 failed — all in files this slice does not own** (table below) | `/tmp/hippo-pa4a-fake-green.log` |
+| 3 | Owned files only: `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_public_errors.py tests/unit/test_managed_route_activation.py tests/unit/test_query_session.py tests/unit/test_query_snapshots.py tests/unit/test_ask.py -q -o addopts='' -W error` | 155 passed (142 before the managed-code mapper) | `/tmp/hippo-pa4a-mine.log` |
+| 3b | RED then GREEN for `public_failure_for_code`: same command on `test_public_errors.py` alone | 13 failed, 64 passed → 77 passed | `/tmp/hippo-pa4a-red-codes.log` |
 | 4 | Full sweep: `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit -q -o addopts='' -p no:cacheprovider -W error -W "ignore:…BlockingPortal…"` | 3302 passed, 26 skipped, 50 failed (14 pre-existing `test_cli.py`, 36 routed below) in 237.88s | `/tmp/hippo-pa4a-full-fake.log` |
+| 4n | *(note on row 4)* The sweep predates the last two commits. Neither can move its 50: `public_errors.py` is imported only by the two new test files, the `ask.py` change was a docstring, and the file whose assertion was tightened was rerun alone on both backends (22 passed each). A rerun would read 3315 passed, 26 skipped, 50 failed. | — |
 | 5 | GREEN Ladybug: `HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_managed_route_activation.py tests/unit/test_query_session.py tests/unit/test_query_snapshots.py -q -o addopts='' -W error` | **65 passed** in 129.21s, exit 0 | `/tmp/hippo-pa4a-ladybug-green.log` |
+| 5b | Ladybug rerun of `test_managed_route_activation.py` alone, after the heartbeat assertion was tightened from "at most one" to an exact count: `HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_managed_route_activation.py -q -o addopts='' -W error` | **22 passed** in 89.33s, exit 0 — Ladybug pins the same snapshot bundles as Fake, so the exact counts hold on both | `/tmp/hippo-pa4a-ladybug-activation.log` |
 | 6 | `.venv/bin/ruff check src/hippo tests/unit/test_public_errors.py tests/unit/test_managed_route_activation.py tests/unit/test_query_session.py tests/unit/test_query_snapshots.py tests/unit/test_ask.py && .venv/bin/ruff format --check <the eight changed files>` | All checks passed; 8 files already formatted | — |
 
 AnyIO warning handling: **form (b)** on the command line, and only on the runs that include a
@@ -171,7 +180,26 @@ an environment condition, unrelated to sessions, and nothing in this slice reads
    this and is 4c's to decide.
 8. **Ladybug was run on the three files the brief names.** No Neo4j run: out of scope, and this
    worker never held the disposable container.
-9. **`tests/unit/test_web_base.py`** is named in `task4-notes.md` as needing the AnyIO marker before
+9. **The managed-code mapper takes a plain string, not a `ManagedFailure`.** `managed_activation.py`
+   arrived on `rag-it-all-tibs` in `c668688`, after this slice's base `043ca51`, so it is not in this
+   worktree and cannot be imported or cross-tested here. That turned out to be the right shape
+   anyway: `knowledge/public_errors.py` keeps no dependency on `ingest/managed_activation.py`, and a
+   route can render a persisted Source-row code without loading the build lane. The nine codes are
+   transcribed from `managed_activation.FAILURES` (`src/hippo/ingest/managed_activation.py:343-356`)
+   plus `UNKNOWN_CODE`, and `test_a_stored_code_and_its_own_exception_agree` pins the pairing
+   family by family. **Open item for whoever integrates after both branches are merged:** replace
+   that hand-written pairing with a loop over the real `FAILURES` table, so a future row added there
+   cannot silently miss this mapping.
+10. **A deliberate asymmetry between the two entry points, recorded not hidden.** The managed
+   table's widest model row is `OllamaError`, so a build that failed on `EmbeddingProfileMismatch`
+   or `EmbeddingProfileChanged` is stored as `model_unavailable` and reads back 503, while the same
+   exception raised during a query maps to `retrieval_rebuild_required` (409). Consuming the managed
+   lane's own classification is the point of `public_failure_for_code`; narrowing it belongs in
+   `managed_activation.FAILURES`, as a row ahead of `OllamaError`. Flagged for the 3a/3b owner.
+11. **`invalid_configuration` maps to `operation_failed`, not `invalid_source`.** It means the
+   operator's stored indexing settings cannot build a source. That is not the reader's request, and
+   a 400 "not an accepted input type" would send them looking in the wrong place.
+12. **`tests/unit/test_web_base.py`** is named in `task4-notes.md` as needing the AnyIO marker before
    a `-W error` gate line can include it. It is not in this slice's file list and it does not fail
    in the full sweep under the command-line ignore (form (b)), so nothing was done to it. The gate
    line that includes it already carries form (b); the orchestrator maintains those lines.
@@ -182,4 +210,7 @@ an environment condition, unrelated to sessions, and nothing in this slice reads
 `test_query_snapshots.py` with a bare `-W error`: **65 passed** in 129.21s, exit 0
 (`/tmp/hippo-pa4a-ladybug-green.log`). No AnyIO ignore was needed; none of the three imports a
 transport at module level. Same counts as Fake for the same three files, so nothing in the
-structural default or the dense dispatch is Fake-only.
+structural default or the dense dispatch is Fake-only. Rerun of the activation file alone after
+the heartbeat assertion was tightened: 22 passed in 89.33s
+(`/tmp/hippo-pa4a-ladybug-activation.log`), so "one acquisition, one heartbeat per pinned
+snapshot, one finalizer" is proven exactly, not loosely, on both backends.
