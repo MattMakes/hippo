@@ -530,3 +530,41 @@ def test_renewal_uses_job_lease_read_after_lock(store, monkeypatch):
             fencing_token=job.fencing_token,
             lease_expires_at=NOW + timedelta(minutes=30),
         )
+
+
+def test_recorded_correction_survives_a_ladybug_close_and_reopen(tmp_path):
+    """A closed segment, its correction and the receipt all reload from the file."""
+    from hippo.store.ladybug import LadybugStore
+    from tests.unit.test_temporal_evidence import _plan, _publish_only, correction_world
+
+    path = tmp_path / "corrected.lbug"
+    store = LadybugStore(path)
+    try:
+        world = correction_world(store)
+        plan = _plan(world)
+        receipt = _publish_only(store, world.second, world.job_two, plan=plan)
+    finally:
+        store.close()
+    reopened = LadybugStore(path)
+    try:
+        reopened._generation_clock = lambda: datetime(2026, 5, 12, tzinfo=UTC)
+        closed = reopened._knowledge_get("AssertionVersion", world.version_one.id)
+        assert closed == world.version_one.replace(recorded_to=datetime(2026, 5, 12, tzinfo=UTC))
+        assert reopened._knowledge_get("AssertionVersion", world.version_two.id).recorded_to is None
+        assert reopened._knowledge_get("Generation", world.second.id).status == "active"
+        # The receipt and its closures are observable again, not re-applied.
+        assert (
+            reopened.publish_staged_generation(
+                world.second.id,
+                expected_parent_id=world.first.id,
+                expected_suppression_epoch=reopened.suppression_epoch(),
+                published_at=datetime(2026, 5, 12, tzinfo=UTC),
+                plan=plan,
+                job_id=world.job_two.id,
+                lease_owner=world.job_two.lease_owner,
+                fencing_token=world.job_two.fencing_token,
+            )
+            == receipt
+        )
+    finally:
+        reopened.close()

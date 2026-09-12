@@ -11,8 +11,10 @@ from hippo.knowledge import model as k
 from hippo.knowledge import snapshots as snapshot_service
 from hippo.knowledge.access import AuthorizationChanged, EvidenceAccess
 from hippo.knowledge.temporal import (
+    RecordedSegment,
     ResolvedTemporalSelector,
     TemporalInputs,
+    TemporalPublicationPlan,
     history_access,
     match_temporal,
     resolve_selector,
@@ -426,15 +428,15 @@ def test_resolved_selector_rejects_origin_labels_its_own_data_contradicts():
 # --- Section 4: authorized history selection, manifests and snapshot pinning ---
 
 
-def _publish_window(store):
-    store._generation_clock = lambda: MAY_12
+def _publish_window(store, at=MAY_12):
+    store._generation_clock = lambda: at
 
 
 def _credentials(job):
     return dict(job_id=job.id, lease_owner=job.lease_owner, fencing_token=job.fencing_token)
 
 
-def _generation(store, source, key, parent=None):
+def _generation(store, source, key, parent=None, *, at=MAY_12):
     row = k.Generation(
         source_id=source,
         parent_id=parent.id if parent else None,
@@ -446,20 +448,20 @@ def _generation(store, source, key, parent=None):
         manifest_hash=key,
     )
     store.put_knowledge(row)
-    _publish_window(store)
+    _publish_window(store, at)
     return row
 
 
-def _claim(store, gen):
+def _claim(store, gen, *, at=MAY_12):
     return store.claim_generation_build(
         gen.id,
         job_key=gen.manifest_hash,
         lease_owner="worker",
-        lease_expires_at=MAY_12 + timedelta(minutes=5),
+        lease_expires_at=at + timedelta(minutes=5),
     )
 
 
-def _publish(store, gen, job):
+def _seal(store, gen, job):
     store.seal_generation(
         gen.id,
         k.IndexManifest(
@@ -472,13 +474,23 @@ def _publish(store, gen, job):
         ),
         **_credentials(job),
     )
-    store.publish_staged_generation(
+
+
+def _publish_only(store, gen, job, *, at=MAY_12, plan=None, fault_hook=None):
+    return store.publish_staged_generation(
         gen.id,
         expected_parent_id=gen.parent_id,
         expected_suppression_epoch=store.suppression_epoch(),
-        published_at=MAY_12,
+        published_at=at,
+        plan=plan,
+        fault_hook=fault_hook,
         **_credentials(job),
     )
+
+
+def _publish(store, gen, job, *, at=MAY_12, plan=None, fault_hook=None):
+    _seal(store, gen, job)
+    return _publish_only(store, gen, job, at=at, plan=plan, fault_hook=fault_hook)
 
 
 def _revision(store, artifact, text, observed_at):
@@ -1115,3 +1127,437 @@ def test_purge_history_evidence_answers_only_an_audience_that_proves_the_manifes
         store.purged_history_evidence(
             "historymanifest-absent", workspace_id=world.workspace, access=EVERYTHING
         )
+
+
+# --- Section 5: append-only recorded correction publication ---------------------
+
+
+def _passage(gen, revision, span):
+    from hippo.knowledge.lifecycle import generation_passage_id
+
+    return dict(
+        id=generation_passage_id(gen.id, revision.id, span.id, 0),
+        source_id=gen.source_id,
+        generation_id=gen.id,
+        artifact_revision_id=revision.id,
+        span_id=span.id,
+        embedding_profile="p",
+        text=span.text,
+        title=span.text,
+        ordinal=0,
+        embedding=[0.1, 0.2],
+    )
+
+
+def _member(store, gen, record):
+    store.put_knowledge(
+        k.GenerationEvidenceMember(
+            generation_id=gen.id, record_kind=type(record).__name__, record_id=record.id
+        )
+    )
+
+
+def _support(store, version, span):
+    row = k.AssertionSupport(assertion_version_id=version.id, span_id=span.id, derivation_group="direct")
+    store.put_knowledge(row)
+    return row
+
+
+def _owned_by(store, workspace, subject, name, *, scope_key="prod"):
+    target = _object(store, workspace, "person", name)
+    assertion = k.checked_assertion(subject, "OWNED_BY", target, scope_key=scope_key)
+    store.put_knowledge(assertion)
+    return assertion, target
+
+
+def correction_world(store):
+    """The plan's May ownership example, staged for an append-only correction.
+
+    Unlike `history_world`, every corrected row is an exact member of its
+    generation, so the published-interpretation guard is real and nothing but a
+    publication plan can close it. The second generation is left sealed and
+    unpublished, so each test publishes it with the plan variation it is about.
+    """
+    source = store.create_source("text", "owners-corrected")
+    workspace = store.get_source(source)["workspace_id"]
+    if store._knowledge_get("Workspace", workspace) is None:
+        store.put_knowledge(k.Workspace(name="default"))
+    policy = k.AccessPolicy(
+        workspace_id=workspace,
+        origin="local_curated",
+        scope_key="source:" + source,
+        mode="workspace",
+        verified_at=MAY_1,
+    )
+    store.put_knowledge(policy)
+    artifact = k.Artifact(
+        workspace_id=workspace,
+        source_id=source,
+        kind="file",
+        external_id="owners.md",
+        canonical_uri="source:owners.md",
+        policy_id=policy.id,
+    )
+    store.put_knowledge(artifact)
+
+    first = _generation(store, source, "corr-one", at=MAY_1)
+    job_one = _claim(store, first, at=MAY_1)
+    with store.generation_write(first.id, **_credentials(job_one)):
+        revision_one = _revision(store, artifact, "may-1", MAY_1)
+        store.put_knowledge(k.GenerationMember(generation_id=first.id, artifact_revision_id=revision_one.id))
+        span_one = _span(store, revision_one, "owners-may-1", policy)
+        _member(store, first, span_one)
+        store.add_passages([_passage(first, revision_one, span_one)])
+        service = _object(store, workspace, "service", "checkout")
+        observation_one = _observation(store, service, span_one, MAY_1, valid_from=MAY_1)
+        _member(store, first, observation_one)
+        owned_by_ada, ada = _owned_by(store, workspace, service, "ada")
+        # Both endpoints need an authorized observation before the proof carries
+        # the assertion at all, exactly as `history_world` establishes them.
+        _member(store, first, _observation(store, ada, span_one, MAY_1, valid_from=MAY_1))
+        version_one = _version(store, owned_by_ada, MAY_1, MAY_1)
+        support_one = _support(store, version_one, span_one)
+        _member(store, first, version_one)
+        _member(store, first, support_one)
+    _publish(store, first, job_one, at=MAY_1)
+
+    # An open-then-closed version of the same source that no generation selected.
+    # Its effective time is unknown, so it stays contextual and never enters a
+    # manifest, but it is a real "already closed" closure target.
+    retracted = k.AssertionVersion(
+        assertion_id=_owned_by(store, workspace, service, "cass")[0].id,
+        evidence_class="declared",
+        rule_version="fixture-v1",
+        confidence=1.0,
+        status="retracted",
+        recorded_from=MAY_1,
+    )
+    store.put_knowledge(retracted)
+    _support(store, retracted, span_one)
+    store.update_knowledge(retracted.replace(recorded_to=MAY_10))
+    retracted = store._knowledge_get("AssertionVersion", retracted.id)
+
+    second = _generation(store, source, "corr-two", first, at=MAY_12)
+    job_two = _claim(store, second, at=MAY_12)
+    with store.generation_write(second.id, **_credentials(job_two)):
+        revision_two = _revision(store, artifact, "may-10", MAY_10)
+        store.put_knowledge(k.GenerationMember(generation_id=second.id, artifact_revision_id=revision_two.id))
+        span_two = _span(store, revision_two, "owners-may-10", policy)
+        _member(store, second, span_two)
+        store.add_passages([_passage(second, revision_two, span_two)])
+        observation_two = _observation(store, service, span_two, MAY_12, valid_from=MAY_10)
+        _member(store, second, observation_two)
+        # A staged segment whose recorded clock is not the publication instant.
+        mistimed = _observation(store, service, span_two, MAY_10, valid_from=MAY_10)
+        _member(store, second, mistimed)
+        owned_by_bo, bo = _owned_by(store, workspace, service, "bo")
+        _member(store, second, _observation(store, bo, span_two, MAY_12, valid_from=MAY_10))
+        version_two = _version(store, owned_by_bo, MAY_12, MAY_10)
+        support_two = _support(store, version_two, span_two)
+        _member(store, second, version_two)
+        _member(store, second, support_two)
+    _seal(store, second, job_two)
+
+    return SimpleNamespace(
+        store=store,
+        source=source,
+        workspace=workspace,
+        policy=policy,
+        artifact=artifact,
+        first=first,
+        second=second,
+        job_two=job_two,
+        revision_one=revision_one,
+        revision_two=revision_two,
+        span_one=span_one,
+        span_two=span_two,
+        service=service,
+        observation_one=observation_one,
+        observation_two=observation_two,
+        mistimed=mistimed,
+        retracted=retracted,
+        version_one=version_one,
+        version_two=version_two,
+    )
+
+
+def _plan(world, **changes):
+    fields = dict(
+        published_at=MAY_12,
+        closures=(
+            RecordedSegment("AssertionVersion", world.version_one.id),
+            RecordedSegment("ObjectObservation", world.observation_one.id),
+        ),
+        appends=(
+            RecordedSegment("AssertionVersion", world.version_two.id),
+            RecordedSegment("ObjectObservation", world.observation_two.id),
+        ),
+    )
+    return TemporalPublicationPlan(**(fields | changes))
+
+
+def _row(store, kind, record_id):
+    return store._knowledge_get(kind, record_id)
+
+
+def _unsupported_version(world):
+    """An open version with no support group at all; nothing proves its lineage."""
+    subject = _object(world.store, world.workspace, "service", "shipping")
+    assertion, _ = _owned_by(world.store, world.workspace, subject, "dee")
+    return _version(world.store, assertion, MAY_1, MAY_1)
+
+
+def _foreign_version(world):
+    """A version whose complete support belongs to another source entirely."""
+    store = world.store
+    other = store.create_source("text", "other-owners")
+    policy = k.AccessPolicy(
+        workspace_id=world.workspace,
+        origin="local_curated",
+        scope_key="source:" + other,
+        mode="workspace",
+        verified_at=MAY_1,
+    )
+    store.put_knowledge(policy)
+    artifact = k.Artifact(
+        workspace_id=world.workspace,
+        source_id=other,
+        kind="file",
+        external_id="other.md",
+        canonical_uri="source:other.md",
+        policy_id=policy.id,
+    )
+    store.put_knowledge(artifact)
+    span = _span(store, _revision(store, artifact, "other-may-1", MAY_1), "other-owners", policy)
+    subject = _object(store, world.workspace, "service", "billing")
+    assertion, _ = _owned_by(store, world.workspace, subject, "cy")
+    version = _version(store, assertion, MAY_1, MAY_1)
+    _support(store, version, span)
+    return version
+
+
+def test_recorded_correction_plan_is_frozen_canonical_and_disjoint():
+    """The plan is data the caller fixed before the transaction, not a callback."""
+    older = RecordedSegment("AssertionVersion", "assertionversion-a")
+    newer = RecordedSegment("AssertionVersion", "assertionversion-b")
+    observation = RecordedSegment("ObjectObservation", "objectobservation-a")
+    plan = TemporalPublicationPlan(published_at=MAY_12, closures=(observation, older), appends=(newer,))
+
+    assert plan.closures == (older, observation)
+    assert plan.published_at == MAY_12
+    assert (
+        plan.fingerprint
+        == TemporalPublicationPlan(
+            published_at=MAY_12, closures=(older, observation), appends=(newer,)
+        ).fingerprint
+    )
+    assert (
+        plan.fingerprint
+        != TemporalPublicationPlan(
+            published_at=MAY_12 + timedelta(days=1), closures=(older, observation), appends=(newer,)
+        ).fingerprint
+    )
+    with pytest.raises(AttributeError):
+        plan.closures = ()
+    with pytest.raises(ValueError, match="unique"):
+        TemporalPublicationPlan(published_at=MAY_12, closures=(older, older))
+    with pytest.raises(ValueError, match="also be appended"):
+        TemporalPublicationPlan(published_at=MAY_12, closures=(older,), appends=(older,))
+    with pytest.raises(ValueError, match="at least one"):
+        TemporalPublicationPlan(published_at=MAY_12, closures=())
+    with pytest.raises(TypeError, match="segments"):
+        TemporalPublicationPlan(published_at=MAY_12, closures=(("AssertionVersion", "x"),))
+    with pytest.raises(ValueError, match="timezone aware"):
+        TemporalPublicationPlan(published_at=datetime(2026, 5, 12), closures=(older,))
+    with pytest.raises(ValueError, match="recorded evidence"):
+        RecordedSegment("EvidenceSpan", "evidencespan-a")
+
+
+def test_recorded_correction_closes_the_prior_segment_and_appends_the_corrected_one(store):
+    """May's backdated ownership correction: closures and appends in one transaction."""
+    world = correction_world(store)
+
+    _publish_only(store, world.second, world.job_two, plan=_plan(world))
+
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to == MAY_12
+    assert _row(store, "ObjectObservation", world.observation_one.id).recorded_to == MAY_12
+    assert _row(store, "AssertionVersion", world.version_two.id).recorded_to is None
+    assert _row(store, "AssertionVersion", world.version_two.id).recorded_from == MAY_12
+    assert _row(store, "Generation", world.second.id).status == "active"
+    assert _row(store, "Generation", world.first.id).status == "retired"
+    assert store.get_source(world.source)["active_generation_id"] == world.second.id
+    # Original bytes are immutable: `recorded_to` is the only field that moved.
+    assert _row(store, "AssertionVersion", world.version_one.id) == world.version_one.replace(
+        recorded_to=MAY_12
+    )
+
+
+def test_recorded_correction_is_visible_to_history_selection_at_each_cutoff(store):
+    """Behavior 7: each cutoff returns its own segment, and `recorded_to` serializes."""
+    world = correction_world(store)
+    _publish_only(store, world.second, world.job_two, plan=_plan(world))
+
+    before = select(world, valid_at=MAY_5, known_at=MAY_5)
+    after = select(world, valid_at=MAY_12, known_at=MAY_12)
+
+    assert before.manifest.assertion_version_ids == (world.version_one.id,)
+    assert after.manifest.assertion_version_ids == (world.version_two.id,)
+    closed = _row(store, "AssertionVersion", world.version_one.id)
+    assert serialize_temporal_evidence(TemporalInputs(record=closed))["recorded_to"] == "2026-05-12T00:00:00Z"
+    assert serialize_temporal_evidence(TemporalInputs(record=world.version_two))["recorded_to"] is None
+
+
+@pytest.mark.parametrize("point", ["closure", "pointer", "version", "retirement", "event", "lease"])
+def test_recorded_correction_rolls_back_every_write_when_a_failpoint_fires(store, point):
+    world = correction_world(store)
+    epoch = store.content_epoch()
+
+    def fail(at):
+        if at == point:
+            raise RuntimeError("injected")
+
+    with pytest.raises(RuntimeError, match="injected"):
+        _publish_only(store, world.second, world.job_two, plan=_plan(world), fault_hook=fail)
+
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+    assert _row(store, "ObjectObservation", world.observation_one.id).recorded_to is None
+    assert _row(store, "Generation", world.first.id).status == "active"
+    assert _row(store, "Generation", world.second.id).status == "ready"
+    assert store.get_source(world.source)["active_generation_id"] == world.first.id
+    assert _row(store, "MaintenanceJob", world.job_two.id).status == "running"
+    assert store.content_epoch() == epoch
+
+
+def test_recorded_correction_retry_returns_the_original_receipt_and_observes_the_closures(store):
+    world = correction_world(store)
+    plan = _plan(world)
+
+    receipt = _publish_only(store, world.second, world.job_two, plan=plan)
+    epoch = store.content_epoch()
+
+    assert _publish_only(store, world.second, world.job_two, plan=plan) == receipt
+    assert store.content_epoch() == epoch
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to == MAY_12
+
+
+def test_recorded_correction_retry_with_a_different_plan_fails_without_writing(store):
+    world = correction_world(store)
+    _publish_only(store, world.second, world.job_two, plan=_plan(world))
+    epoch = store.content_epoch()
+    narrower = _plan(
+        world,
+        closures=(RecordedSegment("AssertionVersion", world.version_one.id),),
+        appends=(RecordedSegment("AssertionVersion", world.version_two.id),),
+    )
+
+    for call in (dict(plan=narrower), dict(plan=None)):
+        with pytest.raises(ValueError, match="another build"):
+            _publish_only(store, world.second, world.job_two, **call)
+    assert store.content_epoch() == epoch
+    assert _row(store, "ObjectObservation", world.observation_one.id).recorded_to == MAY_12
+
+
+@pytest.mark.parametrize(
+    "case,message",
+    [
+        ("closed", "already closed"),
+        ("foreign", "lineage"),
+        ("unsupported", "complete support"),
+        ("not_before", "before the publication"),
+        ("missing", "missing"),
+    ],
+)
+def test_recorded_correction_refuses_a_closure_target_it_cannot_prove(store, case, message):
+    world = correction_world(store)
+    target = {
+        "closed": lambda: world.retracted.id,
+        "foreign": lambda: _foreign_version(world).id,
+        "unsupported": lambda: _unsupported_version(world).id,
+        "not_before": lambda: world.version_two.id,
+        "missing": lambda: "assertionversion-absent",
+    }[case]()
+    plan = _plan(world, closures=(RecordedSegment("AssertionVersion", target),), appends=())
+    epoch = store.content_epoch()
+
+    with pytest.raises(ValueError, match=message):
+        _publish_only(store, world.second, world.job_two, plan=plan)
+    assert store.content_epoch() == epoch
+    assert _row(store, "Generation", world.second.id).status == "ready"
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+
+
+@pytest.mark.parametrize(
+    "case,message",
+    [
+        ("outside", "exact member"),
+        ("recorded", "publication instant"),
+        ("series", "corrected series"),
+    ],
+)
+def test_recorded_correction_refuses_an_append_outside_the_staged_correction(store, case, message):
+    world = correction_world(store)
+    closures = (RecordedSegment("AssertionVersion", world.version_one.id),)
+    appends = {
+        "outside": lambda: (RecordedSegment("AssertionVersion", _unsupported_version(world).id),),
+        "recorded": lambda: (RecordedSegment("ObjectObservation", world.mistimed.id),),
+        "series": lambda: (RecordedSegment("ObjectObservation", world.observation_two.id),),
+    }[case]()
+
+    with pytest.raises(ValueError, match=message):
+        _publish_only(
+            store, world.second, world.job_two, plan=_plan(world, closures=closures, appends=appends)
+        )
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+    assert _row(store, "Generation", world.second.id).status == "ready"
+
+
+def test_recorded_correction_requires_the_plan_clock_to_be_the_publication_clock(store):
+    """No unguarded clock: `published_at` is the plan's, fixed before the transaction."""
+    world = correction_world(store)
+
+    with pytest.raises(ValueError, match="publication clock"):
+        _publish_only(store, world.second, world.job_two, plan=_plan(world, published_at=MAY_10))
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+
+
+def test_recorded_correction_is_refused_by_the_generic_fixture_publication_path(store):
+    """The compatibility primitive must never become a correction bypass."""
+    world = correction_world(store)
+
+    with pytest.raises(ValueError, match="strict publication"):
+        store.publish_generation(
+            world.second.id, expected_parent_id=world.first.id, published_at=MAY_12, plan=_plan(world)
+        )
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+
+
+def test_recorded_correction_fails_without_writes_on_a_stale_parent_or_a_later_suppression(store):
+    world = correction_world(store)
+    plan = _plan(world)
+
+    for change in (
+        dict(expected_suppression_epoch=store.suppression_epoch() + 1),
+        dict(expected_parent_id=None),
+    ):
+        call = dict(
+            expected_parent_id=world.first.id,
+            expected_suppression_epoch=store.suppression_epoch(),
+            published_at=MAY_12,
+            plan=plan,
+            **_credentials(world.job_two),
+        )
+        with pytest.raises(ValueError):
+            store.publish_staged_generation(world.second.id, **(call | change))
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+    assert _row(store, "ObjectObservation", world.observation_one.id).recorded_to is None
+
+
+def test_recorded_correction_never_reaches_a_published_row_through_update_knowledge(store):
+    """Outside the plan the published interpretation is immutable, and closes once."""
+    world = correction_world(store)
+
+    with pytest.raises(ValueError, match="immutable"):
+        store.update_knowledge(world.version_one.replace(recorded_to=MAY_12))
+    _publish_only(store, world.second, world.job_two, plan=_plan(world))
+    with pytest.raises(ValueError, match="close once"):
+        store.update_knowledge(world.version_one.replace(recorded_to=MAY_12 + timedelta(days=1)))
