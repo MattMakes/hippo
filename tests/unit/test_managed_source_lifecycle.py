@@ -197,10 +197,8 @@ def test_an_unauthorized_reader_learns_nothing_about_the_source(managed):
     """Managed, unmanaged and absent are one generic denial for an actor with no standing.
 
     Standing is established before the managed recheck, so `UnmanagedSource` is no
-    longer an oracle: the managed and unmanaged denials are byte-identical. The
-    absent-source message comes from `_source_control` and is common to every
-    `capture_build_authority` caller, so the type - which the HTTP layer maps - is
-    what this boundary guarantees.
+    longer an oracle; `_source_control` raises the same text as `_actor_access`, so
+    an absent source is not one either. One type, one message, all three cases.
     """
     store = managed.store
     stranger = store.create_user("stranger", "password", "individual")
@@ -216,7 +214,7 @@ def test_an_unauthorized_reader_learns_nothing_about_the_source(managed):
 
     assert [kind for kind, _ in denials] == [AuthorizationChanged] * 3
     assert not any(issubclass(kind, api().SourceLifecycleError) for kind, _ in denials)
-    assert denials[0][1] == denials[1][1], denials
+    assert len({message for _, message in denials}) == 1, denials
     assert (epochs(store), inventory(store)) == before
 
 

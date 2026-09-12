@@ -297,6 +297,11 @@ with `policy_epoch` raised above `1`.
    `functools.wraps`, so `__wrapped__` is always present; the helper raises if
    it is not.
 
+   *Partly superseded 2026-09-11 — see "Follow-up 2026-09-11", decision 8: the
+   public wrapper no longer bumps at all. `permission_mutation` still owns the
+   single bump for every reduction, and the locked helper still bumps nothing,
+   which is the part this deviation turns on.*
+
 5. **New memberships are exactly `enabled=True`, `mapping_authority="local"`,
    `policy_epoch=1`**, and the locked helper is a no-op (no write, no count)
    when an equal enabled membership already exists. That keeps
@@ -353,7 +358,7 @@ the orchestrator added mid-task (7 and 8).
 | 1 | major — tombstone is not a store barrier | `claim_generation_build` refuses a tombstoned source |
 | 2 | minor — disable rewrote the authority | `_apply_local_membership` retains `mapping_authority` when disabling |
 | 3 | minor — guard parity | `_disable_local_workspace_memberships_locked` gets `_local_mapping_available()` |
-| 4 | minor — managed/unmanaged oracle | `tombstone_managed_source` establishes standing before the managed check |
+| 4 | minor — managed/unmanaged oracle | standing established before the managed check; absent-source denial text normalized |
 | 5 | minor — tests only | cancellation request asserted; many-changes epoch behaviour asserted |
 | 6 | documented, no code change | `_local_mapping_available` docstring states the unmapped-create consequence |
 | 7 | added — ambient guard was a false negative | `apply_source_tombstone` asks `in_ambient_transaction()` |
@@ -440,16 +445,25 @@ The function docstring states the ordering and why.
 Proof, `test_an_unauthorized_reader_learns_nothing_about_the_source`: a `stranger`
 reader attempting a managed source, an unmanaged source and a nonexistent id gets
 `AuthorizationChanged` all three times, none of them a `SourceLifecycleError`, with
-epochs and the whole retained inventory unchanged.
+one single distinct message across all three and with epochs and the whole retained
+inventory unchanged.
 
-**Residual, recorded not fixed:** the managed and unmanaged denials are byte-identical
-(`"Build actor cannot manage source"`), which is the oracle finding 7 named and it is
-closed. A *nonexistent* source id yields `"Plain build source is unavailable"`, raised
-by `_source_control` (`src/hippo/knowledge/build_authority.py:65`) — a do-NOT-touch
-file, and a property common to every `capture_build_authority` caller rather than to
-this boundary. The test asserts type identity for all three (the type is what the HTTP
-layer maps) and message identity for managed vs unmanaged. Normalizing the absent-source
-message is a `build_authority.py` change for whoever owns it.
+The reorder alone made the managed and unmanaged denials byte-identical
+(`"Build actor cannot manage source"`), closing the oracle finding 7 named, but a
+*nonexistent* source id still yielded `"Plain build source is unavailable"` from
+`_source_control` — a distinguishable absent-vs-present signal in
+`src/hippo/knowledge/build_authority.py`, which this brief listed as do-NOT-touch
+because `wp/txown` owned it. Reported to the orchestrator as options (a) record the
+residual or (b) normalize; **the orchestrator chose (b) and granted ownership of that
+file and `tests/unit/test_build_authority.py` for this one change.** `_source_control`
+now raises the same `"Build actor cannot manage source"` text, with a comment stating
+why the two read alike. No test asserted either string, so
+`tests/unit/test_build_authority.py` needed no edit. The test's message assertion is
+therefore full equality across all three cases, not just managed vs unmanaged.
+
+That normalization applies to every `capture_build_authority` caller, not only this
+one: an absent, wrong-kind or workspace-less source and a source the actor may not
+manage are now indistinguishable everywhere. The refusal *condition* is unchanged.
 
 `test_unmanaged_source_is_refused_before_any_mutation` now creates its legacy source
 with `owner_id=managed.user` and asserts `UnmanagedSource` specifically. Without an
@@ -548,8 +562,8 @@ No ini-wide `filterwarnings` was added.
 | 1 | fake baseline — `test_managed_source_lifecycle`, `test_local_workspace_membership`, `test_generation_store`, `test_generation_failure` | **126 passed**, EXIT 0 | `/tmp/hippo-pa1fix-baseline.log` |
 | 2 | fake RED (decisions 1–5, 7) — the two owned test files | **8 failed, 77 passed**, EXIT 1 | `/tmp/hippo-pa1fix-red.log` |
 | 3 | fake RED (decision 8) — held-session regression + the two render/citation tests, bump temporarily restored | **3 failed, 11 passed**, EXIT 1 | `/tmp/hippo-pa1fix-d8-red.log` |
-| 4 | fake GREEN — 18 files (the two owned, generation store/failure, build authority, evidence access/epochs/store-access/derived, store knowledge, migrations, policy migration, query snapshots, transaction ownership, ingest concurrency, query session, answer original citations, lookup snapshot lifetime); form (b) | **420 passed, 9 skipped**, EXIT 0 | `/tmp/hippo-pa1fix-fake-green.log` |
-| 5 | ladybug GREEN — managed source lifecycle, local workspace membership, generation store, store migrations, transaction ownership, build authority, evidence store access, generation failure, query session, answer original citations; form (b) | **269 passed**, EXIT 0, 122.8s | `/tmp/hippo-pa1fix-ladybug-green.log` |
+| 4 | fake GREEN — 20 files (the two owned, generation store/failure, build authority, evidence access/epochs/store-access/derived, store knowledge, migrations, policy migration, query snapshots, transaction ownership, ingest concurrency, query session, answer original citations, lookup snapshot lifetime, structural loading, managed source inventory); form (b) | **487 passed, 10 skipped**, EXIT 0 | `/tmp/hippo-pa1fix-fake-green.log` |
+| 5 | ladybug GREEN — managed source lifecycle, local workspace membership, generation store, store migrations, transaction ownership, build authority, evidence store access, generation failure, query session, answer original citations; form (b) | **269 passed**, EXIT 0, 127.2s | `/tmp/hippo-pa1fix-ladybug-green.log` |
 
 The step-2 RED failures, each for the intended reason:
 
@@ -568,10 +582,10 @@ many-changes half of finding 5 were missing *assertions*, not wrong behaviour.
 
 Ruff 0.16.6 on every changed file
 (`store/generations.py`, `store/knowledge.py`, `knowledge/source_lifecycle.py`,
-`tests/unit/test_managed_source_lifecycle.py`,
+`knowledge/build_authority.py`, `tests/unit/test_managed_source_lifecycle.py`,
 `tests/unit/test_local_workspace_membership.py`,
 `tests/unit/test_evidence_store_access.py`):
-`All checks passed!` / `6 files already formatted`.
+`All checks passed!` / `7 files already formatted`.
 
 ## Still open after this follow-up
 
@@ -579,7 +593,26 @@ Ruff 0.16.6 on every changed file
   docstring sentence (decision 6) is the sanctioned form.
 - Finding 8, the Neo4j lane (`store/__init__.py:81`, `store/users.py`): untested here,
   orchestrator-owned (PA7/PA8 parity from an isolated reservation).
-- The absent-source denial message in `build_authority.py:65` (see decision 4 above).
 - `delete_user` of the last user on a pre-schema-5 file (`authorization.py:86`,
   accepted residual).
 - No route, dispatcher or production path was activated.
+
+## Note on run ordering
+
+Runs 4 and 5 above are the *final* runs, after the orchestrator's option (b) and after
+a whitespace-only `ruff format` of `tests/unit/test_managed_source_lifecycle.py`. The
+RED for option (b) is the first form of
+`test_an_unauthorized_reader_learns_nothing_about_the_source`, which failed with
+`assert 2 == 1` over
+`{'Build actor cannot manage source', 'Plain build source is unavailable'}`.
+
+On the decision-8 repro: the orchestrator named three tests. With the bump temporarily
+restored and rulebook form (b) applied, the reproduced failures were
+`test_query_session.py::test_html_ask_uses_one_graph_through_inventory_and_render[True]`
+and `test_answer_original_citations.py::test_answer_surfaces_present_originals_separately_from_ranked_views[html]`,
+plus the new held-session regression — all three
+`AuthorizationChanged("Permissions changed; repeat the query")`.
+`test_search_labels_derived_text_and_analysis_renders_original_evidence` failed only in
+the first attempt, which omitted form (b), so its failure there was the sanctioned AnyIO
+warning and not the epoch bump; it is green in run 4. Worth reconciling if the
+orchestrator's own repro disagrees.

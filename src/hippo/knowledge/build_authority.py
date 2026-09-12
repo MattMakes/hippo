@@ -62,7 +62,9 @@ class SourceControl:
 def _source_control(store, source_id):
     source = store.get_source(source_id)
     if not source or source.get("kind") not in {"text", "file"} or not source.get("workspace_id"):
-        raise AuthorizationChanged("Plain build source is unavailable")
+        # Deliberately the same text as the denial in `_actor_access`: a caller with no
+        # standing must not be able to tell an absent source from one it may not touch.
+        raise AuthorizationChanged("Build actor cannot manage source")
     meta = source.get("meta") or {}
     managed = bool(
         source.get("managed")
