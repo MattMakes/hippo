@@ -386,11 +386,20 @@ def test_a_bare_selection_failure_is_operation_failed_not_a_client_error(ctx, mo
 
 
 def test_a_malformed_client_request_keeps_its_own_bounded_400(ctx, client, prose):
-    """The public mapper must not swallow the caller's own mistakes into `operation_failed`."""
+    """The public mapper must not swallow the caller's own mistakes into `operation_failed`.
+
+    All three vocabularies meet inside these routes: a bad setting, a bad simulation
+    override and a blank required argument are the request's fault and say so, while an
+    incoherent view is not and does not.
+    """
     response = client.post(
         "/api/graph/light-up", json={"question": QUESTION, "settings": {"damping": "not a number"}}
     )
     assert response.status_code == 400, response.text
+    overridden = client.post(
+        "/api/simulate", json={"question": QUESTION, "overrides": {"settings": {"damping": 5}}}
+    )
+    assert overridden.status_code == 400, overridden.text
     assert client.get("/api/code/path?a=&b=x").status_code == 400
 
 
