@@ -189,6 +189,21 @@ def test_structural_context_keeps_different_managed_profiles_offline(ctx):
     assert all(r.released_at is not None for r in ctx.store._knowledge_rows("SnapshotReference"))
 
 
+def test_structural_selection_records_its_authorized_pairs_without_model_access(ctx):
+    first, _ = published(ctx.store, "first")
+    second, _ = published(ctx.store, "second", profile="q", dimension=3)
+    ctx.ollama = Offline()
+    with query_session(ctx, EVERYTHING, structural=True) as session:
+        graph = session.graph
+        assert graph.selected_managed_generations == tuple(
+            sorted(((first.source_id, first.id), (second.source_id, second.id)))
+        )
+        assert graph.scoped({first.source_id}).selected_managed_generations == ((first.source_id, first.id),)
+        session.validate()
+    # The legacy lane selects no generation, so it can never claim one.
+    assert not dense.structural_legacy_graph(legacy_graph()).selected_managed_generations
+
+
 def test_managed_and_hidden_dimensions_do_not_choose_legacy_majority(ctx):
     store = ctx.store
     store.ensure_roles()
@@ -721,6 +736,11 @@ def test_structural_shared_canonical_code_object_does_not_collide_across_sources
         baseline = ctx.graph_for(EVERYTHING)
         try:
             assert len(baseline.code_nodes) == 1
+            # The non-structural managed lane proves the same pairs, so source inventory agrees
+            # whichever view a reader holds.
+            assert baseline.selected_managed_generations == tuple(
+                sorted(((a.source_id, a.id), (b.source_id, b.id)))
+            )
         finally:
             baseline.close_snapshot()
     ctx.ollama = Offline()

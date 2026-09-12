@@ -11,13 +11,19 @@ from hippo.status import system_status
 
 def status_context():
     graph = NS(
-        passages=[NS(source_id="public", title="Public")],
+        passages=[NS(id="public-passage", source_id="public", title="Public")],
         entity_names={"entity": "visible"},
-        facts=[NS(id="fact")],
+        facts=[NS(id="fact", passage_ids=["public-passage"])],
         code_nodes=[NS(id="public-node", kind="symbol", lang="python", source_id="public")],
         code_out={0: [NS(kind="INVOKES", src=0), NS(kind="DEFINED_IN", src=0)]},
         node_ids=["public-node"],
         edges={(0, 1): NS(mention=True, synonym_score=0.0, code_kinds=[])},
+        # A managed row is counted from these provenance sidecars and from its proven selected
+        # generation pair, never from the Store's Source counters.
+        structural_code_evidence=(),
+        structural_object_evidence=(),
+        structural_relations=(),
+        selected_managed_generations=(),
         validate_authorization=Mock(),
     )
     public = {"id": "public", "meta": {"code": {"languages": ["python"], "unresolved_calls_total": 2}}}
@@ -70,7 +76,7 @@ def test_private_corpus_cannot_change_reader_counts_cards_or_jobs():
     assert after["embed_model_built"] is None
     assert after["embed_model_mismatch"] is False
     ctx.store.stats.assert_not_called()
-    ctx.graph_for.assert_called_with(access, settings=ANY)
+    ctx.graph_for.assert_called_with(access, settings=ANY, structural=True)
 
 
 def test_generation_only_source_is_hidden_until_authorized_evidence_is_projected():
@@ -87,7 +93,7 @@ def test_generation_only_source_is_hidden_until_authorized_evidence_is_projected
 
 def test_managed_metadata_is_withheld_even_with_visible_managed_evidence():
     ctx = status_context()
-    ctx.graph_for.return_value.passages.append(NS(source_id="managed", title="Managed"))
+    ctx.graph_for.return_value.passages.append(NS(id="managed-passage", source_id="managed", title="Managed"))
     ctx.graph_for.return_value.code_nodes.append(
         NS(id="managed-node", kind="data", lang="sql", source_id="managed")
     )
@@ -124,7 +130,7 @@ def test_cache_is_per_context_and_never_caches_audience_inventory():
     first.graph_for.return_value.passages.append(NS(source_id="public"))
     assert system_status(first, access=access)["stats"]["passages"] == 2
     first.ollama.is_up.assert_called_once()
-    first.graph_for.assert_called_with(access, settings=ANY)
+    first.graph_for.assert_called_with(access, settings=ANY, structural=True)
 
 
 def test_cache_cannot_be_poisoned_by_mutating_a_previous_response():
@@ -184,6 +190,8 @@ def test_status_route_and_page_header_pass_the_request_audience(monkeypatch):
     )
     page = render.render(request, "unused.html")
     assert page["status"]["stats"]["passages"] == 1
+    # These routes own their session, so the request audience is what this proves. Their own
+    # structural switch is Task 4's; status only owns the session it acquires itself.
     ctx.graph_for.assert_called_with(access, settings=ANY)
     request.state.principal = None
     assert render.render(request, "unused.html")["status"]["stats"]["passages"] == 0
@@ -226,6 +234,7 @@ def test_mcp_identity_never_exposes_total_hidden_source_inventory():
     ctx.store.list_sources.assert_called_with(principal.access)
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_private_source_is_invisible_to_real_web_status_and_header(ctx, sample_text, monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -292,6 +301,7 @@ def test_role_downgrade_clamps_status_sources_metadata_and_jobs(ctx, monkeypatch
     assert value["jobs"] == ["index:" + public]
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_user_and_role_source_counts_are_intersected_with_the_callers_inventory(ctx):
     from fastapi.testclient import TestClient
 
@@ -308,6 +318,53 @@ def test_user_and_role_source_counts_are_intersected_with_the_callers_inventory(
         assert before == {path: client.get(path).text for path in before}
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
+def test_proven_selected_pair_renders_the_source_control_presentation(ctx, monkeypatch):
+    """The counterpart to the withheld case below: a proven pair authorizes the Source row.
+
+    Without a pair the row exists only because some evidence happened to be visible, so the
+    Source's own name/status/progress stay withheld. With one, the reader is looking at a
+    source it provably selected, and hiding its own administration controls only made the
+    page lie about what it is. `meta` code metadata stays withheld either way, and the error
+    string stays withheld until Task 3's closed mapper owns it.
+    """
+    from fastapi.testclient import TestClient
+
+    from hippo.hipporag.graph_index import Passage
+    from hippo.web.app import create_app
+    from tests.unit.test_evidence_projection import graph
+
+    ctx.store.ping()
+    uid = ctx.store.create_user("managed-control-reader", "secret1", "individual")
+    user = ctx.store.get_user(uid)
+    sid = ctx.store.create_source("text", "Field notes", meta={"code": {"languages": ["SECRET"]}})
+    ctx.store.update_source(
+        sid, status="ready", stage="refreshing: capture", progress_done=2, progress_total=7
+    )
+    projected = graph([], [Passage("allowed-span", "Allowed title", "Allowed body", sid, "", 0)])
+    projected.selected_managed_generations = ((sid, "generation-current"),)
+    monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: projected)
+    original = ctx.store._knowledge_rows
+    monkeypatch.setattr(
+        ctx.store,
+        "_knowledge_rows",
+        lambda kind: [NS(source_id=sid)] if kind == "Artifact" else original(kind),
+    )
+    with TestClient(create_app(ctx), base_url="http://localhost") as client:
+        client.headers["Authorization"] = "Bearer " + user["token"]
+        row = client.get(f"/api/sources/{sid}").json()
+        assert row["name"] == "Field notes"
+        assert row["status"] == "ready"
+        assert row["stage"] == "refreshing: capture"
+        assert row["progress_done"] == 2 and row["progress_total"] == 7
+        assert row["created_at"] == ctx.store.get_source(sid)["created_at"]
+        assert row["error"] == ""
+        assert row["passages"] == 1
+        assert row["meta"] == {}
+        assert "SECRET" not in client.get(f"/api/sources/{sid}").text
+
+
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 @pytest.mark.parametrize("role", ["individual", "local-admin"])
 def test_managed_source_surfaces_render_only_projected_evidence(ctx, monkeypatch, role):
     from fastapi.testclient import TestClient
@@ -360,6 +417,7 @@ def test_managed_source_surfaces_render_only_projected_evidence(ctx, monkeypatch
         assert client.get(f"/api/sources/{sid}").status_code == 404
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 @pytest.mark.parametrize("path", ["/", "/partials/sources", "/sources/{id}", "/partials/sources/{id}/status"])
 def test_source_html_revalidates_its_original_inventory_after_render(ctx, monkeypatch, path):
     from fastapi.testclient import TestClient
@@ -384,6 +442,7 @@ def test_source_html_revalidates_its_original_inventory_after_render(ctx, monkey
         assert "Withdrawn source" not in response.text
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_account_and_identity_count_only_owned_sources_with_visible_evidence(ctx, monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -407,6 +466,7 @@ def test_account_and_identity_count_only_owned_sources_with_visible_evidence(ctx
         assert "1 of your own" in client.get("/account").text
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_reindex_all_acknowledges_without_exposing_the_global_start_count(ctx, monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -426,6 +486,7 @@ def test_reindex_all_acknowledges_without_exposing_the_global_start_count(ctx, m
         operation.assert_called_once_with(ctx)
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 def test_source_detail_lists_only_the_callers_owned_evaluation_sets(ctx):
     from fastapi.testclient import TestClient
 

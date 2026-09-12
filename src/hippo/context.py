@@ -249,21 +249,22 @@ class AppContext:
         )
         proofs = []
         for workspace_id in sorted({row["workspace_id"] for row in sources if row["id"] in managed_sources}):
-            generations = frozenset(
-                row["active_generation_id"]
+            # Keep the source-to-generation mapping, not just the generation set: projection must be
+            # told which source each selected generation belongs to rather than infer it from rows.
+            local = {
+                row["id"]: row["active_generation_id"]
                 for row in sources
                 if row["workspace_id"] == workspace_id
                 and row["id"] in managed_sources
                 and row.get("active_generation_id")
+            }
+            engine, proof = self.store._reader_proof(
+                workspace_id,
+                access,
+                expected_epoch=epoch,
+                selection=EvidenceSelection(generation_ids=frozenset(local.values())),
             )
-            proofs.append(
-                self.store._reader_proof(
-                    workspace_id,
-                    access,
-                    expected_epoch=epoch,
-                    selection=EvidenceSelection(generation_ids=generations),
-                )
-            )
+            proofs.append((engine, proof, local))
 
         def validate():
             if bundle is not None:
@@ -272,7 +273,7 @@ class AppContext:
                 raise AuthorizationChanged("Retrieval profile changed during graph use")
             if self.store.authorization_epoch() != epoch:
                 raise AuthorizationChanged("Authorization changed during graph use")
-            for engine, proof in proofs:
+            for engine, proof, _ in proofs:
                 engine.validate_current(proof)
             if self.ollama.embed_model != profile:
                 raise AuthorizationChanged("Retrieval profile changed during graph use")
@@ -283,7 +284,7 @@ class AppContext:
         key = (
             full.version,
             legacy_ids,
-            tuple(proof.policy_fingerprint for _, proof in proofs),
+            tuple(proof.policy_fingerprint for _, proof, _ in proofs),
             epoch,
             profile,
         )
@@ -294,8 +295,15 @@ class AppContext:
                 self._managed_scoped.move_to_end(key)
                 return cached
         projections = [
-            project_managed_graph(full, self.store, proof, embedding_profile=profile, snapshot_bundle=bundle)
-            for _, proof in proofs
+            project_managed_graph(
+                full,
+                self.store,
+                proof,
+                embedding_profile=profile,
+                selected_generations=local,
+                snapshot_bundle=bundle,
+            )
+            for _, proof, local in proofs
         ]
         scoped = compose_graphs(full.scoped(legacy_ids), *projections)
         scoped.authorization_check = validate
@@ -403,6 +411,7 @@ class AppContext:
                     source_profiles={
                         source: generation.embedding_profile for source, generation in local.items()
                     },
+                    selected_generations={source: generation.id for source, generation in local.items()},
                     snapshot_bundle=bundle,
                     structural=True,
                 )

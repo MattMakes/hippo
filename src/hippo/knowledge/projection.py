@@ -286,6 +286,32 @@ def _code_node(obj, kind, observations, source_id):
     return node
 
 
+def _selected_pairs(selected_generations, generations, members, revisions, artifacts):
+    """The exact `(source, generation)` pairs this audience proved for the caller's selection.
+
+    The caller states which generation it selected per source; nothing here infers a source
+    from unrestricted Source rows or from manifest counts. A pair survives only when that
+    generation's raw manifest `GenerationMember` revision is itself authorized, so a Source
+    ACL that permits listing cannot expose a generation whose artifact policy denied it.
+    """
+    if selected_generations is None:
+        return ()
+    expected = {generation.source_id: identity for identity, generation in generations.items()}
+    if dict(selected_generations) != expected:
+        raise ProjectionError("Selected generation mapping differs from the authorized selection")
+    return tuple(
+        sorted(
+            (generation.source_id, identity)
+            for identity, generation in generations.items()
+            if any(
+                (identity, revision_id) in members
+                and artifacts[revisions[revision_id].artifact_id].source_id == generation.source_id
+                for revision_id in revisions
+            )
+        )
+    )
+
+
 def project_managed_graph(
     full: GraphIndex | None,
     store,
@@ -293,6 +319,7 @@ def project_managed_graph(
     *,
     embedding_profile: str | None = None,
     source_profiles: Mapping[str, str] | None = None,
+    selected_generations: Mapping[str, str] | None = None,
     snapshot_bundle=None,
     synonymy_threshold: float = 0.8,
     structural: bool = False,
@@ -632,6 +659,9 @@ def project_managed_graph(
         structural_code_evidence=code_evidence,
         structural_object_evidence=tuple(object_evidence),
         structural_relations=tuple(relation_evidence),
+        selected_managed_generations=_selected_pairs(
+            selected_generations, generations, members, revisions, artifacts
+        ),
     )
     if snapshot_bundle is not None:
         snapshot_bundle.validate()
@@ -769,6 +799,7 @@ def _assemble(
     structural_code_evidence=(),
     structural_object_evidence=(),
     structural_relations=(),
+    selected_managed_generations=(),
 ):
     nodes = sorted(nodes, key=lambda node: CODE_KINDS.index(node.kind))
     identities = list(entities) + [node.id for node in nodes] + [passage.id for passage in passages]
@@ -872,6 +903,7 @@ def _assemble(
         structural_code_evidence=structural_code_evidence,
         structural_object_evidence=structural_object_evidence,
         structural_relations=structural_relations,
+        selected_managed_generations=selected_managed_generations,
     )
     payload[3], payload[5] = fingerprint_vectors(result)
     try:
@@ -882,6 +914,11 @@ def _assemble(
         payload.append(extension)
     if extension := structural_code_payload(result):
         payload.append(extension)
+    if result.selected_managed_generations:
+        # A lane whose only content is an empty selected generation still has an identity.
+        payload.append(
+            {"selected_managed_generations_v1": [list(pair) for pair in result.selected_managed_generations]}
+        )
     result.version = int(hashlib.sha256(canonical_json(payload).encode()).hexdigest()[:15], 16)
     return result
 
@@ -898,6 +935,9 @@ def compose_graphs(*graphs: GraphIndex) -> GraphIndex:
     code_evidence = tuple(row for graph in graphs for row in graph.structural_code_evidence)
     object_evidence = tuple(row for graph in graphs for row in graph.structural_object_evidence)
     relation_evidence = tuple(row for graph in graphs for row in graph.structural_relations)
+    # Canonicalization rejects one source arriving with two generations, which is the shape a
+    # lane composed from a stale pointer would have.
+    selected_generations = tuple(pair for graph in graphs for pair in graph.selected_managed_generations)
     entities, nodes, passages, facts, passage_vectors, fact_vectors, edges, arrows = (
         {},
         [],
@@ -1001,8 +1041,11 @@ def compose_graphs(*graphs: GraphIndex) -> GraphIndex:
         structural_code_evidence=code_evidence,
         structural_object_evidence=object_evidence,
         structural_relations=relation_evidence,
+        selected_managed_generations=selected_generations,
     )
-    populated = [graph for graph in graphs if graph.num_nodes]
+    # A lane holding only an empty selected generation still carries identity, so it must not be
+    # skipped here or a single-lane composition would report the version of a different lane.
+    populated = [graph for graph in graphs if graph.num_nodes or graph.selected_managed_generations]
     if len(populated) == 1:
         result.version = populated[0].version
     return result

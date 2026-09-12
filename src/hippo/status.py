@@ -35,10 +35,15 @@ class SourceView:
 
 
 def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None = None) -> SourceView:
-    """Keep source controls separate from managed evidence labels and inventory."""
+    """Keep source controls separate from managed evidence labels and inventory.
+
+    A supplied session is the caller's; when this owns the view it loads a structural one,
+    because `selected_managed_generations` is the only proof that an authorized generation
+    which produced no evidence at all exists, and nothing else can represent it.
+    """
     epoch = ctx.store.authorization_epoch()
     access = current_access(ctx.store, access)
-    graph = session.graph if session is not None else ctx.graph_for(access)
+    graph = session.graph if session is not None else ctx.graph_for(access, structural=True)
 
     def validate():
         if session is not None:
@@ -61,6 +66,10 @@ def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None
     legacy_ids = {source["id"] for source in sources if source["id"] not in managed}
     represented = {passage.source_id for passage in graph.passages}
     represented.update(node.source_id for node in graph.code_nodes if node.source_id)
+    # A proven selected pair is representation in its own right. This is what keeps an authorized
+    # empty generation visible, and omitting a policy-denied or tombstoned one needs no extra rule:
+    # neither proves a pair, so neither reaches this set.
+    represented.update(source for source, _generation in graph.selected_managed_generations)
     rows = [
         _managed_source(source, graph) if source["id"] in managed else deepcopy(source)
         for source in sources
@@ -71,9 +80,26 @@ def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None
 
 
 def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
+    """One managed row, counted from the held graph's own provenance.
+
+    Every count comes from this view's exact provenance, never from the Store's Source
+    counters: those span legacy, staged, active and retired generations at once, so a
+    refreshed source would report both generations' passages as current.
+
+    A shared code object stays one global vertex while being attributed to each selected
+    source that contributed evidence for it, which is why the node's own `source_id` (the
+    smallest contributor) cannot be the only rule.
+    """
     identity = source["id"]
+    pair = next((row for row in graph.selected_managed_generations if row[0] == identity), None)
     passages = [passage for passage in graph.passages if passage.source_id == identity]
-    nodes = [node for node in graph.code_nodes if node.source_id == identity]
+    passage_ids = {passage.id for passage in passages}
+    fact_links = sum(
+        1 for fact in graph.facts for passage_id in fact.passage_ids if passage_id in passage_ids
+    )
+    contributed = {row.node_id for row in graph.structural_code_evidence if row.source_id == identity}
+    contributed.update(row.node_id for row in graph.structural_object_evidence if row.source_id == identity)
+    nodes = [node for node in graph.code_nodes if node.id in contributed or node.source_id == identity]
     node_ids = {node.id for node in nodes}
     edge_counts = Counter(
         edge.kind
@@ -81,26 +107,37 @@ def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
         for edge in edges
         if edge.kind in CODE_EDGE_KINDS and graph.node_ids[edge.src] in node_ids
     )
+    # Relation-only support contributes no node of its own, so it is counted from the relation's
+    # exact selected pair rather than from this source's vertices.
+    edge_counts.update(
+        row.predicate
+        for row in graph.structural_relations
+        if pair is not None and pair in row.source_generations
+    )
     names = sorted({passage.title for passage in passages if passage.title})
     # These are source administration controls, not inferred upstream ownership.
     controls = {
         key: source.get(key) for key in ("access_role_id", "access_role_name", "min_rank", "owner_id")
     }
+    # Without a proven pair the row exists only because some evidence is visible; the Source's own
+    # presentation is not authorized by that and stays withheld.
+    proven = pair is not None
     return {
         **controls,
         "id": identity,
-        "name": names[0] if names else "Managed source",
+        "name": (source.get("name") or "") if proven else (names[0] if names else "Managed source"),
         "kind": "managed",
         "managed": True,
-        "owner_name": "",
-        "created_at": "",
-        "status": "ready",
-        "stage": "",
+        "owner_name": (source.get("owner_name") or "") if proven else "",
+        "created_at": (source.get("created_at") or "") if proven else "",
+        "status": (source.get("status") or "") if proven else "ready",
+        "stage": (source.get("stage") or "") if proven else "",
+        # Managed failure text is Task 3's closed exception mapper, not a stored Source string.
         "error": "",
-        "progress_done": 0,
-        "progress_total": 0,
+        "progress_done": int(source.get("progress_done") or 0) if proven else 0,
+        "progress_total": int(source.get("progress_total") or 0) if proven else 0,
         "passages": len(passages),
-        "fact_links": 0,
+        "fact_links": fact_links,
         "meta": {
             "code": {
                 "symbols": sum(node.kind == "symbol" for node in nodes),
@@ -111,7 +148,7 @@ def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
                 "languages": sorted({node.lang for node in nodes if node.lang}),
             }
         }
-        if nodes
+        if nodes or edge_counts
         else {},
     }
 
@@ -200,7 +237,9 @@ def _audience_inventory(
     if access.audience_kind == "preview":
         return stats, _code_card(stats, []), []
     if session is None:
-        with query_session(ctx, access) as owned:
+        # Structural, so these aggregates count the same sources `source_view` renders. A
+        # non-structural owner here would report fewer sources than the inventory it feeds.
+        with query_session(ctx, access, structural=True) as owned:
             return _audience_inventory(ctx, access, session=owned)
     view = source_view(ctx, access, session=session)
     graph = view.graph
