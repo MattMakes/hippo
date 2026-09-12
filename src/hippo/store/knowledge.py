@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import get_args, get_origin
 
@@ -21,6 +23,25 @@ LOCAL_MAPPING_AUTHORITY = "local"
 
 CLOSABLE_RECORD_KINDS = ("AssertionVersion", "ObjectObservation")
 """The two bitemporal rows whose `recorded_to` an append-only correction may close."""
+
+
+@dataclass(frozen=True, eq=False)
+class RecordedClosureCapability:
+    """Authority to close exactly the recorded intervals one validated plan named.
+
+    Minted by `_recorded_closure_capability` inside the publication transaction,
+    after `_validate_publication_plan` has proved the plan, and revoked as the
+    closure step ends. It is never persisted, never serialized into a receipt and
+    never handed back to a caller, and it is deliberately compared by identity
+    (`eq=False`): building an object with the same fields grants nothing, because
+    the only capability the store accepts is the one it is currently holding.
+    """
+
+    generation_id: str
+    plan_fingerprint: str
+    recorded_to: datetime
+    segments: tuple[tuple[str, str], ...]
+
 
 # Typed scalar references, validated on write and materialized where traversal needs them.
 REFERENCES = {
@@ -701,8 +722,33 @@ class KnowledgeQueries:
             and record == existing.replace(recorded_to=instant)
         )
 
-    def _close_recorded_intervals(self, segments, *, recorded_to: datetime) -> tuple[str, ...]:
-        """Close each named open recorded interval once, in the caller's transaction.
+    @contextmanager
+    def _recorded_closure_capability(self, generation_id: str, plan):
+        """Mint the one capability that authorizes this publication's closures.
+
+        This is the authority boundary: the capability exists only between a
+        validated plan and the closures it proved, only inside the publication
+        transaction, and only for the rows and instant the plan named. It is
+        dropped on the way out whether the publication commits or rolls back, so
+        a capability that outlives its publication authorizes nothing.
+        """
+        if not self.in_ambient_transaction():
+            raise RuntimeError("Recorded closure capability requires the publication transaction")
+        capability = RecordedClosureCapability(
+            generation_id=generation_id,
+            plan_fingerprint=plan.fingerprint,
+            recorded_to=plan.published_at,
+            segments=tuple(sorted((s.record_kind, s.record_id) for s in plan.closures)),
+        )
+        previous = getattr(self, "_closure_capability", None)
+        self._closure_capability = capability
+        try:
+            yield capability
+        finally:
+            self._closure_capability = previous
+
+    def _close_recorded_intervals(self, segments, *, recorded_to: datetime, capability) -> tuple[str, ...]:
+        """Close each named open recorded interval once, under a minted capability.
 
         The batch half of the append-only correction rule, and the only sanctioned
         way a *published* interpretation changes at all. Every row still goes
@@ -711,16 +757,25 @@ class KnowledgeQueries:
         single thing relaxed for the named rows is the published-interpretation
         guard, which is exactly what an append-only correction exists to move.
 
-        The publication primitive is the sole coordinator: without its transaction
-        this refuses to run, so no caller acquires the relaxation on its own.
+        The authority is the capability, not the transaction. `transaction()` is
+        public, so an ambient transaction proves only that these writes commit or
+        roll back together; what proves the closures were validated is the
+        capability `publish_staged_generation` minted for this generation and
+        plan. This accepts none but the one the store is holding right now - by
+        identity, not by field equality - and only for the exact segments and
+        instant that capability names.
         """
         if not self.in_ambient_transaction():
             raise RuntimeError("Recorded closure requires the publication transaction")
+        if capability is None or capability is not getattr(self, "_closure_capability", None):
+            raise RuntimeError("Recorded closure requires the capability its publication minted")
         authority = {}
         for kind, record_id in segments:
             if kind not in CLOSABLE_RECORD_KINDS:
                 raise ValueError("Only recorded evidence rows carry a closable interval")
             authority[(kind, record_id)] = recorded_to
+        if capability.recorded_to != recorded_to or capability.segments != tuple(sorted(authority)):
+            raise RuntimeError("Recorded closure exceeds the capability its publication minted")
         previous = getattr(self, "_recorded_closures", None)
         self._recorded_closures = authority
         try:

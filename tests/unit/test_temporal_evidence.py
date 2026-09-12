@@ -1170,13 +1170,23 @@ def _owned_by(store, workspace, subject, name, *, scope_key="prod"):
     return assertion, target
 
 
-def correction_world(store):
+def correction_world(store, *, extra_span=None, corroborated=False, seal=True):
     """The plan's May ownership example, staged for an append-only correction.
 
     Unlike `history_world`, every corrected row is an exact member of its
     generation, so the published-interpretation guard is real and nothing but a
     publication plan can close it. The second generation is left sealed and
     unpublished, so each test publishes it with the plan variation it is about.
+
+    `extra_span` stages one more version in the corrected series whose support
+    row is deliberately *not* a member: `"two"` supports it from this
+    generation's own span, `"one"` from the previous generation's, which are the
+    two ways an appended segment can depend on evidence its generation does not
+    carry. Such a generation cannot be sealed, so `extra_span` implies
+    `seal=False`. `corroborated` adds an open version this source supports
+    *jointly with a second source*, built before the second build is claimed
+    because a support row reaching a source's revisions needs build authority
+    once its build is running.
     """
     source = store.create_source("text", "owners-corrected")
     workspace = store.get_source(source)["workspace_id"]
@@ -1237,6 +1247,17 @@ def correction_world(store):
     store.update_knowledge(retracted.replace(recorded_to=MAY_10))
     retracted = store._knowledge_get("AssertionVersion", retracted.id)
 
+    corroborated_version = None
+    if corroborated:
+        # Decision 3's case: this source's claim, also proven by a second
+        # source's span, so no single publication owns the whole support group.
+        other = _other_source_span(store, workspace, "corroborating-owners")
+        subject = _object(store, workspace, "service", "search")
+        assertion = _owned_by(store, workspace, subject, "gil")[0]
+        corroborated_version = _version(store, assertion, MAY_1, MAY_1)
+        _support(store, corroborated_version, span_one)
+        _support(store, corroborated_version, other)
+
     second = _generation(store, source, "corr-two", first, at=MAY_12)
     job_two = _claim(store, second, at=MAY_12)
     with store.generation_write(second.id, **_credentials(job_two)):
@@ -1256,7 +1277,18 @@ def correction_world(store):
         support_two = _support(store, version_two, span_two)
         _member(store, second, version_two)
         _member(store, second, support_two)
-    _seal(store, second, job_two)
+        extra_version = None
+        if extra_span is not None:
+            owned_by_eve, _ = _owned_by(store, workspace, service, "eve")
+            extra_version = _version(store, owned_by_eve, MAY_12, MAY_10)
+            _support(store, extra_version, span_one if extra_span == "one" else span_two)
+            # The version stages cleanly - an AssertionVersion reaches no revision
+            # through its references, so the evidence-member guard passes
+            # vacuously. Its support row is deliberately never staged: that is
+            # what the publication plan's own dependency check must catch.
+            _member(store, second, extra_version)
+    if seal and extra_span is None:
+        _seal(store, second, job_two)
 
     return SimpleNamespace(
         store=store,
@@ -1278,6 +1310,9 @@ def correction_world(store):
         retracted=retracted,
         version_one=version_one,
         version_two=version_two,
+        support_one=support_one,
+        extra_version=extra_version,
+        corroborated=corroborated_version,
     )
 
 
@@ -1300,6 +1335,11 @@ def _row(store, kind, record_id):
     return store._knowledge_get(kind, record_id)
 
 
+def _bytes(store, kind, record_id):
+    """The row as it would serialize, so a rollback can be compared byte for byte."""
+    return _row(store, kind, record_id).model_dump_json()
+
+
 def _unsupported_version(world):
     """An open version with no support group at all; nothing proves its lineage."""
     subject = _object(world.store, world.workspace, "service", "shipping")
@@ -1307,12 +1347,11 @@ def _unsupported_version(world):
     return _version(world.store, assertion, MAY_1, MAY_1)
 
 
-def _foreign_version(world):
-    """A version whose complete support belongs to another source entirely."""
-    store = world.store
-    other = store.create_source("text", "other-owners")
+def _other_source_span(store, workspace, name):
+    """A span of a second source in the same workspace."""
+    other = store.create_source("text", name)
     policy = k.AccessPolicy(
-        workspace_id=world.workspace,
+        workspace_id=workspace,
         origin="local_curated",
         scope_key="source:" + other,
         mode="workspace",
@@ -1320,19 +1359,24 @@ def _foreign_version(world):
     )
     store.put_knowledge(policy)
     artifact = k.Artifact(
-        workspace_id=world.workspace,
+        workspace_id=workspace,
         source_id=other,
         kind="file",
-        external_id="other.md",
-        canonical_uri="source:other.md",
+        external_id=name + ".md",
+        canonical_uri="source:" + name + ".md",
         policy_id=policy.id,
     )
     store.put_knowledge(artifact)
-    span = _span(store, _revision(store, artifact, "other-may-1", MAY_1), "other-owners", policy)
+    return _span(store, _revision(store, artifact, name + "-may-1", MAY_1), name, policy)
+
+
+def _foreign_version(world):
+    """A version whose complete support belongs to another source entirely."""
+    store = world.store
     subject = _object(store, world.workspace, "service", "billing")
     assertion, _ = _owned_by(store, world.workspace, subject, "cy")
     version = _version(store, assertion, MAY_1, MAY_1)
-    _support(store, version, span)
+    _support(store, version, _other_source_span(store, world.workspace, "other-owners"))
     return version
 
 
@@ -1411,6 +1455,13 @@ def test_recorded_correction_is_visible_to_history_selection_at_each_cutoff(stor
 def test_recorded_correction_rolls_back_every_write_when_a_failpoint_fires(store, point):
     world = correction_world(store)
     epoch = store.content_epoch()
+    affected = (
+        ("AssertionVersion", world.version_one.id),
+        ("ObjectObservation", world.observation_one.id),
+        ("AssertionVersion", world.version_two.id),
+        ("ObjectObservation", world.observation_two.id),
+    )
+    before = {key: _bytes(store, *key) for key in affected}
 
     def fail(at):
         if at == point:
@@ -1419,6 +1470,8 @@ def test_recorded_correction_rolls_back_every_write_when_a_failpoint_fires(store
     with pytest.raises(RuntimeError, match="injected"):
         _publish_only(store, world.second, world.job_two, plan=_plan(world), fault_hook=fail)
 
+    # Byte-identical, not merely open: no field of any corrected row may move.
+    assert {key: _bytes(store, *key) for key in affected} == before
     assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
     assert _row(store, "ObjectObservation", world.observation_one.id).recorded_to is None
     assert _row(store, "Generation", world.first.id).status == "active"
@@ -1462,16 +1515,19 @@ def test_recorded_correction_retry_with_a_different_plan_fails_without_writing(s
     [
         ("closed", "already closed"),
         ("foreign", "lineage"),
+        ("corroborated", "lineage"),
         ("unsupported", "complete support"),
         ("not_before", "before the publication"),
         ("missing", "missing"),
     ],
 )
 def test_recorded_correction_refuses_a_closure_target_it_cannot_prove(store, case, message):
-    world = correction_world(store)
+    """Decision 3 included: one source's publication cannot retire a shared claim."""
+    world = correction_world(store, corroborated=case == "corroborated")
     target = {
         "closed": lambda: world.retracted.id,
         "foreign": lambda: _foreign_version(world).id,
+        "corroborated": lambda: world.corroborated.id,
         "unsupported": lambda: _unsupported_version(world).id,
         "not_before": lambda: world.version_two.id,
         "missing": lambda: "assertionversion-absent",
@@ -1511,6 +1567,88 @@ def test_recorded_correction_refuses_an_append_outside_the_staged_correction(sto
     assert _row(store, "Generation", world.second.id).status == "ready"
 
 
+def test_recorded_correction_refuses_a_closure_target_the_same_generation_publishes(store):
+    """A generation may not close a row it is itself publishing.
+
+    `mistimed` is a staged member of the second generation whose `recorded_from`
+    is before the publication instant, so every other closure precondition holds.
+    Closing it would mint a recorded window over which Hippo exposed nothing: the
+    generation that carries the row was not active for a moment of it. A
+    correction closes only what an earlier generation published.
+    """
+    world = correction_world(store)
+    plan = _plan(world, closures=(RecordedSegment("ObjectObservation", world.mistimed.id),), appends=())
+
+    with pytest.raises(ValueError, match="generation being published"):
+        _publish_only(store, world.second, world.job_two, plan=plan)
+    assert _row(store, "ObjectObservation", world.mistimed.id).recorded_to is None
+    assert _row(store, "Generation", world.second.id).status == "ready"
+
+
+@pytest.mark.parametrize("extra_span", ["two", "one"])
+def test_recorded_correction_cannot_even_seal_an_append_whose_proof_group_is_incomplete(store, extra_span):
+    """Where "preserves evidence dependencies" is really enforced for a version.
+
+    An `AssertionVersion` reaches no revision through its own references, so the
+    evidence-member guard passes vacuously when it is staged. What catches it is
+    `validate_generation_seal` (`generations.py:703-710`), which requires every
+    support row of a member version to be a member too, and which
+    `publish_staged_generation` re-runs at `generations.py:995` before it
+    validates any plan. `"two"` supports the extra version from this
+    generation's own span, `"one"` from the previous generation's; in both the
+    support row is deliberately unstaged, and in both the generation never
+    reaches a publishable state at all.
+    """
+    world = correction_world(store, extra_span=extra_span)
+
+    with pytest.raises(ValueError, match="Incomplete assertion proof group"):
+        _seal(store, world.second, world.job_two)
+    # And an unsealed generation cannot publish at all: the strict path takes
+    # only a `ready` generation, so no plan of any shape is ever looked at.
+    with pytest.raises(ValueError, match="Stale build lease, fence, or generation state"):
+        _publish_only(store, world.second, world.job_two, plan=_plan(world))
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+    assert _row(store, "Generation", world.second.id).status == "staging"
+
+
+@pytest.mark.parametrize("extra_span", ["two", "one"])
+def test_recorded_correction_plan_refuses_an_append_depending_on_outside_evidence(store, extra_span):
+    """The plan's own dependency check, pinned where the publication cannot reach it.
+
+    `generations.py:914` is defense in depth behind the seal check above: every
+    route to it through `publish_staged_generation` is refused earlier with
+    "Incomplete assertion proof group" (measured by mutating the line away).
+    Validation is read-only and side-effect free, so the check is pinned by
+    calling it directly - this test fails if the line is removed.
+    """
+    world = correction_world(store, extra_span=extra_span)
+    gen = store._knowledge_get("Generation", world.second.id)
+    plan = _plan(
+        world,
+        closures=(RecordedSegment("AssertionVersion", world.version_one.id),),
+        appends=(RecordedSegment("AssertionVersion", world.extra_version.id),),
+    )
+
+    with pytest.raises(ValueError, match="depends on evidence outside its generation"):
+        store._validate_publication_plan(gen, plan)
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+
+
+def test_recorded_correction_cannot_stage_a_support_row_from_another_generation(store):
+    """The companion fact: what a support row's own staging already refuses.
+
+    A support row *does* reach a revision, so staging one whose span belongs to
+    an earlier generation is refused by the evidence-member guard. The version it
+    supports is not, which is why the proof-group rule has to be enforced on the
+    version rather than left to its references.
+    """
+    world = correction_world(store, seal=False)
+
+    with pytest.raises(ValueError, match="outside generation revisions"):
+        with store.generation_write(world.second.id, **_credentials(world.job_two)):
+            _member(store, world.second, world.support_one)
+
+
 def test_recorded_correction_requires_the_plan_clock_to_be_the_publication_clock(store):
     """No unguarded clock: `published_at` is the plan's, fixed before the transaction."""
     world = correction_world(store)
@@ -1532,12 +1670,14 @@ def test_recorded_correction_is_refused_by_the_generic_fixture_publication_path(
 
 
 def test_recorded_correction_fails_without_writes_on_a_stale_parent_or_a_later_suppression(store):
+    """Precondition (d) in full: a stale parent, a stale fence and a moved epoch."""
     world = correction_world(store)
     plan = _plan(world)
 
     for change in (
         dict(expected_suppression_epoch=store.suppression_epoch() + 1),
         dict(expected_parent_id=None),
+        dict(fencing_token=world.job_two.fencing_token + 1),
     ):
         call = dict(
             expected_parent_id=world.first.id,
@@ -1561,3 +1701,68 @@ def test_recorded_correction_never_reaches_a_published_row_through_update_knowle
     _publish_only(store, world.second, world.job_two, plan=_plan(world))
     with pytest.raises(ValueError, match="close once"):
         store.update_knowledge(world.version_one.replace(recorded_to=MAY_12 + timedelta(days=1)))
+
+
+def test_recorded_correction_closure_helper_refuses_a_caller_without_a_capability(store):
+    """An ambient transaction is not authority; the publication's capability is.
+
+    `store.transaction()` is public, so "inside a transaction" says nothing about
+    who opened it. The closure helper takes the capability `publish_staged_generation`
+    mints after the plan validates, and a caller that has only a transaction
+    cannot call it at all.
+    """
+    world = correction_world(store)
+    segments = (("AssertionVersion", world.version_one.id),)
+
+    with pytest.raises(TypeError, match="capability"):
+        with store.transaction():
+            store._close_recorded_intervals(segments, recorded_to=MAY_12)
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+
+
+def test_recorded_correction_closure_capability_is_neither_forgeable_nor_reusable(store, monkeypatch):
+    """The capability is the object the publication minted, not its field values.
+
+    A caller can construct something that looks identical, and can keep the real
+    one after the publication that minted it returns. Neither is accepted: the
+    helper requires the capability the store is holding for this publication,
+    and the publication drops it as soon as its closures are written.
+    """
+    from hippo.store.knowledge import RecordedClosureCapability
+
+    world = correction_world(store)
+    plan = _plan(world)
+    segments = tuple((s.record_kind, s.record_id) for s in plan.closures)
+    captured = []
+    original = type(store)._close_recorded_intervals
+
+    def spy(self, closing, *, recorded_to, capability):
+        captured.append(capability)
+        return original(self, closing, recorded_to=recorded_to, capability=capability)
+
+    monkeypatch.setattr(type(store), "_close_recorded_intervals", spy)
+    forged = RecordedClosureCapability(
+        generation_id=world.second.id,
+        plan_fingerprint=plan.fingerprint,
+        recorded_to=plan.published_at,
+        segments=segments,
+    )
+
+    for capability in (forged, None):
+        with pytest.raises(RuntimeError, match="capability"):
+            with store.transaction():
+                store._close_recorded_intervals(segments, recorded_to=MAY_12, capability=capability)
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to is None
+
+    captured.clear()
+    _publish_only(store, world.second, world.job_two, plan=plan)
+
+    assert _row(store, "AssertionVersion", world.version_one.id).recorded_to == MAY_12
+    # The minted capability carries the same fields the forgery guessed; being a
+    # different object is the whole of the difference, and it is decisive.
+    assert captured and captured[0] is not forged
+    assert captured[0].plan_fingerprint == forged.plan_fingerprint
+    assert getattr(store, "_closure_capability", None) is None
+    with pytest.raises(RuntimeError, match="capability"):
+        with store.transaction():
+            store._close_recorded_intervals(segments, recorded_to=MAY_12, capability=captured[0])
