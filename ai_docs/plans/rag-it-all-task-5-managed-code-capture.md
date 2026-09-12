@@ -414,6 +414,8 @@ later is a new generation rather than an append.
 4. **Accepted.** Provisional repository identity from the normalized clone URL; Task 10 adds provider aliases rather than renaming evidence.
 5. **Accepted, bounded.** Files matching `readers.PROSE_EXTENSIONS` inside a repository go through OpenIE under the same budgets as the plain lane; code comments and docstrings are not prose inputs.
 
+6. **Ruled during CC1 (2026-09-12).** The managed flip stays an authorization-epoch bump (the source's authorization model changes from source ACL to artifact policy plus membership, so a held legacy session must revalidate), performed inside `publish_staged_generation`'s transaction through the single `begin_managed_source` primitive; the automatic call from `store/authorization.py`'s record mutation on every Artifact/Generation put is removed, so staging rows no longer flip a source. The prose coordinator's publication accounts for that bump; code builds rebaseline across it.
+
 Blockers A (legacy serving until publication) and B (resumable reclaim) and the scale finding (generation-scoped reads) are accepted as prerequisites CC1–CC3. The split CC1–CC11 is adopted; CC1 and CC4 start in parallel, the rest in the stated order. An independent design review runs alongside CC1/CC4; its findings bind the later tasks.
 
 ## 12. Task split
