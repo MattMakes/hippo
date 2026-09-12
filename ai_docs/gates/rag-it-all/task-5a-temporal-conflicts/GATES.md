@@ -37,7 +37,7 @@ OWNS: src/hippo/knowledge/{temporal,conflicts}.py, tests/unit/test_temporal_evid
   EXPECT: passed
 
 - [x] T5A6: Formatting passes for the pure and integrated modules.
-  CHECK: .venv/bin/ruff check src/hippo/knowledge/temporal.py src/hippo/knowledge/conflicts.py tests/unit/test_temporal_evidence.py tests/unit/test_temporal_conflicts.py && .venv/bin/ruff format --check src/hippo/knowledge/temporal.py src/hippo/knowledge/conflicts.py tests/unit/test_temporal_evidence.py tests/unit/test_temporal_conflicts.py
+  CHECK: .venv/bin/ruff check src/hippo/knowledge/temporal.py src/hippo/knowledge/conflicts.py src/hippo/knowledge/access.py src/hippo/knowledge/model.py src/hippo/knowledge/snapshots.py src/hippo/store/snapshots.py tests/unit/test_temporal_evidence.py tests/unit/test_temporal_conflicts.py tests/unit/test_knowledge_contracts.py tests/unit/test_snapshot_store.py && .venv/bin/ruff format --check src/hippo/knowledge/temporal.py src/hippo/knowledge/conflicts.py src/hippo/knowledge/access.py src/hippo/knowledge/model.py src/hippo/knowledge/snapshots.py src/hippo/store/snapshots.py tests/unit/test_temporal_evidence.py tests/unit/test_temporal_conflicts.py tests/unit/test_knowledge_contracts.py tests/unit/test_snapshot_store.py
   EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=All checks passed! | 4 files already formatted
   CRITERIA: modified temporal implementation and tests pass Ruff check and format verification. Task completion separately requires independent SPEC/QUALITY review confirming no unchecked temporal ambiguity, authorization fork, non-atomic closure, mutable evidence, wall-clock dependency, or ingest-order tie-breaker.
   EXPECT: files already formatted

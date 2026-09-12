@@ -84,7 +84,7 @@ For one eligible Source it must:
 6. Map coordinator `BuildProgress` to Source `status`, `stage`, `progress_done`, and `progress_total` only. Do not put progress/status/error into `meta_json`, which participates in `SourceControl.input_config_json`.
 7. Call `build_plain_source` outside every ambient store transaction. Forward `Jobs.is_cancelled(job_key)` and never invoke model/file callbacks under store locks.
 
-The first managed publication atomically replaces legacy evidence as already guaranteed by the coordinator. Refresh keeps G1 serving until G2 publishes. The adapter must never call `_clear_passages`, `delete_passages_for_source`, `delete_code_for_source`, `remove_orphans`, `store.delete_source`, `shutil.rmtree`, generation collection, raw deletion, or any source-wide cleanup for a managed attempt.
+The first managed publication atomically replaces legacy evidence as already guaranteed by the coordinator. Refresh keeps G1 serving until G2 publishes. The adapter must never call `_clear_passages`, `delete_passages_for_source`, `delete_code_nodes_for_source`, `remove_orphans`, `store.delete_source`, `shutil.rmtree`, generation collection, raw deletion, or any source-wide cleanup for a managed attempt.
 
 ### Failure and progress presentation
 
