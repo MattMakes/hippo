@@ -648,7 +648,7 @@ def build_plain_source(
         and not callable(on_progress)
     ):
         raise ValueError("Stable operation identity and live cancellation required")
-    if getattr(ctx.store, "_transaction_depth", 0) or getattr(ctx.store, "_transaction", None) is not None:
+    if ctx.store.in_ambient_transaction():
         raise ValueError("Coordinator requires no ambient transaction")
     run = _Run(ctx, actor, source_id, options, should_stop, on_progress)
     installed = False

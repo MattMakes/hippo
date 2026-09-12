@@ -697,13 +697,12 @@ def test_two_detached_bootstrap_workers_admit_exactly_one_atomic_winner(setup):
     assert w.store.validate_generation_seal(w.store.get_source(w.source)["active_generation_id"]).ready
 
 
-@pytest.mark.skip(reason="store per-thread transaction ownership pending")
 def test_concurrent_build_is_not_rejected_by_another_threads_transaction(setup, monkeypatch):
-    """Deferred 2026-09-11 (review finding 3): the ambient probe reads a process-global depth.
+    """Review finding 3: the entry probe must answer for the calling thread only.
 
-    Turn this on with the store increment that records the owning thread of an open
-    transaction; until then a build entered while any other thread holds a transaction
-    is rejected with an ambient-transaction error the caller did not cause.
+    A process-global depth reads as "in a transaction" from every thread while any one
+    thread holds one, so a build entered here was rejected with an ambient-transaction
+    error the caller did not cause. The probe asks `store.in_ambient_transaction()`.
     """
     from threading import Event, Thread
 

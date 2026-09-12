@@ -5,6 +5,7 @@ import json
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import timedelta
+from threading import Event, Thread
 
 import pytest
 
@@ -282,6 +283,57 @@ def test_standalone_wrapper_rejects_outer_transaction_before_callback(store, tmp
     with pytest.raises(ValueError, match="outer|transaction"):
         with store.transaction():
             write(store, prepared, credentials)
+
+
+def test_wrapper_ignores_an_outer_transaction_another_thread_owns(store, tmp_path):
+    """Two refreshes in different threads must not reject each other's transaction.
+
+    The store holds one lock for a whole transaction body, so the depth counter beside it
+    reads as "in a transaction" from every thread; the wrapper asks the per-thread
+    `in_ambient_transaction()` instead. Calling the wrapper directly: the shared `write`
+    helper's callback asserts the process-global attributes, which the holder sets.
+    """
+    old, job, prepared, credentials = setup(store, tmp_path)
+    held, release = Event(), Event()
+    seen, errors = [], []
+
+    def hold():
+        try:
+            with store.transaction():
+                seen.append(store.in_ambient_transaction())
+                held.set()
+                assert release.wait(60)
+        except BaseException as exc:  # noqa: BLE001 - asserted on the calling thread below
+            errors.append(exc)
+        finally:
+            held.set()
+
+    def past_the_probe():
+        # The wrapper is past its entry probe; free the holder so its lock can be taken.
+        release.set()
+
+    thread = Thread(target=hold)
+    thread.start()
+    try:
+        assert held.wait(10), "holder must own an open transaction"
+        manifest = writer().write_staged_prose(store, prepared, check=past_the_probe, **credentials)
+    finally:
+        release.set()
+        thread.join(60)
+    assert not thread.is_alive() and errors == []
+    assert seen == [True]
+    assert manifest == store.validate_generation_seal(prepared.inputs.generation.id)
+
+
+def test_wrapper_still_rejects_a_transaction_the_caller_owns(store, tmp_path):
+    """The sibling of the cross-thread case: the caller's own transaction still refuses."""
+    old, job, prepared, credentials = setup(store, tmp_path)
+    calls = []
+    with store.transaction():
+        assert store.in_ambient_transaction() is True
+        with pytest.raises(ValueError, match="requires no outer transaction"):
+            writer().write_staged_prose(store, prepared, check=lambda: calls.append("called"), **credentials)
+    assert calls == []
 
 
 def test_local_core_is_callback_free_inside_existing_transaction(store, tmp_path):

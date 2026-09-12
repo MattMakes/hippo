@@ -221,7 +221,7 @@ def write_staged_prose(
     batch_size=128,
 ):
     """Write/seal a refresh outside ambient transactions; caller owns publication."""
-    if getattr(store, "_transaction_depth", 0) or getattr(store, "_transaction", None) is not None:
+    if store.in_ambient_transaction():
         raise ValueError("Staged refresh wrapper requires no outer transaction")
     if type(prepared) is not PreparedProseIndex or not callable(check):
         raise ValueError("Prepared output and live build check are required")
