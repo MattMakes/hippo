@@ -41,6 +41,19 @@ class SourceTombstone:
     cancelled_job_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class BuildAdmission:
+    """One fenced admission: the holder it installed, or the live holder it left alone.
+
+    `reused` is true for the idempotent same-holder return, where nothing was written and the
+    caller must not go on to collect, restage or otherwise touch the generation.
+    """
+
+    job: k.MaintenanceJob
+    generation: k.Generation
+    reused: bool
+
+
 def tombstone_scope_key(source_id: str) -> str:
     return f"source:{source_id}:delete"
 
@@ -221,65 +234,103 @@ class GenerationQueries:
             return True
         scope_key = tombstone_scope_key(source_id)
         return any(
-            row.target_kind == "source"
-            and row.target_id == source_id
-            and row.reason == "tombstone"
+            row.reason == "tombstone"
             and row.view_applicability == "current_only"
             and row.scope_key == scope_key
-            for row in self._knowledge_rows("Suppression")
+            # Scoped by the two fields the predicate already required; CC2's v6 step indexes
+            # both, so the barrier costs a lookup rather than a walk of every suppression.
+            for row in self._knowledge_rows(
+                "Suppression", where={"target_kind": "source", "target_id": source_id}
+            )
         )
 
-    def claim_generation_build(self, generation_id, *, job_key, lease_owner, lease_expires_at):
-        with self.transaction():
-            gen = self._generation(generation_id)
-            self._lock_source(gen.source_id)
-            gen = self._generation(generation_id)
-            source = self.get_source(gen.source_id)
-            if self._tombstoned(gen.source_id, source):
-                # The barrier lives here, not in the dispatcher that read the source a
-                # moment ago: refuse before the fence advances, before a holder is
-                # installed, and before the retained attempt could be collected.
-                raise ValueError("Stale build lease, fence, or generation state")
-            now = self._now()
-            if gen.status not in ("staging", "failed") or lease_expires_at <= now:
-                raise ValueError("Build requires staging or unpublished failed generation and future lease")
-            if gen.status == "failed" and (
-                gen.published_at is not None
-                or any(
-                    event.generation_id == gen.id and event.kind == "published"
-                    for event in self._knowledge_rows("IndexEvent")
-                )
-            ):
-                raise ValueError("Published generations cannot reopen for retry")
-            previous = self._knowledge_get("MaintenanceJob", source.get("active_build_id"))
-            if previous is not None and previous.status == "running" and previous.lease_expires_at > now:
-                if (
-                    previous.input_fingerprint == generation_id
-                    and previous.job_key == job_key
-                    and previous.lease_owner == lease_owner
-                ):
-                    return previous
-                raise ValueError("Source already has a live build holder")
-            fence = int(source.get("build_fencing_token") or 0) + 1
-            job = k.MaintenanceJob(
-                source_id=gen.source_id,
-                scope_key="generation",
-                kind="rebuild",
-                job_key=job_key,
-                input_fingerprint=gen.id,
-                expected_parent_id=gen.parent_id,
-                phase="extract",
-                status="running",
-                lease_owner=lease_owner,
-                lease_expires_at=lease_expires_at,
-                fencing_token=fence,
-                attempt_count=1,
+    def _admit_build(
+        self, generation_id, *, job_key, lease_owner, lease_expires_at, expected_manifest_hash=None
+    ):
+        """The fenced admission both build entry points share, so their guarantees cannot drift.
+
+        The caller holds the transaction. In order: the source lock, a re-read of the generation
+        under it, the tombstone barrier, the status and future-lease check, the never-published
+        triple, the optional stored-manifest assertion, live-holder exclusion with the idempotent
+        same-holder return, the fence advance, the holder install and the `attempt_count`
+        carry-over. Nothing here collects: `claim_generation_build` collects afterwards and
+        `reclaim_generation_build` never does, which is the one difference between them.
+
+        Every read is scoped by the source or the generation, because this runs under the source
+        lock on every build of every size and a whole-table read here is the whole corpus.
+        """
+        gen = self._generation(generation_id)
+        self._lock_source(gen.source_id)
+        gen = self._generation(generation_id)
+        source = self.get_source(gen.source_id)
+        if self._tombstoned(gen.source_id, source):
+            # The barrier lives here, not in the dispatcher that read the source a
+            # moment ago: refuse before the fence advances, before a holder is
+            # installed, and before the retained attempt could be collected.
+            raise ValueError("Stale build lease, fence, or generation state")
+        now = self._now()
+        if gen.status not in ("staging", "failed") or lease_expires_at <= now:
+            raise ValueError("Build requires staging or unpublished failed generation and future lease")
+        # All three publication proofs, each independently sufficient, exactly as
+        # `fail_generation_build` and `_publish_generation` treat them. A generation any one of
+        # them names has served a reader, so no holder may reopen it under any status.
+        if (
+            gen.published_at is not None
+            or source.get("active_generation_id") == gen.id
+            or any(
+                event.kind == "published"
+                for event in self._knowledge_rows("IndexEvent", generation_id=gen.id)
             )
-            prior = self._knowledge_get("MaintenanceJob", job.id)
-            if prior:
-                job = job.replace(attempt_count=prior.attempt_count + 1)
-            self._write_knowledge(job)
-            self._source_fields(gen.source_id, active_build_id=job.id, build_fencing_token=fence)
+        ):
+            raise ValueError("Published generations cannot reopen for retry")
+        if expected_manifest_hash is not None and expected_manifest_hash != gen.manifest_hash:
+            raise ValueError("Reclaim manifest hash differs from the stored generation")
+        previous = self._knowledge_get("MaintenanceJob", source.get("active_build_id"))
+        if previous is not None and previous.status == "running" and previous.lease_expires_at > now:
+            if (
+                previous.input_fingerprint == generation_id
+                and previous.job_key == job_key
+                and previous.lease_owner == lease_owner
+            ):
+                return BuildAdmission(previous, gen, True)
+            raise ValueError("Source already has a live build holder")
+        fence = int(source.get("build_fencing_token") or 0) + 1
+        job = k.MaintenanceJob(
+            source_id=gen.source_id,
+            scope_key="generation",
+            kind="rebuild",
+            job_key=job_key,
+            input_fingerprint=gen.id,
+            expected_parent_id=gen.parent_id,
+            phase="extract",
+            status="running",
+            lease_owner=lease_owner,
+            lease_expires_at=lease_expires_at,
+            fencing_token=fence,
+            attempt_count=1,
+        )
+        prior = self._knowledge_get("MaintenanceJob", job.id)
+        if prior:
+            job = job.replace(attempt_count=prior.attempt_count + 1)
+        self._write_knowledge(job)
+        self._source_fields(gen.source_id, active_build_id=job.id, build_fencing_token=fence)
+        return BuildAdmission(job, gen, False)
+
+    def claim_generation_build(self, generation_id, *, job_key, lease_owner, lease_expires_at):
+        """Admit a holder for a never-published generation, collecting a failed attempt first.
+
+        This is the reviewed retry contract: a `failed` generation's staged rows are removed
+        before it returns to `staging`, so the retry starts from zero and cannot inherit a
+        half-written payload. `reclaim_generation_build` is the resumable form, for a build
+        that can replay its own batches over rows it recognises.
+        """
+        with self.transaction():
+            admitted = self._admit_build(
+                generation_id, job_key=job_key, lease_owner=lease_owner, lease_expires_at=lease_expires_at
+            )
+            if admitted.reused:
+                return admitted.job
+            gen = admitted.generation
             if gen.status == "failed":
                 # The new source fence is held while removing this never-published
                 # attempt's rows. Shared raw/evidence identities remain reusable.
@@ -287,7 +338,45 @@ class GenerationQueries:
                 if result.blocked_reason is not None:
                     raise ValueError("Failed generation retry is still referenced")
                 self._write_knowledge(gen.replace(status="staging"))
-            return job
+            return admitted.job
+
+    def reclaim_generation_build(
+        self, generation_id, *, job_key, lease_owner, lease_expires_at, expected_manifest_hash
+    ):
+        """Resume a never-published attempt under a fresh holder, keeping its staged rows.
+
+        Admission is `claim_generation_build`'s, step for step and in the same order -- both
+        call `_admit_build` -- so the tombstone barrier, the future lease, the never-published
+        triple, live-holder exclusion with its idempotent same-holder return, the fence advance
+        and the `attempt_count` carry-over all hold here unchanged. The single difference is
+        that a `failed` generation returns to `staging` **without** `_collect_generation`, so a
+        crashed build replays its remaining batches instead of restarting from zero.
+
+        `expected_manifest_hash` is a cheap assertion against a corrupted row, not the safety
+        property. `manifest_hash` is in `Generation.identity_fields`, so a stored generation with
+        this ID necessarily carries the hash that was hashed into it: passing `generation_id`
+        already pins it, and equality proves nothing the ID did not. The properties that do the
+        work are the admission preconditions above, the derivation versions carried in generation
+        identity, and the writer's probe that asserts what is absent as well as what is present.
+        """
+        if not isinstance(expected_manifest_hash, str) or not expected_manifest_hash:
+            raise ValueError("Reclaim requires the stored generation's manifest hash")
+        with self.transaction():
+            admitted = self._admit_build(
+                generation_id,
+                job_key=job_key,
+                lease_owner=lease_owner,
+                lease_expires_at=lease_expires_at,
+                expected_manifest_hash=expected_manifest_hash,
+            )
+            if admitted.reused:
+                return admitted.job
+            gen = admitted.generation
+            if gen.status == "failed":
+                # No collection: the rows of this never-published attempt are the resume
+                # checkpoint, and the new fence is what makes writing over them safe.
+                self._write_knowledge(gen.replace(status="staging"))
+            return admitted.job
 
     def _check_build(self, generation_id, *, job_id, lease_owner, fencing_token, states=("staging",)):
         gen = self._generation(generation_id)
