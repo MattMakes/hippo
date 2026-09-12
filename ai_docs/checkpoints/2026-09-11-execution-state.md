@@ -371,3 +371,12 @@ Controlled profiles published1d46f00. Detached preparation now reuses actual sha
 Root6gatesMET:32preparation/61shared/86writer-binding-derived Fake,19writerLadybug and Ruff/format. IndependentSPEC/QUALITYPASS147Fake/19Ladybug; agent51combinedLadybug. IsolatedNeo19passed (/tmp/hippo-prose-writer-neo4j.log),97530complete NeoFREE. Independent event-controlled tests found and fixed a closed-guard race after a blocking callback; restored authority cannot resume failed preparation.
 
 Structural initial26Neo passed but additional shared-canonical-object regression remains under active implementation; do not publish that slice yet. GuardedOpenIE root implementation has3gatesMET41focused/187regressions/Ruff and independentSPEC/QUALITYPASS, awaiting its own commit after this dependency. Coordinator and verified retrieval-session exact contracts are being drafted separately. No production managed ingestion activation; Task5 remains OPEN.
+
+
+## Task 5 captured OpenIE runtime verified
+
+Managed prose preparation/writer committed ffc46b6. New resolve_openie_profile and GuardedOpenIE capture the actual chat model digest/name/context/capabilities, preserve the existing prompt parser and think-block handling, and construct explicit captured requests without reading or changing the shared capability cache. Every attempt checks current authorization and installed identity; errors are sticky across concurrent workers. Resolver uses fresh metadata only, with explicit completion capability and no inference probe. The captured safe profile has no transport state.
+
+Root3gatesMET41focused/187preparation-Ollama-embedding regressions/Ruff. IndependentSPEC/QUALITYPASS41plus transport probes: drift/revocation on success or connection error sent source text once; a successful503 retry used the identical NER request and then completed triples without recursive guards. Event-driven tests cover failure while authorization/request callbacks block. Raw metadata bracketing is not digest execution attestation; the trusted local server assumption is explicit.
+
+Initial38RED missing-module failures led to implementation; one mutable-capability RED added strict canonical tuple validation. Initial lint gate failed import ordering only; final reverified3gates pass. No store access, source publication or production activation in this adapter. Task5 remains OPEN.
