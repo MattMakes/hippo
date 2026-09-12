@@ -484,7 +484,7 @@ def test_reindex_all_acknowledges_without_exposing_the_global_start_count(ctx, m
         response = client.post("/api/sources/reindex-all")
         assert response.status_code == 200
         assert response.json() == {"accepted": True}
-        operation.assert_called_once_with(ctx)
+        operation.assert_called_once_with(ctx, build_actor=ANY)
 
 
 @pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")

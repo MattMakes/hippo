@@ -274,7 +274,6 @@ def test_reindexing_brings_the_authorized_managers_actor(web, monkeypatch):
     assert seen == [web.actor]
 
 
-@pytest.mark.skip(reason="delete_source takes build_actor when wp/pa3b merges")
 def test_deleting_brings_the_authorized_managers_actor(web, monkeypatch):
     source_id = managed_source(web)
     seen = spy(monkeypatch, "delete_source")
@@ -284,7 +283,6 @@ def test_deleting_brings_the_authorized_managers_actor(web, monkeypatch):
     assert web.client.get(f"/api/sources/{source_id}", headers=web.reader_headers).status_code == 404
 
 
-@pytest.mark.skip(reason="reindex_all takes build_actor when wp/pa3b merges")
 def test_bulk_reindex_brings_the_bulk_managers_actor(web, monkeypatch):
     managed_source(web)
     seen = spy(monkeypatch, "reindex_all")
@@ -504,10 +502,11 @@ def test_revoking_between_the_dto_and_the_response_is_the_existing_409(web, monk
 def test_bulk_reindex_holds_one_owner_across_the_pipeline_call(web, monkeypatch):
     """The route used to validate a view it had released, then acquire a second one.
 
-    The corpus here is legacy on purpose: the managed bulk lane arrives with `wp/pa3b`, and
-    until then `reindex_all` would refuse a managed source rather than clear it, which is the
-    invariant working, not the ownership question this test is about.
+    The corpus is mixed, which is the case the plan cares about: one managed source whose
+    refresh needs the caller's actor, and one legacy source that is prepared and re-indexed
+    the old way. Both lanes run inside the one held owner.
     """
+    managed_source(web)
     web.client.post("/api/sources/sample", headers=web.reader_headers)
     wait(web.ctx)
     seen, closed = acquisitions(web, monkeypatch, closed=True)

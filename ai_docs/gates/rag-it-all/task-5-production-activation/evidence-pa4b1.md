@@ -386,21 +386,54 @@ Three runs, all with `HIPPO_TEST_STORE=ladybug` and form (b) (every file listed 
   A, whose production owner is 4b-ii's `graph.py`; it is red at this slice's clean base on Fake too.
 - **Post-merge, two files** (run 9): **74 passed, 2 skipped**, exit 0, in 787.64s
   (`/tmp/hippo-pa4b1-ladybug-postmerge.log`) — row A now green on Ladybug as well as on Fake.
-- **After the 409 `code` change** (run 9b): see the log
-  (`/tmp/hippo-pa4b1-ladybug-final.log`); the change is one response body in `app.py`, exercised by
+- **After the 409 `code` change** (run 9b): **56 passed, 2 skipped**, exit 0, in 536.96s
+  (`/tmp/hippo-pa4b1-ladybug-final.log`). The change is one response body in `app.py`, exercised by
   `test_managed_web_ingress.py`, which is why that file was rerun rather than the whole set.
+- **After the 3b wiring** (run 14): **58 passed, 0 skipped**, exit 0, in 690.57s
+  (`/tmp/hippo-pa4b1-ladybug-3b.log`), with both formerly skipped tests now running — so the managed
+  delete tombstone and the mixed bulk refresh are proven on the primary backend, not only on Fake.
+  Same 58 as Fake, so the whole slice is backend-agnostic with nothing skipped anywhere.
 
-The new file's counts match Fake exactly in every run (55 owned tests, 2 skipped), so nothing in the
-ingress actors, the failure mapping or the route session ownership is Fake-only. The two skipped tests
-are the 3b-dependent ones.
+The new file's counts match Fake exactly in every run, so nothing in the ingress actors, the failure
+mapping or the route session ownership is Fake-only.
 
-## Left for the `wp/pa3b` follow-up
+## The `wp/pa3b` wiring, done in this slice after all
 
-3b had not merged when this slice finished: `pipeline.delete_source(ctx, source_id)` and
-`pipeline.reindex_all(ctx)` still take no `build_actor`, so `DELETE /api/sources/{id}` and
-`POST /api/sources/reindex-all` pass none. Two tests are in place and skipped with that reason:
-`test_deleting_brings_the_authorized_managers_actor` and
-`test_bulk_reindex_brings_the_bulk_managers_actor`. Unskipping them **is** the RED for that wiring;
-the GREEN is one `build_actor=build_actor_of(principal_of(request))` in each route, plus the managed
-bulk case for `test_bulk_reindex_holds_one_owner_across_the_pipeline_call` (deviation 8). The
-orchestrator is running that as a separate small brief after 3b merges.
+3b merged while this slice was still open, so the work it was waiting for happened here rather than in
+a follow-up brief. Fourth and final authorized merge: `rag-it-all-tibs` at **`640d20b`**, which brings
+`delete_source(ctx, source_id, *, build_actor=None, operation_id=None)` and
+`reindex_all(ctx, *, build_actor=None)`.
+
+**RED.** Un-skipping the two tests was the RED, and it was a more interesting one than expected: both
+routes answered **409**, not a missing-actor assertion failure. 3b's `plan_dispatch` refuses a managed
+source with no actor, and this slice's own handler maps `ManagedActorRequired` to the generic
+permission response — so the fail-closed path and its public rendering were already correct, and what
+was missing was only the actor itself (`/tmp/hippo-pa4b1-red-3b.log`).
+
+**GREEN.** `DELETE /api/sources/{source_id}` and `POST /api/sources/reindex-all` now pass
+`build_actor_of(principal_of(request))` — for delete, the same principal `manageable_source` just
+authorized; for bulk, the `edit_graph` principal, so the permission to run the operation and the
+identity each managed refresh inside it builds as stay separate things and a bulk run never widens the
+second. `test_managed_web_ingress.py`: **58 passed, 0 skipped** (`/tmp/hippo-pa4b1-green-3b.log`).
+
+**Deviation 8 is closed.** `test_bulk_reindex_holds_one_owner_across_the_pipeline_call` now runs the
+**mixed** corpus the plan cares about — one managed source whose refresh needs the caller's actor and
+one legacy source prepared the old way — instead of the legacy-only corpus it used while the managed
+bulk lane would have refused. Both lanes run inside the one held owner, and the assertion is still
+that the owner was acquired once, was still open when the pipeline was called, and was released once.
+
+One assertion in 4b-ii's `tests/unit/test_status_access.py:487` read
+`operation.assert_called_once_with(ctx)` and now takes the passed actor:
+`operation.assert_called_once_with(ctx, build_actor=ANY)` (`ANY` was already imported there).
+Authorized by the orchestrator; that one line and nothing else.
+
+| # | Command | Result | Log |
+|---|---|---|---|
+| 11 | RED for the wiring: the two un-skipped tests | 2 failed (both 409), 1 passed | `/tmp/hippo-pa4b1-red-3b.log` |
+| 12 | GREEN: `tests/unit/test_managed_web_ingress.py` whole file | **58 passed, 0 skipped** | `/tmp/hippo-pa4b1-green-3b.log` |
+| 13 | Final GREEN Fake, 21 files: run 7c's 19 plus `test_managed_pipeline_activation.py` and `test_ingest_pipeline.py` (3b's own files, to prove the wiring did not disturb the lane it calls) | **500 passed, 2 skipped, 0 failed** — and neither skip is in this slice's file | `/tmp/hippo-pa4b1-fake-final.log` |
+| 14 | Final GREEN Ladybug on the new file | **58 passed, 0 skipped**, exit 0, in 690.57s | `/tmp/hippo-pa4b1-ladybug-3b.log` |
+| 15 | Ruff over every file this slice changed | All checks passed; all files formatted | — |
+
+Nothing is left for a follow-up brief. Deviation 9 above is superseded by this section; deviation 8 is
+closed by it.

@@ -503,7 +503,9 @@ def reindex_all(request: Request):
     with query_session(ctx, principal.access) as session:
         view = source_view(ctx, principal.access, session=session)
         try:
-            pipeline.reindex_all(ctx)
+            # `edit_graph` says this caller may run the operation; the actor says who each
+            # managed refresh inside it builds as. A bulk run never widens that.
+            pipeline.reindex_all(ctx, build_actor=build_actor_of(principal))
         except Busy as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
         view.validate()
@@ -541,8 +543,11 @@ def set_access(request: Request, source_id: str, body: AccessBody):
 def delete_source(request: Request, source_id: str):
     ctx = ctx_of(request)
     manageable_source(request, source_id)
+    # The same principal `manageable_source` just authorized. A managed source is tombstoned
+    # as that reader or not at all: the lifecycle service rechecks the actor inside its own
+    # transaction, and an actorless call is refused before anything is suppressed.
     try:
-        pipeline.delete_source(ctx, source_id)
+        pipeline.delete_source(ctx, source_id, build_actor=build_actor_of(principal_of(request)))
     except Busy as exc:
         return JSONResponse({"error": str(exc)}, status_code=409)
     except AuthorizationChanged as exc:
