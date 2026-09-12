@@ -262,13 +262,18 @@ def test_a_gated_local_index_really_reaches_the_managed_lane(cli_ctx, tmp_path, 
     assert_clean(captured.out + captured.err)
 
 
-@pytest.mark.parametrize("code", ["model_unavailable", "retrieval_rebuild_required", "authorization_changed"])
+@pytest.mark.parametrize(
+    "code",
+    ["model_unavailable", "retrieval_rebuild_required", "build_interrupted", "authorization_changed"],
+)
 def test_cli_index_prints_a_closed_stored_error_unchanged(cli_ctx, tmp_path, monkeypatch, capsys, code):
     """Every code `managed_activation` can store is already the public rendering.
 
-    `authorization_changed` is the one the public table maps to `None` on purpose, and
+    `authorization_changed` is the one the public table maps to `None` on purpose;
     `retrieval_rebuild_required` is the tenth, added when the managed table learned to tell
-    a stale embedding profile from an unreachable model. Neither may be swallowed.
+    a stale embedding profile from an unreachable model; and `build_interrupted` is the
+    eleventh, which the store's restart sweep writes with no exception behind it at all.
+    None of them may be swallowed -- each one tells the reader what to do next.
     """
     stored = f"{code}: The build could not be completed."
     note = _failing_index(cli_ctx, tmp_path, monkeypatch, stored)

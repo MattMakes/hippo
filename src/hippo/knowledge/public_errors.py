@@ -114,10 +114,14 @@ _ROWS: tuple[tuple[type[BaseException], PublicFailure], ...] = (
 )
 
 
-# `ManagedFailure.code`, the nine stable values `managed_activation.FAILURES` and
-# `UNKNOWN_CODE` produce. Keyed by string rather than by exception so that a stored
-# Source row can be rendered without the build lane, and so that this module keeps no
-# dependency on `hippo.ingest.managed_activation`.
+# The eleven stable values a Source row's `error` can carry. Ten are `ManagedFailure.code`
+# from `managed_activation.FAILURES` and `UNKNOWN_CODE`; the eleventh, `build_interrupted`,
+# comes from somewhere else entirely -- the store's own restart sweep writes it directly
+# (`store/memory.py`, `INTERRUPTED_REFRESH_ERROR`), because a process that has just come up
+# has no exception to classify and must not import the pipeline to recover from a crash.
+# So this table is keyed by string rather than by exception for two reasons now: a stored
+# row can be rendered without the build lane, and not every code in it has an exception
+# behind it at all.
 #
 # `invalid_configuration` is the one row where the two vocabularies part company.
 # It means the operator's stored indexing settings cannot build a source -- their
@@ -136,8 +140,19 @@ _ROWS: tuple[tuple[type[BaseException], PublicFailure], ...] = (
 # falls through to `None` and its caller's `or OPERATION_FAILED` turns a 409 "reindex
 # this" into a 500 "look in the logs", which is the wrong instruction as well as the
 # wrong status.
+#
+# `build_interrupted` is `operation_failed` (500), not `retrieval_rebuild_required` (409),
+# and the choice is worth spelling out because 409 is tempting: both sentences end up
+# telling the reader to reindex. But 409 says "Rebuild compatible sources before
+# retrieval", which is a claim about the *corpus* -- that what is published cannot serve a
+# query until it is rebuilt. An interrupted refresh makes no such claim: the published
+# generation kept serving throughout, which is exactly why the sweep leaves the source
+# `ready` and retires only the stage. Nothing is stale and nothing is incompatible; an
+# operation simply did not finish. Its nearest row is `build_cancelled`, the same event
+# with a different trigger and the same "Reindex to run it again", and that is 500.
 _MANAGED_CODES: dict[str, PublicFailure | None] = {
     "build_cancelled": OPERATION_FAILED,
+    "build_interrupted": OPERATION_FAILED,
     "build_busy": OPERATION_FAILED,
     "authorization_changed": None,
     "model_unavailable": RETRIEVAL_UNAVAILABLE,

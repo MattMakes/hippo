@@ -205,11 +205,14 @@ def test_an_exception_whose_str_raises_is_still_mapped():
 # `ManagedFailure.code` from `src/hippo/ingest/managed_activation.py` (Task 3a).
 # The managed lane maps an exception once, at the point of failure, and stores the
 # code on the Source row; a route reading that row hours later has no exception to
-# re-derive from. These ten are the stable set: the nine recorded in the Task 3a
-# review, plus `retrieval_rebuild_required`, which Task 3b added when the managed
-# table learned to read a stale embedding profile ahead of the wider `OllamaError`.
+# re-derive from. These eleven are the stable set: the nine recorded in the Task 3a
+# review, plus the two Task 3b added -- `retrieval_rebuild_required`, when the managed
+# table learned to read a stale embedding profile ahead of the wider `OllamaError`, and
+# `build_interrupted`, which the store's restart sweep writes without any exception to
+# classify (see `test_a_code_the_store_writes_without_an_exception_still_has_an_answer`).
 MANAGED_CODES = {
     "build_cancelled": FAILED,
+    "build_interrupted": FAILED,
     "build_busy": FAILED,
     "authorization_changed": None,
     "model_unavailable": UNAVAILABLE,
@@ -256,6 +259,29 @@ def test_a_stored_code_and_its_own_exception_agree():
         ("invalid_source", InputCaptureError(POISON)),
     ):
         assert module.public_failure_for_code(code) == module.public_failure(exc), code
+
+
+def test_a_code_the_store_writes_without_an_exception_still_has_an_answer():
+    """`build_interrupted` has no exception family, so its round trip is the stored string.
+
+    A process that has just restarted has no exception to classify: the sweep in
+    `store/memory.py` writes `INTERRUPTED_REFRESH_ERROR` onto the row directly, and must
+    not import the pipeline to do it. The literal is spelled out here for the same reason
+    the pairing above is -- importing the store into this test would pull a driver -- so
+    what this pins is the shape contract between the two modules: whatever the sweep
+    writes has to split on `": "` into a code this table knows and a bounded sentence.
+    """
+    module = api()
+    stored = "build_interrupted: The build was interrupted by a restart. Reindex to run it again."
+    code, separator, message = stored.partition(": ")
+    assert separator and message
+    failure = module.public_failure_for_code(code)
+    assert failure is not None, "a stored code with no public answer renders as the wrong status"
+    assert (failure.code, failure.message, failure.http_status) == FAILED
+    # Not 409: that sentence claims the corpus cannot serve a query until it is rebuilt,
+    # and an interrupted refresh leaves the published generation serving throughout.
+    assert failure.http_status == 500
+    assert failure != module.public_failure_for_code("retrieval_rebuild_required")
 
 
 def test_an_unknown_or_malformed_code_falls_through_like_an_unknown_exception():

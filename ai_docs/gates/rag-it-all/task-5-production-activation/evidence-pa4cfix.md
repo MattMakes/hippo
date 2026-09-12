@@ -21,9 +21,9 @@ pair, because `test_cli.py`, `test_mcp_http.py` and `test_graph_surface_access.p
 |---|---|---|---|
 | 1 | Baseline, before any change: the brief's six files | **188 passed**, EXIT 0 | `/tmp/hippo-pa4cfix-baseline.log` |
 | 2 | RED: the six files plus `test_public_errors.py` | **31 failed**, 259 passed | `/tmp/hippo-pa4cfix-red.log` |
-| 3 | GREEN (Fake), the brief's command | **212 passed**, EXIT 0 | `/tmp/hippo-pa4cfix-fake-green.log` |
+| 3 | GREEN (Fake), the brief's command plus `test_public_errors.py` | **293 passed**, EXIT 0 | `/tmp/hippo-pa4cfix-fake-green.log` |
 | 4 | GREEN (Fake), adjacent sweep — see below | **290 passed, 1 skipped**, EXIT 0 | `/tmp/hippo-pa4cfix-sweep.log` |
-| 5 | GREEN (Ladybug), `test_managed_transport_activation.py test_mcp_server.py` | **85 passed** in 246.96s, EXIT 0 | `/tmp/hippo-pa4cfix-ladybug-green.log` |
+| 5 | GREEN (Ladybug), `test_managed_transport_activation.py test_mcp_server.py test_public_errors.py` | **166 passed** in 212.77s, EXIT 0 | `/tmp/hippo-pa4cfix-ladybug-green.log` |
 
 The adjacent sweep (4) is not in the brief. `public_errors.py`, `cli.py`, `mcp_server.py` and
 `remote.py` are read by surfaces outside the six files, so it covers `test_public_errors.py`,
@@ -275,9 +275,13 @@ there for. The reviewer's second observation is recorded too: the two modules or
 table differently and agree only because `AuthorizationChanged` appears in no row of the
 public table, so if it ever gains one they have to be re-read together.
 
-## Addendum from Task 3b: the tenth managed failure code
+## Addenda from Task 3b: the tenth and eleventh managed failure codes
 
-Routed mid-task by the orchestrator, with ownership of `public_errors.py` granted for it.
+Two, routed mid-task by the orchestrator, with ownership of `public_errors.py` granted.
+Both verified against `wp/pa3b` / `rag-it-all-tibs` before acting, and both confirmed
+genuinely unmapped: `public_failure_for_code` answered `None` for each.
+
+### The tenth: `retrieval_rebuild_required`
 
 **Verified before acting.** `wp/pa3b` (merged to `rag-it-all-tibs` as `640d20b`) added
 `_REBUILD_CODE = "retrieval_rebuild_required"` to `managed_activation.FAILURES`, reading
@@ -296,12 +300,54 @@ and is rewritten.
 This also mattered for F3: without the row, a stored rebuild code would have failed
 `_stored_error`'s closed-shape check and been replaced by the fixed sentence.
 
+### The eleventh: `build_interrupted`
+
+Also verified first. `store/memory.py` defines
+`INTERRUPTED_REFRESH_ERROR = "build_interrupted: The build was interrupted by a restart.
+Reindex to run it again."` and the restart sweep writes it straight onto the row (3b commit
+`990b587`, "Retire the stage of a refresh no restart could finish"). It was unmapped, so a
+row carrying it rendered as `operation_failed` via its caller's `or OPERATION_FAILED` — the
+right status by luck, but by fall-through rather than by the table.
+
+It mattered more for **F3** than for the routes: `_stored_error` prints a stored error only
+when its code is one of the closed ones, so before this row an interrupted refresh would
+have been replaced by `indexing failed; inspect local logs for source <id>` — hiding
+"Reindex to run it again", which is the one thing the reader can act on. The F3 test is
+parametrised over `build_interrupted` for exactly that reason.
+
+**Status: `operation_failed`, 500 — not 409.** The addendum asked me to say which and why.
+409 is tempting because both sentences end in "reindex", but 409's message is
+`Rebuild compatible sources before retrieval`, which is a claim about the *corpus*: that
+what is published cannot serve a query until it is rebuilt. An interrupted refresh makes no
+such claim — the published generation kept serving throughout, which is precisely why the
+sweep leaves the source `ready` and retires only the stage. Its nearest row is
+`build_cancelled`: the same event with a different trigger, the same "Reindex to run it
+again", and 500. The reasoning is in the table comment, and the test asserts both the 500
+and that it is *not* the rebuild failure.
+
+**Producer note, beyond what was asked.** The comment above `_MANAGED_CODES` described the
+set as "the nine stable values `managed_activation.FAILURES` and `UNKNOWN_CODE` produce".
+Two things were wrong with that: the count (which I had already missed once when adding the
+tenth — the addendum caught it) and, more importantly, the framing. `build_interrupted` has
+no exception family and no `managed_activation` row behind it at all; the store writes it
+directly, because a process that has just come up has nothing to classify and must not
+import the pipeline to recover from a crash. The comment now names both producers and says
+why the table is keyed by string for two reasons rather than one.
+
+`test_a_code_the_store_writes_without_an_exception_still_has_an_answer` pins the shape
+contract between the two modules — whatever the sweep writes must split on `": "` into a
+code this table knows and a bounded sentence — using the literal rather than an import, for
+the same reason `test_a_stored_code_and_its_own_exception_agree` spells out its pairing:
+importing the store here would pull a driver. The literal is not yet importable from this
+base in any case (the sweep is in 3b's merge, not in `be6062a`).
+
 **Ownership note:** the test went into `tests/unit/test_public_errors.py`, which is not in
 this brief's owned list. The addendum said "with a test" and that file is the only sensible
-home — it already holds the local `MANAGED_CODES` mirror and the pairing test. Three edits
-there: the new key, two rows in `test_a_stored_code_and_its_own_exception_agree`
-(`EmbeddingProfileMismatch` and `EmbeddingProfileChanged`), and "These nine" → "These ten"
-with a sentence on where the tenth came from. Reported via `horch note`.
+home — it already holds the local `MANAGED_CODES` mirror and the pairing test. The edits
+there: the two new keys, two rows in `test_a_stored_code_and_its_own_exception_agree`
+(`EmbeddingProfileMismatch` and `EmbeddingProfileChanged`), the new
+`test_a_code_the_store_writes_without_an_exception_still_has_an_answer`, and "These nine" →
+"These eleven" with a sentence on where each came from. Reported via `horch note`.
 
 ## Deviations from the brief, in one place
 
