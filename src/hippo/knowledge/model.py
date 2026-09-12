@@ -112,6 +112,26 @@ class Contract(BaseModel):
         return type(self).model_validate(self.model_dump())
 
 
+def _identity_value(value):
+    """An unset knowledge cutoff is an absence, so null and absent hash alike.
+
+    `known_at` exists on every selector mode, but two of them gained it after
+    snapshots were already persisted. Hashing the explicit null would rename
+    every stored record whose identity embeds such a selector, and a renamed
+    record is one its own store can no longer load. A cutoff that *is* set still
+    changes the identity, which is exactly what pinning one means.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _identity_value(item)
+            for key, item in value.items()
+            if not (key == "known_at" and item is None)
+        }
+    if isinstance(value, list):
+        return [_identity_value(item) for item in value]
+    return value
+
+
 class Record(Contract):
     id: Text = "pending"
     identity_key: Json = "[]"
@@ -120,7 +140,7 @@ class Record(Contract):
 
     def identity_parts(self) -> list:
         data = self.model_dump(mode="json")
-        return [data[name] for name in self.identity_fields]
+        return [_identity_value(data[name]) for name in self.identity_fields]
 
     @model_validator(mode="after")
     def canonical_id(self) -> Self:
@@ -1200,6 +1220,10 @@ class SelectorBase(Contract):
 
 class CurrentSelector(SelectorBase):
     mode: Literal["current"] = "current"
+    # A pinned historical read has to round-trip: `None` still means "the latest
+    # knowledge available", and a persisted selector carries the instant it was
+    # resolved at, so replaying one never silently resolves to a later "now".
+    known_at: Instant | None = None
 
 
 class AsOfSelector(SelectorBase):
@@ -1231,6 +1255,7 @@ class ChangesSelector(SelectorBase):
 
 class AtemporalSelector(SelectorBase):
     mode: Literal["atemporal"] = "atemporal"
+    known_at: Instant | None = None
 
 
 SingleSelector = Annotated[
@@ -1266,6 +1291,8 @@ TemporalSelector = Annotated[
 def validate_knowledge_cutoff(selector: TemporalSelector, cutoff: datetime) -> None:
     """A pinned manifest has one knowledge cutoff; implicit latest resolves to it.
 
+    Every mode carries `known_at`, so this proves the agreement for all six rather
+    than passing vacuously on the two that once had no field to disagree with.
     Comparisons that intentionally use different knowledge cutoffs require their
     own side manifests rather than silently overriding an explicit selector.
     """

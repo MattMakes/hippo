@@ -16,6 +16,7 @@ from ..access import Access
 from .access import AuthorizationChanged, EvidenceSelection, utc_now
 from .model import CurrentSelector, QuerySnapshot, SnapshotSource
 from .query_access import current_access
+from .temporal import history_access, proof_covers_manifest
 
 
 class QuerySnapshotUnavailable(ValueError):
@@ -214,6 +215,12 @@ def acquire_history_snapshot(
     A history snapshot pins reachability, not serving evidence: it names no active
     generation, so it can never be mistaken for a current answer, and its proof is
     rebuilt and rechecked here and on every later use exactly like a current pin.
+
+    The proof belongs to the caller, never to whoever selected the manifest: this
+    audience is proved again from `access` and this clock, and it must be able to
+    cover every ID the manifest asserts. Otherwise the bundle would revalidate a
+    selection-time audience for the rest of its life, which is the fork the plan
+    forbids, and `coverage_json` makes a manifest audience-specific anyway.
     """
     if lease_duration <= timedelta(0):
         raise ValueError("Snapshot lease duration must be positive")
@@ -226,10 +233,12 @@ def acquire_history_snapshot(
         if current_access(store, access) is None:
             raise ValueError("Snapshots require an explicit audience")
         now = _now(clock)
-        resolver = history.resolver
+        resolver = history_access(store, manifest.workspace_id, access, clock=clock)
         proof = resolver.build(history.selection)
         if proof.authorization_epoch != epoch:
             raise AuthorizationChanged("Authorization changed during the history read")
+        if not proof_covers_manifest(proof, manifest):
+            raise AuthorizationChanged("History manifest is outside this audience's proof")
         snapshot = QuerySnapshot(
             workspace_id=manifest.workspace_id,
             sources=(),

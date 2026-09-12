@@ -52,9 +52,23 @@ from ..hipporag.indexer import GRAPH_WRITE_LOCK, index_source
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.build_authority import BuildActor, capture_build_authority
 from ..knowledge.source_lifecycle import tombstone_managed_source
-from . import managed_activation, readers, repos
+from . import readers, repos
 from .chunker import chunk_documents
 from .readers import Document, TextBudget, TooLarge
+
+
+def _managed():
+    """Import the managed lane lazily.
+
+    ``managed_activation`` imports the coordinator, which imports
+    ``hippo.knowledge``; modules there import ``hippo.ingest.accepted_inputs``,
+    which initialises this package and this module. A module-level import
+    therefore forms a cycle whenever ``hippo.knowledge`` is imported first.
+    """
+    from . import managed_activation
+
+    return managed_activation
+
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +115,7 @@ def add_text(
     build_actor: BuildActor | None = None,
 ) -> str:
     """Remember a pasted text. The name is what the library shows."""
-    managed_activation.check_actor(build_actor)  # before a Source row or a saved byte exists
+    _managed().check_actor(build_actor)  # before a Source row or a saved byte exists
     name = name.strip() or "Untitled text"
     if not text.strip():
         raise ValueError("the text is empty")
@@ -129,7 +143,7 @@ def add_upload(
     build_actor: BuildActor | None = None,
 ) -> str:
     """Remember an uploaded file. A .zip becomes an 'archive' source; anything else a 'file'."""
-    managed_activation.check_actor(build_actor)  # before a Source row or a saved byte exists
+    _managed().check_actor(build_actor)  # before a Source row or a saved byte exists
     safe_name = _safe_filename(filename)
     if not data:
         raise ValueError(f"{safe_name} is empty")
@@ -235,9 +249,9 @@ def start_indexing(
     source = ctx.store.get_source(source_id)
     if source is None:
         # The row is already gone; `run_indexing` logs it. Legacy behaviour, unchanged.
-        managed_activation.check_actor(build_actor)
+        _managed().check_actor(build_actor)
         return ctx.jobs.start(job_key(source_id), lambda: run_indexing(ctx, source_id))
-    plan = managed_activation.plan_dispatch(source, actor=build_actor, operation_id=operation_id)
+    plan = _managed().plan_dispatch(source, actor=build_actor, operation_id=operation_id)
     if plan.mode == "skip":
         log.info("Source %s is tombstoned; no index job was started", source_id)
         return False
@@ -275,7 +289,7 @@ def run_indexing(
     if source is None:
         log.warning("index job: source %s no longer exists", source_id)
         return
-    plan = managed_activation.plan_dispatch(source, actor=build_actor, operation_id=operation_id)
+    plan = _managed().plan_dispatch(source, actor=build_actor, operation_id=operation_id)
     if plan.mode == "skip":
         log.info("index job: source %s is tombstoned; there is nothing to rebuild", source_id)
         return
@@ -315,7 +329,7 @@ def _run_managed_indexing(ctx: AppContext, source_id: str, plan) -> None:
     keeps serving, and the coordinator retains its own unpublished attempt for recovery.
     """
     try:
-        receipt = managed_activation.run_managed_build(
+        receipt = _managed().run_managed_build(
             ctx,
             source_id=source_id,
             actor=plan.actor,
@@ -324,7 +338,7 @@ def _run_managed_indexing(ctx: AppContext, source_id: str, plan) -> None:
         )
     except Exception as err:  # noqa: BLE001 - every managed failure is presented generically
         try:
-            managed_activation.record_build_failure(
+            _managed().record_build_failure(
                 ctx, source_id=source_id, operation_id=plan.operation_id, error=err
             )
         except Exception:  # noqa: BLE001 - a failure that cannot be written is still not a report
@@ -336,7 +350,7 @@ def _run_managed_indexing(ctx: AppContext, source_id: str, plan) -> None:
                 plan.operation_id,
             )
         return
-    managed_activation.record_build_receipt(ctx, source_id=source_id, receipt=receipt)
+    _managed().record_build_receipt(ctx, source_id=source_id, receipt=receipt)
 
 
 def _read_chunk_index(ctx: AppContext, source: dict[str, Any], *, should_stop) -> None:
@@ -522,7 +536,7 @@ def delete_source(
     if source is not None:
         # One classification for both lanes; it refuses a managed source with no actor, and
         # an unbounded operation identity, before any hook below can run.
-        plan = managed_activation.plan_dispatch(source, actor=build_actor, operation_id=operation_id)
+        plan = _managed().plan_dispatch(source, actor=build_actor, operation_id=operation_id)
         if plan.eligibility in ("managed", "tombstoned"):
             _tombstone(ctx, source_id, build_actor, operation_id)
             return
@@ -549,9 +563,7 @@ def _tombstone(ctx: AppContext, source_id: str, actor: BuildActor | None, operat
     """
     if actor is None:
         # Nothing to fall back to: the legacy delete would physically remove managed evidence.
-        raise managed_activation.ManagedActorRequired(
-            "A managed source cannot be deleted without a build actor"
-        )
+        raise _managed().ManagedActorRequired("A managed source cannot be deleted without a build actor")
     # A tombstoned source comes here too. The service answers a reader with the same generic
     # denial as any unavailable source, and lets an internal caller replaying its own
     # operation identity have its receipt back without a second suppression epoch.
@@ -559,7 +571,7 @@ def _tombstone(ctx: AppContext, source_id: str, actor: BuildActor | None, operat
         ctx,
         source_id=source_id,
         actor=actor,
-        operation_id=operation_id or managed_activation.new_operation_id(),
+        operation_id=operation_id or _managed().new_operation_id(),
     )
 
 
@@ -579,7 +591,7 @@ def reindex_all(ctx: AppContext, *, build_actor: BuildActor | None = None) -> in
     # Classify the whole inventory before touching any of it. A managed source with no actor
     # refuses at this line, which is still before the first clear.
     lanes = [
-        (source["id"], managed_activation.plan_dispatch(source, actor=build_actor))
+        (source["id"], _managed().plan_dispatch(source, actor=build_actor))
         for source in ctx.store.list_sources()
     ]
     lanes = [lane for lane in lanes if lane[1].mode != "skip"]  # a tombstone is never rebuilt
@@ -630,7 +642,7 @@ def reindex(ctx: AppContext, source_id: str, *, build_actor: BuildActor | None =
     source = ctx.store.get_source(source_id)
     if source is None:
         return False
-    plan = managed_activation.plan_dispatch(source, actor=build_actor)
+    plan = _managed().plan_dispatch(source, actor=build_actor)
     if plan.mode == "skip":
         return False
     _refuse_if_indexing(ctx)
@@ -665,7 +677,7 @@ def _clear_passages(ctx: AppContext, source_id: str) -> None:
 
 def source_dir(ctx: AppContext, source_id: str) -> Path:
     # One definition, in the module that must also resolve it absolutely for a managed capture.
-    return managed_activation.source_directory(ctx, source_id)
+    return _managed().source_directory(ctx, source_id)
 
 
 def _write_bytes(path: Path, data: bytes) -> None:

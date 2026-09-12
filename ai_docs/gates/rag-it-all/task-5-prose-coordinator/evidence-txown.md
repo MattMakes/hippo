@@ -162,6 +162,11 @@ assertion on the main thread can never leave a helper parked (the PC2 lesson fro
 
 ## Findings for the orchestrator (out of my file ownership, untouched)
 
+**Resolution (orchestrator, 2026-09-11):** all three probes below now use `in_ambient_transaction()`.
+`generations.py` was switched in the Task 1 follow-up (`99a41b7`, decision 7); `staged_prose.py` and
+the coordinator's own probe were switched together in `158ebf2` with the deferred concurrent-build
+test enabled. The text below is kept as the original finding.
+
 Two sibling probes read the same process-global attributes and have the same defect. Both are in
 files this brief lists under "do NOT touch", so neither is changed here:
 
