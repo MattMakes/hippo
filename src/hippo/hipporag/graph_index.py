@@ -45,7 +45,16 @@ from ..knowledge.dense import (
     DenseCapability,
     DenseUnavailable,
     DenseVector,
+    LegacyDenseVector,
+    StructuralCodeEvidence,
+    StructuralObjectEvidence,
+    StructuralRelationEvidence,
+    canonical_code_evidence,
     canonical_dense_vectors,
+    canonical_legacy_vectors,
+    canonical_object_evidence,
+    canonical_relation_evidence,
+    relation_arrow_key,
     validate_dense_graph,
 )
 from ..store.code import SPECIFICITY_KINDS
@@ -226,6 +235,10 @@ class GraphIndex:
     managed_passage_ids: frozenset[str] = frozenset()
     dense_capability: DenseCapability = field(default_factory=DenseCapability)
     dense_vectors: tuple[DenseVector, ...] = ()
+    legacy_dense_vectors: tuple[LegacyDenseVector, ...] = ()
+    structural_code_evidence: tuple[StructuralCodeEvidence, ...] = ()
+    structural_object_evidence: tuple[StructuralObjectEvidence, ...] = ()
+    structural_relations: tuple[StructuralRelationEvidence, ...] = ()
     # One rebuilt igraph per non-default code_structural_scale; see graph_for_scale.
     _scaled: dict[float, ig.Graph] = field(default_factory=dict, repr=False, compare=False)
     # vertex -> its display name, filled by `paths.display_at`; a walk asks for it per edge.
@@ -234,6 +247,10 @@ class GraphIndex:
 
     def __post_init__(self) -> None:
         self.dense_vectors = canonical_dense_vectors(self.dense_vectors)
+        self.legacy_dense_vectors = canonical_legacy_vectors(self.legacy_dense_vectors)
+        self.structural_code_evidence = canonical_code_evidence(self.structural_code_evidence)
+        self.structural_object_evidence = canonical_object_evidence(self.structural_object_evidence)
+        self.structural_relations = canonical_relation_evidence(self.structural_relations)
         validate_dense_graph(self)
 
     def require_dense(self, profile_fingerprint: str | None = None) -> None:
@@ -585,19 +602,23 @@ class GraphIndex:
         activation can never pass through a hidden passage, and a hidden passage can never be
         ranked. Edge weights and specificity are recomputed from the visible passages alone, so a
         fact stated only in a hidden passage neither links its entities nor seeds them, and a
-        symbol whose defining passages are all hidden has no vertex at all. That is one rule, not
-        two: a node is visible when a visible passage reaches it, for every kind.
+        symbol whose defining passages are all hidden has no vertex unless an explicit structural
+        observation retains it. Structural typed/code contributions also retain their original
+        evidence without requiring a fabricated passage; relationships still require complete support.
         """
         validate_dense_graph(self)
         visible = set(visible_sources)
+        visible_originals = {row.id for row in self.original_citations if row.source_id in visible}
         keep_passages = [p for p in self.passages if p.source_id in visible]
         keep_passage_ids = {p.id for p in keep_passages}
         old_passage_vertices = {
             int(self.passage_vertices[i]) for i, p in enumerate(self.passages) if p.id in keep_passage_ids
         }
 
-        # Entities stay only when a visible passage mentions them (a mention edge to a kept passage).
-        keep_entity_vertices: set[int] = set()
+        # Typed observations can retain entities without fabricating a passage mention.
+        keep_entity_vertices: set[int] = {
+            self.idx_of[row.node_id] for row in self.structural_object_evidence if row.source_id in visible
+        }
         mention_count: dict[int, int] = {}
         for (a, b), e in self.edges.items():
             if not e.mention:
@@ -615,12 +636,18 @@ class GraphIndex:
             (i, node)
             for i, node in enumerate(self.code_nodes)
             if any(dst in old_passage_vertices for dst in self.defining_passages(int(self.code_vertices[i])))
+            or any(
+                row.node_id == node.id and row.source_id in visible for row in self.structural_code_evidence
+            )
         ]
         if (
             len(keep_passages) == len(self.passages)
             and len(keep_entity_vertices) == len(self.entity_names)
             and len(keep_code) == len(self.code_nodes)
             and all(fact.passage_ids and set(fact.passage_ids) <= keep_passage_ids for fact in self.facts)
+            and all(row.source_id in visible for row in self.structural_code_evidence)
+            and all(row.source_id in visible for row in self.structural_object_evidence)
+            and all(set(row.original_span_ids) <= visible_originals for row in self.structural_relations)
         ):
             # Staged nodes/facts can lack passage support; visible passages alone cannot authorize them.
             return self
@@ -695,6 +722,27 @@ class GraphIndex:
             e = edges.setdefault((min(a, b), max(a, b)), Edge())
             e.fact_count += len(f.passage_ids)
 
+        relations = tuple(
+            row
+            for row in self.structural_relations
+            if row.subject_id in idx_of
+            and row.object_id in idx_of
+            and set(row.original_span_ids) <= visible_originals
+        )
+        relation_keys = {row.key for row in relations}
+        for row in self.structural_relations:
+            if row.subject_id in idx_of and row.object_id in idx_of:
+                pair = tuple(sorted((idx_of[row.subject_id], idx_of[row.object_id])))
+                if pair in edges:
+                    edges[pair].omega = 0.0
+                    edges[pair].code_kinds = []
+        for row in relations:
+            pair = tuple(sorted((idx_of[row.subject_id], idx_of[row.object_id])))
+            edge = edges.setdefault(pair, Edge())
+            edge.omega = max(edge.omega, row.weight)
+            if row.predicate.lower() not in edge.code_kinds:
+                edge.code_kinds.append(row.predicate.lower())
+
         # Hidden-only facts may leave an inert copied pair. It must not change the visible
         # fingerprint, while an explicit tuned=0 edit still belongs to the visible graph.
         edges = {
@@ -718,6 +766,13 @@ class GraphIndex:
                 src, dst = old_to_new.get(arrow.src), old_to_new.get(arrow.dst)
                 if src is None or dst is None:
                     continue
+                if (
+                    self.structural_relations
+                    and arrow.provenance == "authorized_evidence"
+                    and arrow.extra.get("assertion_version_id")
+                    and relation_arrow_key(self, arrow) not in relation_keys
+                ):
+                    continue
                 kept = DirectedEdge(src, dst, arrow.kind, arrow.omega, arrow.provenance, arrow.extra)
                 code_out.setdefault(src, []).append(kept)
                 code_in.setdefault(dst, []).append(kept)
@@ -727,7 +782,21 @@ class GraphIndex:
             passage_count[new_v] = float(in_degree.get(new_v, 0) + 1)
         # Public node metadata must describe the same scoped relations as specificity.
         # Copy each node so this view cannot mutate the shared, unrestricted graph.
-        code_nodes = [replace(node, in_degree=in_degree.get(idx_of[node.id], 0)) for node in code_nodes]
+        code_nodes = [
+            replace(
+                node,
+                in_degree=in_degree.get(idx_of[node.id], 0),
+                source_id=min(
+                    (
+                        row.source_id
+                        for row in self.structural_code_evidence
+                        if row.node_id == node.id and row.source_id in visible
+                    ),
+                    default=node.source_id,
+                ),
+            )
+            for node in code_nodes
+        ]
 
         if self.dense_capability.mode == "verified":
             if not keep_passages:
@@ -743,6 +812,24 @@ class GraphIndex:
                 or row.lane == "fact"
                 and row.projected_id in fact_index_of
             )
+        )
+        code_evidence = tuple(
+            row
+            for row in self.structural_code_evidence
+            if row.node_id in code_ids and row.source_id in visible
+        )
+        object_evidence = tuple(
+            row
+            for row in self.structural_object_evidence
+            if row.node_id in entity_ids and row.source_id in visible
+        )
+        provenance = scoped_provenance(self, keep_passage_ids, set(fact_index_of))
+        original_ids = {identity for row in code_evidence for identity in row.original_span_ids}
+        original_ids.update(identity for row in object_evidence for identity in row.original_span_ids)
+        original_ids.update(identity for row in relations for identity in row.original_span_ids)
+        original_ids.update(row.id for row in provenance["original_citations"])
+        provenance["original_citations"] = tuple(
+            row for row in self.original_citations if row.id in original_ids
         )
         return GraphIndex(
             version=self.version,
@@ -772,7 +859,25 @@ class GraphIndex:
             authorization_check=self.authorization_check,
             dense_capability=self.dense_capability,
             dense_vectors=dense_vectors,
-            **scoped_provenance(self, keep_passage_ids, set(fact_index_of)),
+            structural_code_evidence=code_evidence,
+            structural_object_evidence=object_evidence,
+            structural_relations=relations,
+            legacy_dense_vectors=tuple(
+                replace(
+                    row,
+                    support_passage_ids=tuple(
+                        pid for pid in row.support_passage_ids if pid in keep_passage_ids
+                    ),
+                )
+                if row.lane == "fact"
+                else row
+                for row in self.legacy_dense_vectors
+                if row.lane == "passage"
+                and row.projected_id in keep_passage_ids
+                or row.lane == "fact"
+                and row.projected_id in fact_index_of
+            ),
+            **provenance,
         )
 
     # ---------------------------------------------------- what-if edits

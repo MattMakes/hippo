@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from types import SimpleNamespace
@@ -41,7 +42,16 @@ from .citations import (
     provenance_payload,
     resolve_citations,
 )
-from .dense import DenseCapability, composed_dense_capability, fingerprint_vectors
+from .dense import (
+    DenseCapability,
+    DenseVector,
+    StructuralCodeEvidence,
+    StructuralObjectEvidence,
+    StructuralRelationEvidence,
+    composed_dense_capability,
+    fingerprint_vectors,
+    structural_code_payload,
+)
 from .derivations import validate_prose, validate_view
 from .embedding_cache import _vectors
 from .identity import canonical_json, make_identity, normalize_relative_path
@@ -53,7 +63,7 @@ class ProjectionError(ValueError):
     """The supplied graph/evidence cannot establish a coherent current view."""
 
 
-def _current_generations(store, authorized, embedding_profile, snapshot_bundle=None):
+def _current_generations(store, authorized, embedding_profile, snapshot_bundle=None, source_profiles=None):
     selection = authorized.selection
     if selection.query_mode != "current" or selection.generation_ids is None:
         raise ProjectionError("Managed compatibility projection requires explicit current generations")
@@ -68,7 +78,12 @@ def _current_generations(store, authorized, embedding_profile, snapshot_bundle=N
         if (
             generation is None
             or generation.status not in ({"active", "retired"} if identity in pinned else {"active"})
-            or generation.embedding_profile != embedding_profile
+            or generation.embedding_profile
+            != (
+                source_profiles.get(generation.source_id)
+                if source_profiles is not None
+                else embedding_profile
+            )
             or source is None
             or source.get("workspace_id") != authorized.workspace_id
             or (identity not in pinned and source.get("active_generation_id") != identity)
@@ -77,6 +92,8 @@ def _current_generations(store, authorized, embedding_profile, snapshot_bundle=N
             raise ProjectionError("Selected generation is not the current compatible workspace generation")
         generations[identity] = generation
         source_ids.add(generation.source_id)
+    if source_profiles is not None and set(source_profiles) != source_ids:
+        raise ProjectionError("Structural source profiles must exactly match selected sources")
     return generations
 
 
@@ -116,10 +133,20 @@ def _closure_allowed(closure, authorized):
 
 
 def _safe_vectors(
-    full, store, generations, spans, revisions, artifacts, embedding_profile, members, authorized
+    full,
+    store,
+    generations,
+    spans,
+    revisions,
+    artifacts,
+    embedding_profile,
+    members,
+    authorized,
+    *,
+    structural=False,
 ):
     """Reuse only vectors with an exact persisted and cached input binding."""
-    positions = {passage.id: index for index, passage in enumerate(full.passages)}
+    positions = {} if structural else {passage.id: index for index, passage in enumerate(full.passages)}
     entries, aliases = {}, {}
     for row in sorted(_passage_bindings(store, generations), key=lambda item: item["id"]):
         view_id = row.get("retrieval_view_id")
@@ -128,10 +155,11 @@ def _safe_vectors(
         span = spans.get(row.get("span_id"))
         position = positions.get(row["id"])
         generation = generations.get(row.get("generation_id"))
-        if span is None or position is None or generation is None:
+        if span is None or (position is None and not structural) or generation is None:
             if view_id:
                 raise ProjectionError("Authorized rendered passage binding is unavailable")
             continue
+        expected_profile = generation.embedding_profile if structural else embedding_profile
         original_ids, binding_ids = (span.id,), frozenset()
         identity, expected_text = span.id, span.text
         if view_id:
@@ -147,37 +175,37 @@ def _safe_vectors(
                 raise ProjectionError("Rendered passage identity differs from its binding")
             if not _closure_allowed(closure, authorized) or not closure.span_ids <= spans.keys():
                 raise ProjectionError("Rendered passage lineage differs from the authorized proof")
-            if view.span_id != span.id or view.vector_profile != embedding_profile:
+            if view.span_id != span.id or view.vector_profile != expected_profile:
                 raise ProjectionError("Rendered passage anchor or profile differs")
             identity, expected_text = row["id"], view.text
             original_ids, binding_ids = tuple(sorted(closure.span_ids)), closure.binding_ids
         source_id = artifacts[revisions[span.revision_id].artifact_id].source_id
-        passage = full.passages[position]
+        passage = None if structural else full.passages[position]
         if (
             row.get("artifact_revision_id") != span.revision_id
             or (generation.id, span.revision_id) not in members
-            or row.get("embedding_profile") != embedding_profile
+            or row.get("embedding_profile") != expected_profile
             or row.get("source_id") != source_id
             or generation.source_id != source_id
-            or passage.source_id != source_id
+            or (passage is not None and passage.source_id != source_id)
             or row.get("text") != expected_text
-            or passage.text != expected_text
+            or (passage is not None and passage.text != expected_text)
         ):
-            if view_id:
+            if view_id or structural:
                 raise ProjectionError("Rendered passage text or vector profile differs from its binding")
             continue
         try:
-            if view_id:
+            if view_id or structural:
                 vector = _vectors(row.get("embedding"), (len(row["embedding"]),))
             else:
                 vector = np.asarray(row.get("embedding"), dtype=np.float32)
         except (ValueError, TypeError) as exc:
-            if view_id:
+            if view_id or structural:
                 raise ProjectionError("Rendered passage vector is invalid") from exc
             continue
         if vector.ndim != 1 or not vector.size or not np.all(np.isfinite(vector)):
             continue
-        if not np.array_equal(vector, full.passage_embeddings[position]):
+        if not structural and not np.array_equal(vector, full.passage_embeddings[position]):
             if view_id:
                 raise ProjectionError("Rendered passage cached vector differs from its binding")
             continue
@@ -191,7 +219,10 @@ def _safe_vectors(
             binding_ids,
         )
         aliases[row["id"]] = identity
-    if len({len(entry.vector) for entry in entries.values()}) > 1:
+    dimensions = defaultdict(set)
+    for entry in entries.values():
+        dimensions[entry.evidence.generation_id if structural else None].add(len(entry.vector))
+    if any(len(values) > 1 for values in dimensions.values()):
         raise ProjectionError("Authorized vectors have incompatible dimensions")
     return entries, aliases
 
@@ -256,13 +287,15 @@ def _code_node(obj, kind, observations, source_id):
 
 
 def project_managed_graph(
-    full: GraphIndex,
+    full: GraphIndex | None,
     store,
     authorized: AuthorizedEvidence,
     *,
-    embedding_profile: str,
+    embedding_profile: str | None = None,
+    source_profiles: Mapping[str, str] | None = None,
     snapshot_bundle=None,
     synonymy_threshold: float = 0.8,
+    structural: bool = False,
 ) -> GraphIndex:
     """Build only the managed lane; no native provenance is inferred from endpoints.
 
@@ -272,9 +305,20 @@ def project_managed_graph(
     typed assertions retain their separate channel. Historical generations are
     usable only while a supplied snapshot reference is live.
     """
-    if not embedding_profile:
+    if structural:
+        if embedding_profile is not None or not isinstance(source_profiles, Mapping):
+            raise ProjectionError("Structural projection requires an explicit source profile mapping")
+        source_profiles = dict(source_profiles)
+        if any(
+            type(key) is not str or not key or type(value) is not str or not value
+            for key, value in source_profiles.items()
+        ):
+            raise ProjectionError("Invalid structural source profile mapping")
+    elif not embedding_profile or source_profiles is not None:
         raise ProjectionError("An explicit embedding profile is required")
-    generations = _current_generations(store, authorized, embedding_profile, snapshot_bundle)
+    elif full is None:
+        raise ProjectionError("Nonstructural projection requires a cached full graph")
+    generations = _current_generations(store, authorized, embedding_profile, snapshot_bundle, source_profiles)
 
     def allowed(kind, identities):
         return {row.id: row for row in store._knowledge_rows(kind) if row.id in identities}
@@ -295,10 +339,30 @@ def project_managed_graph(
         if value.revision_id in revisions and value.revision_id in selected_revisions
     }
     entries, aliases = _safe_vectors(
-        full, store, generations, spans, revisions, artifacts, embedding_profile, members, authorized
+        full,
+        store,
+        generations,
+        spans,
+        revisions,
+        artifacts,
+        embedding_profile,
+        members,
+        authorized,
+        structural=structural,
     )
     vectors = {identity: entry.vector for identity, entry in entries.items()}
     needed_spans = {identity for entry in entries.values() for identity in entry.evidence.original_span_ids}
+    if structural:
+        structural_bindings = [
+            row
+            for row in allowed("NativeBinding", authorized.native_binding_ids).values()
+            if row.generation_id in generations
+        ]
+        needed_spans.update(row.span_id for row in structural_bindings)
+        needed_spans.update(
+            row.span_id for row in allowed("ObjectObservation", authorized.observation_ids).values()
+        )
+        needed_spans.update(identity for group in authorized.support_groups for identity in group.span_ids)
     spans = {key: value for key, value in spans.items() if key in needed_spans}
     observations = defaultdict(list)
     for row in allowed("ObjectObservation", authorized.observation_ids).values():
@@ -322,10 +386,13 @@ def project_managed_graph(
             and (binding.generation_id, spans[binding.span_id].revision_id) in members
         ):
             bindings[binding.object_id].append(binding)
-    entities, nodes = {}, []
+    entities, nodes, code_contributions, object_evidence = {}, [], {}, []
     native_kinds = {"Symbol": "symbol", "DataObject": "data", "Commit": "commit"}
     for identity, obj in sorted(objects.items()):
         observed = observations[identity]
+        by_source = defaultdict(list)
+        for observation in observed:
+            by_source[artifacts[revisions[observation.revision_id].artifact_id].source_id].append(observation)
         kinds = {native_kinds[binding.native_kind] for binding in bindings[identity]}
         expected = (
             "symbol"
@@ -338,8 +405,45 @@ def project_managed_graph(
         )
         if kinds == {expected}:
             source_id = min(generations[binding.generation_id].source_id for binding in bindings[identity])
-            nodes.append(_code_node(obj, expected, observed, source_id))
+            if structural:
+                contributions = {}
+                for binding in bindings[identity]:
+                    generation = generations[binding.generation_id]
+                    contributions[generation.source_id] = (generation, by_source[generation.source_id])
+                local_nodes = [
+                    _code_node(obj, expected, rows, source)
+                    for source, (_, rows) in sorted(contributions.items())
+                ]
+                display = [
+                    {
+                        key: value
+                        for key, value in asdict(node).items()
+                        if key not in {"source_id", "source_name", "in_degree"}
+                    }
+                    for node in local_nodes
+                ]
+                if any(value != display[0] for value in display[1:]):
+                    raise ProjectionError("Shared code has conflicting source display attributes")
+                nodes.append(local_nodes[0])
+                code_contributions[identity] = contributions
+            else:
+                nodes.append(_code_node(obj, expected, observed, source_id))
         else:
+            if structural:
+                values = [_attributes(rows) for rows in by_source.values()]
+                if any(value != values[0] for value in values[1:]):
+                    raise ProjectionError("Shared typed object has conflicting source attributes")
+                selected = {generation.source_id: generation.id for generation in generations.values()}
+                object_evidence.extend(
+                    StructuralObjectEvidence(
+                        identity,
+                        selected[source],
+                        source,
+                        tuple(sorted(row.id for row in rows)),
+                        tuple(sorted({row.span_id for row in rows})),
+                    )
+                    for source, rows in sorted(by_source.items())
+                )
             attributes = _attributes(observed)
             entities[identity] = (
                 attributes.get("name") if isinstance(attributes.get("name"), str) else obj.kind
@@ -374,7 +478,7 @@ def project_managed_graph(
     for ordinal, (identity, entry) in enumerate(sorted(entries.items())):
         source_id = generations[entry.evidence.generation_id].source_id
         passages.append(Passage(identity, titles[entry.span_id], entry.text, source_id, "", ordinal))
-    edges, arrows = {}, []
+    edges, arrows, relation_evidence = {}, [], []
 
     def relation(subject, target, kind, weight, extra=None, mention=False):
         if subject == target:
@@ -430,9 +534,86 @@ def project_managed_graph(
                 derivation_group=group.derivation_group,
             ),
         )
+        if structural and assertion.subject_id != assertion.object_id:
+            relation_evidence.append(
+                StructuralRelationEvidence(
+                    assertion.subject_id,
+                    assertion.object_id,
+                    assertion.predicate,
+                    float(version.confidence),
+                    version.id,
+                    group.derivation_group,
+                    tuple(sorted(group.span_ids)),
+                    tuple(
+                        sorted(
+                            (
+                                source,
+                                next(
+                                    generation.id
+                                    for generation in generations.values()
+                                    if generation.source_id == source
+                                ),
+                            )
+                            for source in {
+                                artifacts[revisions[spans[identity].revision_id].artifact_id].source_id
+                                for identity in group.span_ids
+                            }
+                        )
+                    ),
+                )
+            )
     facts, fact_vectors, prose_provenance = _project_prose(
-        store, authorized, generations, entries, aliases, entities, edges, synonymy_threshold
+        store,
+        authorized,
+        generations,
+        entries,
+        aliases,
+        entities,
+        edges,
+        synonymy_threshold,
+        structural=structural,
     )
+    dense_vectors = ()
+    code_evidence = ()
+    if structural:
+        attached_code = {a for a, b, kind, *_ in arrows if kind == "DEFINED_IN" and b in entries}
+        code_evidence = tuple(
+            StructuralCodeEvidence(
+                node.id,
+                generation.id,
+                source,
+                tuple(sorted({row.span_id for row in local_observations})),
+            )
+            for node in nodes
+            if node.id not in attached_code
+            or {row.span_id for row in observations[node.id]} - {entry.span_id for entry in entries.values()}
+            or len(code_contributions[node.id]) > 1
+            for source, (generation, local_observations) in sorted(code_contributions[node.id].items())
+        )
+        dense_vectors = tuple(
+            [
+                DenseVector(
+                    "passage",
+                    identity,
+                    entry.evidence.generation_id,
+                    generations[entry.evidence.generation_id].embedding_profile,
+                    len(entry.vector),
+                    tuple(entry.vector.tolist()),
+                )
+                for identity, entry in sorted(entries.items())
+            ]
+            + [
+                DenseVector(
+                    "fact",
+                    proof.fact_id,
+                    proof.generation_id,
+                    generations[proof.generation_id].embedding_profile,
+                    len(fact_vectors[proof.fact_id]),
+                    tuple(fact_vectors[proof.fact_id].tolist()),
+                )
+                for proof in prose_provenance
+            ]
+        )
     result = _assemble(
         entities,
         nodes,
@@ -446,25 +627,37 @@ def project_managed_graph(
         original_citations=tuple(original_citations),
         prose_provenance=prose_provenance,
         managed_passage_ids=frozenset(entries),
+        dense_capability=DenseCapability("unavailable") if structural else None,
+        dense_vectors=dense_vectors,
+        structural_code_evidence=code_evidence,
+        structural_object_evidence=tuple(object_evidence),
+        structural_relations=tuple(relation_evidence),
     )
     if snapshot_bundle is not None:
         snapshot_bundle.validate()
     return result
 
 
-def _project_prose(store, authorized, generations, entries, aliases, entities, edges, synonymy_threshold):
+def _project_prose(
+    store, authorized, generations, entries, aliases, entities, edges, synonymy_threshold, *, structural=False
+):
     """Feed the existing inferred Fact channel only from explicit authorized support."""
     entity_vectors, fact_vectors, triples, supports, contributions, owners = {}, {}, {}, {}, {}, {}
     sources, physical_support = defaultdict(dict), {}
-    dimensions = {len(entry.vector) for entry in entries.values()}
+    dimensions = defaultdict(set)
+    for entry in entries.values():
+        dimensions[generations[entry.evidence.generation_id].source_id if structural else None].add(
+            len(entry.vector)
+        )
 
-    def vector(identity, value, destination):
+    def vector(identity, value, destination, source):
         try:
             current = _vectors(value, (len(value),))
         except (TypeError, ValueError) as exc:
             raise ProjectionError("Invalid inferred prose vector") from exc
-        dimensions.add(len(current))
-        if len(dimensions) > 1:
+        local_dimensions = dimensions[source if structural else None]
+        local_dimensions.add(len(current))
+        if len(local_dimensions) > 1:
             raise ProjectionError("Inferred prose vectors have incompatible dimensions")
         previous = destination.get(identity)
         if previous is not None and not np.array_equal(previous, current):
@@ -505,7 +698,7 @@ def _project_prose(store, authorized, generations, entries, aliases, entities, e
             if identity in entities and entities[identity] != entity.name:
                 raise ProjectionError("Inferred entity identity collides")
             entities[identity] = entity.name
-            vector(identity, entity.embedding, entity_vectors)
+            vector(identity, entity.embedding, entity_vectors, generation.source_id)
             sources[generation.source_id][identity] = entity.name
             for passage_id in shown_in:
                 edges.setdefault(tuple(sorted((identity, passage_id))), Edge()).mention = True
@@ -513,7 +706,7 @@ def _project_prose(store, authorized, generations, entries, aliases, entities, e
             values = (triple.subject, triple.predicate, triple.object)
             identity = make_identity("fact", ["inferred-prose-v1", generation.source_id, *values])
             triples[identity] = (*values, local_ids[triple.subject], local_ids[triple.object])
-            vector(identity, triple.embedding, fact_vectors)
+            vector(identity, triple.embedding, fact_vectors, generation.source_id)
             supports.setdefault(identity, set()).update(shown_in)
             contributions.setdefault(identity, set()).add(extraction.id)
             owners[identity] = generation.id
@@ -572,6 +765,10 @@ def _assemble(
     managed_passage_ids=frozenset(),
     dense_capability=None,
     dense_vectors=(),
+    legacy_dense_vectors=(),
+    structural_code_evidence=(),
+    structural_object_evidence=(),
+    structural_relations=(),
 ):
     nodes = sorted(nodes, key=lambda node: CODE_KINDS.index(node.kind))
     identities = list(entities) + [node.id for node in nodes] + [passage.id for passage in passages]
@@ -671,6 +868,10 @@ def _assemble(
         managed_passage_ids=managed_passage_ids,
         dense_capability=capability,
         dense_vectors=dense_vectors,
+        legacy_dense_vectors=legacy_dense_vectors,
+        structural_code_evidence=structural_code_evidence,
+        structural_object_evidence=structural_object_evidence,
+        structural_relations=structural_relations,
     )
     payload[3], payload[5] = fingerprint_vectors(result)
     try:
@@ -678,6 +879,8 @@ def _assemble(
     except ValueError as exc:
         raise ProjectionError("Managed citation provenance is invalid") from exc
     if extension := provenance_payload(result):
+        payload.append(extension)
+    if extension := structural_code_payload(result):
         payload.append(extension)
     result.version = int(hashlib.sha256(canonical_json(payload).encode()).hexdigest()[:15], 16)
     return result
@@ -691,6 +894,10 @@ def compose_graphs(*graphs: GraphIndex) -> GraphIndex:
     """
     capability = composed_dense_capability(graphs)
     dense_vectors = tuple(row for graph in graphs for row in graph.dense_vectors)
+    legacy_dense_vectors = tuple(row for graph in graphs for row in graph.legacy_dense_vectors)
+    code_evidence = tuple(row for graph in graphs for row in graph.structural_code_evidence)
+    object_evidence = tuple(row for graph in graphs for row in graph.structural_object_evidence)
+    relation_evidence = tuple(row for graph in graphs for row in graph.structural_relations)
     entities, nodes, passages, facts, passage_vectors, fact_vectors, edges, arrows = (
         {},
         [],
@@ -736,7 +943,10 @@ def compose_graphs(*graphs: GraphIndex) -> GraphIndex:
         )
         passages.extend(deepcopy(graph.passages))
         facts.extend(deepcopy(graph.facts))
-        canonical_rows = {(row.lane, row.projected_id): row.values for row in graph.dense_vectors}
+        canonical_rows = {
+            (row.lane, row.projected_id): row.values
+            for row in (*graph.dense_vectors, *graph.legacy_dense_vectors)
+        }
         for i, passage in enumerate(graph.passages):
             vector = (
                 np.array(canonical_rows["passage", passage.id], dtype=np.float32)
@@ -787,6 +997,10 @@ def compose_graphs(*graphs: GraphIndex) -> GraphIndex:
         managed_passage_ids=frozenset(managed_passage_ids),
         dense_capability=capability,
         dense_vectors=dense_vectors,
+        legacy_dense_vectors=legacy_dense_vectors,
+        structural_code_evidence=code_evidence,
+        structural_object_evidence=object_evidence,
+        structural_relations=relation_evidence,
     )
     populated = [graph for graph in graphs if graph.num_nodes]
     if len(populated) == 1:

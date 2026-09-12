@@ -7,6 +7,7 @@ Legacy graphs are pinned separately in memory, not represented as durable histor
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, timedelta
 from uuid import uuid4
@@ -101,7 +102,8 @@ def acquire_query_snapshots(
     access: Access,
     *,
     source_ids: frozenset[str],
-    profile_fingerprint: str,
+    profile_fingerprint: str | None = None,
+    source_profiles: Mapping[str, str] | None = None,
     settings_fingerprint: str,
     lease_duration: timedelta = timedelta(minutes=5),
     clock=utc_now,
@@ -115,6 +117,20 @@ def acquire_query_snapshots(
         raise ValueError("Snapshot lease duration must be positive")
     if not isinstance(source_ids, frozenset) or any(not isinstance(s, str) or not s for s in source_ids):
         raise ValueError("Snapshot source IDs must be immutable nonempty strings")
+    if (profile_fingerprint is None) == (source_profiles is None):
+        raise ValueError("Exactly one snapshot profile selector is required")
+    if source_profiles is not None:
+        if not isinstance(source_profiles, Mapping):
+            raise ValueError("Snapshot source profiles require a mapping")
+        profiles = dict(source_profiles)
+        if set(profiles) != source_ids or any(
+            type(k) is not str or type(v) is not str or not v for k, v in profiles.items()
+        ):
+            raise ValueError("Snapshot profile keys must exactly match selected sources")
+    else:
+        if type(profile_fingerprint) is not str or not profile_fingerprint:
+            raise ValueError("Snapshot profile must be a nonempty string")
+        profiles = dict.fromkeys(source_ids, profile_fingerprint)
     owner, request_key = str(uuid4()), str(uuid4())
     with store.transaction():
         epoch = store.authorization_epoch()
@@ -134,14 +150,14 @@ def acquire_query_snapshots(
                 generation is None
                 or generation.status != "active"
                 or generation.source_id != identity
-                or generation.embedding_profile != profile_fingerprint
+                or generation.embedding_profile != profiles[identity]
             ):
                 raise QuerySnapshotUnavailable("Source lacks a compatible active generation/profile")
-            by_workspace.setdefault(source["workspace_id"], []).append(
+            by_workspace.setdefault((source["workspace_id"], profiles[identity]), []).append(
                 SnapshotSource(source_id=identity, generation_id=generation.id)
             )
         snapshots, proofs, references = [], [], []
-        for workspace, selected in sorted(by_workspace.items()):
+        for (workspace, profile), selected in sorted(by_workspace.items()):
             selection = EvidenceSelection(
                 generation_ids=frozenset(source.generation_id for source in selected),
                 require_exact_membership=True,
@@ -154,7 +170,7 @@ def acquire_query_snapshots(
                 sources=tuple(selected),
                 knowledge_cutoff=now,
                 temporal=CurrentSelector(),
-                profile_fingerprint=profile_fingerprint,
+                profile_fingerprint=profile,
                 settings_fingerprint=settings_fingerprint,
                 policy_fingerprint=proof.policy_fingerprint,
                 suppression_epoch=store.suppression_epoch(),

@@ -46,6 +46,11 @@ class AuthorizedModel:
         self.model = model
         self.validate = validate
 
+    @property
+    def profile_fingerprint(self) -> str | None:
+        """Expose only the wrapped immutable profile identity, without model I/O."""
+        return getattr(self.model, "profile_fingerprint", None)
+
     def _call(self, name, *args, **kwargs):
         self.validate()
         try:
@@ -63,10 +68,13 @@ class AuthorizedModel:
         return self._call("chat_text", *args, **kwargs)
 
 
-def query_access(ctx, access, *, settings: dict[str, Any] | None = None):
+def query_access(ctx, access, *, settings: dict[str, Any] | None = None, structural: bool = False):
     epoch = ctx.store.authorization_epoch()
     access = current_access(ctx.store, access)
-    graph = ctx.graph_for(access, settings=settings) if settings is not None else ctx.graph_for(access)
+    if structural:
+        graph = ctx.graph_for(access, settings=settings, structural=True)
+    else:
+        graph = ctx.graph_for(access, settings=settings) if settings is not None else ctx.graph_for(access)
 
     def validate():
         if ctx.store.authorization_epoch() != epoch:
@@ -94,11 +102,15 @@ class QuerySession:
 
 
 @contextmanager
-def query_session(ctx, access=None, *, settings: dict[str, Any] | None = None) -> Iterator[QuerySession]:
+def query_session(
+    ctx, access=None, *, settings: dict[str, Any] | None = None, structural: bool = False
+) -> Iterator[QuerySession]:
     """Keep one view pinned through output construction, then release it on every exit."""
     effective_settings = validate_settings({**ctx.store.get_settings(), **(settings or {})})
     captured_settings = MappingProxyType(effective_settings)
-    graph, model, validate = query_access(ctx, access, settings=dict(captured_settings))
+    graph, model, validate = query_access(
+        ctx, access, settings=dict(captured_settings), **({"structural": True} if structural else {})
+    )
     heartbeat = None
 
     def validate_live():

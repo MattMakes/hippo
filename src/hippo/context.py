@@ -114,7 +114,9 @@ class AppContext:
 
     SCOPED_CACHE_SIZE = 16
 
-    def graph_for(self, access: Access | None, *, settings: dict | None = None) -> GraphIndex:
+    def graph_for(
+        self, access: Access | None, *, settings: dict | None = None, structural: bool = False
+    ) -> GraphIndex:
         """
         The graph as `access` may see it. Unrestricted access (None, open mode, internal work)
         gets the full graph; anyone else gets an induced subgraph over their visible sources,
@@ -124,7 +126,7 @@ class AppContext:
         from .knowledge.query_access import current_access
 
         access = current_access(self.store, access)
-        graph = self._graph_for(access, epoch, settings=settings)
+        graph = self._graph_for(access, epoch, settings=settings, structural=structural)
         from .knowledge.access import AuthorizationChanged
 
         try:
@@ -165,10 +167,15 @@ class AppContext:
                 self._legacy_authorized.popitem(last=False)
             return view
 
-    def _graph_for(self, access: Access | None, epoch: int, *, settings=None) -> GraphIndex:
+    def _graph_for(self, access: Access | None, epoch: int, *, settings=None, structural=False) -> GraphIndex:
         managed_sources = {record.source_id for record in self.store._knowledge_rows("Artifact")}
         managed_sources.update(record.source_id for record in self.store._knowledge_rows("Generation"))
         managed_sources.update(row["id"] for row in self.store.list_sources() if row.get("managed"))
+        if structural:
+            with self.store.transaction():
+                return self._build_structural_graph(
+                    access or Principal.open().access, managed_sources, epoch, settings=settings
+                )
         if managed_sources:
             return self._managed_graph_for(
                 access or Principal.open().access, managed_sources, epoch, settings=settings
@@ -309,6 +316,113 @@ class AppContext:
             while len(self._managed_scoped) > self.SCOPED_CACHE_SIZE:
                 self._managed_scoped.popitem(last=False)
         return scoped
+
+    def _build_structural_graph(self, access, managed_sources, epoch, *, settings=None):
+        """Opt-in local evidence loading; never inspect a model or joint matrix."""
+        from .knowledge.access import AuthorizationChanged, EvidenceSelection
+        from .knowledge.dense import structural_legacy_graph
+        from .knowledge.graph_loader import load_generation_graph
+        from .knowledge.identity import canonical_json, text_hash
+        from .knowledge.projection import compose_graphs, project_managed_graph
+        from .knowledge.replay import view_fingerprint
+        from .knowledge.snapshots import acquire_query_snapshots
+
+        sources = self.store.list_sources(access)
+        legacy_ids = frozenset(row["id"] for row in sources if row["id"] not in managed_sources)
+        strict = {
+            row.generation_id
+            for row in self.store._knowledge_rows("IndexManifest")
+            if row.ready and {"evidence", "dense", "native"} <= set(row.required_representations)
+        }
+        selected, proofs, by_workspace = {}, [], {}
+        for source in sorted(sources, key=lambda row: row["id"]):
+            if source["id"] in managed_sources and source.get("active_generation_id"):
+                by_workspace.setdefault(source["workspace_id"], []).append(source)
+        for workspace, rows in sorted(by_workspace.items()):
+            identities = frozenset(source["active_generation_id"] for source in rows)
+            engine, proof = self.store._reader_proof(
+                workspace,
+                access,
+                expected_epoch=epoch,
+                selection=EvidenceSelection(
+                    generation_ids=identities, require_exact_membership=identities <= strict
+                ),
+            )
+            local = {}
+            # Establish exact authorized evidence before inspecting profiles.
+            for source in rows:
+                generation = self.store._knowledge_get("Generation", source["active_generation_id"])
+                if generation is None or generation.source_id != source["id"]:
+                    raise AuthorizationChanged("Selected generation is unavailable")
+                selected[source["id"]] = local[source["id"]] = generation
+            proofs.append((engine, proof, local))
+
+        bundle = None
+        try:
+            profiles = {source: gen.embedding_profile for source, gen in selected.items() if gen.id in strict}
+            if profiles:
+                bundle = acquire_query_snapshots(
+                    self.store,
+                    access,
+                    source_ids=frozenset(profiles),
+                    source_profiles=profiles,
+                    settings_fingerprint=text_hash(
+                        canonical_json(self.store.get_settings() if settings is None else settings)
+                    ),
+                )
+                if bundle.generation_ids != frozenset(
+                    gen.id for gen in selected.values() if gen.id in strict
+                ):
+                    raise AuthorizationChanged("Selected generations changed while acquiring snapshots")
+
+            def validate():
+                if self.store.authorization_epoch() != epoch:
+                    raise AuthorizationChanged("Authorization changed during graph use")
+                if bundle is not None:
+                    bundle.validate()
+                for engine, proof, _ in proofs:
+                    engine.validate_current(proof)
+                if self.store.authorization_epoch() != epoch:
+                    raise AuthorizationChanged("Authorization changed during graph use")
+
+            validate()
+            legacy = load_generation_graph(
+                self.store,
+                generations={},
+                legacy_source_ids=legacy_ids,
+                version=self.store.graph_version(),
+            )
+            if managed_sources or not access.unrestricted:
+                legacy = legacy.scoped(legacy_ids)
+            legacy = structural_legacy_graph(legacy)
+            projected = [
+                project_managed_graph(
+                    None,
+                    self.store,
+                    proof,
+                    source_profiles={
+                        source: generation.embedding_profile for source, generation in local.items()
+                    },
+                    snapshot_bundle=bundle,
+                    structural=True,
+                )
+                for _, proof, local in proofs
+            ]
+            graph = compose_graphs(legacy, *projected)
+            graph.authorization_check = validate
+            graph.version = int(view_fingerprint(graph)[:12], 16)
+            validate()
+            if bundle is not None:
+                import weakref
+
+                graph.snapshot_ids = tuple(snapshot.id for snapshot in bundle.snapshots)
+                graph.snapshot_renewal_interval = bundle.lease_duration.total_seconds() / 3
+                graph.close_snapshot = weakref.finalize(graph, _release_snapshot, bundle)
+            return graph
+        except BaseException:
+            if bundle is not None:
+                bundle.close()
+            raise
 
     def invalidate_graph(self) -> None:
         with self._graph_lock:
