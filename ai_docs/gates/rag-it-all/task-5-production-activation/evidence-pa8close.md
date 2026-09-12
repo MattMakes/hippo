@@ -12,7 +12,7 @@ to `tail`. **No Neo4j was used and the disposable container was never claimed.**
 
 ## Commits
 
-Three of my own, not the brief's two, plus one merge the orchestrator asked for. Item 1/4/5
+Four of my own, not the brief's two, plus one merge the orchestrator asked for. Item 1/4/5
 landed first because they touch no code and the audit refresh had to be stamped at a HEAD;
 items 2 and 3 are separate because item 2 changes behaviour and item 3 only adds coverage,
 and a reviewer of one should not have to read the other.
@@ -23,6 +23,7 @@ and a reviewer of one should not have to read the other.
 | 2 | `ccb6635` | Guard the last isinstance catches and close the LOW activation batch | Item 2 |
 | 3 | `4be9920` | Cover the activation gaps the plan's adversarial cases name | Item 3 + this file |
 | 4 | `fed22c3` | Merge rag-it-all-tibs (`013317f`) so the PA6 line is clean | The CC1 fix, on the orchestrator's instruction |
+| 5 | `779d8c7` | Record the final gate results and the Ladybug lane this batch did not break | The post-merge numbers and the Ladybug base-check |
 
 ## Findings, one row each
 
@@ -255,7 +256,10 @@ HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_managed_pipeline_activ
 git checkout HEAD -- <the same two files>     # restored; worktree clean
 ```
 
-Identical failures without this batch's edits. Isolated first
+Identical failures without this batch's edits. That closes the loop for the whole lane: this
+batch modified exactly two files that PA7's Ladybug line reaches, both were reverted for the
+base-check, and the lane's other file -- `test_managed_source_lifecycle.py` -- was never
+touched by this batch and holds none of the five failures. Isolated first
 (`/tmp/hippo-pa8close-ladybug-subset.log`, 5 failed, 105 deselected), so it is not an
 ordering or contention artifact either.
 
