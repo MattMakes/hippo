@@ -351,6 +351,21 @@ Brief: `ai_docs/handoffs/briefs/fix-pa1.md`. Source review:
 `ai_docs/reports/2026-09-11-pa1-review.md` (1 major, 7 minor), plus two decisions
 the orchestrator added mid-task (7 and 8).
 
+## Commits on `wp/pa1fix`
+
+| Hash | Subject |
+|---|---|
+| `99a41b7` | Make a committed tombstone a store barrier and stop bootstrap invalidating readers |
+| `e1e9186` | Append the PA1 follow-up evidence and restate deviation 7 |
+| `c3ef7c4` | Make an absent build source indistinguishable from one the actor cannot manage |
+| `<this>`  | Record the follow-up commit hashes in the PA1 evidence |
+
+Files touched: `src/hippo/store/generations.py`, `src/hippo/store/knowledge.py`,
+`src/hippo/knowledge/source_lifecycle.py`, `src/hippo/knowledge/build_authority.py`,
+`tests/unit/test_managed_source_lifecycle.py`,
+`tests/unit/test_local_workspace_membership.py`,
+`tests/unit/test_evidence_store_access.py`, this file.
+
 ## What changed
 
 | # | Decision | Change |
