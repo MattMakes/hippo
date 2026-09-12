@@ -212,7 +212,11 @@ a `QuerySnapshot` JSON string captured from the tree at `043ca51` (before the fi
 rehydrates to `querysnapshot-ceb92845…` and compares equal to a freshly built one; pinning
 `known_at` on either implicit mode changes the ID.
 
-Scope of the carve-out: it also drops a null `known_at` from `as_of`/`during`/`changes`/`compare`
+Scope of the carve-out: it lives in `Record.identity_parts`, so it applies to every record whose
+identity embeds a selector at any depth rather than to `QuerySnapshot` alone — and no model class
+outside the six selectors carries a `known_at` field at all (`CompareSelector`, `CurrentSelector`,
+`AsOfSelector`, `DuringSelector`, `ChangesSelector`, `AtemporalSelector`), so no other record's
+identity can change. It also drops a null `known_at` from `as_of`/`during`/`changes`/`compare`
 selectors, which *did* carry the null before. No persisted row is affected, because the only two
 writers of a `QuerySnapshot.temporal` are `acquire_query_snapshots` (a bare `CurrentSelector()`)
 and `acquire_history_snapshot` (a pinned selector, whose `known_at` is always bound);
