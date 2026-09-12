@@ -55,10 +55,17 @@ class Watch:
         self.heartbeats = []
         self.dispatched = []
 
-    def once(self):
+    def once(self, heartbeats=1):
+        """One acquisition, one finalizer, and one lease heartbeat per pinned snapshot.
+
+        A managed generation pins a snapshot, so its owner runs a heartbeat; a
+        purely legacy corpus pins nothing and must not start one.
+        """
         assert len(self.acquired) == 1, f"expected one acquisition, saw {len(self.acquired)}"
         assert self.closed == self.acquired, "the acquired owner was not released exactly once"
-        assert len(self.heartbeats) <= 1, f"expected at most one heartbeat, saw {len(self.heartbeats)}"
+        assert len(self.heartbeats) == heartbeats, (
+            f"expected {heartbeats} heartbeat(s), saw {len(self.heartbeats)}"
+        )
 
 
 def watch(ctx, monkeypatch) -> Watch:
@@ -197,7 +204,7 @@ def test_a_purely_legacy_corpus_still_ranks_its_passages(ctx, monkeypatch, sampl
     index_sample(ctx, sample_text)
     record = watch(ctx, monkeypatch)
     trace = ask_module.search(ctx, "Where is Acme Robotics headquartered?")
-    record.once()
+    record.once(heartbeats=0)
     assert record.dispatched == ["tag_compatible"]
     assert trace.passages[0].title == "The company"
     assert not trace.used_dpr_fallback

@@ -6,7 +6,14 @@ Search and ask: the two things every entry point (web, MCP, CLI) does with the m
 
 Both take an optional `access` (hippo/access.py): the search then runs on the
 part of the graph that user may see, so hidden passages can neither be ranked
-nor read by the model. None means unrestricted (open mode, the CLI, tests).
+nor read by the model. None means the open audience (open mode, the CLI,
+tests), which reads legacy sources unrestricted but cannot prove managed
+evidence, so a managed corpus needs a real reader.
+
+Every model path here runs over one held structural session dispatched by
+`retrieval_session`, which is what turns the view's provenance sidecars back
+into a scorable matrix. A caller may hand its own session in; it is dispatched
+in place, and never reacquired below this layer.
 """
 
 from __future__ import annotations
