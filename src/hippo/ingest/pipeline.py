@@ -43,7 +43,8 @@ from ..codegraph import extract_code
 from ..context import AppContext
 from ..hipporag import openie
 from ..hipporag.indexer import GRAPH_WRITE_LOCK, index_source
-from . import readers, repos
+from ..knowledge.build_authority import BuildActor
+from . import managed_activation, readers, repos
 from .chunker import chunk_documents
 from .readers import Document, TextBudget, TooLarge
 
@@ -75,6 +76,11 @@ class Busy(ValueError):
 # Every add_* takes `owner_id` and `access_role_id` (see hippo/access.py): who added the source and the
 # lowest role that may see it. Both default to None (no owner, visible to everyone), which is what
 # the CLI and open mode want; the web routes and MCP pass the caller's.
+#
+# `build_actor` (see hippo/knowledge/build_authority.py) is the opt-in to the managed plain-prose
+# build: an authenticated reader (or an explicit internal caller) adding pasted text or a plain file
+# gets the reviewed coordinator, everything else gets the legacy pipeline below. An omitted actor is
+# always legacy; an actor never converts a source family the managed build cannot read.
 
 
 def add_text(
@@ -84,8 +90,10 @@ def add_text(
     *,
     owner_id: str | None = None,
     access_role_id: str | None = None,
+    build_actor: BuildActor | None = None,
 ) -> str:
     """Remember a pasted text. The name is what the library shows."""
+    managed_activation.check_actor(build_actor)  # before a Source row or a saved byte exists
     name = name.strip() or "Untitled text"
     if not text.strip():
         raise ValueError("the text is empty")
@@ -99,7 +107,7 @@ def add_text(
         access_role_id=access_role_id,
     )
     _write_bytes(source_dir(ctx, source_id) / TEXT_FILE, data)
-    start_indexing(ctx, source_id)
+    start_indexing(ctx, source_id, build_actor=build_actor)
     return source_id
 
 
@@ -110,8 +118,10 @@ def add_upload(
     *,
     owner_id: str | None = None,
     access_role_id: str | None = None,
+    build_actor: BuildActor | None = None,
 ) -> str:
     """Remember an uploaded file. A .zip becomes an 'archive' source; anything else a 'file'."""
+    managed_activation.check_actor(build_actor)  # before a Source row or a saved byte exists
     safe_name = _safe_filename(filename)
     if not data:
         raise ValueError(f"{safe_name} is empty")
@@ -131,7 +141,7 @@ def add_upload(
         access_role_id=access_role_id,
     )
     _write_bytes(source_dir(ctx, source_id) / safe_name, data)
-    start_indexing(ctx, source_id)
+    start_indexing(ctx, source_id, build_actor=build_actor)
     return source_id
 
 
@@ -200,26 +210,69 @@ def _check_upload_size(ctx: AppContext, name: str, size: int) -> None:
 # ----------------------------------------------------------- indexing
 
 
-def start_indexing(ctx: AppContext, source_id: str) -> bool:
-    """Start the background job for one source. False if it is already running."""
-    return ctx.jobs.start(f"index:{source_id}", lambda: run_indexing(ctx, source_id))
+def start_indexing(
+    ctx: AppContext,
+    source_id: str,
+    *,
+    build_actor: BuildActor | None = None,
+    operation_id: str | None = None,
+) -> bool:
+    """
+    Start the background job for one source. False if it is already running.
+
+    The lane is decided here, before the thread exists, so that a managed source without an
+    actor is refused synchronously rather than in a worker. The job closure captures only the
+    immutable actor and the bounded operation ID -- never a token, request or ambient principal.
+    """
+    source = ctx.store.get_source(source_id)
+    if source is None:
+        # The row is already gone; `run_indexing` logs it. Legacy behaviour, unchanged.
+        managed_activation.check_actor(build_actor)
+        return ctx.jobs.start(job_key(source_id), lambda: run_indexing(ctx, source_id))
+    plan = managed_activation.plan_dispatch(source, actor=build_actor, operation_id=operation_id)
+    if plan.mode == "skip":
+        log.info("Source %s is tombstoned; no index job was started", source_id)
+        return False
+    actor, operation = plan.actor, plan.operation_id
+    return ctx.jobs.start(
+        job_key(source_id),
+        lambda: run_indexing(ctx, source_id, build_actor=actor, operation_id=operation),
+    )
 
 
 def job_key(source_id: str) -> str:
     return f"index:{source_id}"
 
 
-def run_indexing(ctx: AppContext, source_id: str) -> None:
+def run_indexing(
+    ctx: AppContext,
+    source_id: str,
+    *,
+    build_actor: BuildActor | None = None,
+    operation_id: str | None = None,
+) -> None:
     """
     The job body: read -> chunk -> index. Runs in a thread; reports through the Source row.
 
     Whatever happens, it ends in one of three ways: 'ready', 'failed' (with the passages it
     wrote cleared, so nothing half-done stays behind), or cancelled (someone deleted the source
     while it ran). If the Source row is gone by the end, it sweeps the orphans it may have left.
+
+    A managed source (and an eligible one whose caller brought a build actor) takes the managed
+    lane instead: the coordinator owns its evidence, and none of the legacy cleanup below runs.
+    The classification is taken again here, because the source may have been converted,
+    tombstoned or re-permissioned between the dispatch and this worker.
     """
     source = ctx.store.get_source(source_id)
     if source is None:
         log.warning("index job: source %s no longer exists", source_id)
+        return
+    plan = managed_activation.plan_dispatch(source, actor=build_actor, operation_id=operation_id)
+    if plan.mode == "skip":
+        log.info("index job: source %s is tombstoned; there is nothing to rebuild", source_id)
+        return
+    if plan.mode == "managed":
+        _run_managed_indexing(ctx, source_id, plan)
         return
     key = job_key(source_id)
     try:
@@ -243,6 +296,30 @@ def run_indexing(ctx: AppContext, source_id: str) -> None:
             )
     else:
         _sweep_if_deleted(ctx, source_id)
+
+
+def _run_managed_indexing(ctx: AppContext, source_id: str, plan) -> None:
+    """
+    The managed lane. The coordinator owns the evidence; this owns only the Source row.
+
+    A failure is presented, never raised: like the legacy body above, the job ends with the
+    reason visible in the UI. Unlike it, nothing is cleared -- the last published generation
+    keeps serving, and the coordinator retains its own unpublished attempt for recovery.
+    """
+    try:
+        receipt = managed_activation.run_managed_build(
+            ctx,
+            source_id=source_id,
+            actor=plan.actor,
+            operation_id=plan.operation_id,
+            job_key=job_key(source_id),
+        )
+    except Exception as err:  # noqa: BLE001 - every managed failure is presented generically
+        managed_activation.record_build_failure(
+            ctx, source_id=source_id, operation_id=plan.operation_id, error=err
+        )
+        return
+    managed_activation.record_build_receipt(ctx, source_id=source_id, receipt=receipt)
 
 
 def _read_chunk_index(ctx: AppContext, source: dict[str, Any], *, should_stop) -> None:
@@ -440,17 +517,29 @@ def reindex_all(ctx: AppContext) -> int:
     return sum(1 for source in sources if start_indexing(ctx, source["id"]))
 
 
-def reindex(ctx: AppContext, source_id: str) -> bool:
+def reindex(ctx: AppContext, source_id: str, *, build_actor: BuildActor | None = None) -> bool:
     """
     Drop this source's passages and index its saved files again.
     False if this source's job is already running or the source does not exist;
     Busy while another source is being indexed.
+
+    A managed source, and an eligible one whose caller brought a build actor, take the managed
+    lane instead: the legacy clear below never runs, so the last published generation keeps
+    serving until the new one publishes atomically. A current tombstone is skipped, never
+    resurrected, and a managed source without an actor is refused before any of it.
     """
-    if ctx.jobs.is_running(job_key(source_id)) or ctx.store.get_source(source_id) is None:
+    if ctx.jobs.is_running(job_key(source_id)):
+        return False
+    source = ctx.store.get_source(source_id)
+    if source is None:
+        return False
+    plan = managed_activation.plan_dispatch(source, actor=build_actor)
+    if plan.mode == "skip":
         return False
     _refuse_if_indexing(ctx)
-    _prepare_reindex(ctx, source_id)
-    return start_indexing(ctx, source_id)
+    if plan.mode == "legacy":
+        _prepare_reindex(ctx, source_id)
+    return start_indexing(ctx, source_id, build_actor=plan.actor, operation_id=plan.operation_id)
 
 
 def _prepare_reindex(ctx: AppContext, source_id: str) -> None:
@@ -478,7 +567,8 @@ def _clear_passages(ctx: AppContext, source_id: str) -> None:
 
 
 def source_dir(ctx: AppContext, source_id: str) -> Path:
-    return Path(ctx.config.data_dir) / "sources" / source_id
+    # One definition, in the module that must also resolve it absolutely for a managed capture.
+    return managed_activation.source_directory(ctx, source_id)
 
 
 def _write_bytes(path: Path, data: bytes) -> None:
