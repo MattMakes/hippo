@@ -125,17 +125,23 @@ _ROWS: tuple[tuple[type[BaseException], PublicFailure], ...] = (
 # rather than `invalid_source`; blaming the request for a stored setting would send
 # the reader looking in the wrong place.
 #
-# One deliberate asymmetry with `public_failure`: the managed table's widest model
-# row is `OllamaError`, so a build that failed on `EmbeddingProfileMismatch` or
-# `EmbeddingProfileChanged` is stored as `model_unavailable` and reads back as 503,
-# while the same exception in a query reads as `retrieval_rebuild_required`. That is
-# the managed lane's own classification and consuming it is the point; narrowing it
-# belongs in `managed_activation.FAILURES`, not here.
+# `retrieval_rebuild_required` is the one code the two vocabularies name identically.
+# The managed table used to stop at its widest model row, `OllamaError`, so a build that
+# failed on `EmbeddingProfileMismatch` or `EmbeddingProfileChanged` was stored as
+# `model_unavailable` and read back as a 503 retry -- for evidence that will never be
+# compatible again. `managed_activation.FAILURES` now reads those two ahead of
+# `OllamaError` and stores the rebuild code, so the row below makes the round trip an
+# identity: the same exception maps to the same public failure whether a caller met it in
+# a query or is reading a Source row hours later. Without the row a stored rebuild code
+# falls through to `None` and its caller's `or OPERATION_FAILED` turns a 409 "reindex
+# this" into a 500 "look in the logs", which is the wrong instruction as well as the
+# wrong status.
 _MANAGED_CODES: dict[str, PublicFailure | None] = {
     "build_cancelled": OPERATION_FAILED,
     "build_busy": OPERATION_FAILED,
     "authorization_changed": None,
     "model_unavailable": RETRIEVAL_UNAVAILABLE,
+    "retrieval_rebuild_required": REBUILD_REQUIRED,
     "source_too_large": INVALID_SOURCE_SIZE,
     "unsupported_source": INVALID_SOURCE_TYPE,
     "invalid_configuration": OPERATION_FAILED,

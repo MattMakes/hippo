@@ -205,12 +205,15 @@ def test_an_exception_whose_str_raises_is_still_mapped():
 # `ManagedFailure.code` from `src/hippo/ingest/managed_activation.py` (Task 3a).
 # The managed lane maps an exception once, at the point of failure, and stores the
 # code on the Source row; a route reading that row hours later has no exception to
-# re-derive from. These nine are the stable set, recorded in the Task 3a review.
+# re-derive from. These ten are the stable set: the nine recorded in the Task 3a
+# review, plus `retrieval_rebuild_required`, which Task 3b added when the managed
+# table learned to read a stale embedding profile ahead of the wider `OllamaError`.
 MANAGED_CODES = {
     "build_cancelled": FAILED,
     "build_busy": FAILED,
     "authorization_changed": None,
     "model_unavailable": UNAVAILABLE,
+    "retrieval_rebuild_required": REBUILD,
     "source_too_large": SIZE,
     "unsupported_source": TYPE,
     "invalid_configuration": FAILED,
@@ -241,6 +244,13 @@ def test_a_stored_code_and_its_own_exception_agree():
         ("build_busy", BuildBusy(POISON)),
         ("authorization_changed", AuthorizationChanged(POISON)),
         ("model_unavailable", OllamaError(POISON)),
+        # The one code whose two vocabularies now agree exactly: the managed table reads
+        # a stale or mismatched profile ahead of the wider `OllamaError` row, so a stored
+        # `retrieval_rebuild_required` round-trips to the failure the same exception maps
+        # to in a query. Before Task 3b it was stored as `model_unavailable` and read back
+        # as a 503 retry for evidence that will never be compatible again.
+        ("retrieval_rebuild_required", EmbeddingProfileMismatch(POISON)),
+        ("retrieval_rebuild_required", EmbeddingProfileChanged(POISON)),
         ("source_too_large", TooLarge(POISON)),
         ("unsupported_source", UnsupportedProvenanceFormat(POISON)),
         ("invalid_source", InputCaptureError(POISON)),
