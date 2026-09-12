@@ -161,6 +161,44 @@ class GenerationQueries:
                 generation_id, job_id=job_id, lease_owner=lease_owner, fencing_token=fencing_token
             )
 
+    def fail_generation_build(
+        self, generation_id, *, job_id, lease_owner, fencing_token, error_code="build_failed"
+    ):
+        """End a live unpublished attempt; collection remains an explicit operation.
+
+        Caller authorization is separate from these durable build credentials.
+        An expired or replaced holder must leave cleanup to recovery.
+        """
+        if error_code not in ("build_failed", "build_cancelled"):
+            raise ValueError("Unknown build failure code")
+        with self.transaction():
+            job = self._check_build(
+                generation_id,
+                job_id=job_id,
+                lease_owner=lease_owner,
+                fencing_token=fencing_token,
+                states=("staging", "ready"),
+            )
+            gen = self._generation(generation_id)
+            if (
+                gen.published_at is not None
+                or self.get_source(gen.source_id).get("active_generation_id") == gen.id
+                or any(
+                    event.generation_id == gen.id and event.kind == "published"
+                    for event in self._knowledge_rows("IndexEvent")
+                )
+            ):
+                raise ValueError("Published generations cannot fail as builds")
+            terminal = job.replace(
+                status="cancelled" if error_code == "build_cancelled" else "failed",
+                error_code=error_code,
+            )
+            self._write_knowledge(gen.replace(status="failed"))
+            self._write_knowledge(terminal)
+            self._source_fields(gen.source_id, active_build_id=None)
+            bump_epoch(self, "content_epoch")
+            return terminal
+
     @contextmanager
     def generation_write(self, generation_id, *, job_id, lease_owner, fencing_token):
         with self.transaction():

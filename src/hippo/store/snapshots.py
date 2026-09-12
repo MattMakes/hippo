@@ -260,11 +260,16 @@ class SnapshotQueries:
                 return CollectionResult(generation_id, blocked_reason="live_build")
             return self._collect_generation(generation_id)
 
-    def recover_generation_builds(self):
+    def recover_generation_builds(self, *, source_id=None):
+        """Recover expired builds globally or within one caller-authorized source."""
+        if source_id is not None and (type(source_id) is not str or not source_id.strip()):
+            raise ValueError("Recovery requires a nonempty source scope")
         with self.transaction():
             self._lock_authorization()
             failed = cleared = abandoned = 0
             for gen in self._knowledge_rows("Generation"):
+                if source_id is not None and gen.source_id != source_id:
+                    continue
                 if gen.status not in ("staging", "ready", "failed"):
                     continue
                 self._lock_source(gen.source_id)
