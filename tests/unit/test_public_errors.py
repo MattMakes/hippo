@@ -198,3 +198,88 @@ def test_an_exception_whose_str_raises_is_still_mapped():
             raise AssertionError("public_failure read the exception text")
 
     assert api().public_failure(Hostile()).code == "retrieval_unavailable"
+
+
+# ------------------------------- the managed lane's own code, not its exception
+
+# `ManagedFailure.code` from `src/hippo/ingest/managed_activation.py` (Task 3a).
+# The managed lane maps an exception once, at the point of failure, and stores the
+# code on the Source row; a route reading that row hours later has no exception to
+# re-derive from. These nine are the stable set, recorded in the Task 3a review.
+MANAGED_CODES = {
+    "build_cancelled": FAILED,
+    "build_busy": FAILED,
+    "authorization_changed": None,
+    "model_unavailable": UNAVAILABLE,
+    "source_too_large": SIZE,
+    "unsupported_source": TYPE,
+    "invalid_configuration": FAILED,
+    "invalid_source": TYPE,
+    "operation_failed": FAILED,
+}
+
+
+@pytest.mark.parametrize("code,expected", sorted(MANAGED_CODES.items()))
+def test_every_managed_failure_code_has_one_public_answer(code, expected):
+    failure = api().public_failure_for_code(code)
+    if expected is None:
+        assert failure is None
+        return
+    assert (failure.code, failure.message, failure.http_status) == expected
+
+
+def test_a_stored_code_and_its_own_exception_agree():
+    """The two entry points must not disagree about the same failure.
+
+    `map_build_failure` lives in the ingest lane and is not importable from here,
+    so the pairing is spelled out: each row is the exception family the managed
+    table maps to that code.
+    """
+    module = api()
+    for code, exc in (
+        ("build_cancelled", BuildCancelled(POISON)),
+        ("build_busy", BuildBusy(POISON)),
+        ("authorization_changed", AuthorizationChanged(POISON)),
+        ("model_unavailable", OllamaError(POISON)),
+        ("source_too_large", TooLarge(POISON)),
+        ("unsupported_source", UnsupportedProvenanceFormat(POISON)),
+        ("invalid_source", InputCaptureError(POISON)),
+    ):
+        assert module.public_failure_for_code(code) == module.public_failure(exc), code
+
+
+def test_an_unknown_or_malformed_code_falls_through_like_an_unknown_exception():
+    module = api()
+    for value in ("", "no_such_code", "OPERATION_FAILED", None, 7, ("operation_failed",)):
+        assert module.public_failure_for_code(value) is None
+
+
+def test_a_stored_code_cannot_widen_the_public_vocabulary():
+    module = api()
+    answers = [module.public_failure_for_code(code) for code in MANAGED_CODES]
+    mapped = [failure for failure in answers if failure is not None]
+    assert {failure.code for failure in mapped} <= {
+        "retrieval_rebuild_required",
+        "retrieval_unavailable",
+        "invalid_source",
+        "operation_failed",
+    }
+    assert all(
+        failure.message in {row[1] for row in (REBUILD, UNAVAILABLE, TYPE, SIZE, FAILED)}
+        for failure in mapped
+    )
+
+
+def test_code_mapping_logs_nothing_and_touches_no_store_or_socket(caplog, monkeypatch):
+    module = api()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("public_failure_for_code performed I/O")
+
+    monkeypatch.setattr(httpx.Client, "send", forbidden)
+    monkeypatch.setattr("builtins.open", forbidden)
+    with caplog.at_level(logging.DEBUG):
+        for code in MANAGED_CODES:
+            module.public_failure_for_code(code)
+        module.public_failure_for_code("no_such_code")
+    assert caplog.records == []

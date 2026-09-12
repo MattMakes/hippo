@@ -31,6 +31,21 @@ Everywhere else, `None` means "not mine" and nothing is substituted. This is
 also how the bare `ValueError` raised by `GraphIndex.canonical_selected_generations`
 becomes `operation_failed` without this module having to claim every `ValueError`
 in the process.
+
+A failure the managed lane already classified
+---------------------------------------------
+`managed_activation.map_build_failure` classifies a build failure once, where it
+happens, and stores `ManagedFailure.code` on the Source row. A route rendering
+that row hours later has no exception to re-derive from, and re-deriving would
+be a second opinion about the same event. `public_failure_for_code` takes the
+stored code instead:
+
+    failure = public_failure_for_code(row.code) or OPERATION_FAILED
+
+It takes a plain string on purpose, so nothing in the query lane has to import
+the build lane to render a Source row. The two functions agree by construction
+for every family the managed table maps, and `test_public_errors.py` pins that
+pairing.
 """
 
 from dataclasses import dataclass
@@ -99,6 +114,36 @@ _ROWS: tuple[tuple[type[BaseException], PublicFailure], ...] = (
 )
 
 
+# `ManagedFailure.code`, the nine stable values `managed_activation.FAILURES` and
+# `UNKNOWN_CODE` produce. Keyed by string rather than by exception so that a stored
+# Source row can be rendered without the build lane, and so that this module keeps no
+# dependency on `hippo.ingest.managed_activation`.
+#
+# `invalid_configuration` is the one row where the two vocabularies part company.
+# It means the operator's stored indexing settings cannot build a source -- their
+# problem to fix, not the reader's input -- so publicly it is `operation_failed`
+# rather than `invalid_source`; blaming the request for a stored setting would send
+# the reader looking in the wrong place.
+#
+# One deliberate asymmetry with `public_failure`: the managed table's widest model
+# row is `OllamaError`, so a build that failed on `EmbeddingProfileMismatch` or
+# `EmbeddingProfileChanged` is stored as `model_unavailable` and reads back as 503,
+# while the same exception in a query reads as `retrieval_rebuild_required`. That is
+# the managed lane's own classification and consuming it is the point; narrowing it
+# belongs in `managed_activation.FAILURES`, not here.
+_MANAGED_CODES: dict[str, PublicFailure | None] = {
+    "build_cancelled": OPERATION_FAILED,
+    "build_busy": OPERATION_FAILED,
+    "authorization_changed": None,
+    "model_unavailable": RETRIEVAL_UNAVAILABLE,
+    "source_too_large": INVALID_SOURCE_SIZE,
+    "unsupported_source": INVALID_SOURCE_TYPE,
+    "invalid_configuration": OPERATION_FAILED,
+    "invalid_source": INVALID_SOURCE_TYPE,
+    "operation_failed": OPERATION_FAILED,
+}
+
+
 def public_failure(exc: BaseException) -> PublicFailure | None:
     """The public failure for a known activation or retrieval exception, else `None`."""
     if isinstance(exc, DenseSessionUnavailable):
@@ -108,3 +153,15 @@ def public_failure(exc: BaseException) -> PublicFailure | None:
         if isinstance(exc, kind):
             return failure
     return None
+
+
+def public_failure_for_code(code: str) -> PublicFailure | None:
+    """The public failure for a `ManagedFailure.code` the managed lane already stored.
+
+    `None` for `authorization_changed`, which keeps the existing permission
+    response, and for any code this table does not know; a managed caller adds
+    `or OPERATION_FAILED`, exactly as it does for `public_failure`.
+    """
+    if type(code) is not str:
+        return None
+    return _MANAGED_CODES.get(code)
