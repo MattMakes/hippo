@@ -29,6 +29,15 @@ from .raw_artifacts import RawArtifact
 
 PROFILE_POINTER = "embedding_manifest_revision_id"
 
+# Which accepted-input shape a generation claims, read from the accepted manifest's own
+# configuration so it is hashed into generation identity and cannot be changed afterwards.
+# Absent means plain prose, which is what every generation written before this key existed
+# carries, so their identities and checksums are unchanged.
+GENERATION_PROFILE_KEY = "generation_profile"
+PLAIN_PROSE_PROFILE = "plain_prose"
+CODE_PROFILE = "code"
+GENERATION_PROFILES = (PLAIN_PROSE_PROFILE, CODE_PROFILE)
+
 
 @dataclass(frozen=True)
 class GenerationProfile:
@@ -104,6 +113,92 @@ def _accepted(payload, revision) -> AcceptedInputs:
     )
 
 
+def _accepted_file(pair, item, *, workspace, source_id):
+    """One accepted `file` artifact against its raw identity; shared by both profiles."""
+    if pair is None:
+        raise ValueError("Accepted original artifact is missing")
+    a, r = pair
+    if (
+        a.kind != "file"
+        or a.external_id != item.logical_path
+        or item.input_key
+        != local_input_key(workspace_id=workspace, source_id=source_id, logical_path=item.logical_path)
+        or (r.content_hash, r.raw_uri, r.provider_revision)
+        != (item.raw_hash, item.raw_uri, item.provider_revision)
+    ):
+        raise ValueError("Original revision differs from its accepted raw identity")
+
+
+def _code_members(originals, accepted, generation, workspace):
+    """The `code` member set, returning only the pairs that are identity inputs.
+
+    Exactly one `repository` artifact for the captured tree, one `file` artifact per
+    accepted input, and zero or more `history_event` artifacts -- one per commit the
+    history walk bound. The `history_event` pairs are members but **not** identity
+    inputs: plan section 6 settles the generation before `read_history` runs, so a
+    commit can never be hashed into the ID the members must re-derive. The head SHA
+    still enters identity as the repository revision's `provider_revision`.
+    """
+    from .code_history import COMMIT_RAW_URI_SCHEME
+
+    by_kind = {}
+    for artifact, revision in originals.values():
+        by_kind.setdefault(artifact.kind, []).append((artifact, revision))
+    repositories = by_kind.get("repository", [])
+    files = by_kind.get("file", [])
+    if (
+        set(by_kind) - {"repository", "file", "history_event"}
+        or len(repositories) != 1
+        or len(files) != len(accepted.inputs)
+    ):
+        raise ValueError("Accepted original revision inventory differs")
+    repository, repository_revision = repositories[0]
+    if (
+        repository.canonical_uri != repository.external_id
+        or repository.id
+        != make_identity("artifact", [workspace, generation.source_id, "repository", repository.external_id])
+        or (repository_revision.content_hash, repository_revision.raw_uri)
+        != (accepted.manifest.sha256, accepted.manifest.uri)
+    ):
+        raise ValueError("Captured tree identity differs from its accepted manifest")
+    expected_ids = {repository.id}
+    for item in accepted.inputs:
+        identity = make_identity("artifact", [workspace, generation.source_id, "file", item.logical_path])
+        expected_ids.add(identity)
+        _accepted_file(originals.get(identity), item, workspace=workspace, source_id=generation.source_id)
+    for artifact, revision in by_kind.get("history_event", []):
+        expected_ids.add(artifact.id)
+        # A commit names no stored raw object, so its `raw_uri` is never dereferenced:
+        # it is asserted to be exactly the commit scheme instead.
+        if (
+            artifact.canonical_uri != artifact.external_id
+            or artifact.id
+            != make_identity(
+                "artifact", [workspace, generation.source_id, "history_event", artifact.external_id]
+            )
+            or not revision.provider_revision
+            or artifact.external_id != f"{repository.external_id}@{revision.provider_revision}"
+            or revision.raw_uri != COMMIT_RAW_URI_SCHEME + revision.provider_revision
+        ):
+            raise ValueError("History event revision differs from its commit identity")
+    if expected_ids != set(originals):
+        raise ValueError("Generation has unaccepted original revisions")
+    return [(a, r) for a, r in originals.values() if a.kind != "history_event"]
+
+
+def _prose_members(originals, accepted, generation, workspace):
+    if len(originals) != len(accepted.inputs):
+        raise ValueError("Accepted original revision inventory differs")
+    expected_ids = set()
+    for item in accepted.inputs:
+        identity = make_identity("artifact", [workspace, generation.source_id, "file", item.logical_path])
+        expected_ids.add(identity)
+        _accepted_file(originals.get(identity), item, workspace=workspace, source_id=generation.source_id)
+    if expected_ids != set(originals):
+        raise ValueError("Generation has unaccepted original revisions")
+    return list(originals.values())
+
+
 def validate_generation_profile(store, generation, manifest_revision_id=None) -> GenerationProfile:
     """Validate exact accepted metadata; explicit revision is for staging bind only."""
     mode = embedding_mode(generation)
@@ -120,7 +215,7 @@ def validate_generation_profile(store, generation, manifest_revision_id=None) ->
     if source is None:
         raise ValueError("Generation source is unavailable")
     workspace = source["workspace_id"]
-    members = [row for row in store._knowledge_rows("GenerationMember") if row.generation_id == generation.id]
+    members = store._knowledge_rows("GenerationMember", generation_id=generation.id)
     selected = {row.artifact_revision_id for row in members}
     if len(selected) != len(members) or manifest_revision_id not in selected:
         raise ValueError("Accepted manifest is outside exact generation membership")
@@ -154,36 +249,20 @@ def validate_generation_profile(store, generation, manifest_revision_id=None) ->
     accepted = _accepted(metadata["accepted_manifest_v1"], revision)
     if (accepted.source_id, accepted.workspace_id) != (generation.source_id, workspace):
         raise ValueError("Accepted manifest belongs to another source or workspace")
-    originals = {a.id: (a, r) for a, r in pairs if a.kind != "manifest"}
-    if len(originals) != len(pairs) - 1 or len(originals) != len(accepted.inputs):
-        raise ValueError("Accepted original revision inventory differs")
-    expected_ids = set()
-    for item in accepted.inputs:
-        identity = make_identity("artifact", [workspace, generation.source_id, "file", item.logical_path])
-        expected_ids.add(identity)
-        pair = originals.get(identity)
-        if pair is None:
-            raise ValueError("Accepted original artifact is missing")
-        a, r = pair
-        if (
-            a.kind != "file"
-            or a.external_id != item.logical_path
-            or item.input_key
-            != local_input_key(
-                workspace_id=workspace, source_id=generation.source_id, logical_path=item.logical_path
-            )
-            or (r.content_hash, r.raw_uri, r.provider_revision)
-            != (item.raw_hash, item.raw_uri, item.provider_revision)
-        ):
-            raise ValueError("Original revision differs from its accepted raw identity")
-    if expected_ids != set(originals):
-        raise ValueError("Generation has unaccepted original revisions")
     configuration = json.loads(accepted.configuration_json)
+    shape = configuration.get(GENERATION_PROFILE_KEY, PLAIN_PROSE_PROFILE)
+    if shape not in GENERATION_PROFILES:
+        raise ValueError("Unknown accepted generation profile")
+    originals = {a.id: (a, r) for a, r in pairs if a.kind != "manifest"}
+    if len(originals) != len(pairs) - 1:
+        raise ValueError("Accepted original revision inventory differs")
+    members = _code_members if shape == CODE_PROFILE else _prose_members
+    identity_pairs = [manifests[0], *members(originals, accepted, generation, workspace)]
     descriptor = validate_profile_descriptor(configuration.get("embedding_profile"))
     if descriptor.fingerprint != generation.embedding_profile:
         raise ValueError("Generation and accepted embedding profiles differ")
     expected = generation_for_inputs(
-        pairs,
+        identity_pairs,
         workspace_id=workspace,
         source_id=generation.source_id,
         parent_id=generation.parent_id,

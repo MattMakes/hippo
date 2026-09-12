@@ -428,3 +428,48 @@ def test_malformed_manifest_pointer_is_a_controlled_denial(store, tmp_path, poin
     with pytest.raises(ValueError):
         store.bind_generation_embedding_profile(value.gen.id, pointer, **authority(value.job))
     assert store.content_epoch() == before
+
+
+# ----------------------------------------------- CC8: the closed profile selector
+
+
+def test_the_accepted_generation_profile_names_are_closed():
+    module = api()
+    assert module.GENERATION_PROFILES == (module.PLAIN_PROSE_PROFILE, module.CODE_PROFILE)
+    assert (module.PLAIN_PROSE_PROFILE, module.CODE_PROFILE) == ("plain_prose", "code")
+    assert module.GENERATION_PROFILE_KEY == "generation_profile"
+
+
+def test_an_absent_profile_key_is_plain_prose_and_changes_no_existing_identity(store, tmp_path):
+    """Every generation written before the key existed carries no key; nothing moves."""
+    value = prepared(store, tmp_path)
+    assert api().GENERATION_PROFILE_KEY not in value.config
+    assert api().validate_generation_profile(store, value.gen, value.manifest_revision.id)
+
+
+def test_the_profile_selector_is_part_of_generation_identity(store, tmp_path):
+    """It sits in the accepted configuration, which `generation_for_inputs` hashes.
+
+    So a generation cannot be re-labelled after the fact: claiming the code profile is
+    claiming a different generation. The manifest revision itself cannot be re-pointed
+    either -- `metadata_json` is outside `ArtifactRevision.identity_fields`, so rewriting
+    it keeps the ID and `put_knowledge` refuses the changed contents outright.
+    """
+    module = api()
+    value = prepared(store, tmp_path)
+    relabelled = generation_for_inputs(
+        [(a, r) for a, r in value.originals] + [(None, None)][:0],
+        workspace_id=value.workspace,
+        source_id=value.gen.source_id,
+        parent_id=value.gen.parent_id,
+        parser_version=value.gen.parser_version,
+        linker_version=value.gen.linker_version,
+        embedding_profile=value.gen.embedding_profile,
+        configuration=value.config | {module.GENERATION_PROFILE_KEY: module.CODE_PROFILE},
+        created_at=NOW,
+    )
+    assert relabelled.manifest_hash != value.gen.manifest_hash
+    revision = value.manifest_revision.replace(metadata_json='{"accepted_manifest_v1": {}}')
+    assert revision.id == value.manifest_revision.id
+    with pytest.raises(ValueError, match="Immutable record already exists"):
+        store.put_knowledge(revision)
