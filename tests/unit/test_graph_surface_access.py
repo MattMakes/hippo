@@ -7,7 +7,6 @@ from mcp.server.mcpserver.exceptions import ToolError
 from hippo import ask, mcp_server
 from hippo.access import Principal
 from hippo.hipporag.indexer import Chunk, index_source
-from hippo.knowledge.access import AuthorizationChanged
 from hippo.web.app import create_app
 from hippo.web.routes import code, graph
 from tests.unit.test_store_knowledge import foundation
@@ -128,7 +127,7 @@ def test_mcp_query_rechecks_after_building_output(ctx, public_source, monkeypatc
     monkeypatch.setattr(mcp_server, "code_fields", build)
     with pytest.raises(ToolError) as caught:
         getattr(mcp_server, surface + "_tool")(ctx, "Who designed Orion?", principal=Principal.open())
-    assert str(caught.value) == mcp_server.DENIED
+    assert str(caught.value) == f"{mcp_server.DENIED_CODE}: {mcp_server.DENIED}"
 
 
 @pytest.mark.parametrize("error", [False, True])
@@ -185,8 +184,14 @@ def test_code_path_surfaces_validate_error_output(
             "exception": ("exception_path_tool", ("x", "y")),
             "history": ("history_tool", ("x",)),
         }[operation]
-        with pytest.raises(AuthorizationChanged):
+        # The redaction this test exists to prove used to hold by accident: the trailing
+        # `validate()` replaced the `ToolError("PRIVATE SYMBOL")` the `UnknownSymbol`
+        # handler had just built. Now the outer mapper renders the denial deliberately,
+        # and the MCP half asserts what the HTTP half above already does.
+        with pytest.raises(ToolError) as caught:
             getattr(mcp_server, name)(ctx, *args, principal=Principal.open())
+        assert str(caught.value) == f"{mcp_server.DENIED_CODE}: {mcp_server.DENIED}"
+        assert "PRIVATE SYMBOL" not in str(caught.value)
 
 
 def test_staged_generation_without_artifacts_is_not_a_source_dropdown_entry(ctx, client):
@@ -290,7 +295,7 @@ def test_mcp_model_errors_cannot_skip_transport_revocation_checks(ctx, public_so
     with pytest.raises(ToolError) as caught:
         getattr(mcp_server, surface + "_tool")(ctx, "Who designed Orion?", principal=Principal.open())
     message = str(caught.value)
-    assert message == mcp_server.DENIED
+    assert message == f"{mcp_server.DENIED_CODE}: {mcp_server.DENIED}"
     assert "PRIVATE PROVIDER ERROR" not in message
 
 

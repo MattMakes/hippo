@@ -131,6 +131,14 @@ def test_code_builder_holds_snapshot_and_captured_settings(ctx, managed, monkeyp
         message = str(caught.value)
         assert message.startswith("operation_failed:")
         assert "construction failed" not in message
+    elif action == "revoke" and surface == "mcp_path":
+        # `payload` bumps the epoch and returns, so only `_code_answer`'s trailing
+        # `validate()` raises. A `finally` that raises replaces what is in flight, so the
+        # MCP half has to map it like any other failure; the HTTP half below keeps the raw
+        # exception, because `web/app.py` registers the handler that renders it as 409.
+        with pytest.raises(ToolError) as caught:
+            invoke(surface, ctx, request, span)
+        assert str(caught.value) == f"{mcp_server.DENIED_CODE}: {mcp_server.DENIED}"
     else:
         with pytest.raises(AuthorizationChanged if action == "revoke" else RuntimeError):
             invoke(surface, ctx, request, span)
