@@ -529,8 +529,9 @@ def delete_source(
     manifests and every saved byte remain for authorized history. Physical removal is a
     separate, later operation.
 
-    Raises Busy while another source is being indexed. If this source's own job is running,
-    it is cancelled and given a moment to stop first.
+    The legacy lane raises Busy while another source is being indexed, and cancels this
+    source's own job and waits a moment for it to stop. The managed lane does neither; see
+    `_tombstone`.
     """
     source = ctx.store.get_source(source_id)
     if source is not None:

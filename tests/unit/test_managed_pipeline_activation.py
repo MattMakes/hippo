@@ -33,6 +33,7 @@ from tests.unit.test_prose_generation import Runtime
 SETTLE_SECONDS = 60
 FIRST_TEXT = "ACME builds Robot."
 SECOND_TEXT = "ACME now builds Robot."
+THIRD_TEXT = "Zed Corp is located in Dallas."
 # Long enough to make several chunks, so every extract phase is observable.
 LONG_TEXT = "ACME builds Robot. " * 200
 OPERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -1103,9 +1104,10 @@ def test_an_interrupted_refresh_is_retired_by_the_next_ladybug_open(setup):
     w.store.update_source(source, status="ready", stage="refreshing: extract", error=None)
     w.store.close()
 
-    reopened = LadybugStore(w.store.path)
+    path = w.store.path
+    reopened = LadybugStore(path)
     try:
-        w.ctx.store = reopened
+        w.ctx.store = w.store = reopened
         reopened.on_first_connection()  # what a restart does before serving anything
         recovered = row_of(w, source)
         assert (recovered["status"], recovered["stage"]) == ("ready", "refresh_failed")
@@ -1338,7 +1340,7 @@ def mixed(setup, monkeypatch):
     """One managed refresh, one eligible legacy conversion, one unsupported lane, one tombstone."""
     w = setup
     w.managed = managed_source(w, FIRST_TEXT, "Managed")
-    w.tombstoned = managed_source(w, LONG_TEXT, "Tombstoned")
+    w.tombstoned = managed_source(w, THIRD_TEXT, "Tombstoned")
     tombstone_managed_source(
         w.ctx, source_id=w.tombstoned, actor=BuildActor.trusted_local(), operation_id="delete.1"
     )
@@ -1454,7 +1456,8 @@ def test_a_mixed_bulk_refreshes_managed_evidence_and_converts_without_a_legacy_c
     assert converted["managed"] and converted["active_generation_id"]
     assert w.store.passage_ids_for_source(w.unsupported) == []  # the legacy lane was cleared
     assert row_of(w, w.tombstoned)["stage"] == "tombstoned"
-    assert SECOND_TEXT in citations(w.ctx) and LONG_TEXT not in citations(w.ctx)
+    # The tombstoned source's own citation is exactly this text, so its absence is real.
+    assert SECOND_TEXT in citations(w.ctx) and THIRD_TEXT not in citations(w.ctx)
 
 
 def test_one_lane_failing_asynchronously_leaves_every_other_source_intact(mixed, monkeypatch):
@@ -1498,7 +1501,7 @@ def test_a_ladybug_reopen_preserves_pointers_manifests_raw_references_and_the_to
     w = setup
     published = managed_source(w, FIRST_TEXT, "Published")
     failed = managed_source(w, "Zed Corp is located in Austin.", "Failed")
-    tombstoned = managed_source(w, LONG_TEXT, "Tombstoned")
+    tombstoned = managed_source(w, THIRD_TEXT, "Tombstoned")
 
     # A refresh that fails at the model leaves G1 active and the source ready.
     (pipeline.source_dir(w.ctx, failed) / "text.md").write_text(SECOND_TEXT)
@@ -1515,10 +1518,11 @@ def test_a_ladybug_reopen_preserves_pointers_manifests_raw_references_and_the_to
     epochs = (w.store.authorization_epoch(), w.store.suppression_epoch())
     seals = {source: row_of(w, source)["active_generation_id"] for source in (published, failed, tombstoned)}
 
+    path = w.store.path
     w.store.close()
-    reopened = LadybugStore(w.store.path)
+    reopened = LadybugStore(path)
     try:
-        w.ctx.store = reopened
+        w.ctx.store = w.store = reopened
         assert rows_of(w) == before_rows
         assert knowledge_rows(reopened, "Artifact", "ArtifactRevision", "Suppression", "Generation") == (
             before_knowledge
@@ -1533,6 +1537,6 @@ def test_a_ladybug_reopen_preserves_pointers_manifests_raw_references_and_the_to
             for revision in before_knowledge["ArtifactRevision"]
         )
         assert citations(w.ctx) == before_texts
-        assert LONG_TEXT not in before_texts  # the tombstone stays out of the current view
+        assert THIRD_TEXT not in before_texts  # the tombstone stays out of the current view
     finally:
         reopened.close()

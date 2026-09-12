@@ -303,7 +303,8 @@ def test_an_actor_disabled_between_the_bulk_preflight_and_its_worker_fails_only_
     w = setup
     first = managed.managed_source(w, managed.FIRST_TEXT, "First")
     second = managed.managed_source(w, managed.SECOND_TEXT, "Second")
-    for source, text in ((first, managed.LONG_TEXT), (second, managed.LONG_TEXT + "Zed Corp.")):
+    # Rewritten so neither refresh can finish early as `already_current`.
+    for source, text in ((first, managed.THIRD_TEXT), (second, managed.THIRD_TEXT + " Austin too.")):
         (pipeline.source_dir(w.ctx, source) / "text.md").write_text(text)
     generations = {source: managed.row_of(w, source)["active_generation_id"] for source in (first, second)}
     held = w.held_jobs()
