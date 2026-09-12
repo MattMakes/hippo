@@ -12,6 +12,12 @@ in a small in-memory cache (hippo.web.adhoc) so the page shows the answer
 the user just saw and simulations can replay the LLM's fact filter without
 paying for it again. Only POST /analyze runs the search and the model: a GET
 never does, so a link (or an <img src>) cannot start LLM work.
+
+That split decides which session each route holds. POST /analyze and POST
+/api/simulate embed a question, so they dispatch through `retrieval_session`.
+The GET pages explain a trace that already exists over a structural
+`query_session`, and resolve no embedding profile at all - which is what keeps
+reading an analysis possible while the model is unreachable.
 """
 
 from __future__ import annotations
@@ -19,8 +25,9 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from ... import ask as ask_service
@@ -33,13 +40,14 @@ from ...hipporag.retriever import Trace, trace_from_dict
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import retrieval_fields
 from ...knowledge.changeset_access import ChangesetAccess, ChangesetUnavailable
+from ...knowledge.dense_session import retrieval_session
 from ...knowledge.eval_access import EvalAccess
 from ...knowledge.query_access import query_session
 from ...ollama import OllamaError
 from ...store.base import SETTING_RULES
 from ..adhoc import ADHOC_LIMIT, recall_adhoc, remember_adhoc
 from ..auth import principal_of, require
-from ..render import ctx_of, render
+from ..render import ctx_of, public_failure_response, render, retrieval_failure
 
 router = APIRouter()
 api = APIRouter(prefix="/api")
@@ -93,8 +101,11 @@ def analyze_submit(request: Request, question: str = Form("")):
         return RedirectResponse("/ask", status_code=303)
     try:
         trace, answer = ask_service.ask(ctx, question, access=principal.access)
-    except OllamaError as exc:
-        return render(request, "analyze.html", nav="ask", error=str(exc), question=question)
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        # The provider's own words can name a file, quote source text or carry a token.
+        # The page says the one bounded sentence the mapper allows and nothing else.
+        error = retrieval_failure(exc).message
+        return render(request, "analyze.html", nav="ask", error=error, question=question)
     key = remember_adhoc(trace, {"answer": answer.answer, "thought": answer.thought}, owner=principal.user_id)
     # The question rides along so an expired key can offer "analyze it again".
     return RedirectResponse(f"/analyze?key={key}&question={quote(question)}", status_code=303)
@@ -267,7 +278,17 @@ class ChangesetBody(BaseModel):
 def simulate(request: Request, body: SimulateBody):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    with query_session(ctx, principal.access) as session:
+    try:
+        return _simulate(request, ctx, principal, body)
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        # `HTTPException` (the caller's own 404/400) and `AuthorizationChanged` are
+        # neither, so both keep the response they already had.
+        return public_failure_response(retrieval_failure(exc))
+
+
+def _simulate(request: Request, ctx, principal, body: SimulateBody):
+    """One dispatched owner for the whole simulation, from baseline to explanation."""
+    with retrieval_session(ctx, principal.access) as session:
         index, validate = session.graph, session.validate
         baseline: Trace | None = None
         if body.result_id:
@@ -292,20 +313,18 @@ def simulate(request: Request, body: SimulateBody):
             overrides = Overrides.from_dict(body.overrides)
         except (ValueError, TypeError, KeyError) as exc:
             raise HTTPException(400, f"bad overrides: {exc}") from exc
-        try:
-            outcome = run_simulation(
-                ctx,
-                question,
-                overrides,
-                baseline,
-                access=principal.access,
-                authorization_check=validate,
-                session=session,
-            )
-        except OllamaError as exc:
-            response = JSONResponse({"error": str(exc)}, status_code=502)
-            validate()
-            return response
+        # A model failure is mapped by the caller, outside this scope, so that the
+        # session's own release still proves the caller's permissions first: a
+        # revocation during the failing call must answer 409, not the model's code.
+        outcome = run_simulation(
+            ctx,
+            question,
+            overrides,
+            baseline,
+            access=principal.access,
+            authorization_check=validate,
+            session=session,
+        )
         explanation = explain(index, outcome.trace)
         response = {
             "trace": outcome.trace.to_dict(),
