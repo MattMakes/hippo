@@ -20,6 +20,13 @@ from hippo.store.migrations import DEFAULT_WORKSPACE_ID
 
 from .access import AuthorizationChanged
 from .identity import canonical_json
+from .public_errors import (
+    INVALID_SOURCE_SIZE,
+    INVALID_SOURCE_TYPE,
+    OPERATION_FAILED,
+    REBUILD_REQUIRED,
+    RETRIEVAL_UNAVAILABLE,
+)
 from .query_access import QuerySession, current_access, query_access, query_session
 from .replay import reconstruct_trace, view_fingerprint
 from .saved_snapshots import release_saved_evaluations
@@ -27,6 +34,39 @@ from .saved_snapshots import release_saved_evaluations
 
 class EvalAccessDenied(ValueError):
     """The evaluation is missing or unavailable to this audience."""
+
+
+# Every code `public_failure` can return, which is everything an evaluation row can carry.
+_PUBLIC_CODES = frozenset(
+    failure.code
+    for failure in (
+        REBUILD_REQUIRED,
+        RETRIEVAL_UNAVAILABLE,
+        INVALID_SOURCE_TYPE,
+        INVALID_SOURCE_SIZE,
+        OPERATION_FAILED,
+    )
+)
+
+
+def failure_code_of(stored: str | None) -> str | None:
+    """The closed public code for an evaluation row that is presenting a failure, else `None`.
+
+    A failed run, question set or result stores `f"{code}: {type(exc).__name__}: {exc}"`, the
+    shape a failed managed build already stores on its Source row: the code is the half a
+    reader may see and the rest is the operator's. `store.add_result` and `update_run` write
+    fixed property lists, so the first segment is where a closed field can live without a
+    schema change -- but only a real code is ever read back out of it. Every row written
+    before this convention holds `f"{type(exc).__name__}: {exc}"`, and publishing that prefix
+    would disclose an exception class name, or whatever else a caller once put there.
+
+    Such a row cannot fall silent either -- it is still presenting a failure -- so it takes
+    the caller fallback `public_errors` documents, `operation_failed`.
+    """
+    if type(stored) is not str or not stored.strip():
+        return None
+    code = stored.split(":", 1)[0].strip()
+    return code if code in _PUBLIC_CODES else OPERATION_FAILED.code
 
 
 def _guarded_collection(function):
@@ -301,6 +341,7 @@ class EvalAccess:
             result["source_name"] = source["name"]
         result["question_count"] = len(self.list_questions(set_id))
         result["run_count"] = len(self._ids("runs", parent=set_id))
+        result["failure_code"] = failure_code_of(result.get("error"))
         if authorized[0]:
             result["error"] = None  # exception strings may embed model/provider input
         graph.validate_authorization()
@@ -375,7 +416,17 @@ class EvalAccess:
             gold_passage_ids=list(question.get("gold_passage_ids") or []),
             answer_withheld=not reusable,
         )
+        # The closed half of the stored string survives; the private half never leaves here.
+        result["failure_code"] = failure_code_of(result.get("error"))
         result["error"] = None
+        # A question that failed before it retrieved saved no trace and no answer, so there is
+        # nothing to withhold. "Withheld" has to mean "a saved answer exists and this audience
+        # may not see it": otherwise a run of routing failures reads to `get_run` as a run of
+        # hidden answers, and it blanks the whole summary -- including the error count that is
+        # the only thing left to say about it. A failure that happened later does have a saved
+        # trace, and that one is withheld like any other.
+        if result["failure_code"] is not None and not raw_trace:
+            result["answer_withheld"] = False
         if not reusable:
             for key in ("answer", "thought", "verdict", "judge_reason"):
                 result[key] = ""
@@ -420,6 +471,7 @@ class EvalAccess:
             return None
         results = self.list_results(run_id)
         result = deepcopy(row)
+        result["failure_code"] = failure_code_of(result.get("error"))
         if authorized[0]:
             result["error"] = None
         visible_questions = len(self.list_questions(refs["set_id"]))

@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from ...evals import question_maker, runner
 from ...knowledge.eval_access import EvalAccess, EvalAccessDenied
+from ...knowledge.public_errors import OPERATION_FAILED, public_failure_for_code
 from ...store.base import validate_settings
 from ..auth import principal_of, require_capability
 from ..render import STOP_POLLING, ctx_of, render
@@ -50,7 +51,22 @@ def _write(request: Request, method: str, *args, **kwargs):
         raise HTTPException(404, "no such evaluation") from exc
 
 
+def public_reason(code: str | None) -> str:
+    """The closed sentence for a code `EvalAccess` passed through, never a stored string.
+
+    An evaluation row that is presenting a failure must not fall silent, so a code this
+    table does not map takes the caller fallback `public_errors` documents. Only the
+    message is read: `invalid_source` covers two HTTP statuses, so a stored code can
+    never be turned back into one.
+    """
+    if not code:
+        return ""
+    return (public_failure_for_code(code) or OPERATION_FAILED).message
+
+
+# `errors` first: a reader who cannot tell that retrieval failed cannot read any of the rest.
 SUMMARY_CARDS = [
+    ("errors", "Errors", "questions whose retrieval or answer failed"),
     ("accuracy", "Accuracy", "mean judge score: correct 1, partial ½, incorrect 0"),
     ("exact_match", "Exact match", "answer equals the expected one after normalising"),
     ("f1", "F1", "word overlap between answer and expected"),
@@ -110,6 +126,7 @@ def set_page(request: Request, set_id: str, error: str = ""):
         questions=_service(request).list_questions(set_id),
         runs=_service(request).list_runs(set_id),
         error=error,
+        public_reason=public_reason,
     )
 
 
@@ -131,6 +148,7 @@ def run_page(request: Request, run_id: str, compare: str = ""):
         siblings=siblings,
         other=other,
         cards=SUMMARY_CARDS,
+        public_reason=public_reason,
     )
 
 
@@ -148,6 +166,7 @@ def run_partial(request: Request, run_id: str, compare: str = ""):
         results=_service(request).list_results(run_id),
         cards=SUMMARY_CARDS,
         other=_service(request).get_run(compare) if compare else None,
+        public_reason=public_reason,
         status_code=200 if run["status"] == "running" else STOP_POLLING,
     )
 

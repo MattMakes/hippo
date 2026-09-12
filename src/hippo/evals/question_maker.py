@@ -41,6 +41,7 @@ from ..hipporag.graph_index import COMMIT, ENTITY, SYMBOL, GraphIndex, Passage
 from ..hipporag.paths import display_at, display_of
 from ..knowledge.citations import resolve_citations
 from ..knowledge.eval_access import EvalAccess
+from ..knowledge.public_errors import OPERATION_FAILED, public_failure
 from ..knowledge.query_access import AuthorizedModel, query_session
 from ..ollama import OllamaError
 
@@ -138,7 +139,12 @@ def generate_questions(
             )
         except Exception as exc:
             log.exception("Question generation for source %s failed", source_id)
-            store.update_question_set(set_id, status="failed", stage="failed", error=str(exc))
+            # The closed code first, so the set page has a public reason to render; the rest
+            # of the string stays the operator's. See `eval_access.failure_code_of`.
+            code = (public_failure(exc) or OPERATION_FAILED).code
+            store.update_question_set(
+                set_id, status="failed", stage="failed", error=f"{code}: {type(exc).__name__}: {exc}"
+            )
             raise
         return set_id
 

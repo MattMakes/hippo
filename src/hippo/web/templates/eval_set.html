@@ -15,7 +15,7 @@
 {% if question_set.status == 'generating' %}
 <div class="callout warn" hx-get="/evals/sets/{{ question_set.id }}" hx-trigger="every 3s" hx-select="main" hx-target="main" hx-swap="outerHTML">Still writing questions… {{ question_set.stage }} {% if question_set.progress_total %}({{ question_set.progress_done }}/{{ question_set.progress_total }}){% endif %}</div>
 {% elif question_set.status == 'failed' %}
-<div class="callout bad">Generating questions failed: {{ question_set.error }}</div>
+<div class="callout bad">Generating questions failed: {{ public_reason(question_set.failure_code) }}</div>
 {% endif %}
 
 <section class="card">

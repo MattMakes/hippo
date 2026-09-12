@@ -26,6 +26,11 @@ from .embedding_profile import (
 from .generation_profiles import embedding_mode, validate_generation_profile
 from .query_access import AuthorizedModel, QuerySession, query_session
 
+# The two modes a retrieval dispatch yields once it has chosen a route. Anything else is
+# an owner that has not been dispatched yet: a structural graph reports "unavailable",
+# and an activated empty one reports "legacy", which re-wrapping costs nothing.
+_DISPATCHED = frozenset({"verified", "tag_compatible"})
+
 
 class DenseSessionUnavailable(DenseUnavailable):
     """A held candidate inventory cannot satisfy the requested dense route."""
@@ -183,6 +188,14 @@ def _session(
             session.settings
         ):
             raise DenseSessionUnavailable("invalid_borrow", "Requested settings differ from the held session")
+        if not verified and session.graph.dense_capability.mode in _DISPATCHED:
+            # Already routed, so hand the caller's own owner back untouched: re-resolving
+            # would cost a second `/api/show` and probe embedding for the same profile,
+            # and the session's own guard is still the one that authorizes every read.
+            # The two checks above ran first on purpose -- a pass-through is a borrow, and
+            # the rule that used to live in `ask._dispatch` skipped both of them.
+            yield session
+            return
         owner_context = nullcontext(session)
     else:
         owner_context = query_session(ctx, access, settings=settings, structural=True)
@@ -289,7 +302,20 @@ def dense_session(
 def retrieval_session(
     ctx, access=None, *, settings=None, resolved_profile=None, spec=None, cache=None, session=None
 ):
-    """Dispatch retained evidence to verified dense or explicit tag compatibility."""
+    """Dispatch retained evidence to verified dense or explicit tag compatibility.
+
+    The whole own/borrow/pass-through rule for a model path lives here, so every caller
+    gets the same one:
+
+    * no `session` -- acquire the structural owner and route it;
+    * a `session` that is not routed yet (a structural owner, or an activated empty
+      corpus) -- route it in place, without reacquiring a graph;
+    * a `session` already routed to a dense mode -- yield it unchanged.
+
+    A borrowed session keeps its own audience and its own captured settings either way:
+    passing `access`, or settings the session never captured, raises `invalid_borrow`
+    rather than being quietly dropped.
+    """
     with _session(
         ctx,
         access,

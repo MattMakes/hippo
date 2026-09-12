@@ -204,6 +204,115 @@ def test_result_reconstructs_trace_and_withholds_answer_and_metrics_after_view_c
     assert "SECRET" not in repr(stale)
 
 
+POISON_ERROR = (
+    "EmbeddingProfileMismatch: token=sk-live-DEADBEEF /Users/someone/notes.md "
+    "'Acme Robotics is headquartered in Boulder.'"
+)
+
+
+def failed_result(ctx, service, set_id, question, stored_error):
+    run = ctx.store.create_run(set_id, "run", ctx.store.get_settings())
+    return run, ctx.store.add_result(run, question, dict(answer="", error=stored_error))
+
+
+def test_a_failed_result_passes_its_closed_code_through_and_nothing_else(ctx):
+    """A reader learns *that* retrieval failed and *which* closed family, never the text.
+
+    The runner stores the code it already computed as the first segment of `error`, the way
+    `managed_activation.record_build_failure` does. `error` itself stays nulled: the rest of
+    the string is `f"{type(exc).__name__}: {exc}"`, and several of the exceptions in the
+    public table carry a model reply body or an absolute path by construction.
+    """
+    api()
+    alice, _ = readers(ctx)
+    service, set_id, question = owned(ctx, alice)
+    _, result_id = failed_result(
+        ctx, service, set_id, question, f"retrieval_rebuild_required: {POISON_ERROR}"
+    )
+    result = service.get_result(result_id)
+    assert result["failure_code"] == "retrieval_rebuild_required"
+    assert result["error"] is None
+    assert "sk-live-DEADBEEF" not in repr(result)
+    assert "Acme Robotics" not in repr(result)
+
+
+def test_a_result_that_did_not_fail_carries_no_code(ctx):
+    api()
+    alice, _ = readers(ctx)
+    service, set_id, question = owned(ctx, alice)
+    _, result_id = failed_result(ctx, service, set_id, question, None)
+    assert service.get_result(result_id)["failure_code"] is None
+
+
+@pytest.mark.parametrize(
+    "stored,expected",
+    [
+        ("retrieval_rebuild_required", "retrieval_rebuild_required"),
+        ("retrieval_unavailable: OllamaError: boom", "retrieval_unavailable"),
+        ("EmbeddingProfileMismatch: boom", "operation_failed"),
+        ("sk-live-DEADBEEF: boom", "operation_failed"),
+        ("boom", "operation_failed"),
+        ("", None),
+        ("   ", None),
+        (None, None),
+    ],
+    ids=["code-only", "code-and-text", "class-name", "secret", "no-colon", "empty", "blank", "none"],
+)
+def test_only_a_real_public_code_is_ever_read_back_out_of_a_stored_error(ctx, stored, expected):
+    """Every row written before the closed field existed holds `f"{type(exc).__name__}: {exc}"`.
+
+    Splitting on the first colon and publishing the result would disclose a class name -- or
+    worse, whatever a caller once put there -- so the prefix is read back only when it is one
+    of the codes `public_failure` itself can return. A row that is nonetheless presenting a
+    failure cannot fall silent, so it takes the documented `operation_failed` fallback.
+    """
+    api()
+    alice, _ = readers(ctx)
+    service, set_id, question = owned(ctx, alice)
+    _, result_id = failed_result(ctx, service, set_id, question, stored)
+    result = service.get_result(result_id)
+    assert result["failure_code"] == expected
+    assert result["error"] is None
+    assert "sk-live-DEADBEEF" not in repr(result)
+    assert "EmbeddingProfileMismatch" not in repr(result["failure_code"])
+
+
+def test_a_run_of_routing_failures_still_reports_its_summary(ctx):
+    """Nothing was saved, so nothing is withheld, so the error count survives the read.
+
+    `get_run` blanks the summary when any result withholds its answer. A question that
+    failed before it retrieved stored no trace, which used to read as "withheld" and took
+    the whole summary -- the error count included -- with it.
+    """
+    api()
+    alice, _ = readers(ctx)
+    service, set_id, question = owned(ctx, alice)
+    run, result_id = failed_result(
+        ctx, service, set_id, question, f"retrieval_rebuild_required: {POISON_ERROR}"
+    )
+    assert service.get_result(result_id)["answer_withheld"] is False
+    stored_run = service.get_run(run)
+    assert stored_run["summary"]["errors"] == 1
+    assert stored_run["summary"]["error_codes"] == ["retrieval_rebuild_required"]
+    assert "sk-live-DEADBEEF" not in repr(stored_run)
+
+
+def test_a_failed_question_set_and_run_pass_their_closed_code_through(ctx):
+    api()
+    alice, _ = readers(ctx)
+    service, set_id, question = owned(ctx, alice)
+    run, _ = failed_result(ctx, service, set_id, question, None)
+    ctx.store.update_question_set(set_id, status="failed", error=f"retrieval_unavailable: {POISON_ERROR}")
+    ctx.store.update_run(run, status="failed", error=f"operation_failed: {POISON_ERROR}")
+    question_set = service.get_question_set(set_id)
+    assert question_set["failure_code"] == "retrieval_unavailable"
+    assert question_set["error"] is None
+    stored_run = service.get_run(run)
+    assert stored_run["failure_code"] == "operation_failed"
+    assert stored_run["error"] is None
+    assert "sk-live-DEADBEEF" not in repr((question_set, stored_run))
+
+
 def test_new_set_and_ownership_roll_back_together(ctx, monkeypatch):
     module = api()
     alice, _ = readers(ctx)

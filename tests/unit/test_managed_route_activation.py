@@ -69,7 +69,8 @@ class Watch:
 
 
 def watch(ctx, monkeypatch) -> Watch:
-    """Count acquisitions, heartbeats, finalizers and the dense mode ask dispatched."""
+    """Count acquisitions, heartbeats, finalizers and the dense mode a model path dispatched."""
+    from hippo.knowledge import dense_session as dense_session_module
     from hippo.knowledge.lease_heartbeat import LeaseHeartbeat
 
     record = Watch()
@@ -97,17 +98,24 @@ def watch(ctx, monkeypatch) -> Watch:
 
     monkeypatch.setattr(LeaseHeartbeat, "start", counted)
 
-    # setattr fails loudly until ask.py actually imports the dispatcher: that is
-    # the point of the assertion, not a side effect of it.
-    dispatch = ask_module.retrieval_session
+    # One patch point for every promoted caller. `ask`, `analysis.simulate`, `evals.runner`
+    # and `evals.rag_all` all reach the public rule through the module object at call time,
+    # so patching the module attribute observes all four; a route module that imported the
+    # name directly binds it at import and needs its own patch (see
+    # `test_managed_web_surfaces.watch`). `getattr` fails loudly if the name moves.
+    dispatch = getattr(dense_session_module, "retrieval_session")  # noqa: B009
 
     @contextmanager
     def observed(*args, **kwargs):
         with dispatch(*args, **kwargs) as session:
-            record.dispatched.append(session.graph.dense_capability.mode)
+            # A pass-through is not a dispatch: `retrieval_session` hands an already routed
+            # session straight back, and counting that would read as a second route chosen
+            # for the same owner. Only a real activation yields a new session.
+            if session is not kwargs.get("session"):
+                record.dispatched.append(session.graph.dense_capability.mode)
             yield session
 
-    monkeypatch.setattr(ask_module, "retrieval_session", observed)
+    monkeypatch.setattr(dense_session_module, "retrieval_session", observed)
     return record
 
 
@@ -382,6 +390,49 @@ def test_an_already_dispatched_session_is_not_re_resolved(ctx, tmp_path, monkeyp
         for path, body in added
         if path == "/api/embed" and any("probe" in text for text in body.get("input", ()))
     ]
+
+
+def test_the_dispatch_rule_is_public_and_owns_every_borrow_decision(ctx, tmp_path, monkeypatch):
+    """`retrieval_session` itself decides own, wrap or pass through -- no private helper.
+
+    `ask._dispatch` used to hold this rule, and `analysis/simulate.py` and `evals/runner.py`
+    imported it privately (the 4d review's finding 1). It was also weaker than the borrow
+    checks it wrapped: its pass-through branch dropped the caller's `access` where
+    `_session` refuses it. The rule now lives beside those checks, so a pass-through is
+    subject to them too.
+    """
+    from hippo.knowledge.dense_session import retrieval_session
+
+    _, server = verified(ctx, tmp_path)
+    monkeypatch.setattr(ctx.ollama, "chat_json", lambda *args, **kwargs: {"triples": []})
+    with retrieval_session(ctx, EVERYTHING) as session:
+        before = len(server.calls)
+        # Already routed: the same owner comes back, and no second profile is resolved.
+        with retrieval_session(ctx, session=session) as again:
+            assert again is session
+        assert not [path for path, _ in server.calls[before:] if path == "/api/show"]
+
+        # An audience alongside a borrow is refused even now that the borrow is a no-op.
+        with pytest.raises(DenseSessionUnavailable) as caught:
+            with retrieval_session(ctx, EVERYTHING, session=session):
+                pytest.fail("a borrowed session must keep its own audience")
+        assert caught.value.reason == "invalid_borrow"
+
+        # And so are settings the held session never captured.
+        with pytest.raises(DenseSessionUnavailable) as caught:
+            with retrieval_session(ctx, settings={"qa_top_k": 1}, session=session):
+                pytest.fail("a pass-through must not silently widen the held settings")
+        assert caught.value.reason == "invalid_borrow"
+
+
+def test_no_module_reaches_dense_dispatch_through_a_private_helper():
+    """The promotion is only done when the private symbol is gone from every importer."""
+    from hippo.analysis import simulate as simulate_module
+    from hippo.evals import runner as runner_module
+
+    assert not hasattr(ask_module, "_dispatch")
+    for module in (ask_module, simulate_module, runner_module):
+        assert not hasattr(module, "_dispatch"), module.__name__
 
 
 def test_a_borrowed_legacy_session_fails_closed(ctx):

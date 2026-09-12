@@ -180,6 +180,69 @@ def test_run_table_says_which_questions_fell_back_to_embeddings(client, ctx):
     assert ctx.store.list_results(run_id)[0]["used_dpr_fallback"] is True
 
 
+UNROUTABLE = "sk-live-DEADBEEF 'Acme Robotics is headquartered in Boulder.'"
+
+
+def test_a_run_that_could_not_route_shows_a_count_and_a_public_reason(client, ctx, monkeypatch):
+    """The one thing a reader could not see before: that retrieval failed, and why.
+
+    `errors` was in the summary but not in the cards, and the per-question error pill tested a
+    field `EvalAccess` had already nulled, so a run whose every question failed to route
+    rendered identically to a run of unanswerable questions. Both surfaces now read the closed
+    code, never the stored string.
+    """
+    from hippo.evals import runner
+    from hippo.knowledge.embedding_profile import EmbeddingProfileMismatch
+
+    def unroutable(*args, **kwargs):
+        raise EmbeddingProfileMismatch(UNROUTABLE)
+
+    monkeypatch.setattr(runner, "search", unroutable)
+    set_id = client.post(
+        "/api/evals/sets",
+        json={"name": "mixed", "questions": [{"text": "Where is Acme?", "expected_answer": "Boulder"}]},
+    ).json()["set_id"]
+    run_id = client.post(f"/api/evals/sets/{set_id}/run", json={}).json()["run_id"]
+    ctx.jobs.wait_all()
+
+    run = ctx.store.get_run(run_id)
+    assert run["status"] == "done" and run["summary"]["errors"] == 1
+    page = client.get(f"/evals/runs/{run_id}")
+    assert page.status_code == 200
+    assert "Errors" in page.text and "Rebuild compatible sources before retrieval" in page.text
+    assert "sk-live-DEADBEEF" not in page.text and "Acme Robotics is headquartered" not in page.text
+    assert "EmbeddingProfileMismatch" not in page.text
+    assert "Errors" in client.get(f"/partials/runs/{run_id}").text
+
+    served = client.get(f"/api/evals/runs/{run_id}").json()
+    assert served["results"][0]["failure_code"] == "retrieval_rebuild_required"
+    assert served["results"][0]["error"] is None
+    assert "sk-live-DEADBEEF" not in page.text
+
+
+def test_a_question_set_that_failed_to_generate_shows_a_public_reason(client, ctx, monkeypatch):
+    from hippo.evals import question_maker
+    from hippo.ollama import OllamaError
+
+    load_sample(client, ctx)
+    (source,) = ctx.store.list_sources()
+
+    def unreachable(*args, **kwargs):
+        raise OllamaError(UNROUTABLE)
+
+    monkeypatch.setattr(question_maker, "_passages_of", unreachable)
+    response = client.post(f"/api/sources/{source['id']}/generate-questions", json={})
+    set_id = response.json()["set_id"]
+    ctx.jobs.wait_all()
+    assert ctx.store.get_question_set(set_id)["status"] == "failed"
+
+    page = client.get(f"/evals/sets/{set_id}")
+    assert page.status_code == 200
+    assert "Generating questions failed" in page.text
+    assert "Retrieval service is unavailable" in page.text
+    assert "sk-live-DEADBEEF" not in page.text and "OllamaError" not in page.text
+
+
 def test_summary_shows_code_seeded_and_path_fidelity_cards(client, ctx):
     # A prose-only run still carries both keys (S2.11): `code_seeded` reads 0.0 for every
     # question and `path_fidelity` has no commit questions to average, so its card must still
