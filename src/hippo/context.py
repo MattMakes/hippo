@@ -37,6 +37,66 @@ def _release_snapshot(bundle):
         log.warning("Snapshot reference release deferred to lease expiry", exc_info=True)
 
 
+NATIVE_READS = ("load_passages", "load_symbols", "load_data_objects", "load_commits")
+
+
+def _untagged_source_ids(store) -> frozenset[str]:
+    """The sources that still own at least one native row no generation claims.
+
+    Four unscoped reads filtered in Python, because the Store has no bounded
+    "untagged rows of source" read and `store/` is another slice's file. The one this
+    wants is `source_ids_with_untagged_native_rows() -> frozenset[str]`, a single
+    `generation_id IS NULL` scan over `Passage`/`Symbol`/`DataObject`/`Commit`.
+    """
+    return frozenset(
+        row["source_id"]
+        for name in NATIVE_READS
+        for row in getattr(store, name)()
+        if row.get("generation_id") is None and row.get("source_id")
+    )
+
+
+def legacy_lane(store, sources, managed_records) -> tuple[frozenset[str], frozenset[str]]:
+    """`(the sources the legacy lane serves, the converting subset of them)`.
+
+    Two rules, because a conversion is a `Generation` being built and nothing else is.
+
+    A source with no generation keeps `13efa40`'s classification byte for byte: any
+    managed record at all -- an `Artifact`, the `managed` flag -- takes it out of the
+    legacy lane, and a source with no managed record stays in it whether or not it has
+    a row to show. Nothing about such a source is mid-conversion, so nothing about it
+    changes.
+
+    A source that has a generation is converting, and `source_serves_legacy` keeps it in
+    the legacy lane until its first publication. It is *presented* there only while it
+    still owns an untagged row to serve: a bootstrap through managed ingress stages every
+    row it has under a generation, so it has none, and it stays invisible on every surface
+    until it publishes -- exactly as it was before CC1 (plan invariant 5, PA2, PA6). A
+    legacy source converting in place has its old untagged rows, and keeps serving exactly
+    those.
+
+    The production coordinator writes the `Generation` before the first `Artifact`
+    (`ingest/prose_generation.py`), so a converting source never falls into the first rule
+    for a transaction and its legacy graph never blinks out: Blocker A stays fixed.
+    """
+    generation_sources = {record.source_id for record in store._knowledge_rows("Generation")}
+    untagged, legacy, converting = None, set(), set()
+    for row in sources:
+        identity = row["id"]
+        if identity not in generation_sources:
+            if identity not in managed_records:
+                legacy.add(identity)
+            continue
+        if not store.source_serves_legacy(row):
+            continue
+        if untagged is None:
+            untagged = _untagged_source_ids(store)
+        if identity in untagged:
+            legacy.add(identity)
+            converting.add(identity)
+    return frozenset(legacy), frozenset(converting)
+
+
 @dataclass
 class AppContext:
     config: Config
@@ -171,7 +231,10 @@ class AppContext:
         # Which loader can answer at all, not which lane serves a source: `self.graph()`
         # below is `GraphIndex.load`, which reads every native row with no generation
         # filter, so one managed row anywhere means the generation-aware loader must run.
-        # The serving lane is decided per source inside it, by `source_serves_legacy`.
+        # A generation-tagged row names a `Generation`, which puts its source in this set,
+        # so the unfiltered loader is unreachable while any tagged row exists and never has
+        # tagged rows to drop. The serving lane is decided per source inside the
+        # generation-aware builders, by `legacy_lane`.
         managed_sources = {record.source_id for record in self.store._knowledge_rows("Artifact")}
         managed_sources.update(record.source_id for record in self.store._knowledge_rows("Generation"))
         managed_sources.update(row["id"] for row in self.store.list_sources() if row.get("managed"))
@@ -216,10 +279,10 @@ class AppContext:
         profile = self.ollama.embed_model
         sources = self.store.list_sources(access)
         # The serving lane, one level below the loader choice: a source converting to
-        # managed generations has staged rows and so is in `managed_sources`, but until it
-        # publishes it has no generation to serve and belongs here, where the loader takes
-        # exactly its untagged rows. Selection is the active pointer and nothing else.
-        legacy_ids = frozenset(row["id"] for row in sources if self.store.source_serves_legacy(row))
+        # managed generations is in `managed_sources` from its first staged row, but until
+        # it publishes it has no generation to serve and belongs here, where the loader
+        # takes exactly its untagged rows. Selection is the active pointer and nothing else.
+        legacy_ids, _ = legacy_lane(self.store, sources, managed_sources)
         selected = {
             row["id"]: row["active_generation_id"] for row in sources if row.get("active_generation_id")
         }
@@ -341,8 +404,8 @@ class AppContext:
 
         sources = self.store.list_sources(access)
         # The same split as `_build_managed_graph`: `managed_sources` chose this loader,
-        # `source_serves_legacy` chooses the lane, and the active pointer chooses evidence.
-        legacy_ids = frozenset(row["id"] for row in sources if self.store.source_serves_legacy(row))
+        # `legacy_lane` chooses the lane, and the active pointer chooses evidence.
+        legacy_ids, _ = legacy_lane(self.store, sources, managed_sources)
         strict = {
             row.generation_id
             for row in self.store._knowledge_rows("IndexManifest")
