@@ -46,13 +46,17 @@ class DenseSelection:
 
 @dataclass(frozen=True, slots=True)
 class DenseCapability:
-    mode: Literal["legacy", "verified", "unavailable"] = "legacy"
+    mode: Literal["legacy", "verified", "tag_compatible", "unavailable"] = "legacy"
     fingerprint: str | None = None
     dimension: int | None = None
 
     def __post_init__(self) -> None:
         if self.mode == "verified":
             DenseSelection(self.fingerprint, self.dimension)
+        elif self.mode == "tag_compatible":
+            _dimension(self.dimension)
+            if self.fingerprint is not None:
+                raise ValueError("Tag compatibility cannot claim a verified fingerprint")
         elif (
             self.mode not in ("legacy", "unavailable")
             or self.fingerprint is not None
@@ -437,7 +441,7 @@ def validate_dense_graph(graph) -> None:
         | {("fact", identity) for identity in set(facts) - set(prose)}
     ):
         raise ValueError("Legacy sidecar does not exactly cover remaining candidates")
-    if legacy_rows and capability.mode != "unavailable":
+    if legacy_rows and capability.mode not in ("unavailable", "tag_compatible"):
         raise ValueError("Legacy vectors cannot satisfy verified dense capability")
     for row in legacy_rows:
         if row.lane == "fact":
@@ -552,7 +556,14 @@ def validate_dense_graph(graph) -> None:
                 or graph.entity_names.get(fact.object_id) != fact.object
             ):
                 raise ValueError("Dense Fact endpoints are not the authorized projected entities")
-    width = capability.dimension if capability.mode == "verified" else 0
+    active = capability.mode in ("verified", "tag_compatible")
+    if capability.mode == "tag_compatible":
+        if len({row.profile for row in rows}) > 1:
+            raise ValueError("Tag-compatible rows require one declared tag")
+        if any(row.dimension != capability.dimension for row in (*rows, *legacy_rows)):
+            raise ValueError("Tag-compatible row dimension disagrees with capability")
+    width = capability.dimension if active else 0
+    canonical = by_key | {(row.lane, row.projected_id): row for row in legacy_rows}
     for lane, items, matrix in (
         ("passage", graph.passages, graph.passage_embeddings),
         ("fact", graph.facts, graph.fact_embeddings),
@@ -563,9 +574,9 @@ def validate_dense_graph(graph) -> None:
             or matrix.shape != (len(items), width)
         ):
             raise ValueError("Dense search matrix shape does not match its capability")
-        if capability.mode == "verified":
+        if active:
             for item, vector in zip(items, matrix, strict=True):
-                if tuple(vector.tolist()) != by_key[(lane, item.id)].values:
+                if tuple(vector.tolist()) != canonical[(lane, item.id)].values:
                     raise ValueError("Dense matrix differs from its canonical bound sidecar")
 
 

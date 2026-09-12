@@ -49,7 +49,11 @@ class AuthorizedModel:
     @property
     def profile_fingerprint(self) -> str | None:
         """Expose only the wrapped immutable profile identity, without model I/O."""
-        return getattr(self.model, "profile_fingerprint", None)
+        self.validate()
+        try:
+            return getattr(self.model, "profile_fingerprint", None)
+        finally:
+            self.validate()
 
     def _call(self, name, *args, **kwargs):
         self.validate()

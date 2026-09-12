@@ -798,7 +798,7 @@ class GraphIndex:
             for node in code_nodes
         ]
 
-        if self.dense_capability.mode == "verified":
+        if self.dense_capability.mode in ("verified", "tag_compatible"):
             if not keep_passages:
                 passage_embeddings = np.zeros((0, self.dense_capability.dimension), dtype=np.float32)
             if not facts:

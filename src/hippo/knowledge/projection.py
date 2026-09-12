@@ -816,7 +816,7 @@ def _assemble(
         for identity, (boost, specific) in statistics.items():
             boosts[index[identity]], specificity[index[identity]] = boost, specific
     capability = dense_capability or DenseCapability()
-    width = capability.dimension if capability.mode == "verified" else 0
+    width = capability.dimension if capability.mode in ("verified", "tag_compatible") else 0
     passage_matrix = (
         np.stack([passage_vectors[p.id] for p in passages]).astype(np.float32)
         if passages and capability.mode != "unavailable"

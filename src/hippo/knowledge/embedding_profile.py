@@ -408,6 +408,11 @@ class ProfiledEmbeddings:
     def embed_model(self) -> str:
         return self.resolved.profile.model
 
+    @property
+    def profile_fingerprint(self) -> str:
+        """The captured profile identity; reading it performs no remote check."""
+        return self.resolved.fingerprint
+
     def validate(self) -> None:
         self._identity.validate()
 
