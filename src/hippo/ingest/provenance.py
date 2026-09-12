@@ -4,6 +4,10 @@ Analysis coordinates address the UTF-8 encoding of trimmed reader output. Origin
 coordinates address untrimmed decoded text. Raw ranges address retained input bytes;
 replacement decoding is explicitly non-exact. Only complete original lines carry
 file_lines locators. Nothing in these preparation values grants evidence access.
+
+`RawInput` is the accepted-input value `hippo.knowledge.inputs` owns; it is
+re-exported here because reading bytes is what this module does with one, and
+because `hippo.ingest.provenance` is the import path every caller already uses.
 """
 
 from __future__ import annotations
@@ -15,9 +19,9 @@ from hashlib import sha256
 from pathlib import PurePosixPath
 from typing import Literal
 
-from hippo.knowledge.identity import make_identity, normalize_relative_path
+from hippo.knowledge.identity import make_identity
+from hippo.knowledge.inputs import RawInput
 from hippo.knowledge.model import FileLinesLocator
-from hippo.knowledge.raw_artifacts import RawArtifact
 
 from .readers import (
     CODE_EXTENSIONS,
@@ -34,40 +38,6 @@ from .readers import (
 
 class UnsupportedProvenanceFormat(ReadError):
     """This reader has no honest original-unit mapping for the requested format."""
-
-
-@dataclass(frozen=True, slots=True)
-class RawInput:
-    input_key: str
-    logical_path: str
-    media_type: str
-    raw_uri: str
-    raw_hash: str
-    byte_length: int
-    provider_revision: str | None = None
-    container_chain: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        if (
-            not isinstance(self.input_key, str)
-            or not self.input_key
-            or not isinstance(self.media_type, str)
-            or not self.media_type
-        ):
-            raise ValueError("Raw input needs an input key and media type")
-        if self.provider_revision is not None and not isinstance(self.provider_revision, str):
-            raise ValueError("Provider revision must be immutable text")
-        if isinstance(self.container_chain, str):
-            raise ValueError("Container chain must be a collection of logical paths")
-        object.__setattr__(self, "logical_path", normalize_relative_path(self.logical_path))
-        object.__setattr__(
-            self, "container_chain", tuple(normalize_relative_path(p) for p in self.container_chain)
-        )
-        _ = self.raw_artifact  # Validate the portable, content-addressed reference.
-
-    @property
-    def raw_artifact(self) -> RawArtifact:
-        return RawArtifact(self.raw_uri, self.raw_hash, self.byte_length)
 
 
 def _range(start: int, end: int, limit: int | None = None) -> None:
