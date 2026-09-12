@@ -23,8 +23,14 @@ from hippo.context import AppContext
 from hippo.hipporag import indexer
 from hippo.hipporag.indexer import GRAPH_WRITE_LOCK
 from hippo.ingest import pipeline
+from hippo.knowledge.build_authority import BuildActor
+from hippo.knowledge.source_lifecycle import tombstone_managed_source
+from tests.unit import test_managed_pipeline_activation as managed
 
 WAIT = 30  # seconds; generous so a slow CI box does not flake
+
+# The managed fixture: an authenticated local reader, a mock model and a real coordinator.
+setup = managed.setup
 
 
 class Gate:
@@ -213,3 +219,110 @@ def test_reindex_waits_for_the_graph_write_lock(ctx) -> None:
         assert ctx.store.get_source(source_id)["passages"] == 1
     assert cleared.wait(WAIT)
     assert ctx.store.get_source(source_id)["passages"] == 0
+
+
+# ------------------------------------------------ a managed delete vs jobs
+
+
+def test_a_managed_delete_suppresses_while_another_source_is_being_indexed(setup, monkeypatch) -> None:
+    """The Busy precondition guards an orphan sweep; a tombstone sweeps nothing.
+
+    The legacy delete of another source still refuses, which is the behaviour the
+    precondition exists for.
+    """
+    w = setup
+    source = managed.managed_source(w)
+    legacy = managed.legacy_source(w, monkeypatch)
+    release = threading.Event()
+    assert w.ctx.jobs.start("index:someone-else", lambda: release.wait(WAIT))
+    try:
+        with pytest.raises(pipeline.Busy):
+            pipeline.delete_source(w.ctx, legacy)
+        pipeline.delete_source(w.ctx, source, build_actor=w.actor)
+    finally:
+        release.set()
+        w.ctx.jobs.wait_all(WAIT)
+    assert managed.row_of(w, source)["stage"] == "tombstoned"
+    assert w.store.get_source(legacy) is not None  # the refused delete changed nothing
+
+
+def test_a_managed_delete_does_not_wait_for_its_own_blocked_build(setup) -> None:
+    w = setup
+    source = managed.managed_source(w)
+    blocked, finish = threading.Event(), threading.Event()
+
+    def hook(path, body):
+        if path == "/api/chat":
+            blocked.set()
+            assert finish.wait(WAIT), "the test never released the blocked model call"
+
+    (pipeline.source_dir(w.ctx, source) / "text.md").write_text(managed.SECOND_TEXT)
+    w.runtime.hook = hook
+    assert pipeline.reindex(w.ctx, source, build_actor=w.actor) is True
+    assert blocked.wait(WAIT)
+
+    started = time.monotonic()
+    pipeline.delete_source(w.ctx, source, build_actor=w.actor)
+    assert time.monotonic() - started < 5, "delete waited for a blocked model call before suppressing"
+    assert w.ctx.jobs.is_cancelled(pipeline.job_key(source))
+    tombstoned = managed.row_of(w, source)
+    assert (tombstoned["status"], tombstoned["stage"]) == ("deleted", "tombstoned")
+
+    finish.set()
+    w.ctx.jobs.wait_all(WAIT)
+    assert managed.row_of(w, source) == tombstoned  # the late worker never overwrites it
+
+
+# -------------------------------------- bulk races between plan and worker
+
+
+def test_a_source_tombstoned_between_the_bulk_preflight_and_its_worker_skips_that_lane(
+    setup, monkeypatch
+) -> None:
+    w = setup
+    first = managed.managed_source(w, managed.FIRST_TEXT, "First")
+    second = managed.managed_source(w, managed.SECOND_TEXT, "Second")
+    held = w.held_jobs()
+    seen, prepared = managed.bulk_lanes(monkeypatch)
+
+    assert pipeline.reindex_all(w.ctx, build_actor=w.actor) == 2
+    tombstone_managed_source(
+        w.ctx, source_id=first, actor=BuildActor.trusted_local(), operation_id="delete.1"
+    )
+    before = managed.row_of(w, first)
+    for _, work in held:
+        work()
+
+    assert [entry["source"] for entry in seen] == [second]
+    assert prepared == [] and managed.row_of(w, first) == before
+
+
+def test_an_actor_disabled_between_the_bulk_preflight_and_its_worker_fails_only_that_lane(
+    setup, monkeypatch
+) -> None:
+    w = setup
+    first = managed.managed_source(w, managed.FIRST_TEXT, "First")
+    second = managed.managed_source(w, managed.SECOND_TEXT, "Second")
+    for source, text in ((first, managed.LONG_TEXT), (second, managed.LONG_TEXT + "Zed Corp.")):
+        (pipeline.source_dir(w.ctx, source) / "text.md").write_text(text)
+    generations = {source: managed.row_of(w, source)["active_generation_id"] for source in (first, second)}
+    held = w.held_jobs()
+    prepared: list[str] = []
+    monkeypatch.setattr(pipeline, "_prepare_reindex", lambda ctx, source_id: prepared.append(source_id))
+    monkeypatch.setattr(
+        pipeline, "_read_chunk_index", lambda *a, **k: pytest.fail("a managed lane fell back to legacy")
+    )
+
+    assert pipeline.reindex_all(w.ctx, build_actor=w.actor) == 2
+    work = dict(held)
+    w.store.update_user(w.user, disabled=True)
+    work[pipeline.job_key(first)]()
+    w.store.update_user(w.user, disabled=False)
+    work[pipeline.job_key(second)]()
+
+    raced = managed.row_of(w, first)
+    assert (raced["status"], raced["stage"]) == ("ready", "refresh_failed")
+    assert raced["error"].startswith("authorization_changed: ")
+    assert raced["active_generation_id"] == generations[first]
+    assert managed.row_of(w, second)["active_generation_id"] != generations[second]
+    assert prepared == []

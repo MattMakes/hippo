@@ -19,6 +19,7 @@ import logging
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from uuid import uuid4
@@ -26,7 +27,11 @@ from uuid import uuid4
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.build_authority import BuildActor
 from ..knowledge.embedding_cache import EmbeddingCache
-from ..knowledge.embedding_profile import EmbeddingSpec
+from ..knowledge.embedding_profile import (
+    EmbeddingProfileChanged,
+    EmbeddingProfileMismatch,
+    EmbeddingSpec,
+)
 from ..knowledge.raw_artifacts import RawArtifactStore
 from ..knowledge.source_lifecycle import OPERATION_ID
 from ..ollama import EMBED_PREFIXES, OllamaError, _base_name
@@ -182,6 +187,13 @@ def _positive(value: Any, what: str) -> int:
     return value
 
 
+def _fraction(value: Any, what: str) -> float:
+    """A stored setting the build's profile is bound to: refused here, not deep in the coordinator."""
+    if type(value) not in (int, float) or not isfinite(value) or not 0 <= value <= 1:
+        raise ManagedConfigurationError(f"Stored {what} must be a fraction between 0 and 1")
+    return float(value)
+
+
 def build_options(ctx) -> PlainBuildOptions:
     """The effective configuration as coordinator options, or a refusal.
 
@@ -199,7 +211,7 @@ def build_options(ctx) -> PlainBuildOptions:
         raise ManagedConfigurationError("Configured chunk size is below the reviewed minimum")
     if type(overlap) is not int or overlap < 0 or overlap > size // 3:
         raise ManagedConfigurationError("Configured chunk overlap exceeds a third of the chunk size")
-    threshold = ctx.store.get_settings()["synonymy_threshold"]
+    threshold = _fraction((ctx.store.get_settings() or {}).get("synonymy_threshold"), "synonym threshold")
     reviewed = PlainBuildOptions()
     return PlainBuildOptions(
         chunk_size_chars=size,
@@ -337,6 +349,9 @@ class ManagedFailure:
 UNKNOWN_CODE = "operation_failed"
 UNKNOWN_MESSAGE = "The build could not be completed. Check the local logs for this operation."
 _INVALID_SOURCE = "The saved file for this source cannot be built as plain prose."
+# The same stable code `knowledge.public_errors` gives a query that met a stale profile.
+_REBUILD_CODE = "retrieval_rebuild_required"
+_REBUILD_MESSAGE = "The embedding profile changed during the build. Reindex this source before using it."
 
 # Closed, ordered: the first matching family wins. `BuildBusy` and the managed
 # errors are all `ValueError`s, so their order relative to capture matters.
@@ -348,6 +363,13 @@ FAILURES: tuple[tuple[type[BaseException], str, str], ...] = (
         "authorization_changed",
         "Permission for this source changed while it was being built.",
     ),
+    # Ahead of `OllamaError`, whose subclasses these are. A stale or mismatched profile asks
+    # for a rebuild and is a 409; an unreachable model asks for a retry and is a 503. Reading
+    # the wider row first would store the retry code for evidence that will never be
+    # compatible again. `EmbeddingProfileUnavailable` is deliberately not here: it means the
+    # model service could not answer, which really is the unavailable case.
+    (EmbeddingProfileMismatch, _REBUILD_CODE, _REBUILD_MESSAGE),
+    (EmbeddingProfileChanged, _REBUILD_CODE, _REBUILD_MESSAGE),
     (OllamaError, "model_unavailable", "The local model service was unavailable during the build."),
     (TooLarge, "source_too_large", "This source holds more text than a managed build accepts."),
     (UnsupportedProvenanceFormat, "unsupported_source", "This source is not plain prose a build can read."),

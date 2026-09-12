@@ -26,6 +26,12 @@ hipporag/indexer.py, GRAPH_WRITE_LOCK):
   waits for it to stop. If the row is gone by the time a job finishes
   (whatever the reason), the job sweeps orphans itself.
 
+Neither rule applies to a managed source, because neither operation removes
+anything from it: a managed delete suppresses the source from the current view
+and fences its builder, and a managed reindex publishes a new generation over
+the old one. Both need an explicit build actor and never fall back to the
+legacy paths below.
+
 Sizes are capped in one place, here, so the web forms, the JSON API and the
 MCP tool all get the same limits: bytes per upload, characters of text per
 source, and passages per source.
@@ -43,7 +49,9 @@ from ..codegraph import extract_code
 from ..context import AppContext
 from ..hipporag import openie
 from ..hipporag.indexer import GRAPH_WRITE_LOCK, index_source
-from ..knowledge.build_authority import BuildActor
+from ..knowledge.access import AuthorizationChanged
+from ..knowledge.build_authority import BuildActor, capture_build_authority
+from ..knowledge.source_lifecycle import tombstone_managed_source
 from . import managed_activation, readers, repos
 from .chunker import chunk_documents
 from .readers import Document, TextBudget, TooLarge
@@ -491,13 +499,33 @@ def read_source(ctx: AppContext, source: dict[str, Any]) -> list[Document]:
 # -------------------------------------------------- deleting, reindexing
 
 
-def delete_source(ctx: AppContext, source_id: str) -> None:
+def delete_source(
+    ctx: AppContext,
+    source_id: str,
+    *,
+    build_actor: BuildActor | None = None,
+    operation_id: str | None = None,
+) -> None:
     """
     Forget a source: its passages, orphaned entities/facts, and its files on disk.
+
+    That is the legacy lane, and it stays exactly as it was. A managed source is never
+    forgotten this way: it is suppressed from the current view and its builder fenced, in
+    one transaction owned by the lifecycle service, while its published generation, its
+    manifests and every saved byte remain for authorized history. Physical removal is a
+    separate, later operation.
 
     Raises Busy while another source is being indexed. If this source's own job is running,
     it is cancelled and given a moment to stop first.
     """
+    source = ctx.store.get_source(source_id)
+    if source is not None:
+        # One classification for both lanes; it refuses a managed source with no actor, and
+        # an unbounded operation identity, before any hook below can run.
+        plan = managed_activation.plan_dispatch(source, actor=build_actor, operation_id=operation_id)
+        if plan.eligibility in ("managed", "tombstoned"):
+            _tombstone(ctx, source_id, build_actor, operation_id)
+            return
     key = job_key(source_id)
     _refuse_if_indexing(ctx, except_key=key)
     if ctx.jobs.cancel(key) and not ctx.jobs.wait(key, timeout=CANCEL_WAIT_SECONDS):
@@ -512,18 +540,78 @@ def delete_source(ctx: AppContext, source_id: str) -> None:
     shutil.rmtree(source_dir(ctx, source_id), ignore_errors=True)
 
 
-def reindex_all(ctx: AppContext) -> int:
+def _tombstone(ctx: AppContext, source_id: str, actor: BuildActor | None, operation_id: str | None) -> None:
+    """The managed lane of `delete_source`: a suppression and a fence, nothing removed.
+
+    There is no `Busy` refusal here. That precondition protects the orphan sweep at the end
+    of the legacy delete, and this transition sweeps nothing; waiting for someone else's
+    index job would only keep a source readable that its owner has asked to withdraw.
+    """
+    if actor is None:
+        # Nothing to fall back to: the legacy delete would physically remove managed evidence.
+        raise managed_activation.ManagedActorRequired(
+            "A managed source cannot be deleted without a build actor"
+        )
+    # A tombstoned source comes here too. The service answers a reader with the same generic
+    # denial as any unavailable source, and lets an internal caller replaying its own
+    # operation identity have its receipt back without a second suppression epoch.
+    tombstone_managed_source(
+        ctx,
+        source_id=source_id,
+        actor=actor,
+        operation_id=operation_id or managed_activation.new_operation_id(),
+    )
+
+
+def reindex_all(ctx: AppContext, *, build_actor: BuildActor | None = None) -> int:
     """
     Forget every source's passages and index them all again, one background job per source.
     This is the way back after changing HIPPO_EMBED_MODEL: old and new vectors must never mix.
     Raises Busy while anything is being indexed.
+
+    Managed sources are refreshed rather than cleared, an eligible source converts when the
+    caller brought an actor, and a current tombstone is skipped. Every managed lane's
+    authority is proven before the first legacy clear: a clear that cannot be followed by a
+    rebuild would lose that source's evidence, so one lane that cannot be built stops the
+    whole bulk. Without an actor a managed inventory refuses here, for the same reason.
     """
     _refuse_if_indexing(ctx)
-    # Clear every source first, then start the jobs: once a job runs, no more orphan sweeps.
-    sources = ctx.store.list_sources()
-    for source in sources:
-        _prepare_reindex(ctx, source["id"])
-    return sum(1 for source in sources if start_indexing(ctx, source["id"]))
+    # Classify the whole inventory before touching any of it. A managed source with no actor
+    # refuses at this line, which is still before the first clear.
+    lanes = [
+        (source["id"], managed_activation.plan_dispatch(source, actor=build_actor))
+        for source in ctx.store.list_sources()
+    ]
+    lanes = [lane for lane in lanes if lane[1].mode != "skip"]  # a tombstone is never rebuilt
+    if not _preflight_managed(ctx, lanes, build_actor):
+        return 0
+    # Clear every legacy source first, then start the jobs: once a job runs, no more orphan sweeps.
+    for source_id, plan in lanes:
+        if plan.mode == "legacy":
+            _prepare_reindex(ctx, source_id)
+    return sum(
+        1
+        for source_id, plan in lanes
+        if start_indexing(ctx, source_id, build_actor=plan.actor, operation_id=plan.operation_id)
+    )
+
+
+def _preflight_managed(ctx: AppContext, lanes: list[tuple[str, Any]], actor: BuildActor | None) -> bool:
+    """True when this actor can still build every managed lane of a bulk reindex.
+
+    The authority captured here is released immediately; each build captures its own. This
+    only answers "would it be refused?" while refusing is still free. The caller learns
+    nothing about which source failed -- the public response is the same either way.
+    """
+    for source_id, plan in lanes:
+        if plan.mode != "managed":
+            continue
+        try:
+            capture_build_authority(ctx.store, source_id=source_id, actor=actor).close()
+        except AuthorizationChanged:
+            log.warning("Bulk reindex started nothing: source %s cannot be built by this actor", source_id)
+            return False
+    return True
 
 
 def reindex(ctx: AppContext, source_id: str, *, build_actor: BuildActor | None = None) -> bool:
