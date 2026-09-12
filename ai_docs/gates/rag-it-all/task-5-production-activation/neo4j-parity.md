@@ -27,3 +27,5 @@ Tree: `65fbcab` (Task 3b, Task 4e's `release_interrupted_build` and sweep consta
 Files: `test_managed_pipeline_activation.py`, `test_ingest_concurrency.py` with `-k "interrupted or sweep or restart or bulk or tombstone"`.
 
 Result: `16 passed, 2 skipped, 102 deselected in 483.39s`, exit 0. Log `/tmp/hippo-orch-neo4j-parity-3.log`. The Neo4j lane of `mark_interrupted_jobs` (`store/memory.py`) and the managed bulk/tombstone dispatch are proven on the disposable container; the two skips are Ladybug-only close/reopen contracts.
+
+Currency note: run 3's tree (`65fbcab`) remains representative after the layering merge (`0d4d2ec`), which moved class definitions between `hippo.knowledge` and `hippo.ingest` and touched no store lane, query or stored shape; the store code Neo4j executes is byte-identical between the two trees.
