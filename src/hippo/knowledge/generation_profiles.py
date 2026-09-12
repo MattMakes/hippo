@@ -24,9 +24,8 @@ from .inputs import (
 from .lifecycle import generation_for_inputs
 from .raw_artifacts import RawArtifact
 
-# Re-exported: `MANIFEST_EXTERNAL_ID` is the accepted-input contract's own name for
-# the manifest artifact, and this is the import path its callers already use.
-__all__ = ["MANIFEST_EXTERNAL_ID", "GenerationProfile", "embedding_mode", "validate_generation_profile"]
+# `MANIFEST_EXTERNAL_ID` belongs to the accepted-input contract now, and importing
+# it here keeps this module's existing import path working for its callers.
 
 PROFILE_POINTER = "embedding_manifest_revision_id"
 

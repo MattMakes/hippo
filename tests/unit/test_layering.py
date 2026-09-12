@@ -22,11 +22,11 @@ import hippo.knowledge
 KNOWLEDGE = Path(hippo.knowledge.__file__).parent
 
 # `from ..ingest...`, `from hippo.ingest...`, `import hippo.ingest...` and the two
-# package-object spellings, anywhere in the file -- a deferred import inside a
-# function is still a knowledge module depending on ingest.
+# package-object spellings, at any relative depth, anywhere in the file -- a
+# deferred import inside a function is still a knowledge module depending on ingest.
 REVERSE_IMPORT = re.compile(
-    r"^[ \t]*(?:from[ \t]+(?:\.\.ingest|hippo\.ingest)\b"
-    r"|from[ \t]+(?:\.\.|hippo)[ \t]+import[ \t]+ingest\b"
+    r"^[ \t]*(?:from[ \t]+(?:\.{2,}ingest|hippo\.ingest)\b"
+    r"|from[ \t]+(?:\.{2,}|hippo)[ \t]+import[ \t]+ingest\b"
     r"|import[ \t]+hippo\.ingest\b)",
     re.MULTILINE,
 )

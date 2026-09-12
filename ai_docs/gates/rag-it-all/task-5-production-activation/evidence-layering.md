@@ -10,7 +10,8 @@ Commits:
 |---|---|
 | `1dab194` | Move the accepted-input contracts into hippo.knowledge |
 | `895f198` | Import the ingest package lazily and the managed lane eagerly |
-| *(this file)* | Record the layering evidence — hash reported in the `horch done` summary |
+| `712e57b` | Record the layering follow-up's evidence |
+| *(this file's amendments)* | Drop an `__all__` that was not needed and widen the guard's relative-import match — hash in the `horch done` summary |
 
 Files created: `src/hippo/knowledge/inputs.py`, `tests/unit/test_layering.py`, this file.
 Files modified: `src/hippo/ingest/accepted_inputs.py`, `src/hippo/ingest/provenance.py`,
@@ -45,8 +46,9 @@ than an input contract and stayed in `hippo.ingest.accepted_inputs` with `_check
 
 `hippo.ingest.accepted_inputs` re-exports all of them (with an explicit `__all__` recording that the
 imports are the compatibility surface, so nobody deletes them as unused) and
-`hippo.ingest.provenance` re-exports `RawInput`. `hippo.knowledge.generation_profiles` re-exports
-`MANIFEST_EXTERNAL_ID`. **Each name is the same object under both paths**, so `isinstance`, `except`
+`hippo.ingest.provenance` re-exports `RawInput`. `hippo.knowledge.generation_profiles` imports
+`MANIFEST_EXTERNAL_ID` from the new leaf and uses it, so it stays importable from there with no
+`__all__` and no other change to the file. **Each name is the same object under both paths**, so `isinstance`, `except`
 and `type(x) is C` all keep working across the boundary, and no caller and no test changed an import
 for this reason — which is why `prose_generation.py`, listed in the brief as mine for its import
 lines, needed no edit at all. `test_layering.py::test_the_moved_contracts_keep_their_existing_import_paths`
@@ -90,8 +92,9 @@ ImportError: cannot import name 'MANIFEST_EXTERNAL_ID' from partially initialize
 
 `tests/unit/test_layering.py::test_knowledge_modules_do_not_import_ingest` greps every
 `src/hippo/knowledge/**/*.py` for `from ..ingest`, `from hippo.ingest`, `import hippo.ingest`,
-`from .. import ingest` and `from hippo import ingest`, anywhere in the file (a deferred import
-inside a function is still a dependency), and asserts the offending files are **exactly** the
+`from .. import ingest` and `from hippo import ingest` — at any relative depth, so a future
+`knowledge/<sub>/x.py` writing `from ...ingest` is caught too — anywhere in the file (a deferred
+import inside a function is still a dependency), and asserts the offending files are **exactly** the
 allowlist — so an entry that stops being needed must be deleted, not left to rot.
 
 Two entries survive, and the orchestrator ruled (in writing, in answer to the BLOCKED question
@@ -186,9 +189,12 @@ hippo.* modules imported: 34     total sys.modules: 488
   ingest modules loaded: []
 ```
 
-No `hippo.ingest` module is loaded at all, and `hippo.knowledge.inputs` is not in the graph either;
-the 34 `hippo.*` modules are the same set the `pa4c` re-review measured, whose counts it already
-recorded as environment-dependent and not a contract. The absences are the contract and they hold.
+No `hippo.ingest` module is loaded at all, and `hippo.knowledge.inputs` is not in the graph either.
+The 34 `hippo.*` modules are **byte-identical to the same probe run at base `65fbcab`** in this
+worktree (`/tmp/hippo-help-base.txt` vs `/tmp/hippo-help-after.txt`, `diff` empty): this slice adds
+and removes nothing from the `--help` graph. The `pa4c` re-review measured 33 in a different tree,
+and recorded its own counts as environment-dependent rather than a contract; the absences are the
+contract, and they hold.
 
 ### Ruff
 
