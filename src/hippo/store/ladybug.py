@@ -22,7 +22,7 @@ places because LadybugDB is strictly typed and speaks a smaller dialect:
   edge; the joins are on the id), and username/token uniqueness is checked here
   because LadybugDB only enforces the primary key.
 
-Two rules of the road for anyone editing the queries:
+Three rules of the road for anyone editing the queries:
 
 1. Text goes in as bytes and through `decode()`. The Python binding (real_ladybug
    0.15.3) parses any string parameter that starts with `{` or `[` as a struct or
@@ -33,6 +33,12 @@ Two rules of the road for anyone editing the queries:
    Ids, timestamps and fixed status words are safe and are passed as plain strings.
 2. One process may open the file at a time, and one writer at a time inside that
    process, so every query goes through one connection behind one lock.
+3. A set of ids is selected with `base.by_ids`, never with `WHERE x.id IN $ids`.
+   On real_ladybug 0.15.3 that predicate answers from the wrong row once the table
+   holds a deleted row and the wanted row was written inside the open transaction:
+   the selection is right, the projected STRING properties belong to another row.
+   The read comes back quietly wrong, so the rule has a tripwire test rather than
+   only this paragraph (`test_no_query_builder_selects_node_rows_with_a_list_predicate`).
 """
 
 from __future__ import annotations
@@ -55,7 +61,7 @@ from ..access import (
     verify_password,
 )
 from .authorization import metadata_mutation, permission_mutation
-from .base import DEFAULT_SETTINGS, new_id, now_iso, validate_settings
+from .base import DEFAULT_SETTINGS, by_ids, new_id, now_iso, unique_ids, validate_settings
 from .changesets import _changeset_row
 from .code import (
     BOOSTABLE_LABELS,
@@ -794,10 +800,10 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             return []
         rows = self.run(
             f"""
-            MATCH (p:Passage)-[:FROM]->(s:Source) WHERE p.id IN $ids AND {ACCESS_WHERE}
+            {by_ids("Passage", "p")}-[:FROM]->(s:Source) WHERE {ACCESS_WHERE}
             RETURN {self._PASSAGE_COLUMNS}
             """,
-            ids=list(ids),
+            ids=unique_ids(ids),
             **access_params(access),
         )
         return _in_asked_order([_passage_row(_node(r)) for r in rows], ids)
@@ -830,7 +836,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
     def existing_entity_ids(self, ids: list[str]) -> set[str]:
         if not ids:
             return set()
-        rows = self.run("MATCH (e:Entity) WHERE e.id IN $ids RETURN e.id AS id", ids=list(ids))
+        rows = self.run(f"{by_ids('Entity', 'e')} RETURN e.id AS id", ids=unique_ids(ids))
         return {r["id"] for r in rows}
 
     @native_mutation
@@ -865,11 +871,11 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             return []
         rows = self.run(
             f"""
-            MATCH (e:Entity) WHERE e.id IN $ids
+            {by_ids("Entity", "e")}
             {self._VISIBLE_MENTIONS}
             RETURN e.id AS id, e.name AS name, coalesce(e.boost, 1.0) AS boost, passage_count
             """,
-            ids=list(ids),
+            ids=unique_ids(ids),
             **access_params(access),
         )
         return _in_asked_order(rows, ids)
@@ -898,7 +904,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
     def existing_fact_ids(self, ids: list[str]) -> set[str]:
         if not ids:
             return set()
-        rows = self.run("MATCH (f:Fact) WHERE f.id IN $ids RETURN f.id AS id", ids=list(ids))
+        rows = self.run(f"{by_ids('Fact', 'f')} RETURN f.id AS id", ids=unique_ids(ids))
         return {r["id"] for r in rows}
 
     @native_mutation
@@ -933,14 +939,18 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 self._link("OBJECT", "Fact", "Entity", [(r["id"], r["object_id"]) for r in batch])
 
     def _fact_rows(
-        self, where: str, with_embedding: bool, access: Access | None = None, **params: Any
+        self, head: str, with_embedding: bool, access: Access | None = None, **params: Any
     ) -> list[dict[str, Any]]:
         """Facts with the passages that state them; only visible passages are listed, and a fact
-        nobody visible states is left out (unless the read is unrestricted)."""
+        nobody visible states is left out (unless the read is unrestricted).
+
+        `head` is the clause that binds `f`: the whole table, or `base.by_ids` for a named set.
+        It is the match rather than a `WHERE` because an id list may not be a predicate here.
+        """
         embedding = "f.embedding AS embedding," if with_embedding else ""
         rows = self.run(
             f"""
-            MATCH (f:Fact)-[:SUBJECT]->(a:Entity), (f)-[:OBJECT]->(b:Entity) {where}
+            {head}-[:SUBJECT]->(a:Entity), (f)-[:OBJECT]->(b:Entity)
             OPTIONAL MATCH (p:Passage)-[:STATES]->(f), (p)-[:FROM]->(s:Source) WHERE {ACCESS_WHERE}
             WITH f, a, b, count(p) AS visible, collect(p.id) AS passage_ids
             WHERE $acc_all OR visible > 0
@@ -959,7 +969,8 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
         if not ids:
             return []
         return _in_asked_order(
-            self._fact_rows("WHERE f.id IN $ids", with_embedding=False, access=access, ids=list(ids)), ids
+            self._fact_rows(by_ids("Fact", "f"), with_embedding=False, access=access, ids=unique_ids(ids)),
+            ids,
         )
 
     # ================================================================ links
@@ -1229,13 +1240,13 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             return []
         rows = self.run(
             f"""
-            MATCH (n:{label}) WHERE n.id IN $ids
+            {by_ids(label)}
             MATCH (s:Source {{id: n.source_id}}) WHERE {ACCESS_WHERE}
             OPTIONAL MATCH (n)-[:DEFINED_IN]->(p:Passage)
             WITH n, s, collect(p.id) AS passage_ids
             RETURN n AS n, s.name AS source_name, passage_ids
             """,
-            ids=list(ids),
+            ids=unique_ids(ids),
             **access_params(access),
         )
         return [
@@ -1436,7 +1447,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
         )
 
     def load_facts(self) -> list[dict[str, Any]]:
-        return self._fact_rows("", with_embedding=True)
+        return self._fact_rows("MATCH (f:Fact)", with_embedding=True)
 
     def load_fact_edges(self) -> list[dict[str, Any]]:
         return self.run(

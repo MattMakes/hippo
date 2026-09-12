@@ -107,8 +107,13 @@ def _passage_bindings(store, generations):
         return []
     if store.knowledge_backend == "fake":
         return [row for row in store.passages.values() if row.get("generation_id") in generations]
+    # The generation list drives the match rather than filtering it: a list predicate on a
+    # node's STRING column answers from the wrong row on LadybugDB once the table holds a
+    # deleted row and the wanted row was written inside the open transaction. Same rule and
+    # same reason as `store.base.by_ids`, which the store side of this read uses.
     return store.run(
-        "MATCH (p:Passage)-[:FROM]->(s:Source) WHERE p.generation_id IN $generations "
+        "UNWIND $generations AS wanted_generation "
+        "MATCH (p:Passage {generation_id: wanted_generation})-[:FROM]->(s:Source) "
         "RETURN p.id AS id, s.id AS source_id, p.text AS text, p.embedding AS embedding, "
         "p.span_id AS span_id, p.artifact_revision_id AS artifact_revision_id, "
         "p.generation_id AS generation_id, p.embedding_profile AS embedding_profile, "

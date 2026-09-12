@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from ..knowledge import model as k
 from ..knowledge.identity import canonical_json, text_hash
 from .authorization import bump_epoch, epoch
+from .base import by_ids
 
 MANDATORY_REPRESENTATIONS = ("evidence", "dense", "native")
 
@@ -737,8 +738,10 @@ class GenerationQueries:
                 values = [row for row in values if row.get("source_id") == source_id]
             return values
         where, params = [], {}
+        head = f"MATCH (n:{kind})"
         if ids is not None:
-            where.append("n.id IN $ids")
+            # The id list drives the match instead of filtering it; see `base.by_ids`.
+            head = by_ids(kind)
             params["ids"] = ids
         if generation_id is not None:
             where.append("n.generation_id = $generation_id")
@@ -756,18 +759,17 @@ class GenerationQueries:
             if source_id is not None:
                 params["source_id"] = source_id
                 rows = self.run(
-                    f"MATCH (n:Passage){clause} MATCH (n)-[:FROM]->(s:Source {{id:$source_id}}) "
+                    f"{head}{clause} MATCH (n)-[:FROM]->(s:Source {{id:$source_id}}) "
                     "RETURN n AS n, s.id AS source_id",
                     **params,
                 )
             else:
                 rows = self.run(
-                    f"MATCH (n:Passage){clause} OPTIONAL MATCH (n)-[:FROM]->(s:Source) "
-                    "RETURN n AS n, s.id AS source_id",
+                    f"{head}{clause} OPTIONAL MATCH (n)-[:FROM]->(s:Source) RETURN n AS n, s.id AS source_id",
                     **params,
                 )
         else:
-            rows = self.run(f"MATCH (n:{kind}){clause} RETURN n AS n", **params)
+            rows = self.run(f"{head}{clause} RETURN n AS n", **params)
         result = []
         for row in rows:
             native = {key: value for key, value in dict(row["n"]).items() if not key.startswith("_")}
@@ -826,29 +828,40 @@ class GenerationQueries:
                     if (a in selected and b in selected) if both else (a in selected or b in selected):
                         edges.append([rel, a, b, values[key] if isinstance(values, dict) else {}])
                 continue
-            clause = "a.id IN $ids AND b.id IN $ids" if both else "(a.id IN $ids OR b.id IN $ids)"
+            selected = set(ids)
             for a_kind in left:
                 for b_kind in right:
                     if rel == "CODE_EDGE" and (a_kind, b_kind) == ("DataObject", "Symbol"):
                         continue
                     payload = "properties(r)" if self.knowledge_backend == "neo4j" else "r"
-                    for row in self.run(
-                        f"MATCH (a:{a_kind})-[r:{rel}]->(b:{b_kind}) WHERE {clause} "
-                        f"RETURN a.id AS a,b.id AS b,{payload} AS r",
-                        ids=ids,
-                    ):
-                        edges.append(
-                            [
-                                rel,
-                                row["a"],
-                                row["b"],
-                                {
-                                    key: value
-                                    for key, value in dict(row["r"]).items()
-                                    if not key.startswith("_")
-                                },
-                            ]
-                        )
+                    # `base.by_ids` selects one endpoint at a time, so the `OR` form becomes two
+                    # passes -- one driven from each end -- and the pairs are unioned here. A
+                    # relationship exists once per ordered pair, so the seen set is the whole of
+                    # the de-duplication the `OR` used to get from the engine. `both` needs only
+                    # the left pass: an edge whose far end is outside `ids` is dropped in Python
+                    # rather than by a second list predicate.
+                    heads = [f"{by_ids(a_kind, 'a')}-[r:{rel}]->(b:{b_kind})"]
+                    if not both:
+                        heads.append(f"{by_ids(b_kind, 'b')}<-[r:{rel}]-(a:{a_kind})")
+                    seen = set()
+                    for head in heads:
+                        for row in self.run(f"{head} RETURN a.id AS a,b.id AS b,{payload} AS r", ids=ids):
+                            pair = (row["a"], row["b"])
+                            if pair in seen or (both and row["b"] not in selected):
+                                continue
+                            seen.add(pair)
+                            edges.append(
+                                [
+                                    rel,
+                                    row["a"],
+                                    row["b"],
+                                    {
+                                        key: value
+                                        for key, value in dict(row["r"]).items()
+                                        if not key.startswith("_")
+                                    },
+                                ]
+                            )
         return edges
 
     def _native_relationships(self, *, ids=None, generation_id=None):
