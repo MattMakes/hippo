@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from hippo.evals import runner
 from hippo.evals.question_maker import generate_questions
 from hippo.evals.runner import run_question, start_run, summarize
 from hippo.hipporag.indexer import Chunk, index_source
+from hippo.knowledge.embedding_profile import EmbeddingProfileMismatch
 
 
 def index_sample(ctx, sample_text: str) -> str:
@@ -140,6 +143,37 @@ def test_one_broken_question_does_not_kill_the_run(ctx, set_id, monkeypatch):
     assert broken[0]["question"] == poison
     assert run["summary"]["errors"] == 1
     assert run["summary"]["questions"] == len(questions)
+
+
+def test_a_failing_question_logs_its_id_and_code_but_neither_its_text_nor_the_exception(
+    ctx, set_id, monkeypatch, caplog
+):
+    """The per-question log line is bounded, like every other managed failure record.
+
+    A generated question is written out of source passages and `Ollama._request` puts
+    300 characters of the model's reply body into its message, so the question text and
+    `str(exc)` are both private material. What an operator needs to find the run in the
+    local logs is the question's id and the closed code; the exception's type names the
+    family without quoting it.
+    """
+    question = ctx.store.list_questions(set_id)[0]
+    poison = "sk-live-DEADBEEF 'Acme Robotics is headquartered in Boulder.'"
+
+    def exploding_search(*args, **kwargs):
+        raise EmbeddingProfileMismatch(poison)
+
+    monkeypatch.setattr(runner, "search", exploding_search)
+    with caplog.at_level(logging.DEBUG, logger="hippo.evals.runner"):
+        result = run_question(ctx, question, ctx.store.get_settings())
+
+    assert result["error"], "the private record still keeps the whole story"
+    assert caplog.records, "a failed question must not fail silently either"
+    assert question["id"] in caplog.text
+    assert "retrieval_rebuild_required" in caplog.text
+    assert "EmbeddingProfileMismatch" in caplog.text
+    assert question["text"] not in caplog.text
+    assert poison not in caplog.text
+    assert not [record for record in caplog.records if record.exc_info]
 
 
 def test_start_run_rejects_unknown_set(ctx):

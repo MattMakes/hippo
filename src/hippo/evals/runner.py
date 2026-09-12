@@ -34,10 +34,12 @@ from statistics import mean
 from typing import Any
 
 from ..access import Access
-from ..ask import _dispatch, answer_from_trace, search
+from ..ask import answer_from_trace, search
 from ..context import AppContext
+from ..knowledge import dense_session
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.eval_access import EvalAccess, EvalAccessDenied
+from ..knowledge.public_errors import OPERATION_FAILED, public_failure
 from ..knowledge.query_access import AuthorizedModel, QuerySession, current_access, query_session
 from ..knowledge.replay import view_fingerprint
 from ..knowledge.saved_snapshots import save_evaluation_result
@@ -143,12 +145,20 @@ def run_question(
       message passage first, the modified symbols' passages after it.
     """
     text = "<unavailable evaluation question>"
+    # Captured before the try: the row is re-read inside it, and a denial leaves that
+    # name holding `None` exactly where the failure record needs the question's identity.
+    identity = str(question_row.get("id") or "")
     result = _empty_result()
     started = time.time()
     try:
         # Search, answer and grading all run on one dense-dispatched owner: the runner's own
         # borrowed session activated in place, or one acquired here when nobody supplied it.
-        with _dispatch(ctx, access, session, settings) as query:
+        # `access` is still needed below (it is what `EvalAccess` reads the set through), but a
+        # borrowed session already carries the audience it was proved for, and the dispatcher
+        # refuses to be handed both.
+        with dense_session.retrieval_session(
+            ctx, None if session is not None else access, settings=settings, session=session
+        ) as query:
             evaluation = EvalAccess(ctx, access, session=query)
             access = current_access(ctx.store, access)
             if access is not None and access.audience_kind != "internal":
@@ -206,7 +216,18 @@ def run_question(
                 result["judge_reason"] = "no expected answer to compare with"
             validate()
     except Exception as exc:  # noqa: BLE001 - one broken question must not end the run
-        log.exception("Question %r failed", text)
+        code = (public_failure(exc) or OPERATION_FAILED).code
+        # Bounded like `managed_activation.record_build_failure`: the question's id locates
+        # the row, the closed code says what happened and the exception's type names the
+        # family. Neither the question nor `str(exc)` may be logged -- a generated question
+        # is written out of source passages, and a model error quotes the reply body -- so
+        # there is no `exc_info` here either.
+        log.warning(
+            "Evaluation question failed: question=%s code=%s exception=%s",
+            identity,
+            code,
+            type(exc).__name__,
+        )
         if isinstance(exc, (AuthorizationChanged, EvalAccessDenied)):
             result = _empty_result()
         result["error"] = f"{type(exc).__name__}: {exc}"

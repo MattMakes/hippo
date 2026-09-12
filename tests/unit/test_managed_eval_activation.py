@@ -23,6 +23,7 @@ Nothing here imports a transport, so the module stays clean under a bare
 
 import sys
 from contextlib import contextmanager
+from datetime import UTC, datetime
 
 import numpy as np
 import pytest
@@ -30,8 +31,9 @@ import pytest
 from hippo import ask as ask_module
 from hippo.access import EVERYTHING
 from hippo.analysis.simulate import Overrides, simulate
+from hippo.codegraph.model import commit_id, symbol_id
 from hippo.evals import runner as runner_module
-from hippo.evals.question_maker import generate_questions
+from hippo.evals.question_maker import generate_questions, shared_entity_pairs
 from hippo.evals.runner import run_question, start_run
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.knowledge.access import AuthorizationChanged
@@ -41,10 +43,12 @@ from hippo.knowledge.dense_session import DenseSessionUnavailable, retrieval_ses
 from hippo.knowledge.eval_access import EvalAccess
 from hippo.knowledge.public_errors import public_failure
 from hippo.knowledge.query_access import query_session
+from tests.fakes.code_fixture import write_commit_history
 from tests.fakes.fake_ollama import DIM
 from tests.unit.test_dense_session import verified
 from tests.unit.test_managed_route_activation import watch
 from tests.unit.test_managed_source_inventory import empty_published
+from tests.unit.test_staged_prose_writer import publish, setup, write
 from tests.unit.test_structural_loading import published, unembedded_code
 
 QUESTION = "who builds the thing?"
@@ -57,6 +61,31 @@ def managed(ctx, key="managed", **kwargs):
     """One published managed generation the configured embedding tag can read."""
     kwargs.setdefault("dimension", DIM)
     return published(ctx.store, key, profile=ctx.ollama.embed_model, **kwargs)
+
+
+FACT_BEARING = (
+    "# Acme\n\n"
+    "## Company\n\nAcme Robotics builds Robot in Boulder.\n\n"
+    "## Shipping\n\nAcme Robotics ships Robot to Denver.\n\n"
+    "## People\n\nDana Okafor leads Acme Robotics.\n"
+)
+
+
+def fact_bearing(ctx, tmp_path):
+    """A published managed generation with three passages and a shared entity between them.
+
+    The staged prose writer is the only fixture that produces real managed evidence spans
+    *and* extracted facts, which is what `shared_entity_pairs` needs. Returns
+    `(source_id, passages)`; the clock is reset because publication back-dates its lease.
+    """
+    _, job, prepared, credentials = setup(ctx.store, tmp_path, text=FACT_BEARING)
+    write(ctx.store, prepared, credentials)
+    publish(ctx.store, prepared.inputs.generation, job)
+    ctx.store._generation_clock = lambda: datetime.now(UTC)
+    source_id = prepared.inputs.generation.source_id
+    with query_session(ctx, EVERYTHING) as session:
+        passages = [passage for passage in session.graph.passages if passage.source_id == source_id]
+    return source_id, passages
 
 
 def legacy_sample(ctx, sample_text):
@@ -380,13 +409,18 @@ def test_changeset_reads_and_mutations_hold_a_structural_session(ctx, monkeypatc
     assert not live_references(ctx)
 
 
-def test_question_generation_reads_originals_without_a_dense_dispatch(ctx, monkeypatch):
-    # A managed corpus, not the legacy sample: a generated set re-proves its stored evidence
-    # fingerprint on every read, and LadybugDB returns extracted facts in an arbitrary order,
-    # so a fact-bearing corpus makes that fingerprint move between two loads. See the finding
-    # in `evidence-pa4d.md`; it is not this slice's to fix and it is not what this test is about.
-    generation, span = managed(ctx, "managed notes")
-    source_id = generation.source_id
+def test_question_generation_reads_originals_without_a_dense_dispatch(ctx, tmp_path, monkeypatch):
+    """A fact-bearing managed corpus, so both citation-resolving generators actually run.
+
+    `_ask_multihop` is the second `resolve_citations` call site, and it is the one that reads
+    the *entity graph* to pick its passage pair. A corpus with no facts yields no pairs, so
+    that generator never ran and the "reads passages, never scores dense candidates" claim
+    was proven for the single-hop path alone (the 4d review's finding 4). Canonical fact
+    order (`e709aad`) is what makes a fact-bearing corpus usable here: a generated set
+    re-proves its stored evidence fingerprint on every read, and before that fix LadybugDB
+    returned extracted facts in an arbitrary order, so the fingerprint moved between loads.
+    """
+    source_id, passages = fact_bearing(ctx, tmp_path)
     evaluation = EvalAccess(ctx, EVERYTHING)
     set_id = evaluation.create_question_set("generated", source_id, origin="generated")
     prompts = []
@@ -398,20 +432,77 @@ def test_question_generation_reads_originals_without_a_dense_dispatch(ctx, monke
 
     monkeypatch.setattr(ctx.ollama, "chat_json", record_prompt)
     record = watch(ctx, monkeypatch)
-    generate_questions(ctx, source_id, set_id=set_id, max_single=2, max_multihop=1, access=EVERYTHING)
+    generate_questions(ctx, source_id, set_id=set_id, max_single=3, max_multihop=2, access=EVERYTHING)
     record.once()
     assert record.dispatched == [], "question generation reads passages; it never scores dense candidates"
     with query_session(ctx, EVERYTHING) as session:
+        mine = [p for p in session.graph.passages if p.source_id == source_id]
+        assert shared_entity_pairs(session.graph, mine), (
+            "the corpus must bear facts, or the multi-hop generator never runs"
+        )
         originals = {
-            citation.text
-            for passage in session.graph.passages
-            if passage.source_id == source_id
-            for citation in resolve_citations(session.graph, (passage.id,)).citations
+            passage.id: {
+                citation.text for citation in resolve_citations(session.graph, (passage.id,)).citations
+            }
+            for passage in mine
         }
     assert originals, "the held view must resolve the passage back to its original evidence"
-    rendered = "\n".join(message["content"] for prompt in prompts for message in prompt)
-    assert [text for text in originals if text in rendered], (
+    rendered = ["\n".join(message["content"] for message in prompt) for prompt in prompts]
+    assert [text for texts in originals.values() for text in texts if any(text in p for p in rendered)], (
         "the question maker must prompt with the original citation text"
     )
-    assert span.text in rendered
+    for passage in passages:
+        assert any(passage.text in prompt for prompt in rendered)
+    # The multi-hop prompt is the one carrying two passages' own originals at once.
+    assert [
+        prompt
+        for prompt in rendered
+        if sum(1 for passage in passages if passage.text in prompt) >= 2  # noqa: PLR2004
+    ], "the multi-hop generator must prompt from two resolved passages"
     assert ctx.store.get_question_set(set_id)["status"] == "ready"
+
+
+def test_code_and_commit_question_generation_dispatches_nothing_either(code_index, monkeypatch):
+    """The two graph-built generators read the code graph, not dense candidates.
+
+    They are pure (`question_maker.py:115-116` builds them before any model call), so the
+    claim is about the session they read from, not about a model. `commit_questions` needs a
+    commit that touched *two* symbols and `write_commit_history` gives each of its three
+    commits one, so the two newest get a second `MODIFIES` here -- the same arrangement
+    `test_evals_code.code_history` makes, built inline rather than importing a fixture.
+    """
+    ctx, source_id = code_index
+    write_commit_history(ctx, source_id)
+    ctx.store.add_modifies(
+        [
+            {
+                "commit_id": commit_id(source_id, sha),
+                "symbol_id": symbol_id(source_id, path, qualname, "function"),
+                "omega": 1.0,
+                "hunk": {"file": path, "old_range": [1, 0], "new_range": [1, 1], "churn": 1},
+            }
+            for sha, path, qualname in (
+                ("c3c3c3c", "pyapp/orders.py", "OrderService.run"),
+                ("b2b2b2b", "pyapp/billing.py", "total"),
+            )
+        ]
+    )
+    # Created before the recorder: `_create_set` acquires a graph of its own, and this test
+    # is about the session the generators read from.
+    set_id = EvalAccess(ctx, EVERYTHING).create_question_set("generated", source_id, origin="generated")
+    record = watch(ctx, monkeypatch)
+    generate_questions(
+        ctx,
+        source_id,
+        set_id=set_id,
+        per_passage=1,
+        max_single=2,
+        max_multihop=2,
+        max_code=3,
+        max_commits=3,
+        access=EVERYTHING,
+    )
+    record.once(heartbeats=0)
+    assert record.dispatched == [], "the code and commit generators must not score dense candidates"
+    kinds = {row["kind"] for row in ctx.store.list_questions(set_id)}
+    assert {"code", "commit"} <= kinds, kinds
