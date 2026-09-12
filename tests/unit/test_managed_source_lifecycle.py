@@ -325,6 +325,64 @@ def test_saved_ingress_and_query_snapshots_survive_the_tombstone(managed):
     assert (store._knowledge_rows("QuerySnapshot"), store._knowledge_rows("SnapshotReference")) == snapshots
 
 
+def test_the_store_primitive_is_unreachable_without_the_callers_transaction(managed):
+    store = managed.store
+    before = epochs(store), store.get_source(managed.source)
+    with pytest.raises(RuntimeError, match="requires the caller"):
+        store.apply_source_tombstone(managed.source, operation_id=OPERATION, created_at=datetime.now(UTC))
+    assert (epochs(store), store.get_source(managed.source)) == before
+    assert suppressions(store, managed.source) == []
+
+
+def test_tombstone_fence_and_epochs_survive_a_ladybug_reopen(tmp_path, ollama):
+    """The whole transition is durable, including on the primary acceptance backend."""
+    from hippo.config import Config
+    from hippo.context import AppContext
+    from hippo.store.ladybug import LadybugStore
+
+    path, data = tmp_path / "hippo.lbug", tmp_path / "data"
+    store = LadybugStore(path)
+    try:
+        store.ping()
+        ctx = AppContext(config=Config(data_dir=data, openie_workers=2), store=store, ollama=ollama)
+        gen, span = build(ctx)
+        user = store.create_user("deleter", "password", "individual")
+        store.set_source_access(gen.source_id, None, owner_id=user)
+        actor = BuildActor.reader(Principal.for_user(store.get_user(user), store.get_role("individual")))
+        staging = generation(store, "refresh", gen)
+        job = claim(store, staging)
+        w = SimpleNamespace(ctx=ctx, source=gen.source_id, actor=actor)
+        receipt = tombstone(w)
+        expected = store.get_source(gen.source_id)
+    finally:
+        store.close()
+
+    store = LadybugStore(path)
+    try:
+        store.ping()
+        ctx = AppContext(config=Config(data_dir=data, openie_workers=2), store=store, ollama=ollama)
+        assert store.get_source(gen.source_id) == expected
+        # Reopening must not bump anything: the mapping is already in place.
+        assert store.suppression_epoch() == receipt.suppression_epoch
+        row = suppressions(store, gen.source_id)
+        assert len(row) == 1 and row[0].epoch == receipt.suppression_epoch
+        assert row[0].restoration_barrier == OPERATION
+        assert row[0].view_applicability == "current_only" and row[0].all_principals is True
+        assert store._generation(staging.id).status == "failed"
+        cancelled = store._knowledge_get("MaintenanceJob", job.id)
+        assert cancelled.status == "cancelled" and cancelled.error_code == "source_tombstoned"
+        assert store._generation(gen.id).status == "active"
+        with query_session(ctx, EVERYTHING, structural=True) as session:
+            assert session.graph.passage_by_id(span.id) is None
+        replay = tombstone(SimpleNamespace(ctx=ctx, source=gen.source_id, actor=BuildActor.trusted_local()))
+        assert replay.outcome == "already_tombstoned"
+        assert replay.suppression_epoch == receipt.suppression_epoch
+        assert replay.fencing_token == receipt.fencing_token
+        assert replay.cancelled_generation_id == staging.id and replay.cancelled_job_id == job.id
+    finally:
+        store.close()
+
+
 def test_creation_time_of_the_suppression_is_recorded(managed):
     before = datetime.now(UTC)
     tombstone(managed)
