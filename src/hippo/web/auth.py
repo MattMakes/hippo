@@ -41,7 +41,7 @@ from ..context import AppContext
 from ..knowledge.build_authority import BuildActor
 from ..knowledge.query_access import query_session
 from ..status import source_view
-from .render import ctx_of, render
+from .render import caller_error, ctx_of, render
 
 log = logging.getLogger(__name__)
 
@@ -379,6 +379,11 @@ def change_password(request: Request, current: str = Form(""), new: str = Form("
     try:
         ctx.store.update_user(principal.user_id, password=new)
     except ValueError as exc:
+        # Exact type only: a password rule the store refused is this caller's own mistake
+        # and its sentence is what they need. Anything else is re-raised to the mapper,
+        # because a query string is a place an exception's words are easy to forget about.
+        if not caller_error(exc):
+            raise
         return RedirectResponse("/account?error=" + quote(str(exc)), status_code=303)
     return RedirectResponse("/account?saved=password", status_code=303)
 

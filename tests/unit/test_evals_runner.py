@@ -326,3 +326,61 @@ def test_summarize_of_nothing():
     assert summary["questions"] == 0
     assert summary["accuracy"] is None
     assert summary["correct"] == 0
+
+
+# ------------------- wrap-up finding 13: the borrow pair the dispatcher refuses to split
+
+
+def test_run_question_hands_the_dispatcher_a_session_or_an_audience_but_never_both(ctx, monkeypatch):
+    """The invariant `runner.py:159-167` states in a comment, as a test.
+
+    A borrowed `QuerySession` already carries the audience it was proved for, so handing
+    `retrieval_session` an `access` beside it would be a second, unproven opinion about who
+    is asking. The dispatcher refuses that pair outright (`invalid_borrow`); the runner is
+    what keeps the refusal from ever firing, by passing `access=None` whenever it borrows.
+
+    The comment was half the review's fix and the code is correct, but nothing pinned it: a
+    later edit that "restores" the dropped `access` would turn every borrowed question into
+    a runtime `invalid_borrow` and only show up as an error field on a stored result. The
+    second half below proves the pair is what the dispatcher actually objects to, so this
+    test fails for the right reason rather than because a keyword was renamed.
+    """
+    from hippo.access import EVERYTHING
+    from hippo.knowledge import dense_session
+    from hippo.knowledge.dense_session import DenseSessionUnavailable
+    from hippo.knowledge.query_access import query_session
+
+    row = {"id": "x", "text": "Where is Acme?", "expected_answer": "", "gold_passage_ids": []}
+    # The internal audience: `access` is not `None`, so the pair below is a real pair, and
+    # `EvalAccess` does not re-read the row this test never saved.
+    audience = EVERYTHING
+    handed: list[tuple[object, object]] = []
+    real = dense_session.retrieval_session
+
+    def watched(ctx_, access=None, **kwargs):
+        handed.append((access, kwargs.get("session")))
+        return real(ctx_, access, **kwargs)
+
+    monkeypatch.setattr(dense_session, "retrieval_session", watched)
+
+    with query_session(ctx, audience) as borrowed:
+        result = run_question(ctx, row, ctx.store.get_settings(), audience, session=borrowed)
+    assert result["error"] is None, result["error"]
+    # `run_question` enters the dispatcher once and the stages below it re-enter with the
+    # session it routed, so only the first entry is the runner's own hand-over. Compared by
+    # identity: a `QuerySession` holds numpy arrays, so `==` is not a question one can ask.
+    assert handed, "the dispatcher was never reached"
+    assert handed[0][0] is None and handed[0][1] is borrowed, "a borrow arrives without an audience"
+    assert all(access is None for access, _ in handed), "no re-entry may add one either"
+
+    # Acquiring its own owner is the other half of the same rule: an audience, no session.
+    handed.clear()
+    assert run_question(ctx, row, ctx.store.get_settings(), audience)["error"] is None
+    assert handed and (handed[0][0] is audience and handed[0][1] is None)
+
+    # And the pair the runner never forms is the pair the dispatcher refuses.
+    with query_session(ctx, audience) as borrowed:
+        with pytest.raises(DenseSessionUnavailable) as caught:
+            with real(ctx, audience, session=borrowed):
+                pass
+    assert caught.value.reason == "invalid_borrow"

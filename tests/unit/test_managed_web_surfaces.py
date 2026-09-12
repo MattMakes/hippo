@@ -25,6 +25,7 @@ is the arbiter of that decision rather than a comment.
 """
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import httpx
 import numpy as np
@@ -926,6 +927,164 @@ def test_light_up_still_names_the_knob_the_caller_sent(ctx):
     assert "damping must be between" in response.json()["detail"]
 
 
+# --------------- PA4d finding 2: the one guard the last unrestricted `ctx.graph()` is for
+
+
+def test_a_changeset_naming_managed_evidence_is_refused_by_the_unrestricted_read(ctx):
+    """`changeset_access.apply` reads the whole native graph for exactly one reason.
+
+    `native_ids = set(self.ctx.graph().node_ids)` is the single remaining `ctx.graph()`
+    under `src/hippo`, and it exists to refuse an op whose target is evidence rather than a
+    writable legacy node. The 4d review proved the read cannot influence a response or a
+    saved record, but nothing made the guard fire: `rg 'Managed evidence requires typed
+    changes'` found the string only at its own `raise`, so the read had no observable
+    purpose to defend.
+
+    A managed span is exactly the shape the guard is written against. It is in the
+    *authorized* graph -- so `_visible_ops` lets the draft save -- and not in the *native*
+    one, which is the whole distinction: an audience may see evidence it may not hand-edit.
+    The refusal is a fixed sentence naming nothing the caller sent.
+    """
+    from hippo.knowledge.changeset_access import ChangesetAccess
+
+    published(ctx.store, "managed", profile=ctx.ollama.embed_model, dimension=DIM)
+    service = ChangesetAccess(ctx, EVERYTHING)
+    with service.read_scope():
+        evidence = next(node for node in service.graph.idx_of if node.startswith("span-"))
+    assert evidence not in set(ctx.graph().node_ids), "a managed span is not a native node"
+
+    identity = service.save("hand edit", [{"op": "set_node_boost", "entity_id": evidence, "boost": 2.0}])
+    version = ctx.store.graph_version()
+    with pytest.raises(ValueError) as caught:
+        ChangesetAccess(ctx, EVERYTHING).apply(identity)
+    assert str(caught.value) == "Managed evidence requires typed changes, not legacy graph edits"
+    assert evidence not in str(caught.value)
+    # Refused ahead of `changesets.apply`: nothing was written and the draft is still a draft.
+    assert ctx.store.graph_version() == version
+    assert ctx.store.get_changeset(identity)["status"] == "draft"
+
+
+# ---------- wrap-up finding 18 + residual C1: the last isinstance catches in the web layer
+
+
+# Every user, role, account and settings write wraps a store validator that raises the
+# *exact* `ValueError` -- "username is taken", "damping must be between 0 and 1" -- which is
+# the caller's own field and the sentence they need, and which the plan's transport table
+# protects by name. A `ValueError` *subclass* arriving at the same line came from further
+# down and carries whatever it was reading. These were the last catches under `src/hippo/web`
+# without `render.caller_error` in front of them, so the guard is the same one every other
+# 4xx site applies rather than a new rule.
+#
+# `ProjectionError` stands in for the family: it is a `ValueError` subclass the closed table
+# already knows, so the mapped answer is assertable rather than a bare 500.
+@pytest.fixture
+def ladder(ctx):
+    """An arch-admin over the real app, plus one user below them to write to."""
+    headers = reader(ctx)
+    subject = ctx.store.create_user("subject", "secret1", "local-admin")
+    with web(ctx, headers) as client:
+        yield SimpleNamespace(client=client, ctx=ctx, subject=subject)
+
+
+USER_AND_ROLE_WRITES = {
+    "create_user": (
+        "create_user",
+        lambda c, w: c.post(
+            "/api/users", json={"username": "neo", "password": "secret1", "role_id": "local-admin"}
+        ),
+    ),
+    "update_user": (
+        "update_user",
+        lambda c, w: c.patch(f"/api/users/{w.subject}", json={"display_name": "Subject"}),
+    ),
+    "create_role": ("create_role", lambda c, w: c.post("/api/roles", json={"name": "Scouts", "rank": 5})),
+    "update_role": (
+        "update_role",
+        lambda c, w: c.patch("/api/roles/local-admin", json={"description": "changed"}),
+    ),
+    "delete_role": ("delete_role", lambda c, w: c.delete("/api/roles/local-assistant")),
+}
+
+
+@pytest.mark.parametrize("case", sorted(USER_AND_ROLE_WRITES))
+def test_a_user_or_role_write_that_fails_is_mapped_rather_than_quoted_back_as_a_400(
+    ladder, monkeypatch, case
+):
+    """A store write's own words are not the caller's mistake, on these routes either."""
+    method, call = USER_AND_ROLE_WRITES[case]
+
+    def refuse(*args, **kwargs):
+        raise ProjectionError(LEAKY_PATH)
+
+    monkeypatch.setattr(ladder.ctx.store, method, refuse)
+    response = call(ladder.client, ladder)
+    assert LEAKY_PATH not in response.text
+    assert response.status_code == 500, response.text
+    assert response.json()["code"] == "operation_failed"
+
+
+def test_the_role_form_still_shows_the_validators_sentence_but_not_a_subclasses(ladder, monkeypatch):
+    """The two `getattr(exc, "detail", str(exc))` sites keep exactly three families.
+
+    `RoleBody` is constructed inside the try, so an empty name is a pydantic
+    `ValidationError` -- a `ValueError` subclass, but this form's own field rules and the
+    only thing that tells the operator which box was wrong. A non-numeric rank is the bare
+    `ValueError` from `int()`. Both stay; a subclass raised by the store write does not.
+    This is the one place the batch needed more than `caller_error` alone.
+    """
+    empty_name = ladder.client.post("/roles", data={"name": ""}, follow_redirects=False)
+    assert empty_name.status_code == 303, empty_name.text
+    assert "error=" in empty_name.headers["location"]
+
+    bad_rank = ladder.client.post("/roles", data={"name": "Scouts", "rank": "high"}, follow_redirects=False)
+    assert bad_rank.status_code == 303 and "error=" in bad_rank.headers["location"]
+
+    def refuse(*args, **kwargs):
+        raise ProjectionError(LEAKY_PATH)
+
+    monkeypatch.setattr(ladder.ctx.store, "create_role", refuse)
+    leaked = ladder.client.post("/roles", data={"name": "Scouts", "rank": "5"}, follow_redirects=False)
+    assert LEAKY_PATH not in leaked.text and LEAKY_PATH not in str(leaked.headers)
+    assert leaked.status_code == 500, leaked.text
+
+
+def test_a_password_change_that_fails_is_not_redirected_back_with_its_own_words(ladder, monkeypatch):
+    """`auth.py:382` put `str(exc)` straight into the `/account?error=` query string."""
+
+    def refuse(*args, **kwargs):
+        raise ProjectionError(LEAKY_PATH)
+
+    monkeypatch.setattr(ladder.ctx.store, "update_user", refuse)
+    response = ladder.client.post(
+        "/account/password",
+        data={"current": "secret1", "new": "secret22", "again": "secret22"},
+        follow_redirects=False,
+    )
+    assert LEAKY_PATH not in response.text and LEAKY_PATH not in str(response.headers)
+    assert response.status_code == 500, response.text
+
+
+def test_a_settings_form_write_that_fails_is_mapped_rather_than_rendered_into_the_page(ctx, monkeypatch):
+    """Residual C1: the JSON twin's guard, on the page that shares its store call.
+
+    `pages.py` renders `error=str(exc)` from a bare `except ValueError`, which the plan
+    protects *for the validator's sentence* -- the knob the operator just typed and its
+    range. A subclass raised by the write is not that sentence, and
+    `test_a_settings_write_that_fails_is_mapped_rather_than_quoted_back_as_a_400` already
+    guards the exact same shape one route over.
+    """
+
+    def refuse(changes):
+        raise ProjectionError(LEAKY_PATH)
+
+    monkeypatch.setattr(ctx.store, "update_settings", refuse)
+    with web(ctx) as client:
+        response = client.post("/settings", data={"damping": "0.6"}, follow_redirects=False)
+    assert LEAKY_PATH not in response.text
+    assert response.status_code == 500, response.text
+    assert response.json()["code"] == "operation_failed"
+
+
 # ------------------------------------- 4e decision 1's own check, as a test rather than a grep
 
 
@@ -958,13 +1117,16 @@ STR_EXC_SITES = {
         'return JSONResponse({"detail": str(exc), "candidates": exc.candidates}, status_code=409)',
     ): 1,
     ("routes/code.py", "raise HTTPException(404, str(exc)) from exc"): 1,
-    # protected: the legacy settings form, which the plan's transport table names. What is
-    # protected is `validate_settings`' sentence rather than the catch itself -- see the
-    # comment at the site, and the deferred half below.
+    # protected *and* guarded: the legacy settings form, which the plan's transport table
+    # names. `validate_settings`' sentence is what is protected; the PA8 closure batch put
+    # `caller_error` in front of the catch, so a subclass no longer reaches the page.
     ("routes/pages.py", "error=str(exc),"): 1,
-    # bounded today, deferred by the wrap-up review (finding 18) to whoever next owns these
-    # files: the store validators these wrap raise the plain `ValueError` their own rules
-    # raise, which is the caller's own field. A hardening, not a live leak.
+    # guarded by the PA8 closure batch (wrap-up finding 18 and `evidence-cleanup4.md`'s
+    # residual C1): the user, role and account writes. The store validators these wrap
+    # raise the plain `ValueError` their own rules raise, which is the caller's own field;
+    # a subclass is re-raised to the mapper. The two role forms carry one clause more,
+    # because they build their pydantic model inside the `try` and a `ValidationError` is
+    # that form's own field rules. `analyze.py`'s two below are still the deferred family.
     ("routes/users.py", "raise HTTPException(400, str(exc)) from exc"): 5,
     ("routes/users.py", 'return _back(getattr(exc, "detail", str(exc)))'): 2,
     ("auth.py", 'return RedirectResponse("/account?error=" + quote(str(exc)), status_code=303)'): 1,

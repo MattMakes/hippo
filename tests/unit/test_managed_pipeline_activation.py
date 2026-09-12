@@ -27,6 +27,7 @@ from hippo.knowledge.build_authority import BuildActor
 from hippo.knowledge.query_access import query_session
 from hippo.knowledge.source_lifecycle import tombstone_managed_source
 from hippo.ollama import Ollama
+from hippo.status import source_view
 from hippo.store.migrations import DEFAULT_WORKSPACE_ID
 from tests.unit.test_prose_generation import Runtime
 
@@ -338,6 +339,31 @@ def test_an_existing_managed_source_without_an_actor_refuses_before_any_legacy_h
     assert seen == [] and source_row(w) == before
 
 
+def test_the_actorless_refusal_names_the_delete_path_it_also_guards(setup):
+    """Wrap-up finding 17 / PA3b finding 3: one refusal serves two operations.
+
+    `plan_dispatch` is the single classification both `reindex` and `delete_source` run, and
+    `delete_source` reaches it (`pipeline.py:563`) *before* `_tombstone`'s own already-correct
+    "cannot be deleted" sentence, so that one is unreachable. The message said only "rebuilt",
+    which is wrong on the delete path and is what an operator reads in the local log. Naming
+    both operations is correct on both paths; a verb swap would only move the error.
+
+    It reaches no client either way -- `web/app.py` maps `ManagedActorRequired` to the fixed
+    permission body -- so this is the exception's own words and the log line, nothing more.
+    """
+    w = setup
+    w.quiet_jobs()
+    source = w.stage_text()
+    w.store.begin_managed_source(source)
+    for call in (
+        lambda: pipeline.reindex(w.ctx, source),
+        lambda: pipeline.delete_source(w.ctx, source),
+    ):
+        with pytest.raises(w.module.ManagedActorRequired) as caught:
+            call()
+        assert "rebuilt or deleted" in str(caught.value), str(caught.value)
+
+
 def test_an_existing_managed_source_with_an_actor_refreshes_and_never_prepares_legacy(setup, monkeypatch):
     w = setup
     seen = lanes(monkeypatch)
@@ -595,6 +621,21 @@ def test_the_raw_root_and_embedding_cache_appear_only_for_a_managed_build(setup,
     wait(w.ctx)
     citations(w.ctx)
     assert not knowledge_root(w.ctx).exists()
+
+    # PA3a finding 5: the two the plan's step 3 names by name and the test did not reach.
+    # `on_first_connection` is the schema/membership bootstrap every process runs before it
+    # serves anything, and `status.source_view` is what every library, page and CLI listing
+    # goes through -- between them they are most of what touches a cold store that has never
+    # had a managed build. Neither may be the thing that creates a raw root, because a
+    # directory appearing on startup or on a read is a directory nobody asked for.
+    # `on_first_connection` is backend-only (`test_store_code.BACKEND_ONLY`), so the Fake
+    # runs the bootstrap it does have; PA7 runs this same line on Ladybug, where the real
+    # one -- schema, memberships, the restart sweep -- is what executes.
+    bootstrap = getattr(w.store, "on_first_connection", w.store.ensure_schema)
+    bootstrap()
+    with query_session(w.ctx, EVERYTHING, structural=True) as session:
+        source_view(w.ctx, EVERYTHING, session=session).validate()
+    assert not knowledge_root(w.ctx).exists(), "a bootstrap or a source listing created a raw root"
 
     monkeypatch.setattr(w.ctx, "ollama", w.managed_ollama)
     w.source = pipeline.add_text(w.ctx, "Managed", FIRST_TEXT, owner_id=w.user, build_actor=w.actor)
@@ -1082,6 +1123,7 @@ def test_a_refresh_interrupted_by_a_restart_is_retired_without_losing_g1(setup):
     generation = row_of(w, source)["active_generation_id"]
 
     w.store.update_source(source, status="ready", stage=in_flight["stage"], error=None)
+    before = row_of(w, source)
     assert w.store.mark_interrupted_jobs() == 1
 
     recovered = row_of(w, source)
@@ -1091,6 +1133,20 @@ def test_a_refresh_interrupted_by_a_restart_is_retired_without_losing_g1(setup):
     assert code == "build_interrupted"
     assert code.isascii() and 0 < len(message) <= w.module.MAX_MESSAGE_CHARS
     assert citations(w.ctx) == {SECOND_TEXT}  # the published generation never stopped serving
+
+    # PA3b finding 8, the "nothing else moved" half. Asserting the fields that *did* change
+    # says nothing about the ones that did not, and this sweep runs on a row nobody is
+    # holding: it may retire the stage and say why, and it may not quietly tidy anything
+    # else. The stale `progress_done`/`progress_total` of the build that died are part of
+    # what must survive -- they are the only record of how far it got.
+    moved = {"stage", "error", "updated_at"}
+    assert {k: v for k, v in recovered.items() if k not in moved} == {
+        k: v for k, v in before.items() if k not in moved
+    }
+    assert (recovered["progress_done"], recovered["progress_total"]) == (
+        before["progress_done"],
+        before["progress_total"],
+    )
 
 
 def test_an_interrupted_refresh_is_retired_by_the_next_ladybug_open(setup):
@@ -1415,6 +1471,30 @@ def test_a_mixed_bulk_clears_only_legacy_lanes_and_submits_each_with_its_own_ide
     assert row_of(w, w.tombstoned) == before_tombstone
 
 
+def test_a_single_reindex_of_an_unsupported_source_with_an_actor_stays_legacy(mixed, monkeypatch):
+    """PA3a finding 3: the entry point the bulk test proves this classification through.
+
+    A `.py` upload is not an accepted managed input, so an actor does not make it one --
+    `plan_dispatch` must still answer `legacy`, and the legacy clear must still run. The
+    mixed-bulk test above asserts exactly that (`w.unsupported: "legacy"`, `prepared ==
+    [w.unsupported]`), but only through `reindex_all`. Every actor-bearing
+    `pipeline.reindex(...)` in the tree was on an eligible or already-managed source, so
+    the single-source door the review named had nothing on it: a classification bug that
+    only reached this path would pass the whole suite.
+    """
+    w = mixed
+    seen = lanes(monkeypatch)
+    prepared: list[str] = []
+    monkeypatch.setattr(pipeline, "_prepare_reindex", lambda ctx, source_id: prepared.append(source_id))
+
+    assert pipeline.reindex(w.ctx, w.unsupported, build_actor=w.actor) is True
+    wait(w.ctx)
+
+    assert seen == [("legacy", w.unsupported)], "an actor cannot promote an unsupported input"
+    assert prepared == [w.unsupported], "the legacy lane still clears before it re-reads"
+    assert not w.store.get_source(w.unsupported)["managed"]
+
+
 def test_a_failed_managed_preflight_clears_nothing_and_starts_nothing(mixed, no_destruction, monkeypatch):
     w = mixed
     deny_one(w)
@@ -1684,7 +1764,9 @@ def test_a_lane_that_changes_lane_after_the_plan_does_not_strand_the_lanes_behin
 
     def submit(ctx, source_id, **kwargs):
         if source_id == w.eligible:
-            raise w.module.ManagedActorRequired("A managed source cannot be rebuilt without a build actor")
+            raise w.module.ManagedActorRequired(
+                "A managed source cannot be rebuilt or deleted without a build actor"
+            )
         submitted.append(source_id)
         return original(ctx, source_id, **kwargs)
 

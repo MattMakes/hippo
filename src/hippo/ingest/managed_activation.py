@@ -35,7 +35,7 @@ from ..knowledge.embedding_profile import (
 from ..knowledge.raw_artifacts import RawArtifactStore
 from ..knowledge.source_lifecycle import OPERATION_ID
 from ..ollama import EMBED_PREFIXES, OllamaError, _base_name
-from ..store.generations import REFRESHING_PREFIX
+from ..store.generations import INTERRUPTED_REFRESH_STAGE, REFRESHING_PREFIX
 from .accepted_inputs import CaptureLimits, FileInput, InputCaptureError
 from .chunker import MIN_CHUNK_CHARS
 from .prose_generation import (
@@ -64,7 +64,10 @@ TOMBSTONE = ("deleted", "tombstoned")
 
 MAX_MESSAGE_CHARS = 200
 STATUSES = ("ready", "failed")
-STAGES = ("refresh_failed", "refresh_cancelled", "failed", "cancelled")
+# The first is the stage the store's own restart sweep writes, so it is that constant rather
+# than a second spelling of it: 4e decision 7 moved the managed-lane vocabulary to
+# `store/generations.py`, and `REFRESHING_PREFIX` above already comes from there.
+STAGES = (INTERRUPTED_REFRESH_STAGE, "refresh_cancelled", "failed", "cancelled")
 
 
 class ManagedDispatchError(ValueError):
@@ -173,7 +176,9 @@ def plan_dispatch(
     if eligibility == "tombstoned":
         return Dispatch("skip", eligibility)
     if eligibility == "managed" and actor is None:
-        raise ManagedActorRequired("A managed source cannot be rebuilt without a build actor")
+        # Both verbs, because this one classification is what `reindex` and `delete_source`
+        # run: `delete_source` reaches it before `_tombstone`'s own "deleted" sentence.
+        raise ManagedActorRequired("A managed source cannot be rebuilt or deleted without a build actor")
     if actor is not None and eligibility in ("managed", "eligible_legacy"):
         return Dispatch("managed", eligibility, actor, operation_id or new_operation_id())
     return Dispatch("legacy", eligibility)

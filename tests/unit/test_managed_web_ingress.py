@@ -586,11 +586,48 @@ def test_a_bulk_whose_managed_preflight_refuses_answers_a_closed_refusal_code(we
     assert web.store.get_source(source_id)["active_generation_id"] == before
 
 
+def test_a_bulk_refused_as_busy_still_makes_the_revocation_check_its_siblings_make(web, monkeypatch):
+    """Wrap-up finding 9: the `Busy` branch was the one exit that skipped `view.validate()`.
+
+    Both of its siblings validate the view they are holding before they answer -- the
+    refused preflight at the `bulk_refused` return, the success path at `{"accepted": true}`
+    -- because the inventory this caller proved is what the answer is about. `Busy` returned
+    a 409 straight out of the `with` block.
+
+    This test was green before the check was added, and it is worth keeping anyway. The
+    answer was already the revocation, because `query_session` validates on *every* exit
+    (`query_access.py:157-162`, the `finally`) and a raising `__exit__` discards the return
+    value the branch had just built. So the finding is the asymmetry, not a leak: what the
+    added line closes is that the branch answered correctly by accident of the context
+    manager rather than by saying so, and the view's own proof -- which is `source_view`'s
+    epoch, not the session's -- was never the thing that held. Nothing pinned either half.
+    """
+    managed_source(web)
+
+    def busy_after_a_revocation(ctx, *args, **kwargs):
+        ctx.store._bump_authorization_epoch()
+        raise pipeline.Busy("something else is indexing")
+
+    monkeypatch.setattr(pipeline, "reindex_all", busy_after_a_revocation)
+    response = web.client.post("/api/sources/reindex-all", headers=web.admin_headers)
+    assert response.status_code == 409, response.text
+    assert response.json() == PERMISSION_RESPONSE
+
+
+def test_a_bulk_refused_as_busy_with_nothing_revoked_still_says_busy(web, monkeypatch):
+    """The revocation check must not swallow the refusal it was added beside."""
+    managed_source(web)
+    monkeypatch.setattr(pipeline, "reindex_all", raises(pipeline.Busy("something else is indexing")))
+    response = web.client.post("/api/sources/reindex-all", headers=web.admin_headers)
+    assert response.status_code == 409, response.text
+    assert response.json() == {"error": "something else is indexing", "code": "indexing_busy"}
+
+
 def test_a_bulk_over_a_managed_inventory_with_no_actor_is_the_generic_permission_answer(web, monkeypatch):
     """A managed operation an identity may not perform is a permission answer, not a report."""
 
     def refuse(ctx, **kwargs):
-        raise ManagedActorRequired("A managed source cannot be rebuilt without a build actor")
+        raise ManagedActorRequired("A managed source cannot be rebuilt or deleted without a build actor")
 
     monkeypatch.setattr(pipeline, "reindex_all", refuse)
     response = web.client.post("/api/sources/reindex-all", headers=web.admin_headers)
@@ -759,3 +796,82 @@ def test_the_index_job_closure_captures_nothing_request_scoped(web):
     )
     assert type(captured["actor"]).__name__ in ("BuildActor", "NoneType")
     assert isinstance(captured["source_id"], str) and isinstance(captured["operation"], str)
+
+
+# ---------- T3 (`task4-notes.md:91,96`): the verified lane, over HTTP, as a real reader
+
+
+# `test_managed_web_surfaces.py` proves verified dense dispatch at
+# `test_light_up_over_verified_managed_evidence_dispatches_verified_dense_once`, but through
+# `internal_request(ctx)` -- a direct call with the internal audience -- and its own fixture's
+# docstring records why: the staged-writer fixture's generation is not one a reader audience
+# can prove, so the same request over HTTP came back as an empty `legacy` corpus. That was
+# read as a fixture-building task and deferred.
+#
+# It is not one here. This module's `managed_source` builds through the *real* coordinator
+# over the real route, and `ingest/prose_generation.py` stamps `origin="local_curated"`,
+# which is exactly the origin `knowledge/access.py` accepts for a workspace reader. So the
+# two cases the 4b-ii review called fixture-blocked are two tests: a reader reaching verified
+# dense over the transport, and a revocation landing on that lane rather than on a
+# structural one.
+
+
+def dispatched(monkeypatch) -> list[str]:
+    """Every dense mode a request routes to, seen at the one module attribute."""
+    from contextlib import contextmanager
+
+    from hippo.knowledge import dense_session as module
+
+    modes: list[str] = []
+    real = module.retrieval_session
+
+    @contextmanager
+    def observed(*args, **kwargs):
+        with real(*args, **kwargs) as session:
+            # A pass-through is not a dispatch: an already routed session is handed back.
+            if session is not kwargs.get("session"):
+                modes.append(session.graph.dense_capability.mode)
+            yield session
+
+    monkeypatch.setattr(module, "retrieval_session", observed)
+    return modes
+
+
+def test_a_reader_reaches_verified_dense_over_http(web, monkeypatch):
+    """The audience is the point: a reader, a cookie-less bearer token, a real transport."""
+    managed_source(web)
+    modes = dispatched(monkeypatch)
+
+    response = web.client.post("/api/graph/light-up", json={"question": QUESTION}, headers=web.reader_headers)
+
+    assert response.status_code == 200, response.text
+    assert modes == ["verified"], "a reader over HTTP must reach the verified lane exactly once"
+    say_nothing_private(response.text)
+
+
+def test_revoking_during_a_verified_dispatch_is_the_generic_permission_answer(web, monkeypatch):
+    """The revocation half: the epoch moves while the *verified* owner is held.
+
+    The existing revocation tests all land on a structural owner. This one fires after the
+    dispatcher has routed the session to verified dense, which is the lane an activated
+    managed corpus actually serves from, and the answer must still be the permission one --
+    not a half-built result and not a dense failure wearing a retrieval code.
+    """
+    managed_source(web)
+    from contextlib import contextmanager
+
+    from hippo.knowledge import dense_session as module
+
+    real = module.retrieval_session
+
+    @contextmanager
+    def revoked(*args, **kwargs):
+        with real(*args, **kwargs) as session:
+            assert session.graph.dense_capability.mode == "verified"
+            web.store._bump_authorization_epoch()
+            yield session
+
+    monkeypatch.setattr(module, "retrieval_session", revoked)
+    response = web.client.post("/api/graph/light-up", json={"question": QUESTION}, headers=web.reader_headers)
+    assert response.status_code == 409, response.text
+    assert response.json() == PERMISSION_RESPONSE

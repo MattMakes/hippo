@@ -167,6 +167,12 @@ def managed_evidence_exists(ctx) -> bool:
     `managed_eligibility` is the one definition of "managed"; a tombstoned source is not
     counted, because its evidence is suppressed for every audience and the preview is
     therefore not hiding it from anybody.
+
+    The unfiltered `list_sources()` is deliberate and is not an audience read: this is
+    workspace metadata answering a manager's question about their own workspace, not
+    evidence answering a reader's question. Only a `manage_users`/`manage_roles` holder ever
+    reaches a preview, and the notice interpolates nothing -- `PREVIEW_NOTICE` is a fixed
+    sentence -- so the boolean is the whole of what the unfiltered read discloses.
     """
     return any(
         managed_eligibility(source) == "managed" and source.get("active_generation_id")
