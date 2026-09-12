@@ -17,13 +17,12 @@ from fastapi.responses import RedirectResponse
 from ... import ask as ask_service
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import answer_sources
-from ...knowledge.public_errors import OPERATION_FAILED, public_failure
 from ...knowledge.query_access import QuerySession, query_session
 from ...status import system_status
 from ...store.base import DEFAULT_SETTINGS, SETTING_RULES, validate_settings
 from ..adhoc import remember_adhoc
 from ..auth import principal_of, require
-from ..render import ctx_of, render
+from ..render import ctx_of, render, retrieval_failure
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -103,11 +102,12 @@ def ask_page(request: Request, q: str = ""):
 def failure_text(exc: BaseException) -> str:
     """What the answer fragment may say about a failure: one closed code, never its words.
 
-    The same table the JSON routes read, rendered as the one sentence a reader can act on
-    plus the code they can quote. The exception itself goes to the local log at DEBUG, where
-    a public-level capture cannot pick up the model's reply body or an absolute path.
+    The same helper the JSON routes and the app's handlers use, rendered as the one sentence
+    a reader can act on plus the code they can quote. The exception itself goes to the local
+    log at DEBUG, where a public-level capture cannot pick up the model's reply body or an
+    absolute path.
     """
-    failure = public_failure(exc) or OPERATION_FAILED
+    failure = retrieval_failure(exc)
     log.warning("ask failed: %s", type(exc).__name__)
     log.debug("ask failure detail", exc_info=True)
     return f"{failure.message} [{failure.code}]"

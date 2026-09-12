@@ -25,10 +25,9 @@ from ..ingest.managed_activation import ManagedActorRequired, ManagedDispatchErr
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.dense import DenseUnavailable
 from ..knowledge.projection import ProjectionError
-from ..knowledge.public_errors import OPERATION_FAILED, public_failure
 from ..ollama import OllamaError
 from . import auth
-from .render import STATIC_DIR, render
+from .render import STATIC_DIR, public_failure_response, render, retrieval_failure
 from .routes import analyze, api, code, evals, graph, pages, sources, users
 from .security import HostAndOriginGuard
 
@@ -101,13 +100,12 @@ async def public_failure_page(request: Request, exc: Exception):
     """
     One stable code and one bounded sentence for a failure no route shaped itself.
 
-    `public_failure` returning None means the table does not know this exception; inside the
-    managed paths that reach here it can only be answered generically, which is the caller
-    rule the mapper documents. The body keeps the `{"error": ...}` shape the pages' JavaScript
-    already reads and adds `code`, the same field the MCP tools and the CLI report.
+    The same two helpers every web surface uses, so a client that moves between the pages,
+    the JSON routes and the MCP tools reads one vocabulary: `retrieval_failure` applies the
+    mapper's documented caller rule, and `public_failure_response` keeps the `{"error": ...}`
+    shape the pages' JavaScript already reads while adding `code`.
     """
-    failure = public_failure(exc) or OPERATION_FAILED
-    return JSONResponse({"error": failure.message, "code": failure.code}, status_code=failure.http_status)
+    return public_failure_response(retrieval_failure(exc))
 
 
 async def forbidden_page(request: Request, exc: HTTPException):

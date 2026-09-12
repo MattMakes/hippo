@@ -15,12 +15,11 @@ from pydantic import BaseModel, Field
 from ... import ask as ask_service
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import answer_sources, retrieval_fields
-from ...knowledge.public_errors import OPERATION_FAILED, public_failure
 from ...knowledge.query_access import query_session
 from ...status import system_status
 from ...store.base import validate_settings
 from ..auth import principal_of, require
-from ..render import ctx_of
+from ..render import ctx_of, public_failure_response, retrieval_failure
 
 router = APIRouter(prefix="/api")
 
@@ -88,12 +87,11 @@ def checked_settings(settings: dict[str, Any] | None) -> None:
 def query_failure(exc: BaseException) -> JSONResponse:
     """One closed code for a failed query, never the exception's own words.
 
-    A model path must not let an unknown exception reach the client, which is the caller
-    rule `public_errors` documents: map what the table knows, and call everything else
-    `operation_failed`.
+    A model path must not let an unknown exception reach the client. `retrieval_failure` is
+    that caller rule, shared with the page surfaces and the app's own handlers so the three
+    cannot drift apart.
     """
-    failure = public_failure(exc) or OPERATION_FAILED
-    return JSONResponse({"error": failure.message, "code": failure.code}, status_code=failure.http_status)
+    return public_failure_response(retrieval_failure(exc))
 
 
 @router.post("/ask")
