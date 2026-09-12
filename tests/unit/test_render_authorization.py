@@ -26,7 +26,10 @@ def test_render_without_content_callback_rechecks_status_permissions(ctx, monkey
         client.headers["Authorization"] = "Bearer " + ctx.store.get_user(user)["token"]
         response = client.get(url)
     assert response.status_code == 409
-    assert response.json() == {"error": "Permissions changed; repeat the query"}
+    assert response.json() == {
+        "error": "Permissions changed; repeat the query",
+        "code": "authorization_changed",
+    }
 
 
 def test_unavailable_store_login_can_render_without_a_graph(ctx, monkeypatch):

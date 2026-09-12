@@ -46,6 +46,10 @@ PUBLIC_FAILURES = (
     httpx.TransportError,
 )
 
+# The stable code for the generic permission answer, which is not one of the four retrieval
+# codes; see `authorization_changed` below.
+AUTHORIZATION_CHANGED = "authorization_changed"
+
 
 def create_app(ctx: AppContext | None = None) -> FastAPI:
     ctx = ctx or AppContext.from_env()
@@ -93,7 +97,19 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
 
 
 async def authorization_changed(request: Request, exc: Exception):
-    return JSONResponse({"error": "Permissions changed; repeat the query"}, status_code=409)
+    """
+    The generic permission answer: the sentence clients already read, plus its stable code.
+
+    `public_errors` maps `AuthorizationChanged` to `None` on purpose — a permission change is
+    not a retrieval failure and has no status of its own — so the name lives here rather than
+    in the closed table, and it is the same string the managed lane already stores for this
+    condition (`public_errors._MANAGED_CODES["authorization_changed"]`). The exception's own
+    words are never read: every caller of this response raises it with a different sentence.
+    """
+    return JSONResponse(
+        {"error": "Permissions changed; repeat the query", "code": AUTHORIZATION_CHANGED},
+        status_code=409,
+    )
 
 
 async def public_failure_page(request: Request, exc: Exception):

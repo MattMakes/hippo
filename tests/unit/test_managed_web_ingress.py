@@ -71,7 +71,10 @@ SECRETS = (
     "the model refused",
 )
 
-PERMISSION_RESPONSE = {"error": "Permissions changed; repeat the query"}
+PERMISSION_RESPONSE = {
+    "error": "Permissions changed; repeat the query",
+    "code": "authorization_changed",
+}
 
 
 # ------------------------------------------------------------------ fixtures
@@ -366,6 +369,17 @@ def test_a_delete_retry_on_an_unavailable_source_says_only_that_it_is_missing(we
     assert response.status_code == 404
     assert response.json() == {"detail": "no such source"}
     say_nothing_private(response.text)
+
+
+def test_the_permission_answer_carries_its_code_and_none_of_the_exception(web, monkeypatch, caplog):
+    """Every JSON answer has a code, and a denial's own sentence is never the raised one."""
+    source_id = managed_source(web)
+    monkeypatch.setattr(pipeline, "reindex", raises(AuthorizationChanged(POISON)))
+    with caplog.at_level(logging.INFO):
+        response = web.client.post(f"/api/sources/{source_id}/reindex", headers=web.reader_headers)
+    assert response.status_code == 409
+    assert response.json() == PERMISSION_RESPONSE
+    say_nothing_private(response.text, str(dict(response.headers)), caplog.text)
 
 
 def test_legacy_validation_routes_keep_their_own_messages(web):

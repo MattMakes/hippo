@@ -272,3 +272,135 @@ No other breakage row names a file owned here.
     stores a bounded code and Task 2 withholds `error` on managed rows. Turning that stored code into
     a rendered sentence with `public_failure_for_code` belongs to `status.py`, which this slice must
     not touch; the consumer side is ready.
+
+## After the 4b-ii merge
+
+The pre-merge tables above are kept as they were: they are what proves the cross-slice dependency on
+`graph.py` existed and was not this slice's to close.
+
+Second authorized merge: `git merge rag-it-all-tibs` → merge commit **`67429a6`**, with
+`rag-it-all-tibs` at **`a0f811f`** (containing 4b-ii's `2256f48`, and 4c's and 4d's work). Clean; no
+conflicts in any file this slice touches.
+
+| Hash | Subject |
+|---|---|
+| `70cd6ce` | Read the failure vocabulary from one place now that render owns it |
+| `cc71ff2` | Pin which condition won, now that no transport shows the exception |
+
+1. **Dedupe.** `web/render.py` now exports `retrieval_failure(exc) -> PublicFailure` and
+   `public_failure_response(failure) -> JSONResponse`, which are exactly the shape this slice had
+   implemented locally while 4b-ii was in flight. All three local copies are gone:
+   `app.py::public_failure_page`, `api.py::query_failure` and `pages.py::failure_text` now call those
+   two, and the direct `public_errors` imports were dropped from the three modules.
+   `ManagedActorRequired` keeps its own registration to `authorization_changed`: running it through
+   `retrieval_failure` would answer a permission question with `operation_failed`.
+2. **Both rows this slice had to leave red are now green**: `test_web_auth.py::test_graph_page_and_its_endpoints_are_scoped_and_previewable` (row A) and
+   `test_status_access.py::test_status_route_and_page_header_pass_the_request_audience` (row C).
+3. **Four MCP rows in `tests/unit/test_query_session.py` were adapted**, authorized by the
+   orchestrator alongside the two http rows. 4c's `mcp_server._public_failures` now wraps each tool
+   body, so a model failure reaches a client as `ToolError("operation_failed: …")` and a revocation
+   as `ToolError(DENIED)` rather than as the raised `RuntimeError` / `AuthorizationChanged` the four
+   rows asserted. They now assert the rendered vocabulary, that `"model failed"` is absent from it,
+   and — unchanged — `len(acquired) == 1 and released == acquired`. This was 4c's behaviour change,
+   found by this slice's post-merge run and reported before touching it.
+
+A third authorized merge followed, to pick up `79e379a` (sonnet-2's adaptation of the four MCP rows in
+`test_graph_surface_access.py` that 4c's `ToolError` wrapping had broken, and which this slice had
+reported as pre-existing at the merged HEAD rather than chased): `rag-it-all-tibs` at **`e709aad`**.
+Clean.
+
+| # | Command | Result | Log |
+|---|---|---|---|
+| 7 | Post-merge GREEN Fake, the 14 files of run 3 plus `test_managed_web_surfaces.py` | **289 passed, 2 skipped, 0 failed** | `/tmp/hippo-pa4b1-fake-green-postmerge.log` |
+| 7b | Baseline for the 409 `code` question, at the merged HEAD before that change: `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_graph_surface_access.py tests/unit/test_query_authorization_boundary.py tests/unit/test_render_authorization.py …` | 4 failed, 58 passed — the four `test_mcp_*` rows in `test_graph_surface_access.py`, all from 4c's `ToolError` wrapping and none from this slice. Fixed upstream in `79e379a`. | `/tmp/hippo-pa4b1-409-baseline.log` |
+| 7c | Final GREEN Fake, 19 files: run 7's 15 plus `test_graph_surface_access.py`, `test_query_authorization_boundary.py`, `test_render_authorization.py`, `test_lookup_snapshot_lifetime.py` | **370 passed, 2 skipped, 0 failed** | `/tmp/hippo-pa4b1-fake-final.log` |
+| 8 | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_query_session.py -q -o addopts='' -p no:cacheprovider -W error` (bare, no ignore: the file imports no transport) | **38 passed** | `/tmp/hippo-pa4b1-query-session.log` |
+| 9 | Post-merge GREEN Ladybug: `HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_managed_web_ingress.py tests/unit/test_web_auth.py -q -o addopts='' -p no:cacheprovider -W error -W "ignore:…BlockingPortal…"` | **74 passed, 2 skipped**, exit 0, in 787.64s | `/tmp/hippo-pa4b1-ladybug-postmerge.log` |
+| 9b | Ladybug again after the 409 `code` change, on the new file: same command, `test_managed_web_ingress.py` alone | see "Ladybug result" | `/tmp/hippo-pa4b1-ladybug-final.log` |
+| 10 | Ruff over the six changed source files and the three changed test files | All checks passed; all files formatted | — |
+
+## 4b-ii review finding 10, as it applies to these files
+
+The review reported two things about this slice's files. One was already fixed; one was real.
+
+1. **Stale.** "`web/routes/api.py:96` and `:119` still answer `JSONResponse({'error': str(exc)}, 502)`"
+   describes the code before commit `2377f7c`, which removed both branches. At the reviewed HEAD
+   `rg -n '502|str\(exc\)' src/hippo/web/{app.py,routes/api.py,routes/pages.py}` returns no `502` at
+   all and exactly three `str(exc)` calls, all of them the **legacy settings validators** the plan
+   requires to keep their own text: `api.py::put_settings`, `api.py::checked_settings` and the
+   settings form in `pages.py`. `test_settings_and_safety.py` asserts those messages.
+2. **Real, and fixed here.** The `AuthorizationChanged` handler answered `{"error": …}` at 409 with
+   no `code`, which is the one JSON body in these files that did not carry one. It now answers
+   `{"error": "Permissions changed; repeat the query", "code": "authorization_changed"}`. The code
+   name is not new vocabulary: it is the string the managed lane already stores for this condition
+   (`public_errors._MANAGED_CODES["authorization_changed"]`). The constant lives in `web/app.py`
+   rather than in the closed table because `public_errors` maps `AuthorizationChanged` to `None` on
+   purpose — a permission change is not one of the four retrieval failures and has no status of its
+   own. `test_the_permission_answer_carries_its_code_and_none_of_the_exception` injects a poison
+   `AuthorizationChanged` and asserts the body plus the absence of anything private from the body,
+   the headers and `caplog` at `INFO`.
+
+That change altered one shared response, so three assertions in 4b-ii's files needed the single added
+key and nothing else. Authorized by the orchestrator and applied as one line each:
+`tests/unit/test_render_authorization.py:29`, `tests/unit/test_graph_surface_access.py:82`,
+`tests/unit/test_query_authorization_boundary.py:48` (six parametrized rows between them).
+
+**Open asymmetry for the integrator, recorded not resolved.** 4c's MCP surface deliberately answers a
+denial with `mcp_server.DENIED`, a sentence with **no** code ("One sentence and no code:
+`public_errors` maps an authorization change to `None` on purpose", `mcp_server.py:166-169`), and
+`cli.DENIED` prints the same string. HTTP now carries `code: "authorization_changed"` for the same
+condition. The plan asks that "FastAPI, MCP `ToolError`, remote client, and CLI stderr … use the same
+stable code/message", so one of the two should move: either MCP and the CLI prefix the denial with
+the same code, or the HTTP body drops it again. This slice implemented the HTTP half as directed and
+is flagging the other half rather than changing 4c's files.
+
+## Open finding for the integrator
+
+**A bare `ValueError` from a graph-only route still escapes the closed vocabulary.**
+`GraphIndex.canonical_selected_generations` raises a plain `ValueError`
+(`src/hippo/hipporag/graph_index.py:209,212`) during structural acquisition, and
+`public_failure` maps a bare `ValueError` to `None` by design (pa4a decision 1). The model routes
+handle it: `/api/ask`, `/api/search` and the HTML ask fragment apply `retrieval_failure` themselves,
+so it becomes `operation_failed`. The graph-only routes do not — `entities`, `neighborhood`,
+`library`, `source_page`, `list_sources`, `get_source`, `me`, `account`, `users_page`, `list_users`,
+`list_roles` rely on `app.py`'s handlers, which are registered per exception family and cannot catch
+a bare `ValueError` without catching every caller mistake in the app. So that one condition reaches
+a client as a 500 with no `code`.
+
+Nothing private leaks: the two messages are the module's own constants
+("Selected generations must be immutable nonempty (source, generation) pairs" / "Selected
+generations name one source twice") and Starlette's 500 body is "Internal Server Error" anyway. It is
+a code-stability gap, not a redaction gap, and the same gap exists on 4b-ii's graph/code/analyze
+routes and 4d's surfaces, so it is one cross-slice decision rather than eleven route edits: either
+that field validator raises `ProjectionError` (in `knowledge/`, which no 4b slice may touch) or every
+graph-only owner grows a mapping. Recorded rather than fixed for that reason.
+
+## Ladybug result
+
+Three runs, all with `HIPPO_TEST_STORE=ladybug` and form (b) (every file listed imports
+`fastapi.testclient` at module level):
+
+- **Pre-merge, six files** (run 5): **134 passed, 2 skipped, 1 failed** in 969.77s
+  (`/tmp/hippo-pa4b1-ladybug-green.log`). The one failure is
+  `test_web_auth.py::test_graph_page_and_its_endpoints_are_scoped_and_previewable`, pa4a breakage row
+  A, whose production owner is 4b-ii's `graph.py`; it is red at this slice's clean base on Fake too.
+- **Post-merge, two files** (run 9): **74 passed, 2 skipped**, exit 0, in 787.64s
+  (`/tmp/hippo-pa4b1-ladybug-postmerge.log`) — row A now green on Ladybug as well as on Fake.
+- **After the 409 `code` change** (run 9b): see the log
+  (`/tmp/hippo-pa4b1-ladybug-final.log`); the change is one response body in `app.py`, exercised by
+  `test_managed_web_ingress.py`, which is why that file was rerun rather than the whole set.
+
+The new file's counts match Fake exactly in every run (55 owned tests, 2 skipped), so nothing in the
+ingress actors, the failure mapping or the route session ownership is Fake-only. The two skipped tests
+are the 3b-dependent ones.
+
+## Left for the `wp/pa3b` follow-up
+
+3b had not merged when this slice finished: `pipeline.delete_source(ctx, source_id)` and
+`pipeline.reindex_all(ctx)` still take no `build_actor`, so `DELETE /api/sources/{id}` and
+`POST /api/sources/reindex-all` pass none. Two tests are in place and skipped with that reason:
+`test_deleting_brings_the_authorized_managers_actor` and
+`test_bulk_reindex_brings_the_bulk_managers_actor`. Unskipping them **is** the RED for that wiring;
+the GREEN is one `build_actor=build_actor_of(principal_of(request))` in each route, plus the managed
+bulk case for `test_bulk_reindex_holds_one_owner_across_the_pipeline_call` (deviation 8). The
+orchestrator is running that as a separate small brief after 3b merges.
