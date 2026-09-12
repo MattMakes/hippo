@@ -11,15 +11,22 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, fields
 
-from ..ingest.accepted_inputs import AcceptedInputs, CaptureLimits, InputDisposition
-from ..ingest.provenance import RawInput
 from .embedding_profile import StoredEmbeddingProfile, validate_profile_descriptor
 from .identity import canonical_json, make_identity, text_hash
 from .input_binding import local_input_key
+from .inputs import (
+    MANIFEST_EXTERNAL_ID,
+    AcceptedInputs,
+    CaptureLimits,
+    InputDisposition,
+    RawInput,
+)
 from .lifecycle import generation_for_inputs
 from .raw_artifacts import RawArtifact
 
-MANIFEST_EXTERNAL_ID = "accepted-inputs-v1"
+# `MANIFEST_EXTERNAL_ID` belongs to the accepted-input contract now, and importing
+# it here keeps this module's existing import path working for its callers.
+
 PROFILE_POINTER = "embedding_manifest_revision_id"
 
 

@@ -10,11 +10,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+# The one import that still runs knowledge -> ingest, allowed by name in
+# `tests/unit/test_layering.py`: `PreparedChunk` carries ingest's provenance value
+# types, which subclass `ingest.readers.ReadError` and render an
+# `ingest.readers.Document`, so they cannot move without moving the readers. It is
+# one-directional -- nothing in `hippo.ingest.prepared_chunks` imports back into
+# this module -- and `tests/unit/test_import_order.py` proves it in every order.
 from ..ingest.prepared_chunks import PreparedChunk
-from ..ingest.provenance import RawInput
 from . import model as k
 from .derivations import dependency_version, view_fingerprint
 from .identity import canonical_json, make_identity, normalize_relative_path, text_hash
+from .inputs import RawInput
 from .lifecycle import generation_passage_id
 
 MATERIALIZER_VERSION = "plain-prose-materializer-v1"
