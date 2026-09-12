@@ -380,9 +380,13 @@ def test_changeset_reads_and_mutations_hold_a_structural_session(ctx, monkeypatc
     assert not live_references(ctx)
 
 
-def test_question_generation_reads_originals_without_a_dense_dispatch(ctx, monkeypatch, sample_text):
-    source_id = legacy_sample(ctx, sample_text)
-    published(ctx.store, "other tag", profile="q", dimension=3)
+def test_question_generation_reads_originals_without_a_dense_dispatch(ctx, monkeypatch):
+    # A managed corpus, not the legacy sample: a generated set re-proves its stored evidence
+    # fingerprint on every read, and LadybugDB returns extracted facts in an arbitrary order,
+    # so a fact-bearing corpus makes that fingerprint move between two loads. See the finding
+    # in `evidence-pa4d.md`; it is not this slice's to fix and it is not what this test is about.
+    generation, span = managed(ctx, "managed notes")
+    source_id = generation.source_id
     evaluation = EvalAccess(ctx, EVERYTHING)
     set_id = evaluation.create_question_set("generated", source_id, origin="generated")
     prompts = []
@@ -404,7 +408,10 @@ def test_question_generation_reads_originals_without_a_dense_dispatch(ctx, monke
             if passage.source_id == source_id
             for citation in resolve_citations(session.graph, (passage.id,)).citations
         }
+    assert originals, "the held view must resolve the passage back to its original evidence"
     rendered = "\n".join(message["content"] for prompt in prompts for message in prompt)
-    used = [text for text in originals if text in rendered]
-    assert used, "the question maker must prompt with the original citation text"
+    assert [text for text in originals if text in rendered], (
+        "the question maker must prompt with the original citation text"
+    )
+    assert span.text in rendered
     assert ctx.store.get_question_set(set_id)["status"] == "ready"
