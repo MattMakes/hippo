@@ -184,8 +184,17 @@ smaller one during it. All four answers are implemented as ruled.
 | `BoundCodePassage` (all 6 rendered) | 6 |
 | `commit_chunks` | 0 |
 
-All six passages require a view, which is CC5's finding 2 in practice: the complete-line closure
-keeps the newline the passage text dropped.
+All six passages require a view, which is item 2 of CC5's "Statements a reviewer should read as
+claims, not proofs" in practice: the complete-line closure keeps the newline the passage text
+dropped.
+
+Three further shapes are bound and tested outside that fixture: an `archive` capture of the same two
+files (`test_an_archive_capture_binds_its_members_with_a_source_scoped_tree` — `container_chain` is
+empty for every zip member, so the prose lane's no-container refusal is kept unchanged and is
+harmless here), a single code file (`test_a_single_code_file_capture_binds_one_accepted_file` — three
+revision members, and the tree artifact is a distinct row from the one accepted file's), and a tree
+with no code graph at all, which reaches both the `window` and the `prose` kinds
+(`test_a_tree_with_no_code_graph_at_all_still_binds_its_windows_and_prose`).
 
 ## Results
 
@@ -197,10 +206,10 @@ to CD5** and none was made. Fake is the only backend this gate needs.
 | --- | --- | --- | --- |
 | Baseline before RED | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_input_binding.py tests/unit/test_prepared_code_chunks.py tests/unit/test_repo_capture.py tests/unit/test_knowledge_contracts.py tests/unit/test_layering.py -q -o addopts='' -W error` | 233 passed | `/tmp/hippo-cc6-baseline.log` |
 | RED | `tests/unit/test_code_binding.py` | 2 failed, 44 errors, `ModuleNotFoundError: No module named 'hippo.knowledge.code_binding'` | `/tmp/hippo-cc6-red.log` |
-| GREEN, CD5 command | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_code_binding.py tests/unit/test_managed_input_binding.py -q -o addopts='' -W error` | **82 passed** | `/tmp/hippo-cc6-cd5.log` |
+| GREEN, CD5 command | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_code_binding.py tests/unit/test_managed_input_binding.py -q -o addopts='' -W error` | **86 passed** | `/tmp/hippo-cc6-cd5.log` |
 | GREEN, layering and upstream | `tests/unit/test_layering.py test_import_order.py test_knowledge_contracts.py test_prepared_code_chunks.py test_repo_capture.py test_code_provenance.py` | 260 passed | `/tmp/hippo-cc6-green.log` |
 
-Per file: `test_code_binding.py` 48 passed.
+Per file: `test_code_binding.py` 52 passed.
 
 The CD5 CHECK line as the ledger spells it runs from `/Users/mascott/projects/hippo`; the command
 above is byte-identical but was run from `.worktrees/cc6`, so the gate checker's own run passes only
@@ -323,7 +332,30 @@ Ruff, over both files changed and over this document:
    a reader can tell a checkout's file from an archive member's without another lookup. Neither
    enters any record's `identity_fields` beyond the attributes hash that `ObjectObservation` already
    includes, so an archive and a checkout of the same bytes are honestly different observations.
-10. **The repository object's identity is provisional, exactly as ruling 4 intends.** It is
+10. **CC8 must subtract the bound native IDs from the graph before it writes `CODE_EDGE`.** This
+    module emits a native row only for a node some passage names through `chunk.symbol_id` or
+    `chunk.data_object_ids`. A symbol whose rendered body is only whitespace is dropped by the
+    committed chunker (`_symbol_chunks` skips such a group), so it can sit in `facts.symbols` with no
+    passage and therefore no row. Refusing the whole build over an empty function body would be
+    wrong, so the complement is CC8's to filter:
+    `{s.id for s in facts.symbols} | {d.id for d in facts.data_objects}` minus
+    `{row.native_id for row in bundle.native_rows}`. An edge to an unfiltered endpoint hits
+    `native_mutation`'s "Missing shared graph endpoint". The property is deliberately *not* a bundle
+    field: CC8 holds both `facts` and the bundle, so it is a one-line set difference, and carrying
+    the graph's node inventory into a pure evidence bundle would add a field this boundary otherwise
+    never reads. `test_every_graph_node_the_fixture_holds_gets_a_native_row` pins that the fixture
+    has an empty complement, and names the rule in its docstring. CC9 should record a nonempty
+    complement in `coverage_json`.
+11. **`CodeChunkSettings.effective_overlap` changes nothing for any non-prose code passage.**
+    `chunker.code_windows(lines, size)` takes no overlap and advances `start = end`, and
+    `_regroup(rows, statement_lines, size)` takes only a size, so every window and every symbol group
+    of a code file is disjoint and the whole file is partitioned. The overlap reaches only the
+    delegated `prose` lane. Not a defect, but plan section 5 puts the effective overlap into
+    `configuration_json`, so two generations differing *only* in `overlap_chars` are distinct
+    generations with byte-identical code passages. `test_the_windows_of_an_oversized_unparsed_file_partition_its_lines`
+    pins the partition, and it is why the per-passage disjointness `_disjoint` asserts is never in
+    tension with an overlap setting.
+12. **The repository object's identity is provisional, exactly as ruling 4 intends.** It is
     `repository_key(provider_instance, provider_repository_id)` from CC4's normalized clone path.
     Task 10's connector adds a provider alias rather than renaming evidence. Design review m7's
     point applies to symbols and is worth CC11's attention: a walker upgrade that changes a

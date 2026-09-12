@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from importlib import import_module
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -67,6 +68,8 @@ def helper(value):
 """
 
 SCHEMA = "CREATE TABLE orders (\n  id INT\n);\n\nSELECT id FROM orders;\n"
+
+READ_ME = "Acme\n\nA paragraph about the project.\n\nAnother paragraph about it.\n"
 
 OVERLOADS = """\
 namespace Acme
@@ -950,11 +953,92 @@ def test_a_bundle_whose_native_row_lost_its_binding_refuses(api, raw_store, tmp_
         replace(bundle, bindings=bundle.bindings[:-1])
 
 
-def test_a_tree_with_no_code_graph_at_all_still_binds_its_windows(api, raw_store, tmp_path):
-    captured = capture(raw_store, tree(tmp_path / "repo", {"conf/app.yaml": b"a: b\nc: d\n"}))
+def test_a_tree_with_no_code_graph_at_all_still_binds_its_windows_and_prose(api, raw_store, tmp_path):
+    files = {"conf/app.yaml": b"a: b\nc: d\n", "README": READ_ME.encode()}
+    captured = capture(raw_store, tree(tmp_path / "repo", files))
     prepared, _ = prepared_of(api, raw_store, captured)
     bundle = bind(api, captured, prepared, None)
     assert bundle.passages and bundle.spans
     assert bundle.native_rows == () and bundle.bindings == ()
     assert {object_.kind for object_ in bundle.objects} == {"repository", "file"}
-    assert all(chunk.kind in ("window", "prose") for chunk in prepared.chunks)
+    assert {chunk.kind for chunk in prepared.chunks} == {"window", "prose"}
+    assert {passage.chunk.kind for passage in bundle.passages} == {"window", "prose"}
+
+
+def test_the_windows_of_an_oversized_unparsed_file_partition_its_lines(api, raw_store, tmp_path):
+    """`chunker.code_windows` takes no overlap, so no two code windows share a line.
+
+    A configured `overlap_chars` reaches only the delegated prose lane: `code_windows`
+    advances `start = end` and `_regroup` takes only a size, so every window and every
+    symbol group of a code file is disjoint. That is why the per-passage span
+    disjointness `_disjoint` asserts is never in tension with an overlap setting.
+    """
+    body = "".join(f"key{index:04d}: value{index:04d}\n" for index in range(300)).encode()
+    captured = capture(raw_store, tree(tmp_path / "repo", {"conf/big.yaml": body}))
+    prepared, facts = prepared_of(api, raw_store, captured, size=400, overlap=120)
+    assert len(prepared.chunks) > 2 and all(chunk.kind == "window" for chunk in prepared.chunks)
+    bundle = bind(api, captured, prepared, facts)
+    assert all(len(passage.spans) == 1 for passage in bundle.passages)
+    ranges = sorted(
+        (json.loads(span.locator_json)["start"], json.loads(span.locator_json)["end"])
+        for span in bundle.spans
+        if span.locator_kind == "file_lines"
+    )
+    assert len(ranges) == len(bundle.passages)
+    assert ranges[0][0] == 1 and ranges[-1][1] == 300
+    for left, right in zip(ranges, ranges[1:], strict=False):
+        assert right[0] == left[1] + 1, (left, right)
+
+
+# --------------------------------------------------------- archive and file
+
+
+def test_an_archive_capture_binds_its_members_with_a_source_scoped_tree(api, raw_store, tmp_path):
+    archive = tmp_path / "bundle.zip"
+    with ZipFile(archive, "w") as handle:
+        for name, data in TREE.items():
+            handle.writestr(name, data)
+    captured = capture(raw_store, archive, repository=None, provider_revision=None)
+    assert captured.kind == "archive" and captured.repository is None
+    assert all(item.container_chain == () for item in captured.accepted.inputs)
+    prepared, facts = prepared_of(api, raw_store, captured)
+    bundle = bind(api, captured, prepared, facts)
+    assert bundle.repository_artifact.kind == "repository"
+    assert bundle.repository_artifact.external_id == f"source:{SOURCE}"
+    assert json.loads(bundle.repository_object.canonical_key) == [f"source:{SOURCE}"]
+    assert json.loads(bundle.repository_span.locator_json)["field_path"] == api.REPOSITORY_FIELD_PATH
+    assert sorted(item.logical_path for item in bundle.accepted) == ["db/schema.sql", "src/orders.py"]
+    assert bundle.native_rows and bundle.bindings and bundle.passages
+    assert all(
+        json.loads(row.attributes_json)["capture_kind"] == "archive"
+        for row in bundle.observations
+        if "capture_kind" in json.loads(row.attributes_json)
+    )
+
+
+def test_a_single_code_file_capture_binds_one_accepted_file(api, raw_store, tmp_path):
+    root = tree(tmp_path / "one", {"only.py": b"def only(value):\n    return value + 1\n"})
+    captured = capture(raw_store, root / "only.py", repository=None, provider_revision=None)
+    assert captured.kind == "file"
+    prepared, facts = prepared_of(api, raw_store, captured)
+    bundle = bind(api, captured, prepared, facts)
+    assert len(bundle.accepted) == 1 and bundle.accepted[0].logical_path == "only.py"
+    assert bundle.repository_artifact.external_id == f"source:{SOURCE}"
+    assert bundle.repository_artifact.id != bundle.accepted[0].artifact.id
+    assert len(bundle.revision_members) == 3
+    assert {object_.kind for object_ in bundle.objects} == {"repository", "file", "symbol"}
+
+
+def test_every_graph_node_the_fixture_holds_gets_a_native_row(api, raw_store, tmp_path):
+    """The complement is CC8's to filter: a node no passage names gets no row here.
+
+    A symbol whose rendered body is only whitespace is dropped by the committed chunker
+    (`_symbol_chunks` skips such a group), so it can sit in `facts.symbols` with no
+    passage and therefore no native row. CC8 must subtract
+    `{row.native_id for row in bundle.native_rows}` from the graph's node IDs before it
+    writes `CODE_EDGE`, or an edge will dangle on an endpoint that was never persisted.
+    """
+    bundle, _, _, facts = bundle_of(api, raw_store, tmp_path / "repo")
+    rows = {row.native_id for row in bundle.native_rows}
+    assert {symbol.id for symbol in facts.symbols} - rows == set()
+    assert {item.id for item in facts.data_objects} - rows == set()
