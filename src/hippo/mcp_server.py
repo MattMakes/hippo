@@ -28,6 +28,18 @@ already refused requests without one once users exist). Over stdio there are
 no headers, so the token comes from the HIPPO_TOKEN environment variable. Until
 the first user is created hippo is open and everything is visible.
 
+The two transports never borrow each other's credential: the HTTP path reads only
+the request, and `HIPPO_TOKEN` belongs to the stdio process alone. What a caller may
+*build* follows from the same identity - `hippo_remember` passes that principal's
+`BuildActor.reader`, and an open caller passes none, so it keeps writing legacy
+evidence. No tool ever manufactures a trusted-local actor.
+
+What a caller may *learn from a failure* is closed too: every tool answers with the
+stable code and bounded sentence in `knowledge/public_errors.py`, which is what the
+HTTP routes and the CLI print for the same condition. A symbol name the caller
+supplied, and the candidates it could have meant, are the exceptions - they are the
+answer rather than a leak.
+
 The same server can be reached two ways:
 
 * **Over HTTP, inside the web app.** `hippo.web.app.create_app` calls
@@ -66,7 +78,10 @@ from .access import Access, Principal
 from .ask import ask, code_block, code_fields, search
 from .context import AppContext
 from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
+from .knowledge.access import AuthorizationChanged
 from .knowledge.answer_evidence import answer_sources, retrieval_fields
+from .knowledge.build_authority import BuildActor
+from .knowledge.public_errors import OPERATION_FAILED, public_failure
 from .knowledge.query_access import query_session
 from .web.auth import StoreDown, principal_from_bearer, resolve_principal
 from .web.routes.code import (
@@ -127,6 +142,52 @@ def caller(ctx: AppContext, mcp_ctx: Context | None, *, transport: CredentialTra
             "stdio needs HIPPO_TOKEN. Your token is on the Account page."
         )
     return principal
+
+
+def reader_actor(principal: Principal) -> BuildActor | None:
+    """The build actor for a caller, or `None` when this identity may only build legacy evidence.
+
+    Open and preview identities cannot prove managed evidence, and no transport may
+    substitute `BuildActor.trusted_local()` for one: that actor is for explicit internal
+    and maintenance calls, never for an unauthenticated request. `cli.py` holds the same
+    three lines for the same reason, rather than importing this module and its web stack.
+    """
+    if principal.is_open or principal.access.unrestricted:
+        return None
+    return BuildActor.reader(principal)
+
+
+# ------------------------------------------------------------- safe failures
+# A ToolError's message is the only thing an MCP client is shown, so it is also the only
+# place a leak could reach one. Everything a tool raises passes through `tool_failure`,
+# which answers with the same closed code and bounded sentence the HTTP routes and the
+# CLI use for the same condition.
+
+# One sentence and no code: `public_errors` maps an authorization change to `None` on
+# purpose, so that a permission denial keeps the response it already had rather than
+# becoming a fifth public code. The CLI prints this same string (`cli.DENIED`).
+DENIED = "your permissions changed; check who you are signed in as and repeat the request"
+
+
+def tool_failure(exc: Exception) -> ToolError:
+    """The one public rendering of a failure, in order of how much is known about it.
+
+    Never called for a `ToolError`, a `KeyboardInterrupt` or a `SystemExit`: the first
+    is already the public answer, and the other two are the operator stopping the
+    process, not hippo failing at something.
+    """
+    failure = public_failure(exc)
+    if failure is not None:
+        return ToolError(f"{failure.code}: {failure.message}")
+    if isinstance(exc, AuthorizationChanged):
+        return ToolError(DENIED)
+    # Closed input validation the caller can act on, raised before any managed work and
+    # never interpolating stored text. Every managed exception is a *subclass* of
+    # ValueError (ReadError, ManagedDispatchError, ProjectionError), so the exact-type
+    # check is what keeps those out of here.
+    if type(exc) is ValueError:
+        return ToolError(str(exc))
+    return ToolError(f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message}")
 
 
 class TransportBoundServer(MCPServer):
@@ -269,13 +330,29 @@ def build_server(ctx: AppContext, *, transport: CredentialTransport = "http") ->
 # Kept as plain functions so they are easy to unit test without the MCP plumbing.
 
 
+@contextmanager
+def _answering():
+    """Whatever goes wrong inside, the client is shown a closed public failure.
+
+    The model paths are where a provider response body, a prompt or a stored absolute
+    path could reach an exception message, so the whole body of each is wrapped rather
+    than the individual calls: one owner, one lifetime, one rendering.
+    """
+    try:
+        yield
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise tool_failure(exc) from exc
+
+
 def search_tool(
     ctx: AppContext, question: str, top_k: int = DEFAULT_TOP_K, principal: Principal | None = None
 ) -> dict[str, Any]:
     question = _clean_question(question)
     top_k = max(1, min(int(top_k), MAX_TOP_K))
     access = principal.access if principal else None
-    with query_session(ctx, access) as session:
+    with _answering(), query_session(ctx, access) as session:
         trace = search(ctx, question, access=access, session=session)
         passages = []
         for ranked in trace.passages[:top_k]:
@@ -313,7 +390,7 @@ def search_tool(
 def ask_tool(ctx: AppContext, question: str, principal: Principal | None = None) -> dict[str, Any]:
     question = _clean_question(question)
     access = principal.access if principal else None
-    with query_session(ctx, access) as session:
+    with _answering(), query_session(ctx, access) as session:
         trace, answer = ask(ctx, question, access=access, session=session)
         sources = answer_sources(session.graph, trace, answer)
         payload = {
@@ -344,12 +421,20 @@ def _code_answer(build: Callable[[], dict[str, Any]], validate: Callable[[], Non
     """
     ToolError is the one exception an MCP client is shown verbatim, so everything a caller could
     act on has to be inside its message - the candidates of an ambiguous name above all.
+
+    A name is the caller's own input and its candidates are the answer, so those two keep
+    their text. Everything else here is a graph read that could carry stored evidence, and
+    goes out as the closed public failure instead.
     """
     validate()
     try:
         return build()
-    except (AmbiguousSymbol, UnknownSymbol, ValueError) as exc:
+    except (AmbiguousSymbol, UnknownSymbol) as exc:
         raise ToolError(str(exc)) from exc
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise tool_failure(exc) from exc
     finally:
         validate()
 
@@ -410,9 +495,19 @@ def remember_tool(
                 raise ToolError(f"you cannot restrict text to '{role['name']}': that tier is above yours")
             role_id = role["id"]
     try:
-        source_id = pipeline.add_text(ctx, name, text, owner_id=principal.user_id, access_role_id=role_id)
-    except ValueError as exc:  # e.g. empty text: the client should see why, not a generic crash
-        raise ToolError(str(exc)) from exc
+        source_id = pipeline.add_text(
+            ctx,
+            name,
+            text,
+            owner_id=principal.user_id,
+            access_role_id=role_id,
+            build_actor=reader_actor(principal),
+        )
+    except ToolError:
+        raise
+    except Exception as exc:
+        # Empty text still says why; anything a managed build could carry does not.
+        raise tool_failure(exc) from exc
     source = ctx.store.get_source(source_id) or {}
     return {
         "source_id": source_id,
@@ -425,8 +520,9 @@ def remember_tool(
 def sources_tool(ctx: AppContext, principal: Principal | None = None) -> list[dict[str, Any]]:
     from .status import source_view
 
-    with query_session(ctx, (principal or Principal.open()).access) as session:
-        view = source_view(ctx, (principal or Principal.open()).access, session=session)
+    access = (principal or Principal.open()).access
+    with _answering(), query_session(ctx, access) as session:
+        view = source_view(ctx, access, session=session)
         return [
             {
                 "id": row["id"],
