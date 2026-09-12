@@ -13,8 +13,9 @@ Three contracts are under test.
 2. **A managed failure reaches the client as a closed public code.** The body is
    `{"error": failure.message, "code": failure.code}` with the mapper's own HTTP
    status, and an unknown exception inside a managed path becomes
-   `operation_failed` rather than its own words. The authorization response keeps
-   its existing shape, because clients already read it.
+   `operation_failed` rather than its own words. A permission change keeps the
+   sentence clients already read and carries `authorization_changed`, which is the
+   word the managed lane already stores for that condition.
 3. **One structural owner per response.** Each route acquires one graph, builds
    its DTO over it, and releases it once; a permission change between the DTO and
    the response is the existing 409.

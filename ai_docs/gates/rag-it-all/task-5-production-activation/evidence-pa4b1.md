@@ -1,25 +1,46 @@
 # Evidence: activation Task 4b-i — web ingress actors, safe failures and route sessions
 
 Branch `wp/pa4b1`, worktree `.worktrees/pa4b1`. Base `rag-it-all-tibs` `957fc35` (the hash the
-orchestrator assigned, not the `1acf069` printed in the brief), then **fast-forwarded to `da51784`**
-under a one-time merge authorization; see "The blocker at the base" below.
+orchestrator assigned, not the `1acf069` printed in the brief).
 Python `.venv/bin/python` 3.12.11, pytest 9.1.1, Ruff 0.16.6, `mcp` pinned to 2.1.1 per the rulebook.
 
-Commits:
+This slice ran alongside the rest of Task 4 and was told to pick up four other branches as they
+landed, so it is read from the top down: the sections after "Commands and results" record what each
+merge changed about the answers above them, and nothing earlier has been rewritten to hide that.
+
+Commits, in order. All seven are this slice's own work:
 
 | Hash | Subject |
 |---|---|
 | `2377f7c` | Say one closed thing about a failed query instead of its own words |
 | `d27321f` | Let every web ingress bring the reader who actually asked |
+| `3b86da3` | Record what the web ingress slice converted and what it left for 3b |
+| `70cd6ce` | Read the failure vocabulary from one place now that render owns it |
+| `cc71ff2` | Pin which condition won, now that no transport shows the exception |
+| `c2c743a` | Give the permission answer a code too, so no JSON body is without one |
+| `ea39383` | Delete and bulk reindex as the reader who asked for them |
 
-Merge recorded for this branch: `git merge rag-it-all-tibs` fast-forwarded `957fc35 → da51784`
-(`Import the managed lane lazily so knowledge modules load first`). No other branch was merged.
+Four authorized merges of `rag-it-all-tibs`, each granted individually by the orchestrator and none of
+them a rebase or a push:
+
+| Merge | `rag-it-all-tibs` at | Why |
+|---|---|---|
+| fast-forward `957fc35 → da51784` | `da51784` | the import cycle that stopped every web test from collecting |
+| `67429a6` | `a0f811f` | 4b-ii's `render.py` helpers, to dedupe this slice's local copies onto them |
+| `55a9c8d` | `e709aad` | `79e379a`, which adapted the four MCP rows this slice had reported |
+| `c7b93e2` | `640d20b` | 3b's `build_actor` on `delete_source` / `reindex_all` |
 
 Files created: `tests/unit/test_managed_web_ingress.py`, this file.
-Files modified: `src/hippo/web/app.py`, `src/hippo/web/auth.py`, `src/hippo/web/routes/api.py`,
-`src/hippo/web/routes/pages.py`, `src/hippo/web/routes/sources.py`, `tests/unit/test_web_base.py`,
-`tests/unit/test_query_session.py` (the last one under an explicit one-change authorization,
-deviation 2).
+
+Files modified and owned: `src/hippo/web/app.py`, `src/hippo/web/auth.py`,
+`src/hippo/web/routes/api.py`, `src/hippo/web/routes/pages.py`, `src/hippo/web/routes/sources.py`,
+`tests/unit/test_web_base.py`.
+
+Files modified under an explicit, individually granted authorization, each a single assertion or a
+single test row and nothing else: `tests/unit/test_query_session.py` (two grants — the http rows, then
+the MCP rows; deviation 2 and the post-merge section), `tests/unit/test_render_authorization.py`,
+`tests/unit/test_graph_surface_access.py`, `tests/unit/test_query_authorization_boundary.py` (the
+added `code` key), `tests/unit/test_status_access.py` (the passed actor).
 
 Nothing under `src/hippo/web/routes/{analyze,code,graph}.py`, `web/render.py`, `status.py`,
 `mcp_server.py`, `cli.py`, `remote.py`, `analysis/`, `evals/`, `eval_access.py`,
@@ -78,11 +99,11 @@ in the GREEN run below, because this slice adds a new import edge
    failure.code}` at `failure.http_status`. The old fixed `502` for `OllamaError` is gone (no test
    asserted it; `retrieval_unavailable` is 503).
 6. **`ManagedActorRequired` is a permission answer, not a failure report** — registered to the
-   existing `authorization_changed` handler, so its body stays exactly
-   `{"error": "Permissions changed; repeat the query"}` at 409, which
-   `test_query_authorization_boundary.py`, `test_render_authorization.py` and
-   `test_graph_surface_access.py` all assert verbatim. Starlette resolves a handler by walking the
-   exception's own MRO, so this row wins over the broader `ManagedDispatchError` one.
+   existing `authorization_changed` handler rather than mapped as a retrieval failure. Starlette
+   resolves a handler by walking the exception's own MRO, so this row wins over the broader
+   `ManagedDispatchError` one. That handler's body was left byte-identical here and **gained a `code`
+   later in the slice**, on the 4b-ii review's finding 10; see that section below for the final
+   shape and for the three assertions it moved.
 7. **Logging is bounded.** `pages.py` no longer calls `log.exception("ask failed")`, which wrote the
    traceback — and therefore `str(exc)` — at ERROR. It logs `type(exc).__name__` at WARNING and the
    exception only at DEBUG, so a capture at public level holds nothing private.
@@ -235,6 +256,8 @@ No other breakage row names a file owned here.
    stopped raising. Asked the orchestrator; answered: edit exactly those two rows to assert the
    mapped 500 body and keep `len(acquired) == 1 and released == acquired`. Done that way; the
    `[True-*]` revoke rows are untouched and still prove that a revocation outranks the failure.
+   **A second grant for the same file followed** after 4c's merge, for its four MCP rows; see the
+   post-merge section.
 3. **The HTML fragment carries the code inside the sentence.** The answer partial renders one
    `error` string, and its template is not this slice's file, so `failure_text` returns
    `"<message> [<code>]"` rather than adding a second template variable. Same message and same code
@@ -249,9 +272,13 @@ No other breakage row names a file owned here.
 5. **`OllamaError` on `/api/ask` and `/api/search` is now 503, not 502.** The plan's table says
    `retrieval_unavailable` → 503 and the agreed contract says "no fixed 502". No test asserted 502
    (`rg -n 502 tests/unit/*.py` → nothing).
-6. **The permission response gained no `code`.** The plan's row for an authorization change is
-   "existing authorization response", and three test files outside this slice assert
-   `{"error": "Permissions changed; repeat the query"}` exactly. Left byte-identical.
+6. **The permission response gained no `code`** — *superseded later in the slice; see finding 10
+   below.* The reasoning at the time: the plan's row for an authorization change is "existing
+   authorization response", and three test files outside this slice assert
+   `{"error": "Permissions changed; repeat the query"}` exactly, so it was left byte-identical. The
+   4b-ii review then called that the one JSON body without a `code`, the orchestrator ruled, and it
+   now carries `code: "authorization_changed"` with those three assertions updated under
+   authorization.
 7. **`httpx.TransportError` is registered alongside the named families.** The model client is
    httpx, `public_failure` already maps `TransportError` to `retrieval_unavailable`, and an
    unwrapped connection error escaping a route is the one case that would otherwise reach a client
