@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 import numpy as np
 
@@ -108,6 +108,63 @@ class EmbeddingSpec:
 
 def _fingerprint(profile: EmbeddingProfile) -> str:
     return _hash({"profile_schema": 1, "profile": asdict(profile)})
+
+
+@dataclass(frozen=True, slots=True)
+class StoredEmbeddingProfile:
+    """Validated persisted identity, without a client or remote attestation."""
+
+    profile: EmbeddingProfile
+    spec: EmbeddingSpec
+    fingerprint: str
+
+    def __post_init__(self):
+        if type(self.profile) is not EmbeddingProfile or type(self.spec) is not EmbeddingSpec:
+            raise ValueError("Stored profiles require immutable profile and specification values")
+        profile, spec = self.profile, self.spec
+        if (
+            profile.model != profile.model.strip()
+            or not re.fullmatch(r"[0-9a-f]{64}", profile.model_digest)
+            or (spec.dimensions is not None and spec.dimensions != profile.dimension)
+            or spec.make_profile(profile.model, profile.model_digest, profile.dimension) != profile
+            or type(self.fingerprint) is not str
+            or self.fingerprint != _fingerprint(profile)
+        ):
+            raise ValueError("Stored embedding profile does not match its complete specification")
+
+    def descriptor(self) -> dict:
+        return {
+            "profile_schema": 1,
+            "profile": asdict(self.profile),
+            "spec": asdict(self.spec),
+            "fingerprint": self.fingerprint,
+        }
+
+
+def validate_profile_descriptor(descriptor: dict) -> StoredEmbeddingProfile:
+    """Validate closed canonical metadata without consulting a model or store.
+
+    This checks internal identity consistency only. The generation writer must
+    bind this descriptor to its accepted inputs, and the query adapter must still
+    verify the live model before using its vectors.
+    """
+    if (
+        type(descriptor) is not dict
+        or set(descriptor) != {"profile_schema", "profile", "spec", "fingerprint"}
+        or type(descriptor["profile_schema"]) is not int
+        or descriptor["profile_schema"] != 1
+    ):
+        raise ValueError("Unsupported stored embedding profile descriptor")
+    for name, record_type in (("profile", EmbeddingProfile), ("spec", EmbeddingSpec)):
+        if type(descriptor[name]) is not dict or set(descriptor[name]) != {
+            item.name for item in fields(record_type)
+        }:
+            raise ValueError("Stored embedding descriptor has missing or unknown fields")
+    profile = EmbeddingProfile(**descriptor["profile"])
+    spec = EmbeddingSpec(**descriptor["spec"])
+    if asdict(spec) != descriptor["spec"]:
+        raise ValueError("Stored embedding specification must use canonical options")
+    return StoredEmbeddingProfile(profile, spec, descriptor["fingerprint"])
 
 
 @dataclass(frozen=True)
