@@ -66,7 +66,10 @@ NO_TOKEN = (
     "(Account page, /account) and run the command again"
 )
 STORE_DOWN = "hippo cannot reach its database, so nobody can be signed in right now"
-DENIED = "your permissions changed; check your token and repeat the command"
+# The same sentence `mcp_server.DENIED` prints, and for the same reason: `public_errors`
+# maps an authorization change to no code at all, so a denial keeps the generic response
+# it already had rather than becoming a fifth public code.
+DENIED = "your permissions changed; check who you are signed in as and repeat the request"
 
 
 class Denied(RuntimeError):
@@ -171,31 +174,36 @@ def main(argv: list[str] | None = None) -> int:
         # A remote refusal already carries the server's own stable code (remote.py).
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except BaseException as exc:
-        failure = _public_failure(exc, command=args.command)
-        if failure is None:
+    except Exception as exc:
+        # KeyboardInterrupt and SystemExit are not Exceptions and so pass straight
+        # through: Ctrl-C is the operator stopping the command, not hippo failing at it.
+        message = _refusal(exc, command=args.command)
+        if message is None:
             raise
-        print(f"error: {failure.code}: {failure.message}", file=sys.stderr)
+        print(f"error: {message}", file=sys.stderr)
         return 2
 
 
-def _public_failure(exc: BaseException, *, command: str):
-    """The stable code and bounded sentence for a failure, or `None` to let it through.
+def _refusal(exc: Exception, *, command: str) -> str | None:
+    """What this failure may be printed as, or `None` to let the exception through.
 
     Same table as the HTTP routes and the MCP tools, so one condition reads the same
     everywhere. An evidence command adds `or OPERATION_FAILED`, which is the caller rule
     `knowledge/public_errors.py` documents: a pure mapper cannot tell where an exception
     was raised, so the path that could have touched stored text says so itself. An
-    administrative command keeps whatever it already did with its own errors.
+    administrative command touches no managed evidence and keeps its own errors.
     """
     from .knowledge.access import AuthorizationChanged
-    from .knowledge.public_errors import OPERATION_FAILED, PublicFailure, public_failure
+    from .knowledge.public_errors import OPERATION_FAILED, public_failure
 
     if isinstance(exc, AuthorizationChanged):
-        return PublicFailure("authorization_changed", DENIED, 409)
+        # No code, one sentence: the mapper leaves a permission change to the response it
+        # already had, and this is the CLI's. `mcp_server.DENIED` is the same string.
+        return DENIED
     if command not in EVIDENCE_COMMANDS:
-        return public_failure(exc)
-    return public_failure(exc) or OPERATION_FAILED
+        return None
+    failure = public_failure(exc) or OPERATION_FAILED
+    return f"{failure.code}: {failure.message}"
 
 
 def _principal(ctx: AppContext):
@@ -208,7 +216,6 @@ def _principal(ctx: AppContext):
     """
     import os
 
-    from .access import Principal
     from .web.auth import StoreDown, principal_from_bearer
 
     try:
@@ -217,7 +224,6 @@ def _principal(ctx: AppContext):
         raise Denied(STORE_DOWN) from exc
     if principal is None:
         raise Denied(NO_TOKEN)
-    assert isinstance(principal, Principal)
     return principal
 
 

@@ -163,13 +163,19 @@ def reader_actor(principal: Principal) -> BuildActor | None:
 # which answers with the same closed code and bounded sentence the HTTP routes and the
 # CLI use for the same condition.
 
-DENIED = "your permissions changed; sign in again and repeat the request"
+# One sentence and no code: `public_errors` maps an authorization change to `None` on
+# purpose, so that a permission denial keeps the response it already had rather than
+# becoming a fifth public code. The CLI prints this same string (`cli.DENIED`).
+DENIED = "your permissions changed; check who you are signed in as and repeat the request"
 
 
-def tool_failure(exc: BaseException) -> ToolError:
-    """The one public rendering of a failure, in order of how much is known about it."""
-    if isinstance(exc, ToolError):
-        return exc
+def tool_failure(exc: Exception) -> ToolError:
+    """The one public rendering of a failure, in order of how much is known about it.
+
+    Never called for a `ToolError`, a `KeyboardInterrupt` or a `SystemExit`: the first
+    is already the public answer, and the other two are the operator stopping the
+    process, not hippo failing at something.
+    """
     failure = public_failure(exc)
     if failure is not None:
         return ToolError(f"{failure.code}: {failure.message}")
@@ -334,7 +340,9 @@ def _answering():
     """
     try:
         yield
-    except BaseException as exc:
+    except ToolError:
+        raise
+    except Exception as exc:
         raise tool_failure(exc) from exc
 
 
@@ -423,7 +431,9 @@ def _code_answer(build: Callable[[], dict[str, Any]], validate: Callable[[], Non
         return build()
     except (AmbiguousSymbol, UnknownSymbol) as exc:
         raise ToolError(str(exc)) from exc
-    except BaseException as exc:
+    except ToolError:
+        raise
+    except Exception as exc:
         raise tool_failure(exc) from exc
     finally:
         validate()
@@ -493,7 +503,9 @@ def remember_tool(
             access_role_id=role_id,
             build_actor=reader_actor(principal),
         )
-    except BaseException as exc:
+    except ToolError:
+        raise
+    except Exception as exc:
         # Empty text still says why; anything a managed build could carry does not.
         raise tool_failure(exc) from exc
     source = ctx.store.get_source(source_id) or {}

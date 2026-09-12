@@ -215,6 +215,33 @@ def test_local_index_builds_as_the_token_reader(cli_ctx, tmp_path, monkeypatch, 
     assert spy.actors[0].user_id == reader["id"]
 
 
+def test_a_gated_local_index_really_reaches_the_managed_lane(cli_ctx, tmp_path, monkeypatch, capsys):
+    """Not just "the actor was passed": the pipeline really dispatches on it.
+
+    Every other ingress test stops at the spy, so this is the one that runs the command
+    through. The consequence of the actor is the whole point: the same `.md` that open
+    mode indexes legacy now goes to the coordinator, which needs embedding metadata the
+    legacy lane never asked for. The shared fake serves none, so what this proves is the
+    dispatch and the presentation of its failure - a stable code, a bounded sentence, and
+    no exception text. The coordinator's own happy path is
+    `test_managed_pipeline_activation.py`'s.
+    """
+    admin, _ = users(cli_ctx)
+    monkeypatch.setenv(mcp_server.TOKEN_ENV, admin["token"])
+    note = tmp_path / "zed.md"
+    note.write_text("Zed Labs is located in Lisbon. Zed Labs builds drones.\n")
+    assert cli.main(["index", str(note), "--name", "Zed notes"]) == 1
+    captured = capsys.readouterr()
+    source = cli_ctx.store.list_sources()[0]
+    assert source["name"] == "Zed notes"
+    # The managed lane's own closed mapping, stored on the row in the same `code: message`
+    # shape a ToolError and the CLI's own stderr line use, and printed as-is.
+    assert source["error"] == "model_unavailable: The local model service was unavailable during the build."
+    assert captured.err.strip() == f"error: {source['error']}"
+    assert "status: failed" in captured.out
+    assert_clean(captured.out + captured.err)
+
+
 @pytest.mark.parametrize("token", [None, "hippo_not-a-real-token"])
 def test_local_index_without_a_valid_token_fails_before_a_source_row(
     cli_ctx, tmp_path, monkeypatch, capsys, token
@@ -453,6 +480,82 @@ def test_mcp_remember_maps_an_unknown_failure_to_operation_failed(ctx, monkeypat
     message = str(caught.value)
     assert message == f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message}"
     assert_clean(message)
+
+
+def test_an_interrupt_is_not_a_public_failure(cli_ctx, monkeypatch):
+    """Ctrl-C is the operator stopping the command, not hippo failing at it.
+
+    Mapping it would print `operation_failed` and exit 2 for something that never went
+    wrong, and would swallow the interrupt the shell is waiting for.
+    """
+    from hippo import ask as ask_module
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ask_module, "ask", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(["ask", QUESTION])
+
+
+def test_an_interrupt_is_not_a_tool_error(ctx, monkeypatch):
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    # `mcp_server` imported `ask` into its own namespace, so that is the binding to replace.
+    monkeypatch.setattr(mcp_server, "ask", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        mcp_server.ask_tool(ctx, QUESTION, principal=anyone(ctx))
+
+
+def test_a_tool_error_raised_inside_a_tool_is_passed_through(ctx, monkeypatch):
+    """The mapper must not wrap a ToolError in itself, nor make it its own cause."""
+    raised = ToolError("the question is empty")
+
+    def explode(*args, **kwargs):
+        raise raised
+
+    monkeypatch.setattr(pipeline, "add_text", explode)
+    with pytest.raises(ToolError) as caught:
+        mcp_server.remember_tool(ctx, "Note", "some text", principal=Principal.open())
+    assert caught.value is raised
+    assert caught.value.__cause__ is not caught.value
+
+
+def test_an_administrative_command_keeps_its_own_errors(cli_ctx, monkeypatch):
+    """`pull-models` is not evidence, so a model outage there is not mapped to a code."""
+    monkeypatch.setattr(cli_ctx.ollama, "is_up", lambda: True)
+    monkeypatch.setattr(cli_ctx.ollama, "missing_models", lambda: ["nomic-embed-text:latest"])
+
+    def explode(*args, **kwargs):
+        raise OllamaError(POISON)
+
+    monkeypatch.setattr(cli_ctx.ollama, "ensure_model", explode)
+    with pytest.raises(OllamaError):
+        cli.main(["pull-models"])
+
+
+def test_an_authorization_change_reads_the_same_on_both_surfaces(ctx, monkeypatch, capsys):
+    """No code: a permission change keeps the existing generic denial, as the mapper says."""
+    from hippo import ask as ask_module
+    from hippo.knowledge.access import AuthorizationChanged
+
+    def revoked(*args, **kwargs):
+        raise AuthorizationChanged(POISON)
+
+    # The MCP tools bound `ask` at import; `cli.cmd_ask` imports it per call.
+    monkeypatch.setattr(mcp_server, "ask", revoked)
+    monkeypatch.setattr(ask_module, "ask", revoked)
+    monkeypatch.setattr(AppContext, "from_env", classmethod(lambda cls, ollama=None: ctx))
+
+    with pytest.raises(ToolError) as caught:
+        mcp_server.ask_tool(ctx, QUESTION, principal=anyone(ctx))
+    assert str(caught.value) == mcp_server.DENIED
+
+    assert cli.main(["ask", QUESTION]) == 2
+    captured = capsys.readouterr()
+    assert captured.err.strip() == f"error: {mcp_server.DENIED}"
+    assert_clean(captured.err)
 
 
 def test_mcp_remember_keeps_its_own_validation_text(ctx):
