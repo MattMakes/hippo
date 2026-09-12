@@ -190,9 +190,10 @@ def test_status_route_and_page_header_pass_the_request_audience(monkeypatch):
     )
     page = render.render(request, "unused.html")
     assert page["status"]["stats"]["passages"] == 1
-    # These routes own their session, so the request audience is what this proves. Their own
-    # structural switch is Task 4's; status only owns the session it acquires itself.
-    ctx.graph_for.assert_called_with(access, settings=ANY)
+    # These routes own their session, so the request audience is what this proves. The
+    # structural keyword is now forwarded verbatim by `query_access`, so the audience
+    # arrives together with the selection this owner actually made.
+    ctx.graph_for.assert_called_with(access, settings=ANY, structural=True)
     request.state.principal = None
     assert render.render(request, "unused.html")["status"]["stats"]["passages"] == 0
 

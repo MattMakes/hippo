@@ -7,11 +7,16 @@ The code graph over HTTP: name lookup, paths, blast radius, exception routes and
     GET /api/code/exception-path?symbol=&exception=   how a function reaches an exception
     GET /api/code/history?symbol=&limit=       the commits that touched a symbol, newest first
 
-Every endpoint reads `ctx.graph_for(access)` - the caller's own slice - and nothing else, so a
-symbol whose source is hidden is not merely refused, it is not there to be refused. That is worth
-saying twice for `/symbols`: `name_index` is built once on the full index and `scoped()` passes the
-*same dict* on, so a hit must be resolved through the scoped `code_node_by_id` (which goes through
-the scoped `idx_of`) before it is returned. Filtering on the dict alone would list hidden names.
+Every endpoint reads one structural `query_session` - the caller's own slice - held for the whole
+response and nothing else, so a symbol whose source is hidden is not merely refused, it is not
+there to be refused. That is worth saying twice for `/symbols`: `name_index` is built once on the
+full index and `scoped()` passes the *same dict* on, so a hit must be resolved through the scoped
+`code_node_by_id` (which goes through the scoped `idx_of`) before it is returned. Filtering on the
+dict alone would list hidden names.
+
+No endpoint here embeds anything, so none of them dispatches dense retrieval and all of them keep
+answering while the model is unreachable. What can still fail is the view itself, and an
+incoherent view is not the caller's mistake: those map to a public code, never to a 400.
 
 The payload builders raise the path tools' own errors (`UnknownSymbol`, `AmbiguousSymbol`), mapped
 here the way `analyze.py` maps its own: unknown -> 404, ambiguous -> 409 carrying the candidates so
@@ -47,8 +52,9 @@ from ...hipporag.paths import (
     triple_rows,
 )
 from ...knowledge.query_access import query_session
+from ...ollama import OllamaError
 from ..auth import principal_of
-from ..render import ctx_of
+from ..render import ctx_of, public_failure_response, retrieval_failure
 
 api = APIRouter(prefix="/api/code")
 
@@ -183,6 +189,21 @@ def _graph(request: Request):
         yield session.graph, float(session.settings["code_theta"])
 
 
+def _code_response(request: Request, build: Callable[[GraphIndex, float], Any]) -> Any:
+    """One held owner for the whole payload, with the two failure vocabularies kept apart.
+
+    `_answer` maps what the *caller* got wrong, against the graph it is already holding.
+    Everything caught here happened while proving or composing the view itself - an
+    incoherent selection, a stale profile - and belongs to the closed public table
+    rather than to a status that blames the request.
+    """
+    try:
+        with _graph(request) as (index, theta):
+            return _answer(lambda: build(index, theta), index.validate_authorization)
+    except (ValueError, OllamaError) as exc:
+        return public_failure_response(retrieval_failure(exc))
+
+
 def _answer(build: Callable[[], Any], validate: Callable[[], None]) -> Any:
     """`analyze.py`'s mapping, plus the 409 that carries what the caller could have meant."""
     validate()
@@ -200,33 +221,28 @@ def _answer(build: Callable[[], Any], validate: Callable[[], None]) -> Any:
 
 @api.get("/symbols")
 def symbols(request: Request, q: str = "", limit: int = DEFAULT_SYMBOL_LIMIT):
-    with _graph(request) as (index, _theta):
-        return _answer(lambda: symbol_rows(index, q, limit), index.validate_authorization)
+    return _code_response(request, lambda index, _theta: symbol_rows(index, q, limit))
 
 
 @api.get("/path")
 def code_path(request: Request, a: str, b: str):
-    with _graph(request) as (index, theta):
-        return _answer(lambda: path_payload(index, a, b, theta=theta), index.validate_authorization)
+    return _code_response(request, lambda index, theta: path_payload(index, a, b, theta=theta))
 
 
 @api.get("/blast-radius")
 def blast(request: Request, symbol: str, depth: int = DEFAULT_DEPTH):
-    with _graph(request) as (index, theta):
-        return _answer(
-            lambda: blast_payload(index, symbol, theta=theta, depth=depth), index.validate_authorization
-        )
+    return _code_response(
+        request, lambda index, theta: blast_payload(index, symbol, theta=theta, depth=depth)
+    )
 
 
 @api.get("/exception-path")
 def raises(request: Request, symbol: str, exception: str):
-    with _graph(request) as (index, theta):
-        return _answer(
-            lambda: exception_payload(index, symbol, exception, theta=theta), index.validate_authorization
-        )
+    return _code_response(
+        request, lambda index, theta: exception_payload(index, symbol, exception, theta=theta)
+    )
 
 
 @api.get("/history")
 def commits(request: Request, symbol: str, limit: int = DEFAULT_HISTORY_LIMIT):
-    with _graph(request) as (index, _theta):
-        return _answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)
+    return _code_response(request, lambda index, _theta: history_payload(index, symbol, limit=limit))

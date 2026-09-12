@@ -14,6 +14,12 @@ page can replay it later. One failing question is recorded with its error
 and the run carries on. At the end the run gets a summary (accuracy, EM, F1,
 recall, latency...) and is never touched again: runs are history you compare.
 
+Each question owns exactly one structural view, activated for dense retrieval
+through `retrieval_session` and held through search, answer, grading and the
+save that retains its snapshots. Evidence that cannot be routed - a corpus
+mixing verified and tag-compatible generations, say - fails that question
+before any model text, like any other per-question failure.
+
 `compare_with_baseline` is the exception that stores nothing: it answers "what
 did the code graph buy?" by running one set twice, the second time with the
 four `BASELINE_SETTINGS` that switch code retrieval off.
@@ -24,12 +30,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from contextlib import nullcontext
 from statistics import mean
 from typing import Any
 
 from ..access import Access
-from ..ask import answer_from_trace, search
+from ..ask import _dispatch, answer_from_trace, search
 from ..context import AppContext
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.eval_access import EvalAccess, EvalAccessDenied
@@ -92,6 +97,10 @@ def _run_all(
     try:
         evaluation.require_set(set_id)
         for done, question in enumerate(evaluation.list_questions(set_id), start=1):
+            # One structural owner per question, held across the question's own dense
+            # dispatch and the save that retains its snapshots. `run_question` activates
+            # this same session rather than acquiring a second graph, so a corpus that
+            # cannot be routed is recorded as that question's error, not as a store failure.
             with query_session(ctx, access, settings=settings) as session:
                 selected = EvalAccess(ctx, access, session=session)
                 result = run_question(ctx, question, settings, access, session=session)
@@ -137,10 +146,9 @@ def run_question(
     result = _empty_result()
     started = time.time()
     try:
-        manager = (
-            nullcontext(session) if session is not None else query_session(ctx, access, settings=settings)
-        )
-        with manager as query:
+        # Search, answer and grading all run on one dense-dispatched owner: the runner's own
+        # borrowed session activated in place, or one acquired here when nobody supplied it.
+        with _dispatch(ctx, access, session, settings) as query:
             evaluation = EvalAccess(ctx, access, session=query)
             access = current_access(ctx.store, access)
             if access is not None and access.audience_kind != "internal":

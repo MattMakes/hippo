@@ -1,9 +1,13 @@
 """
-Rendering HTML pages.
+Rendering HTML pages, and the one JSON body every failing surface answers with.
 
 `render(request, "page.html", nav="ask", **context)` fills a Jinja2 template
 and always adds the things the base layout needs: system status for the
 header, the active nav item, and the config.
+
+`retrieval_failure` and `public_failure_response` live here rather than in a
+route module because every transport in `hippo.web` returns the same body for
+the same condition, and one definition is the only way that stays true.
 """
 
 from __future__ import annotations
@@ -13,11 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 from jinja2 import Undefined
 
 from ..access import Access
 from ..context import AppContext
+from ..knowledge.public_errors import OPERATION_FAILED, PublicFailure, public_failure
 from ..knowledge.query_access import QuerySession, query_session
 from ..status import system_status
 
@@ -64,6 +70,29 @@ templates.env.filters["fmt"] = _fmt
 
 def ctx_of(request: Request) -> AppContext:
     return request.app.state.ctx
+
+
+def retrieval_failure(exc: BaseException) -> PublicFailure:
+    """The public failure for anything raised while acquiring, dispatching or reading a session.
+
+    This is the caller rule `knowledge/public_errors.py` documents, spelled once for
+    the whole web layer: the closed table when it knows the exception, and
+    `operation_failed` when it does not. A route applies it only to the exceptions it
+    has already decided are activation failures rather than the caller's own mistake,
+    so `GraphIndex.canonical_selected_generations`' bare `ValueError` cannot reach a
+    client as a 400 that blames the request, and no exception's own words are read.
+    """
+    return public_failure(exc) or OPERATION_FAILED
+
+
+def public_failure_response(failure: PublicFailure) -> JSONResponse:
+    """One JSON body for every public failure: the `error` clients already read, plus `code`.
+
+    `error` keeps the shape existing clients depend on and carries the mapper's own
+    bounded sentence; `code` is the stable value a client branches on. Neither is ever
+    derived from the raised exception's text.
+    """
+    return JSONResponse({"error": failure.message, "code": failure.code}, status_code=failure.http_status)
 
 
 def render(

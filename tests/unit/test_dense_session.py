@@ -593,7 +593,9 @@ def test_populated_default_legacy_borrow_rejects_without_reacquiring(ctx, monkey
         [dict(id="p", source_id=source, title="p", text="p", ordinal=0, embedding=[1.0, 0.0])]
     )
     held, closed = observe(ctx, monkeypatch)
-    with query_session(ctx, EVERYTHING) as owner:
+    # The subject is a *legacy* borrow being refused, and structural selection is the
+    # default now, so the legacy lane has to be asked for explicitly to obtain one.
+    with query_session(ctx, EVERYTHING, structural=False) as owner:
         assert owner.graph.dense_capability.mode == "legacy"
         with pytest.raises(api().DenseSessionUnavailable, match="structural"):
             with api().retrieval_session(ctx, session=owner):

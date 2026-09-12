@@ -98,6 +98,23 @@ def test_missing_managed_lineage_fails_before_model(derived_graph):
         )
 
 
+def _dispatch_the_fixture(ctx, index, monkeypatch):
+    """Hand `ask` this fixture's graph as an already dispatched session.
+
+    The subject of these tests is how originals are presented, not how dense retrieval
+    is chosen. `derived_graph` is hand-built and names a generation that exists in no
+    store, so the dispatcher correctly refuses to bind it; stubbing the dispatch keeps
+    the fixture's meaning without pretending the binding check is satisfied.
+    """
+    from contextlib import nullcontext
+
+    from hippo import ask
+    from hippo.knowledge.query_access import QuerySession
+
+    session = QuerySession(index, ctx.ollama, lambda: None, {})
+    monkeypatch.setattr(ask, "_dispatch", lambda *a, **kw: nullcontext(session))
+
+
 @pytest.mark.parametrize("surface", ["http", "mcp", "html"])
 def test_answer_surfaces_present_originals_separately_from_ranked_views(
     ctx, derived_graph, monkeypatch, surface
@@ -111,6 +128,7 @@ def test_answer_surfaces_present_originals_separately_from_ranked_views(
 
     index, trace = derived_graph
     monkeypatch.setattr(ctx, "graph_for", lambda *a, **kw: index)
+    _dispatch_the_fixture(ctx, index, monkeypatch)
     monkeypatch.setattr(ask, "_search", lambda *a, **kw: trace)
     monkeypatch.setattr(ctx.ollama, "chat_text", lambda *a, **kw: "Answer: original evidence")
     request = SimpleNamespace(
@@ -241,6 +259,7 @@ def test_search_labels_derived_text_and_analysis_renders_original_evidence(ctx, 
     index, trace = derived_graph
     trace.evidence_fingerprint = view_fingerprint(index)
     monkeypatch.setattr(ctx, "graph_for", lambda *a, **kw: index)
+    _dispatch_the_fixture(ctx, index, monkeypatch)
     monkeypatch.setattr(ask, "_search", lambda *a, **kw: trace)
     result = mcp_server.search_tool(ctx, trace.question)
     assert result["passages"][0]["is_derived"] is True
