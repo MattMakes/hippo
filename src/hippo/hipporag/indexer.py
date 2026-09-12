@@ -34,7 +34,8 @@ import re
 import threading
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import igraph as ig
@@ -42,9 +43,37 @@ import numpy as np
 
 from ..ollama import Ollama
 from . import openie
+from .preparation import (
+    _NO_VECTORS as _NO_VECTORS,
+)
+from .preparation import (
+    MIN_OPENIE_DOC_CHARS as MIN_OPENIE_DOC_CHARS,
+)
+from .preparation import (
+    _as_row as _as_row,
+)
+from .preparation import (
+    _history_rows as _history_rows,
+)
+from .preparation import (
+    _openie_text as _openie_text,
+)
+from .preparation import (
+    _vector as _vector,
+)
+from .preparation import (
+    enters_synonym_search as enters_synonym_search,
+)
+from .preparation import (
+    extract_chunk_prose,
+    prepare_code_rows,
+    prepare_fact_payloads,
+    prepare_passage_vectors,
+)
+from .preparation import (
+    name_text_of as name_text_of,
+)
 from .text import (
-    entity_id,
-    fact_id,
     fact_text,
     is_meaningful_phrase,
     label_of,
@@ -93,11 +122,6 @@ LEIDEN_LOCK = threading.Lock()
 
 # Called as on_progress(stage, done, total). `stage` is a short phrase for the UI.
 Progress = Callable[[str, int, int], None]
-
-
-# A doc-comment shorter than this says nothing OpenIE could turn into a fact, so it is skipped
-# rather than extracted (S2.7). The chunker applies the same rule when it fills `extract_text`.
-MIN_OPENIE_DOC_CHARS = 80
 
 
 @dataclass
@@ -156,21 +180,11 @@ def index_source(
     # 1. Passages.
     progress("embedding passages", 0, len(chunks))
     ids = [passage_id(source_id, c) for c in chunks]
-    embeddings = ollama.embed([c.text for c in chunks], kind="document")
+    passages = list(zip(ids, chunks, strict=True))
+    prepared_passages = prepare_passage_vectors(ollama, source_id, passages)
+    embeddings = prepared_passages.vectors
     check_embedding_compatibility(store, ollama.embed_model, int(embeddings.shape[1]))
-    store.add_passages(
-        [
-            {
-                "id": pid,
-                "source_id": source_id,
-                "ordinal": c.ordinal,
-                "title": c.title,
-                "text": c.text,
-                "embedding": emb.tolist(),
-            }
-            for pid, c, emb in zip(ids, chunks, embeddings, strict=True)
-        ]
-    )
+    store.add_passages(deepcopy(prepared_passages.rows))
     progress("embedding passages", len(chunks), len(chunks))
 
     # 2. The code graph, when this source had one.
@@ -181,52 +195,27 @@ def index_source(
     if code is not None:
         checkpoint("writing code graph")
         progress("writing code graph", 0, 1)
-        code_ids, code_vectors, code_names, code_written = _write_code_graph(
-            store, ollama, code, list(zip(ids, chunks, strict=True))
-        )
+        code_ids, code_vectors, code_names, code_written = _write_code_graph(store, ollama, code, passages)
         progress("writing code graph", 1, 1)
 
     # 3. OpenIE. `extract_text` decides what the model sees, and whether it is called at all.
     progress("extracting facts", 0, len(chunks))
     checkpoint("extracting facts")
-    wanted = [
-        (pid, text)
-        for pid, c in zip(ids, chunks, strict=True)
-        if (text := _openie_text(c)) is not None  # once per chunk, not twice
-    ]
-    extractions = openie.extract_many(
+    extractions = extract_chunk_prose(
         ollama,
-        wanted,
+        passages,
         workers=workers,
         on_progress=lambda done, total: progress("extracting facts", done, total),
         should_stop=should_stop,
     )
-    # A passage we deliberately did not extract still gets a row, so the Source page shows an
-    # empty extraction rather than a missing one, and re-indexing does not retry it.
-    # The set is hoisted, not rebuilt inside the comprehension: at MAX_CHUNKS that was 4e8 hash
-    # inserts of pure waste, growing quadratically with the corpus (AR1 fix 4).
-    wanted_ids = {pid for pid, _ in wanted}
-    skipped = [pid for pid in ids if pid not in wanted_ids]
-    extractions.extend(openie.Extraction(passage_id=pid) for pid in skipped)
     for ex in extractions:
-        store.save_extraction(ex.passage_id, ex.entities, ex.triples, ex.error)
+        store.save_extraction(ex.passage_id, deepcopy(ex.entities), deepcopy(ex.triples), ex.error)
 
     # 3. Entities and facts.
     checkpoint("saving entities and facts")
     progress("saving entities and facts", 0, 1)
-    names: dict[str, str] = {}  # entity id -> name
-    triples: dict[str, tuple[str, str, str]] = {}  # fact id -> triple
-    mentions: list[tuple[str, str]] = []
-    statements: list[tuple[str, str]] = []
-    for ex in extractions:
-        for name in ex.entity_names:
-            eid = entity_id(name)
-            names[eid] = name
-            mentions.append((ex.passage_id, eid))
-        for s, p, o in ex.clean_triples:
-            fid = fact_id(s, p, o)
-            triples[fid] = (s, p, o)
-            statements.append((ex.passage_id, fid))
+    payloads = prepare_fact_payloads(extractions)
+    names, triples = payloads.names, payloads.triples
 
     # Ask the store once which ids it already has (one query, not one per id), then embed
     # only the new ones. Both are done before taking the lock: embedding is the slow part.
@@ -243,34 +232,17 @@ def index_source(
         new_entity_ids, new_entity_vectors = _add_vanished(
             store.existing_entity_ids, known_entities, new_entity_ids, new_entity_vectors, names, ollama
         )
-        store.add_entities(
-            [
-                {"id": eid, "name": names[eid], "embedding": vec.tolist()}
-                for eid, vec in zip(new_entity_ids, new_entity_vectors, strict=True)
-            ]
-        )
-        store.link_passage_entities(mentions)  # link right away: a linked entity is never an orphan
+        store.add_entities(payloads.entity_rows(new_entity_ids, new_entity_vectors))
+        store.link_passage_entities(
+            list(payloads.mentions)
+        )  # link right away: a linked entity is never an orphan
 
         fact_texts = {fid: fact_text(*triple) for fid, triple in triples.items()}
         new_fact_ids, new_fact_vectors = _add_vanished(
             store.existing_fact_ids, known_facts, new_fact_ids, new_fact_vectors, fact_texts, ollama
         )
-        store.add_facts(
-            [
-                {
-                    "id": fid,
-                    "subject": s,
-                    "predicate": p,
-                    "object": o,
-                    "subject_id": entity_id(s),
-                    "object_id": entity_id(o),
-                    "embedding": vec.tolist(),
-                }
-                for fid, vec in zip(new_fact_ids, new_fact_vectors, strict=True)
-                for (s, p, o) in [triples[fid]]
-            ]
-        )
-        store.link_passage_facts(statements)
+        store.add_facts(payloads.fact_rows(new_fact_ids, new_fact_vectors))
+        store.link_passage_facts(list(payloads.statements))
     progress("saving entities and facts", 1, 1)
 
     # 5. Synonym edges for the new entities, and for this source's code nodes: one pass over
@@ -319,21 +291,6 @@ def index_source(
 
 def empty_counts() -> dict[str, int]:
     return dict.fromkeys(COUNT_KEYS, 0)
-
-
-def _openie_text(chunk: Chunk) -> str | None:
-    """
-    What OpenIE should read for this chunk, or None to skip it entirely (S2.7).
-
-    `extract_text is None` is a prose chunk and behaves exactly as it always has -- the whole
-    text, however short. A string is a code passage's doc-comment, and it is only worth two LLM
-    calls when there is something in it: below `MIN_OPENIE_DOC_CHARS` we skip rather than extract
-    a sentence fragment. The one case that must never happen is a body reaching the model, and
-    it cannot: the chunker sets `extract_text` on every code passage.
-    """
-    if chunk.extract_text is None:
-        return chunk.text
-    return chunk.extract_text if len(chunk.extract_text.strip()) >= MIN_OPENIE_DOC_CHARS else None
 
 
 def _scanned(chunk: Chunk) -> str:
@@ -484,84 +441,22 @@ def _write_code_graph(
     Returns what `find_synonyms` needs -- the ids, their vectors and the text each one embeds --
     so the cross-kind search runs once, together with the new entities.
     """
-    embedded = [s for s in code.symbols if enters_synonym_search(s.id, s.name)]
-    names = {s.id: name_text_of(s.name) for s in embedded}
-    names.update({d.id: name_text_of(d.name) for d in code.data_objects})
-    ids = [s.id for s in embedded] + [d.id for d in code.data_objects]
-    vectors = ollama.embed([names[i] for i in ids], kind="document") if ids else _NO_VECTORS
-    by_id = dict(zip(ids, vectors, strict=True))
-
-    commits, modifies, precedes = _history_rows(code)
-    definitions = [(node, pid) for pid, chunk in passages for node in chunk.defines]
+    prepared = prepare_code_rows(ollama, code, passages)
     with GRAPH_WRITE_LOCK:
-        store.add_symbols([{**s.row(), "embedding": _vector(by_id, s.id)} for s in code.symbols])
-        store.add_data_objects([{**d.row(), "embedding": _vector(by_id, d.id)} for d in code.data_objects])
-        store.add_commits(commits)
-        store.add_modifies(modifies)
-        store.add_precedes(precedes)
-        store.add_code_edges([asdict(edge) for edge in code.edges])
-        store.link_definitions(definitions)
+        store.add_symbols(deepcopy(prepared.symbols))
+        store.add_data_objects(deepcopy(prepared.data_objects))
+        store.add_commits(deepcopy(prepared.commits))
+        store.add_modifies(deepcopy(prepared.modifies))
+        store.add_precedes(list(prepared.precedes))
+        store.add_code_edges(deepcopy(prepared.edges))
+        store.link_definitions(list(prepared.definitions))
     written = {
-        "symbols": len(code.symbols),
-        "data_objects": len(code.data_objects),
-        "code_edges": len(code.edges),
-        "commits": len(commits),
+        "symbols": len(prepared.symbols),
+        "data_objects": len(prepared.data_objects),
+        "code_edges": len(prepared.edges),
+        "commits": len(prepared.commits),
     }
-    return ids, vectors, names, {**empty_counts(), **written}
-
-
-_NO_VECTORS = np.zeros((0, 0), dtype=np.float32)
-
-
-def _vector(by_id: dict[str, np.ndarray], node_id: str) -> list[float]:
-    """A node with no vector stores none: `enters_synonym_search` says which, and why."""
-    found = by_id.get(node_id)
-    return found.tolist() if found is not None else []
-
-
-def _history_rows(code: CodeGraph) -> tuple[list[dict], list[dict], list[tuple[str, str]]]:
-    """
-    The commits, MODIFIES and PRECEDES of this source.
-
-    WP2b's `read_history` is what fills them; until then a `CodeGraph` carries none and the three
-    writers above are called with empty lists, which write nothing. This is the seam WP2b plugs
-    into -- it adds the fields and this function starts returning rows.
-    """
-    commits = [_as_row(c) for c in getattr(code, "commits", ()) or ()]
-    modifies = [_as_row(m) for m in getattr(code, "modifies", ()) or ()]
-    precedes = [(a, b) for a, b in getattr(code, "precedes", ()) or ()]
-    return commits, modifies, precedes
-
-
-def _as_row(item) -> dict:
-    return item.row() if hasattr(item, "row") else dict(item)
-
-
-def name_text_of(name: str) -> str:
-    """`codegraph.model.name_text`, imported late so this module never pulls tree-sitter in."""
-    from ..codegraph.model import name_text
-
-    return name_text(name)
-
-
-def enters_synonym_search(node_id: str, name: str) -> bool:
-    """
-    Whether a code node's name vector is stored at all -- and it is stored for one purpose only,
-    so a node that may not link is simply not embedded (D7: the symbol vector's only job is
-    `find_synonyms`).
-
-    Spike 2 measured cross-kind synonyms under the real embedder: of 26,400 symbol-entity pairs
-    only 20 reach 0.80 and eight of those are nonsense, and raising the threshold to 0.85 makes
-    it worse (43%) because the generic one-word names score highest -- `library` against "the
-    library" at 0.94, `main` against "main office" at 0.86. Requiring two split tokens on the
-    *symbol* side drops the nonsense rate to 27% and loses none of the ten known-good pairs
-    (`OrderService` ~ "order service" is unaffected at 0.9368). Data objects are exempt: table
-    names are single nouns, and `table orders` ~ "orders" is exactly the link D9 asks for.
-
-    Not writing the vector is what makes the rule hold on both sides of the search -- the query
-    list *and* the key matrix -- for every run, not just the one that wrote the symbol.
-    """
-    return label_of(node_id) != "Symbol" or len(split_identifier(name)) >= 2
+    return prepared.ids, prepared.vectors, prepared.names, {**empty_counts(), **written}
 
 
 # ------------------------------------------------------------ REFERS_TO
