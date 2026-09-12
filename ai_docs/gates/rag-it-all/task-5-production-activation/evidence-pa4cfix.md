@@ -62,8 +62,10 @@ Two halves, both required:
 
 Ordering the nesting gives, all pinned: an ambiguous or unknown symbol keeps its own text;
 a denial mid-answer outranks a partly built answer; a `ToolError` the inner handler already
-built correctly is no longer swallowed by the `finally`; and a build failure with a valid
-view still reads as its own mapped code rather than being masked by the denial.
+built correctly is never lost to a raw exception or a masked crash, though it may be
+superseded by a denial from the trailing `validate()` — which is intended, and is the
+"a denial mid-answer outranks" clause above seen from the other side; and a build failure
+with a valid view still reads as its own mapped code rather than being masked by the denial.
 
 Tests, all in `tests/unit/test_managed_transport_activation.py`:
 

@@ -202,6 +202,19 @@ async def settings_submit(request: Request):
     try:
         ctx.store.update_settings(parse_settings_form(dict(form)))
     except ValueError as exc:
+        # The one `str(exc)` in the web layer the plan protects by name: the transport
+        # table's "existing bounded validation text from closed input validators only"
+        # row, which `store.base.validate_settings` is -- it names the knob the operator
+        # just typed and the range it must be in, and re-rendering the form without that
+        # sentence would leave them guessing which field was refused.
+        #
+        # What is protected is the validator's sentence, not this catch: `update_settings`
+        # can also raise a `ValueError` *subclass*, and this handler would render that
+        # too. The JSON twin of this route guards exactly that
+        # (`test_a_settings_write_that_fails_is_mapped_rather_than_quoted_back_as_a_400`);
+        # applying `render.caller_error` here would close the same shape on the page and
+        # keep the sentence, and belongs with the other deferred isinstance catches
+        # (wrap-up finding 18) rather than with this comment.
         return render(
             request,
             "settings.html",

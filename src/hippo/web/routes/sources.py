@@ -33,7 +33,15 @@ from ...knowledge.public_errors import INVALID_SOURCE_TYPE
 from ...knowledge.query_access import QuerySession, query_session
 from ...status import source_view
 from ..auth import build_actor_of, principal_of, require
-from ..render import STOP_POLLING, caller_error, coded_response, ctx_of, render
+from ..render import (
+    STOP_POLLING,
+    caller_error,
+    coded_response,
+    ctx_of,
+    public_failure_response,
+    render,
+    retrieval_failure,
+)
 from . import graph as graph_routes
 
 router = APIRouter()
@@ -505,6 +513,16 @@ def add_repo(request: Request, body: RepoBody):
     try:
         return {"source_id": pipeline.add_repo(ctx_of(request), body.url, **access)}
     except RepoError as exc:
+        # Exact type only, the same rule `render.caller_error` applies one clause down.
+        # `pipeline.add_repo` raises `RepoError` for exactly one condition -- the URL does
+        # not look like a git URL -- and that sentence is the caller's own input plus a
+        # fixed hint, which is the bounded validation text the plan's transport table
+        # protects. Cloning happens inside the background job, so `repos.clone_repo`'s
+        # errors reach the Source row through `_legacy_failure` and never this 400. A
+        # future subclass would carry something this route has not read, so it goes to the
+        # closed table instead of being printed.
+        if type(exc) is not RepoError:
+            return public_failure_response(retrieval_failure(exc))
         return coded_response(str(exc), INVALID_SOURCE, 400)
     except ValueError as exc:
         if not caller_error(exc):

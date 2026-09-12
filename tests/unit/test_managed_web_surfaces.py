@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient
 from hippo.access import EVERYTHING
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.ingest.managed_activation import record_build_failure
+from hippo.knowledge import dense_session
 from hippo.knowledge.dense import DenseUnavailable
 from hippo.knowledge.projection import ProjectionError
 from hippo.knowledge.public_errors import public_failure_for_code
@@ -92,13 +93,18 @@ class Watch:
         )
 
 
-def watch(ctx, monkeypatch, *modules) -> Watch:
+def watch(ctx, monkeypatch) -> Watch:
     """Count acquisitions, heartbeats, finalizers and the dense mode each surface dispatched.
 
-    Each route module is patched by name: the dispatcher is imported into the module,
-    so patching `hippo.knowledge.dense_session.retrieval_session` would not be seen.
-    `getattr` fails loudly until the module actually imports it, which is the assertion.
+    One patch point for every surface, the same seam
+    `test_managed_route_activation.watch` uses. The two route modules used to import the
+    dispatcher by name, so each needed a patch of its own; they now reach it through
+    `dense_session` at call time exactly as the four promoted library callers do, so
+    patching the module attribute observes all six.
+    `test_every_dispatching_surface_reaches_the_rule_through_the_module` is what keeps a
+    future direct import from going unseen here.
     """
+    from hippo.knowledge import dense_session as dense_session_module
     from hippo.knowledge.lease_heartbeat import LeaseHeartbeat
 
     record = Watch()
@@ -126,17 +132,36 @@ def watch(ctx, monkeypatch, *modules) -> Watch:
 
     monkeypatch.setattr(LeaseHeartbeat, "start", counted)
 
-    for module in modules:
-        dispatch = module.retrieval_session
+    dispatch = dense_session_module.retrieval_session
 
-        @contextmanager
-        def observed(*args, _dispatch=dispatch, **kwargs):
-            with _dispatch(*args, **kwargs) as session:
+    @contextmanager
+    def observed(*args, **kwargs):
+        with dispatch(*args, **kwargs) as session:
+            # A pass-through is not a dispatch: `retrieval_session` hands an already routed
+            # session straight back, and the empty-corpus surfaces below re-enter over the
+            # owner the route already dispatched. Counting that would read as a second
+            # route chosen for the same owner. Same rule as `test_managed_route_activation`.
+            if session is not kwargs.get("session"):
                 record.dispatched.append(session.graph.dense_capability.mode)
-                yield session
+            yield session
 
-        monkeypatch.setattr(module, "retrieval_session", observed)
+    monkeypatch.setattr(dense_session_module, "retrieval_session", observed)
     return record
+
+
+def test_every_dispatching_surface_reaches_the_rule_through_the_module():
+    """The two web surfaces look the dispatcher up the way the four promoted callers do.
+
+    `watch` above patches one attribute on `dense_session`. That observes a caller only
+    while the caller resolves the name at call time; a module that did
+    `from ...knowledge.dense_session import retrieval_session` would bind it at import and
+    dispatch unseen, which is the per-module patch point this file used to carry. Pinned as
+    an absence, so re-introducing the direct import fails here rather than silently
+    weakening every count below.
+    """
+    for module in (graph_routes, analyze_routes):
+        assert not hasattr(module, "retrieval_session"), module.__name__
+        assert module.dense_session is dense_session
 
 
 class Offline:
@@ -256,7 +281,7 @@ def test_light_up_over_verified_managed_evidence_dispatches_verified_dense_once(
     _, server = verified(ctx, tmp_path)
     # The metadata server answers embeddings only; the fact filter is a chat call.
     monkeypatch.setattr(ctx.ollama, "chat_json", lambda *args, **kwargs: {"triples": []})
-    record = watch(ctx, monkeypatch, graph_routes)
+    record = watch(ctx, monkeypatch)
     payload = graph_routes.light_up(internal_request(ctx), graph_routes.LightUpBody(question=QUESTION))
     record.once()
     assert record.dispatched == ["verified"]
@@ -268,7 +293,7 @@ def test_light_up_over_verified_managed_evidence_dispatches_verified_dense_once(
 def test_light_up_over_tag_compatible_legacy_dispatches_tag_compatible_once(ctx, monkeypatch):
     published(ctx.store, "managed", profile=ctx.ollama.embed_model, dimension=DIM)
     headers = reader(ctx)
-    record = watch(ctx, monkeypatch, graph_routes)
+    record = watch(ctx, monkeypatch)
     with web(ctx, headers) as client:
         response = client.post("/api/graph/light-up", json={"question": QUESTION})
     assert response.status_code == 200, response.text
@@ -279,7 +304,7 @@ def test_light_up_over_tag_compatible_legacy_dispatches_tag_compatible_once(ctx,
 def test_simulate_dispatches_dense_over_the_one_owner_the_route_holds(ctx, monkeypatch):
     published(ctx.store, "managed", profile=ctx.ollama.embed_model, dimension=DIM)
     headers = reader(ctx)
-    record = watch(ctx, monkeypatch, analyze_routes)
+    record = watch(ctx, monkeypatch)
     with web(ctx, headers) as client:
         response = client.post("/api/simulate", json={"question": QUESTION, "overrides": {}})
     assert response.status_code == 200, response.text
@@ -292,7 +317,7 @@ def test_code_only_and_relation_only_support_do_not_change_light_up_dispatch(ctx
     published(ctx.store, "support", profile=ctx.ollama.embed_model, dimension=2, enrich=enrich)
     monkeypatch.setattr(ctx.ollama, "embed_one", lambda *a, **k: np.array([1.0, 0.0], dtype=np.float32))
     headers = reader(ctx)
-    record = watch(ctx, monkeypatch, graph_routes)
+    record = watch(ctx, monkeypatch)
     with web(ctx, headers) as client:
         response = client.post("/api/graph/light-up", json={"question": QUESTION})
     assert response.status_code == 200, response.text
@@ -306,28 +331,34 @@ def test_code_only_and_relation_only_support_do_not_change_light_up_dispatch(ctx
 # route hands `run_simulation` the owner it already dispatched and the dispatch rule
 # re-enters over it. The re-entry must borrow -- one acquisition, one release, and still
 # no model call.
+#
+# `simulate` expects the re-entry as a second `legacy` reading, and that is the whole
+# point: `run_simulation` calls the rule again over the route's own session, and because
+# `legacy` is not a routed mode the rule cannot hand it straight back -- it re-activates
+# over the *same* owner instead. One patch point sees both calls, so the list says so.
+# `record.once()` beside it is what proves the re-entry borrowed rather than acquired.
 EMPTY_SURFACES = {
-    "light-up": (graph_routes, "/api/graph/light-up", lambda payload: payload["seeds"]),
-    "simulate": (analyze_routes, "/api/simulate", lambda payload: payload["trace"]["passages"]),
+    "light-up": ("/api/graph/light-up", ["legacy"], lambda payload: payload["seeds"]),
+    "simulate": ("/api/simulate", ["legacy", "legacy"], lambda payload: payload["trace"]["passages"]),
 }
 
 
 @pytest.mark.parametrize("surface", sorted(EMPTY_SURFACES))
 def test_an_empty_authorized_corpus_answers_without_one_model_call(ctx, monkeypatch, surface):
-    module, url, emptied = EMPTY_SURFACES[surface]
+    url, dispatched, emptied = EMPTY_SURFACES[surface]
     empty_published(ctx.store, "empty", profile=ctx.ollama.embed_model)
     headers = reader(ctx)
-    record = watch(ctx, monkeypatch, module)
+    record = watch(ctx, monkeypatch)
     with web(ctx, headers) as client, offline(ctx):
         response = client.post(url, json={"question": QUESTION, "overrides": {}})
     assert response.status_code == 200, response.text
     record.once()
-    assert record.dispatched == ["legacy"]
+    assert record.dispatched == dispatched
     assert emptied(response.json()) == []
 
 
 def test_a_purely_legacy_corpus_lights_up_and_pins_no_snapshot(ctx, monkeypatch, prose):
-    record = watch(ctx, monkeypatch, graph_routes)
+    record = watch(ctx, monkeypatch)
     with web(ctx) as client:
         response = client.post("/api/graph/light-up", json={"question": QUESTION})
     assert response.status_code == 200, response.text
@@ -589,7 +620,7 @@ def test_the_analyze_page_renders_a_cached_trace_without_resolving_a_profile(ctx
     with web(ctx) as client:
         submitted = client.post("/analyze", data={"question": QUESTION}, follow_redirects=False)
         assert submitted.status_code == 303, submitted.text
-        record = watch(ctx, monkeypatch, analyze_routes)
+        record = watch(ctx, monkeypatch)
         before = len(server.calls)
         response = client.get(submitted.headers["location"])
         added = server.calls[before:]
@@ -707,7 +738,7 @@ def test_the_source_dropdown_a_light_up_returns_comes_from_the_same_held_owner(c
     """`_light_up_response` builds a source view; it must borrow, never acquire a second graph."""
     published(ctx.store, "managed", profile=ctx.ollama.embed_model, dimension=DIM)
     headers = reader(ctx)
-    record = watch(ctx, monkeypatch, graph_routes)
+    record = watch(ctx, monkeypatch)
     with web(ctx, headers) as client:
         assert client.post("/api/graph/light-up", json={"question": QUESTION}).status_code == 200
     record.once()
@@ -823,6 +854,150 @@ def test_a_callers_own_bad_setting_is_still_a_400_naming_it(ctx, route):
         response = client.post(route, json={"question": QUESTION, "settings": {"damping": 9}})
     assert response.status_code == 400, response.text
     assert "damping must be between" in response.json()["detail"]
+
+
+# ------------- the last two isinstance 4xx catches: starting a run, and light-up's settings
+
+
+def test_starting_a_run_on_an_unknown_set_is_a_404_that_reads_no_exception(ctx):
+    """The status comes from the exception's type, not from a substring of its words.
+
+    This route used to answer `404 if "unknown question set" in str(exc) else 400`, so
+    rewording `EvalAccess.require_set`'s sentence would silently have turned the 404 into
+    a 400 that blamed the request.
+    """
+    with web(ctx, reader(ctx)) as client:
+        response = client.post("/api/evals/sets/nope/run", json={})
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "no such question set"
+    assert "access denied" not in response.text
+
+
+def test_starting_a_run_that_cannot_be_routed_is_mapped_not_blamed_on_the_request(ctx, monkeypatch):
+    """`start_run` opens a session through `require_set`, so activation failures arrive here.
+
+    `ProjectionError`, `DenseSessionUnavailable` and `QuerySnapshotUnavailable` are all
+    `ValueError` subclasses. Printing one as a 400 tells the caller their request was
+    wrong and reads a sentence this route never wrote.
+    """
+    from hippo.evals import runner as runner_module
+
+    def refuse(*args, **kwargs):
+        raise ProjectionError(LEAKY_PATH)
+
+    monkeypatch.setattr(runner_module, "start_run", refuse)
+    with web(ctx, reader(ctx)) as client:
+        response = client.post("/api/evals/sets/whatever/run", json={})
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "error": "Operation failed; inspect local logs by operation ID",
+        "code": "operation_failed",
+    }
+    assert LEAKY_PATH not in response.text
+
+
+def test_starting_a_run_with_a_bad_setting_keeps_the_validators_own_sentence(ctx):
+    """The exact-type catch must not take the 400 vocabulary with it, here either."""
+    with web(ctx, reader(ctx)) as client:
+        response = client.post("/api/evals/sets/whatever/run", json={"settings": {"damping": 9}})
+    assert response.status_code == 400, response.text
+    assert "damping must be between" in response.json()["detail"]
+
+
+def test_light_up_maps_a_settings_check_that_is_not_the_validators_own_refusal(ctx, monkeypatch):
+    """The web layer's last isinstance 4xx catch, closed the same way as the others."""
+    from hippo.web.routes import graph as graph_module
+
+    def refuse(changes):
+        raise ProjectionError(LEAKY_PATH)
+
+    monkeypatch.setattr(graph_module, "validate_settings", refuse)
+    with web(ctx, reader(ctx)) as client:
+        response = client.post("/api/graph/light-up", json={"question": QUESTION, "settings": {}})
+    assert response.status_code == 500, response.text
+    assert response.json()["code"] == "operation_failed"
+    assert LEAKY_PATH not in response.text
+
+
+def test_light_up_still_names_the_knob_the_caller_sent(ctx):
+    with web(ctx, reader(ctx)) as client:
+        response = client.post("/api/graph/light-up", json={"question": QUESTION, "settings": {"damping": 9}})
+    assert response.status_code == 400, response.text
+    assert "damping must be between" in response.json()["detail"]
+
+
+# ------------------------------------- 4e decision 1's own check, as a test rather than a grep
+
+
+# Every `str(exc)` under `src/hippo/web`, with the disposition the Task 4 wrap-up review
+# gave it (`ai_docs/reports/2026-09-12-pa4-wrapup-review.md`, "4e -- QUALITY", and
+# `evidence-cleanup4.md`). Decision 1 asked for a grep that finds only sites something
+# protects; a grep cannot say *why* a site is allowed, and it passes the moment a reviewer
+# stops running it. The keys are file and source line -- not line numbers, which drift on
+# any edit above them -- and the value is how many times that exact line may appear.
+#
+# Adding an unlisted `str(exc)` fails here, which is the point: the next one has to be
+# classified before it ships.
+STR_EXC_SITES = {
+    # guarded: `render.caller_error` runs first, so only the exact `ValueError` the closed
+    # input validators raise is printed. `add_repo`'s fourth copy is guarded by its own
+    # exact-`RepoError` test instead (`test_only_the_exact_repo_error_is_printed...`).
+    ("routes/sources.py", "return coded_response(str(exc), INVALID_SOURCE, 400)"): 4,
+    ("routes/api.py", "raise HTTPException(400, str(exc)) from exc"): 1,
+    ("routes/code.py", "raise HTTPException(400, str(exc)) from exc"): 1,
+    # guarded by this cleanup batch: the last two isinstance 4xx catches in the web layer.
+    ("routes/evals.py", "raise HTTPException(400, str(exc)) from exc"): 1,
+    ("routes/graph.py", "raise HTTPException(400, str(exc)) from exc"): 1,
+    # bounded: `Busy` is raised in one place with fixed text, and the plan's transport
+    # table keeps the indexing preconditions' own sentence.
+    ("routes/sources.py", "return coded_response(str(exc), INDEXING_BUSY, 409)"): 3,
+    # intended: the exact `AmbiguousSymbol` / `UnknownSymbol`, whose words are the caller's
+    # own symbol and whose candidates are the answer they asked for.
+    (
+        "routes/code.py",
+        'return JSONResponse({"detail": str(exc), "candidates": exc.candidates}, status_code=409)',
+    ): 1,
+    ("routes/code.py", "raise HTTPException(404, str(exc)) from exc"): 1,
+    # protected: the legacy settings form, which the plan's transport table names. What is
+    # protected is `validate_settings`' sentence rather than the catch itself -- see the
+    # comment at the site, and the deferred half below.
+    ("routes/pages.py", "error=str(exc),"): 1,
+    # bounded today, deferred by the wrap-up review (finding 18) to whoever next owns these
+    # files: the store validators these wrap raise the plain `ValueError` their own rules
+    # raise, which is the caller's own field. A hardening, not a live leak.
+    ("routes/users.py", "raise HTTPException(400, str(exc)) from exc"): 5,
+    ("routes/users.py", 'return _back(getattr(exc, "detail", str(exc)))'): 2,
+    ("auth.py", 'return RedirectResponse("/account?error=" + quote(str(exc)), status_code=303)'): 1,
+    # bounded today, deferred with the same family: both raise `ChangesetUnavailable`
+    # (caught first) or `changesets.validate`'s own sentence.
+    ("routes/analyze.py", "raise HTTPException(400, str(exc)) from exc"): 2,
+    # prose: the docstring that states the rule the sites above follow.
+    ("render.py", "`HTTPException(4xx, str(exc))` prints any of them at the caller. The exact-type test"): 1,
+}
+
+
+def test_every_str_exc_in_the_web_layer_is_one_the_review_classified():
+    """4e decision 1's check: nothing prints an exception's own words unaccounted for."""
+    import collections
+    import pathlib
+
+    import hippo.web
+
+    root = pathlib.Path(hippo.web.__file__).parent
+    found: collections.Counter = collections.Counter()
+    for path in sorted(root.rglob("*.py")):
+        for line in path.read_text().splitlines():
+            # A `#` comment prints nothing, and the sites above are commented *about*.
+            # A docstring line is prose too, but it is kept and listed, because that is
+            # where `render.py` states the rule these sites follow.
+            if "str(exc)" in line and not line.strip().startswith("#"):
+                found[(path.relative_to(root).as_posix(), line.strip())] += 1
+
+    unlisted = sorted(site for site in found if site not in STR_EXC_SITES)
+    assert not unlisted, f"unclassified `str(exc)` site(s): {unlisted}"
+    stale = sorted(site for site in STR_EXC_SITES if site not in found)
+    assert not stale, f"allow-listed site(s) that no longer exist: {stale}"
+    assert dict(found) == STR_EXC_SITES
 
 
 # --------------------- 4e: an incoherent selection is a mapped failure on every transport

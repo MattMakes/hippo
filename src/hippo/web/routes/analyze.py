@@ -37,10 +37,10 @@ from ...analysis.simulate import Overrides
 from ...analysis.simulate import simulate as run_simulation
 from ...hipporag.paths import render_triples
 from ...hipporag.retriever import Trace, trace_from_dict
+from ...knowledge import dense_session
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import retrieval_fields
 from ...knowledge.changeset_access import ChangesetAccess, ChangesetUnavailable
-from ...knowledge.dense_session import retrieval_session
 from ...knowledge.eval_access import EvalAccess
 from ...knowledge.query_access import query_session
 from ...ollama import OllamaError
@@ -309,7 +309,7 @@ def simulate(request: Request, body: SimulateBody):
 
 def _simulate(request: Request, ctx, principal, body: SimulateBody):
     """One dispatched owner for the whole simulation, from baseline to explanation."""
-    with retrieval_session(ctx, principal.access) as session:
+    with dense_session.retrieval_session(ctx, principal.access) as session:
         index, validate = session.graph, session.validate
         baseline: Trace | None = None
         if body.result_id:
