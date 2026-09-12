@@ -40,7 +40,7 @@ def generation_counts(store, generation_id: str) -> GenerationCounts:
                 store.validate_generation_seal(generation_id)
             except ValueError as error:
                 raise GenerationCountsUnavailable("Generation inventory seal is invalid") from error
-        rows = [r for r in store._native_rows("Passage") if r.get("generation_id") == generation_id]
+        rows = store._native_rows("Passage", generation_id=generation_id)
         if any(row.get("source_id") != generation.source_id for row in rows):
             raise GenerationCountsUnavailable("Generation inventory crosses source ownership")
         passage_ids = {row["id"] for row in rows}

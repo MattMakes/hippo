@@ -33,7 +33,9 @@ def test_source_page_labels_rendered_text_and_shows_originals(ctx, derived_graph
     monkeypatch.setattr(
         ctx.store,
         "_knowledge_rows",
-        lambda kind: [SimpleNamespace(source_id=sid)] if kind == "Artifact" else original(kind),
+        lambda kind, **scope: (
+            [SimpleNamespace(source_id=sid)] if kind == "Artifact" else original(kind, **scope)
+        ),
     )
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         response = client.get("/sources/" + sid)

@@ -109,6 +109,19 @@ CONSTRAINTS = [
     "CREATE INDEX symbol_source IF NOT EXISTS FOR (n:Symbol) ON (n.source_id)",
     "CREATE INDEX data_object_source IF NOT EXISTS FOR (n:DataObject) ON (n.source_id)",
     "CREATE INDEX commit_source IF NOT EXISTS FOR (n:Commit) ON (n.source_id)",
+    # A generation-scoped read of a native table is a label scan without these, so the query
+    # counter would report bounded work while the database did exactly as much as before. These
+    # reach a *new* store; `migrations.schema_steps`' v6 step is what reaches an existing one,
+    # because `migrate_store` returns before `_ensure_legacy_schema` once a store is current.
+    *(
+        f"CREATE INDEX {name}_generation IF NOT EXISTS FOR (n:{label}) ON (n.generation_id)"
+        for label, name in (
+            ("Symbol", "symbol"),
+            ("DataObject", "data_object"),
+            ("Commit", "commit"),
+            ("Passage", "passage"),
+        )
+    ),
     "CREATE CONSTRAINT changeset_id IF NOT EXISTS FOR (n:Changeset) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT settings_id IF NOT EXISTS FOR (n:Settings) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT role_id IF NOT EXISTS FOR (n:Role) REQUIRE n.id IS UNIQUE",
