@@ -6,7 +6,7 @@ Scope: G18. Pure modules may proceed now. Shared storage/access/snapshot/publica
 
 OWNS: src/hippo/knowledge/{temporal,conflicts}.py, tests/unit/test_temporal_evidence.py, tests/unit/test_temporal_conflicts.py, tests/fixtures/rag_all/temporal_events.jsonl, ai_docs/plans/rag-it-all-task-5a-temporal-conflicts.md, ai_docs/gates/rag-it-all/task-5a-temporal-conflicts/GATES.md, ai_docs/reports/2026-09-11-task-5a-temporal-conflicts-pre-flight.md
 
-Status (2026-09-12, after the part 2 review fixes): all six gates MET by the gate checker at a9512a2; T5A3/T5A4 cover history_manifest, suppression_history, purge_history and recorded_correction (append-only correction publication with capability-bound closures, six failpoints, idempotent retry). Independent reviews of parts 1 and 2 passed after fixes. Still owed before Task 5A closes: chronological JSONL fixture loading (in flight) and the root-only disposable-Neo4j repeat (queued).
+Status (2026-09-12, after the part 2 review fixes): all six gates MET by the gate checker at a9512a2; T5A3/T5A4 cover history_manifest, suppression_history, purge_history and recorded_correction (append-only correction publication with capability-bound closures, six failpoints, idempotent retry). Independent reviews of parts 1 and 2 passed after fixes. Still owed before Task 5A closes: chronological JSONL fixture loading (in flight). The root-only disposable-Neo4j repeat passed: 160 tests over the temporal, snapshot and generation files (`ai_docs/gates/rag-it-all/task-5-production-activation/neo4j-parity.md`, run 2).
 
 - [x] T5A1: Pure temporal selectors preserve both clocks and unknown/open semantics.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/python -m pytest tests/unit/test_temporal_evidence.py -q -o addopts='' -W error
