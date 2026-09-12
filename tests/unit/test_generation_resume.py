@@ -198,6 +198,22 @@ def test_reclaim_refuses_a_manifest_hash_the_stored_generation_does_not_carry(st
     assert admission(store, gen) == before
 
 
+@pytest.mark.parametrize("absent", [None, ""])
+def test_reclaim_refuses_an_absent_manifest_hash_instead_of_skipping_the_assertion(store, absent):
+    """An unset field must not silently turn the assertion off; it is a required argument."""
+    gen, _ = crashed(store)
+    before = admission(store, gen)
+    with pytest.raises(ValueError, match="Reclaim requires the stored generation's manifest hash"):
+        store.reclaim_generation_build(
+            gen.id,
+            job_key="resume",
+            lease_owner="resume-worker",
+            lease_expires_at=LEASE,
+            expected_manifest_hash=absent,
+        )
+    assert admission(store, gen) == before
+
+
 def test_reclaim_by_the_live_holder_returns_its_own_job_without_a_second_fence(store):
     gen = generation(store)
     job = store.claim_generation_build(
