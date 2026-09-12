@@ -53,7 +53,7 @@ def test_v2_descriptor_and_checksum_are_frozen():
     assert m.V2_CHECKSUM == V2_CHECKSUM
     assert text_hash(canonical_json(m.V2_DESCRIPTOR)) == V2_CHECKSUM
     assert "origin" not in m.V2_DESCRIPTOR[1]["AccessPolicy"]
-    assert m.CURRENT_SCHEMA_VERSION == 5
+    assert m.CURRENT_SCHEMA_VERSION == 6
     assert m.MIGRATION_CHECKSUM != V2_CHECKSUM
 
 
@@ -123,13 +123,14 @@ def test_v2_policy_and_span_keep_ids_and_references_after_migration_and_reopen(t
             assert store._knowledge_get("AccessPolicy", policy.id) == policy
             assert store._knowledge_get("Artifact", artifact.id) == artifact
             assert store._knowledge_get("EvidenceSpan", span.id) == span
-            assert store.schema_version()["version"] == 5
+            assert store.schema_version()["version"] == 6
             assert {row["version"]: row["checksum"] for row in store.schema_history()} == {
                 1: m.V1_CHECKSUM,
                 2: V2_CHECKSUM,
                 3: m.V3_CHECKSUM,
                 4: m.V4_CHECKSUM,
-                5: m.MIGRATION_CHECKSUM,
+                5: m.V5_CHECKSUM,
+                6: m.MIGRATION_CHECKSUM,
             }
             assert store.run("MATCH (p:AccessPolicy) RETURN p.origin AS origin,p.scope_key AS scope") == [
                 {"origin": "legacy_unknown", "scope": None}
@@ -161,14 +162,14 @@ def test_v3_failure_rolls_back_added_columns_and_policy_data_then_recovers(tmp_p
         assert store._knowledge_get("EvidenceSpan", span.id).policy_id == policy.id
         store._migrating = False
         m.migrate_store(store)
-        assert store.schema_version()["version"] == 5
+        assert store.schema_version()["version"] == 6
     finally:
         store.close()
 
 
 def test_new_store_keeps_all_migration_history_and_scope_freshness_is_independent(store):
     store.ensure_schema()
-    assert [row["version"] for row in store.schema_history()] == [1, 2, 3, 4, 5]
+    assert [row["version"] for row in store.schema_history()] == [1, 2, 3, 4, 5, 6]
     first = k.AccessPolicy(
         workspace_id=m.DEFAULT_WORKSPACE_ID, origin="provider", scope_key="provider:A", verified_at=NOW
     )
@@ -197,7 +198,7 @@ def test_corrupt_historical_checksum_is_rejected_even_with_valid_v3_completion(s
     store._migrating = True
     try:
         assert store.get_source(source)["name"] == "untouched"
-        assert store.schema_version()["version"] == 5
+        assert store.schema_version()["version"] == 6
         assert (
             next(row for row in store.schema_history() if row["version"] == version)["checksum"]
             == "corrupt-history"
@@ -212,6 +213,7 @@ def test_v3_transform_fault_keeps_legacy_policy_and_recovery_completes(store):
     policy = k.AccessPolicy(workspace_id=m.DEFAULT_WORKSPACE_ID, verified_at=NOW)
     store._write_knowledge(policy)
     if store.knowledge_backend == "fake":
+        store._schema_history.pop(6)
         store._schema_history.pop(5)
         store._schema_history.pop(4)
         store._schema_history.pop(3)
@@ -236,7 +238,7 @@ def test_v3_transform_fault_keeps_legacy_policy_and_recovery_completes(store):
     finally:
         store._migrating = False
     m.migrate_store(store)
-    assert [row["version"] for row in store.schema_history()] == [1, 2, 3, 4, 5]
+    assert [row["version"] for row in store.schema_history()] == [1, 2, 3, 4, 5, 6]
     assert store.schema_version()["state"] == "complete"
     assert store._knowledge_get("AccessPolicy", policy.id) == policy
 
@@ -341,6 +343,7 @@ def test_pending_v3_recovery_never_rewrites_explicit_policy_identity(store, posi
     )
     store._write_knowledge(policy)
     step = 0 if position == "start" else len(m.schema_steps(store, version=3))
+    change_journal(store, 6, delete=True)
     change_journal(store, 5, delete=True)
     change_journal(store, 4, delete=True)
     change_journal(store, 3, changes={"state": "pending", "step": step})

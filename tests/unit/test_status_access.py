@@ -34,10 +34,12 @@ def status_context():
         get_meta=Mock(return_value="hidden-profile"),
         list_sources=Mock(return_value=[public]),
         _knowledge_rows=Mock(return_value=[]),
-        # The lane predicate the inventory classifies by: a staged row no longer moves a
-        # source out of the legacy lane, only a published generation does, so a fixture
-        # puts a source in the managed lane by giving it the pointer a publication sets.
+        # The lane split the inventory classifies by. A source with no `Generation` row is
+        # classified by its managed records alone, as it was before CC1; one that has a
+        # generation is converting, and stays in the legacy lane until it publishes while it
+        # still owns an untagged row, which is what the bounded native read answers.
         source_serves_legacy=Mock(side_effect=lambda row: not row.get("active_generation_id")),
+        _native_rows=Mock(return_value=[]),
         authorization_epoch=Mock(return_value=1),
         count_users=Mock(return_value=1),
         get_user=Mock(return_value={"id": "reader", "role_id": "individual", "disabled": False}),
@@ -86,13 +88,13 @@ def test_private_corpus_cannot_change_reader_counts_cards_or_jobs():
     ctx.graph_for.assert_called_with(access, settings=ANY, structural=True)
 
 
-def test_generation_only_source_keeps_the_legacy_lane_until_it_publishes():
-    """A staging generation no longer moves its source, and projects no evidence of its own.
+def test_generation_only_source_without_legacy_rows_is_hidden_until_it_publishes():
+    """A source whose every row is staged has nothing the legacy lane can present.
 
-    The row is presented from the legacy lane it never left, which is the whole point of
-    `source_serves_legacy`: a conversion that stages over many transactions must not make
-    its source disappear. What stays hidden is the generation -- it contributes no passage,
-    no count and no managed presentation until it publishes.
+    The lane is not the whole rule: a staging generation holds its source in the legacy
+    lane, but the legacy lane serves untagged rows, and a bootstrap through managed ingress
+    has none. Until it publishes there is no pair to represent it either, so it is absent
+    from the inventory, the counts and the job list, exactly as it was before CC1.
     """
     ctx = status_context()
     ctx.store.list_sources.return_value.append({"id": "staging", "meta": {"secret": "unpublished"}})
@@ -101,10 +103,36 @@ def test_generation_only_source_keeps_the_legacy_lane_until_it_publishes():
     )
     ctx.jobs.running_keys.return_value.append("index:staging")
     value = system_status(ctx, access=Access(user_id="reader"))
+    assert value["stats"]["sources"] == 1
+    assert value["stats"]["passages"] == 1
+    assert value["jobs"] == ["index:public"]
+
+
+def test_converting_source_with_legacy_rows_keeps_the_legacy_lane_until_it_publishes():
+    """The converting counterpart: one untagged row of its own is the whole difference.
+
+    A conversion that stages over many transactions must not make its source disappear, so
+    the source it has always served is presented from the legacy lane it never left. What
+    stays hidden is the generation -- it contributes no passage, no count and no managed
+    presentation until it publishes.
+    """
+    ctx = status_context()
+    ctx.store.list_sources.return_value.append({"id": "converting", "meta": {"secret": "unpublished"}})
+    ctx.store._knowledge_rows.side_effect = lambda kind: (
+        [NS(source_id="converting")] if kind == "Generation" else []
+    )
+    ctx.store._native_rows.side_effect = lambda kind, **keys: (
+        [{"id": "converting:0", "source_id": "converting", "generation_id": None}]
+        if kind == "Passage" and keys.get("source_id") == "converting" and keys.get("untagged")
+        else []
+    )
+    ctx.jobs.running_keys.return_value.append("index:converting")
+    value = system_status(ctx, access=Access(user_id="reader"))
     assert value["stats"]["sources"] == 2
+    # Counted from the held graph, so the staged passage is not reported as the source's own.
     assert value["stats"]["passages"] == 1
     # Its own indexing job comes with it: the source is visible, so its job is too.
-    assert value["jobs"] == ["index:public", "index:staging"]
+    assert value["jobs"] == ["index:public", "index:converting"]
 
 
 def test_managed_metadata_is_withheld_even_with_visible_managed_evidence():
@@ -365,9 +393,14 @@ def test_proven_selected_pair_renders_the_source_control_presentation(ctx, monke
     projected = graph([], [Passage("allowed-span", "Allowed title", "Allowed body", sid, "", 0)])
     projected.selected_managed_generations = ((sid, "generation-current"),)
     monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: projected)
-    # The managed lane is the published one, so the fixture says "this source is past its
-    # first publication" rather than faking the staged Artifact row that used to classify.
-    monkeypatch.setattr(ctx.store, "source_serves_legacy", lambda row: row["id"] != sid)
+    # A source with no generation of its own is classified exactly as it was before CC1:
+    # an Artifact row is enough to take it out of the legacy lane.
+    original = ctx.store._knowledge_rows
+    monkeypatch.setattr(
+        ctx.store,
+        "_knowledge_rows",
+        lambda kind: [NS(source_id=sid)] if kind == "Artifact" else original(kind),
+    )
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         client.headers["Authorization"] = "Bearer " + user["token"]
         row = client.get(f"/api/sources/{sid}").json()
@@ -401,9 +434,14 @@ def test_managed_source_surfaces_render_only_projected_evidence(ctx, monkeypatch
     ctx.store.update_source(sid, status="failed", error="SECRET error", progress_total=100, progress_done=99)
     projected = graph([], [Passage("allowed-span", "Allowed title", "Allowed body", sid, "", 0)])
     monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: projected)
-    # The managed lane is the published one, so the fixture says "this source is past its
-    # first publication" rather than faking the staged Artifact row that used to classify.
-    monkeypatch.setattr(ctx.store, "source_serves_legacy", lambda row: row["id"] != sid)
+    # A source with no generation of its own is classified exactly as it was before CC1:
+    # an Artifact row is enough to take it out of the legacy lane.
+    original = ctx.store._knowledge_rows
+    monkeypatch.setattr(
+        ctx.store,
+        "_knowledge_rows",
+        lambda kind: [NS(source_id=sid)] if kind == "Artifact" else original(kind),
+    )
     monkeypatch.setattr(ctx.jobs, "running_keys", lambda: ["index:" + sid])
     monkeypatch.setattr(ctx.jobs, "is_running", lambda key: True)
     monkeypatch.setattr(
@@ -468,9 +506,14 @@ def test_account_and_identity_count_only_owned_sources_with_visible_evidence(ctx
     uid = ctx.store.create_user("account-reader", "secret1", "individual")
     ctx.store.create_source("text", "Visible", owner_id=uid)
     hidden = ctx.store.create_source("text", "Managed hidden", owner_id=uid)
-    # The managed lane is the published one, so the fixture says "this source is past its
-    # first publication" rather than faking the staged Artifact row that used to classify.
-    monkeypatch.setattr(ctx.store, "source_serves_legacy", lambda row: row["id"] != hidden)
+    # A source with no generation of its own is classified exactly as it was before CC1:
+    # an Artifact row is enough to take it out of the legacy lane.
+    original = ctx.store._knowledge_rows
+    monkeypatch.setattr(
+        ctx.store,
+        "_knowledge_rows",
+        lambda kind: [NS(source_id=hidden)] if kind == "Artifact" else original(kind),
+    )
     monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: graph([], []))
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         client.headers["Authorization"] = "Bearer " + ctx.store.get_user(uid)["token"]

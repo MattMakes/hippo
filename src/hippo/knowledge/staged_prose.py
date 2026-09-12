@@ -150,7 +150,7 @@ def _inventory(store, prepared):
     gen_id = inputs.generation.id
 
     def selected(kind):
-        return {r.id: r for r in store._knowledge_rows(kind) if r.generation_id == gen_id}
+        return {r.id: r for r in store._knowledge_rows(kind, generation_id=gen_id)}
 
     for kind, expected in (
         ("GenerationMember", inputs.evidence.revision_members),
@@ -166,8 +166,7 @@ def _inventory(store, prepared):
     }
     actual_dense = {
         r["id"]: store._canonical_native("Passage", r)
-        for r in store._native_rows("Passage")
-        if r.get("generation_id") == gen_id
+        for r in store._native_rows("Passage", generation_id=gen_id)
     }
     if actual_dense != expected_dense:
         raise ValueError("Dense passage inventory differs from prepared coverage")
@@ -177,12 +176,8 @@ def _inventory(store, prepared):
         raise ValueError("Prose input/result inventory differs from mandatory coverage")
     if (
         selected("NativeBinding")
-        or any(
-            row.get("generation_id") == gen_id
-            for kind in ("Symbol", "DataObject", "Commit")
-            for row in store._native_rows(kind)
-        )
-        or store._native_relationships(set(expected_dense))
+        or any(store._native_rows(kind, generation_id=gen_id) for kind in ("Symbol", "DataObject", "Commit"))
+        or store._native_relationships(ids=set(expected_dense))
     ):
         raise ValueError("Plain prose native code/relationship inventory must be empty")
 
