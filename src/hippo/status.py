@@ -55,15 +55,10 @@ def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None
 
     validate()
     sources = ctx.store.list_sources(access)
-    managed = {row.source_id for row in ctx.store._knowledge_rows("Artifact")}
-    managed.update(row.source_id for row in ctx.store._knowledge_rows("Generation"))
-    managed.update(
-        source["id"]
-        for source in sources
-        if source.get("active_generation_id")
-        or source.get("managed")
-        or (source.get("meta") or {}).get("managed")
-    )
+    # The same lane predicate the graph uses. A source converting to managed generations
+    # stays in the legacy lane, and so keeps presenting its legacy row and counts, until
+    # its first publication sets the managed flag and the active pointer together.
+    managed = {source["id"] for source in sources if not ctx.store.source_serves_legacy(source)}
     legacy_ids = {source["id"] for source in sources if source["id"] not in managed}
     represented = {passage.source_id for passage in graph.passages}
     represented.update(node.source_id for node in graph.code_nodes if node.source_id)
@@ -72,12 +67,25 @@ def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None
     # neither proves a pair, so neither reaches this set.
     represented.update(source for source, _generation in graph.selected_managed_generations)
     rows = [
-        _managed_source(source, graph) if source["id"] in managed else deepcopy(source)
+        _managed_source(source, graph) if source["id"] in managed else _legacy_source(source, graph)
         for source in sources
         if source["id"] in legacy_ids or source["id"] in represented
     ]
     validate()
     return SourceView(graph, rows, legacy_ids, validate)
+
+
+def _legacy_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
+    """One legacy row, with its passage count taken from the held graph.
+
+    The Store's Source counter spans every passage ever written for the source, staged
+    generations included, so a source part way through its conversion would report a
+    generation's staged passages as its own while still serving only its legacy ones. The
+    managed row already counts from the view's own provenance for the same reason.
+    """
+    row = deepcopy(source)
+    row["passages"] = sum(1 for passage in graph.passages if passage.source_id == source["id"])
+    return row
 
 
 def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:

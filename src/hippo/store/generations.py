@@ -59,6 +59,47 @@ class GenerationQueries:
         source = self.get_source(source_id)
         return bool(source and source.get("managed"))
 
+    def source_serves_legacy(self, source_row) -> bool:
+        """True while a source still answers queries from its legacy graph.
+
+        The `managed` flag means "the managed lane owns this source's cleanup and
+        dispatch", and it is still set the moment the first row is staged, so every
+        destructive guard keeps firing throughout a conversion. What it deliberately does
+        not mean is "serve managed evidence": a repository bootstrap stages over many
+        transactions, and until it publishes there is no generation to serve. So this
+        predicate reads publication alone -- no active pointer and no published
+        `IndexEvent` -- and a staging or failed generation leaves its source serving
+        exactly the legacy graph it was already serving.
+
+        A tombstone is the third term, and the only one that is not about publication. A
+        source tombstoned part way through its conversion has no pointer and no published
+        event, so publication alone would leave it serving its legacy graph -- but the
+        managed lane owns it for dispatch (it is `managed`), its suppression is enforced
+        where managed evidence is authorized, and legacy rows are not evidence. Withdrawn
+        means withdrawn: it serves neither lane. Only an all-principals suppression is
+        readable from a row; a principal-specific one stays the access layer's decision,
+        as it is for any legacy source.
+
+        A pure read of the row and the rows naming it: no lock and no clock, so a query
+        path may call it per source. The pointer clause answers every published source
+        without touching either table.
+        """
+        if not source_row or source_row.get("active_generation_id"):
+            return False
+        source_id = source_row.get("id")
+        if any(
+            event.kind == "published" and event.aggregate_id == source_id
+            for event in self._knowledge_rows("IndexEvent")
+        ):
+            return False
+        return not any(
+            row.target_kind == "source"
+            and row.target_id == source_id
+            and row.all_principals
+            and row.workspace_id == source_row.get("workspace_id")
+            for row in self._knowledge_rows("Suppression")
+        )
+
     def _source_fields(self, source_id, **fields):
         if self.knowledge_backend == "fake":
             self.sources[source_id].update(fields)

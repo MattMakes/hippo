@@ -34,6 +34,10 @@ def status_context():
         get_meta=Mock(return_value="hidden-profile"),
         list_sources=Mock(return_value=[public]),
         _knowledge_rows=Mock(return_value=[]),
+        # The lane predicate the inventory classifies by: a staged row no longer moves a
+        # source out of the legacy lane, only a published generation does, so a fixture
+        # puts a source in the managed lane by giving it the pointer a publication sets.
+        source_serves_legacy=Mock(side_effect=lambda row: not row.get("active_generation_id")),
         authorization_epoch=Mock(return_value=1),
         count_users=Mock(return_value=1),
         get_user=Mock(return_value={"id": "reader", "role_id": "individual", "disabled": False}),
@@ -61,9 +65,12 @@ def test_private_corpus_cannot_change_reader_counts_cards_or_jobs():
     ctx.store.stats.return_value = {"passages": 999, "sources": 90, "symbols": 999}
     ctx.store.get_meta.return_value = "new-secret-model"
     ctx.store.list_sources.return_value.append(
-        {"id": "managed", "meta": {"code": {"languages": ["secret-language"], "history_skipped": 100}}}
+        {
+            "id": "managed",
+            "active_generation_id": "generation-current",
+            "meta": {"code": {"languages": ["secret-language"], "history_skipped": 100}},
+        }
     )
-    ctx.store._knowledge_rows.return_value = [NS(source_id="managed")]
     ctx.jobs.running_keys.return_value.extend(
         ["index:managed", "index:private", "run:secret", "generate:secret"]
     )
@@ -79,7 +86,14 @@ def test_private_corpus_cannot_change_reader_counts_cards_or_jobs():
     ctx.graph_for.assert_called_with(access, settings=ANY, structural=True)
 
 
-def test_generation_only_source_is_hidden_until_authorized_evidence_is_projected():
+def test_generation_only_source_keeps_the_legacy_lane_until_it_publishes():
+    """A staging generation no longer moves its source, and projects no evidence of its own.
+
+    The row is presented from the legacy lane it never left, which is the whole point of
+    `source_serves_legacy`: a conversion that stages over many transactions must not make
+    its source disappear. What stays hidden is the generation -- it contributes no passage,
+    no count and no managed presentation until it publishes.
+    """
     ctx = status_context()
     ctx.store.list_sources.return_value.append({"id": "staging", "meta": {"secret": "unpublished"}})
     ctx.store._knowledge_rows.side_effect = lambda kind: (
@@ -87,8 +101,10 @@ def test_generation_only_source_is_hidden_until_authorized_evidence_is_projected
     )
     ctx.jobs.running_keys.return_value.append("index:staging")
     value = system_status(ctx, access=Access(user_id="reader"))
-    assert value["stats"]["sources"] == 1
-    assert value["jobs"] == ["index:public"]
+    assert value["stats"]["sources"] == 2
+    assert value["stats"]["passages"] == 1
+    # Its own indexing job comes with it: the source is visible, so its job is too.
+    assert value["jobs"] == ["index:public", "index:staging"]
 
 
 def test_managed_metadata_is_withheld_even_with_visible_managed_evidence():
@@ -97,9 +113,12 @@ def test_managed_metadata_is_withheld_even_with_visible_managed_evidence():
     ctx.graph_for.return_value.code_nodes.append(
         NS(id="managed-node", kind="data", lang="sql", source_id="managed")
     )
-    ctx.store._knowledge_rows.return_value = [NS(source_id="managed")]
     ctx.store.list_sources.return_value.append(
-        {"id": "managed", "meta": {"code": {"languages": ["private"], "unresolved_calls_total": 90}}}
+        {
+            "id": "managed",
+            "active_generation_id": "generation-current",
+            "meta": {"code": {"languages": ["private"], "unresolved_calls_total": 90}},
+        }
     )
     ctx.jobs.running_keys.return_value.append("index:managed")
     value = system_status(ctx, access=Access(user_id="reader"))
@@ -227,8 +246,9 @@ def test_mcp_identity_never_exposes_total_hidden_source_inventory():
 
     ctx = status_context()
     ctx.store.list_roles = Mock(return_value=[])
-    ctx.store._knowledge_rows.return_value = [NS(source_id="managed")]
-    ctx.store.list_sources.return_value.append({"id": "managed"})
+    ctx.store.list_sources.return_value.append(
+        {"id": "managed", "active_generation_id": "generation-current"}
+    )
     principal = Principal.for_user({"id": "reader"}, {"id": "individual", "rank": 0})
     value = whoami_tool(ctx, principal)
     assert value["sources_visible"] == value["sources_total"] == 1
@@ -345,12 +365,9 @@ def test_proven_selected_pair_renders_the_source_control_presentation(ctx, monke
     projected = graph([], [Passage("allowed-span", "Allowed title", "Allowed body", sid, "", 0)])
     projected.selected_managed_generations = ((sid, "generation-current"),)
     monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: projected)
-    original = ctx.store._knowledge_rows
-    monkeypatch.setattr(
-        ctx.store,
-        "_knowledge_rows",
-        lambda kind: [NS(source_id=sid)] if kind == "Artifact" else original(kind),
-    )
+    # The managed lane is the published one, so the fixture says "this source is past its
+    # first publication" rather than faking the staged Artifact row that used to classify.
+    monkeypatch.setattr(ctx.store, "source_serves_legacy", lambda row: row["id"] != sid)
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         client.headers["Authorization"] = "Bearer " + user["token"]
         row = client.get(f"/api/sources/{sid}").json()
@@ -384,12 +401,9 @@ def test_managed_source_surfaces_render_only_projected_evidence(ctx, monkeypatch
     ctx.store.update_source(sid, status="failed", error="SECRET error", progress_total=100, progress_done=99)
     projected = graph([], [Passage("allowed-span", "Allowed title", "Allowed body", sid, "", 0)])
     monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: projected)
-    original = ctx.store._knowledge_rows
-    monkeypatch.setattr(
-        ctx.store,
-        "_knowledge_rows",
-        lambda kind: [NS(source_id=sid)] if kind == "Artifact" else original(kind),
-    )
+    # The managed lane is the published one, so the fixture says "this source is past its
+    # first publication" rather than faking the staged Artifact row that used to classify.
+    monkeypatch.setattr(ctx.store, "source_serves_legacy", lambda row: row["id"] != sid)
     monkeypatch.setattr(ctx.jobs, "running_keys", lambda: ["index:" + sid])
     monkeypatch.setattr(ctx.jobs, "is_running", lambda key: True)
     monkeypatch.setattr(
@@ -454,12 +468,9 @@ def test_account_and_identity_count_only_owned_sources_with_visible_evidence(ctx
     uid = ctx.store.create_user("account-reader", "secret1", "individual")
     ctx.store.create_source("text", "Visible", owner_id=uid)
     hidden = ctx.store.create_source("text", "Managed hidden", owner_id=uid)
-    original = ctx.store._knowledge_rows
-    monkeypatch.setattr(
-        ctx.store,
-        "_knowledge_rows",
-        lambda kind: [NS(source_id=hidden)] if kind == "Artifact" else original(kind),
-    )
+    # The managed lane is the published one, so the fixture says "this source is past its
+    # first publication" rather than faking the staged Artifact row that used to classify.
+    monkeypatch.setattr(ctx.store, "source_serves_legacy", lambda row: row["id"] != hidden)
     monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: graph([], []))
     with TestClient(create_app(ctx), base_url="http://localhost") as client:
         client.headers["Authorization"] = "Bearer " + ctx.store.get_user(uid)["token"]
