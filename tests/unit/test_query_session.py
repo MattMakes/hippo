@@ -8,6 +8,7 @@ from hippo import ask, cli, mcp_server
 from hippo.access import Principal
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.knowledge.access import AuthorizationChanged
+from hippo.knowledge.replay import view_fingerprint
 from hippo.web.routes import api
 
 QUESTION = "Who designed the Orion arm?"
@@ -111,7 +112,10 @@ def test_content_publication_during_model_keeps_rendering_on_same_graph(observed
     payload = invoke(surface, ctx)
     assert published
     assert len(acquired) == 1
-    assert rendered and all(graph is acquired[0] for graph in rendered)
+    # Dense dispatch renders on an activation of the pinned view, not on the view
+    # object itself, so identity is the wrong test: what must hold is that the
+    # rendered evidence is the acquired evidence and not the publication's.
+    assert rendered and all(view_fingerprint(graph) == view_fingerprint(acquired[0]) for graph in rendered)
     assert "Mira Chen" in payload["code_graph"]
     if surface.endswith("ask"):
         assert "Mira Chen" in payload["answer"]

@@ -72,7 +72,13 @@ class AuthorizedModel:
         return self._call("chat_text", *args, **kwargs)
 
 
-def query_access(ctx, access, *, settings: dict[str, Any] | None = None, structural: bool = False):
+def query_access(ctx, access, *, settings: dict[str, Any] | None = None, structural: bool = True):
+    """Prove one audience's view of the graph. Structural generation selection is the default.
+
+    `structural=False` is the legacy compatibility lane: it couples every selected
+    managed generation to the configured embedding tag. `AppContext.graph_for` keeps
+    the opposite default, because it is the low-level entry point.
+    """
     epoch = ctx.store.authorization_epoch()
     access = current_access(ctx.store, access)
     if structural:
@@ -107,13 +113,18 @@ class QuerySession:
 
 @contextmanager
 def query_session(
-    ctx, access=None, *, settings: dict[str, Any] | None = None, structural: bool = False
+    ctx, access=None, *, settings: dict[str, Any] | None = None, structural: bool = True
 ) -> Iterator[QuerySession]:
-    """Keep one view pinned through output construction, then release it on every exit."""
+    """Keep one view pinned through output construction, then release it on every exit.
+
+    Structural generation selection by default, like `query_access`. The flag is
+    forwarded verbatim: an explicit `structural=False` must reach the lower layer
+    rather than fall through to its default.
+    """
     effective_settings = validate_settings({**ctx.store.get_settings(), **(settings or {})})
     captured_settings = MappingProxyType(effective_settings)
     graph, model, validate = query_access(
-        ctx, access, settings=dict(captured_settings), **({"structural": True} if structural else {})
+        ctx, access, settings=dict(captured_settings), structural=structural
     )
     heartbeat = None
 

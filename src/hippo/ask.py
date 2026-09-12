@@ -23,9 +23,16 @@ from .hipporag import paths
 from .hipporag.answerer import Answer, answer_question
 from .hipporag.retriever import Retriever, Trace
 from .knowledge.citations import resolve_citations
-from .knowledge.query_access import AuthorizedModel, QuerySession, query_session
+from .knowledge.dense_session import retrieval_session
+from .knowledge.query_access import AuthorizedModel, QuerySession
 from .knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from .store.base import validate_settings
+
+# The two modes `retrieval_session` yields once it has chosen a route. Anything else
+# is an owner that has not been dispatched yet (a structural graph reports
+# "unavailable"; an activated empty one reports "legacy" and re-wrapping it is a
+# no-op that makes no model call).
+_DISPATCHED = frozenset({"verified", "tag_compatible"})
 
 
 def search(
@@ -38,22 +45,38 @@ def search(
     session: QuerySession | None = None,
 ) -> Trace:
     """Rank visible passages, retaining any saved-input guard at every model boundary."""
-    with _query_session(ctx, access, authorization_check, session, settings) as query:
+    with _retrieval_scope(ctx, access, authorization_check, session, settings) as query:
         trace = _search(ctx, query.graph, query.model, question, settings, effective_settings=query.settings)
         query.validate()
         return trace
 
 
+def _dispatch(ctx, access, session, settings):
+    """One structural owner, routed to the dense evidence this audience actually proved.
+
+    Owned: `retrieval_session` acquires the structural session itself, so no graph is
+    reacquired below it. Borrowed: the caller's own session is dispatched in place -- or
+    passed straight through when the caller already dispatched it, because re-resolving
+    would cost a second `/api/show` and probe embedding for the same profile.
+    """
+    if session is None:
+        return retrieval_session(ctx, access, settings=settings)
+    if type(session) is QuerySession and session.graph.dense_capability.mode in _DISPATCHED:
+        return nullcontext(session)
+    # Settings were already compared against the held session; passing them again would
+    # only replace that message with the dispatcher's own.
+    return retrieval_session(ctx, session=session)
+
+
 @contextmanager
-def _query_session(ctx, access, authorization_check, session, settings):
+def _retrieval_scope(ctx, access, authorization_check, session, settings):
     if authorization_check is not None:
         authorization_check()
     if session is not None:
         overrides = validate_settings(settings or {})
         if any(session.settings.get(key) != value for key, value in overrides.items()):
             raise ValueError("Query settings do not match the active session")
-    manager = nullcontext(session) if session is not None else query_session(ctx, access, settings=settings)
-    with manager as query:
+    with _dispatch(ctx, access, session, settings) as query:
 
         def validate():
             if authorization_check is not None:
@@ -93,7 +116,7 @@ def ask(
     session: QuerySession | None = None,
 ) -> tuple[Trace, Answer]:
     """Retrieve, then let the LLM read the top `qa_top_k` passages and answer."""
-    with _query_session(ctx, access, authorization_check, session, settings) as query:
+    with _retrieval_scope(ctx, access, authorization_check, session, settings) as query:
         trace = _search(ctx, query.graph, query.model, question, settings, effective_settings=query.settings)
         query.validate()
         answer = _answer_from_trace(query.graph, query.model, trace)
@@ -110,7 +133,7 @@ def answer_from_trace(
     session: QuerySession | None = None,
 ) -> Answer:
     """Answer from ranked passages while preserving the caller's saved-input authorization."""
-    with _query_session(ctx, access, authorization_check, session, trace.settings) as query:
+    with _retrieval_scope(ctx, access, authorization_check, session, trace.settings) as query:
         if not can_reuse_answer(query.graph, trace.evidence_fingerprint):
             trace = reconstruct_trace(query.graph, trace, question=trace.question)
         trace = replace(trace, settings=dict(query.settings))

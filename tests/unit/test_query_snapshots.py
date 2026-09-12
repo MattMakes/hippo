@@ -197,7 +197,9 @@ def test_graph_acquisition_failure_closes_reference_before_propagating(ctx, monk
     from hippo import ask
 
     build(ctx)
-    original = ctx._managed_graph_for
+    # Structural selection is the query default now, so the builder that has to
+    # release its references on a late epoch bump is the structural one.
+    original = ctx._build_structural_graph
     held = []
 
     def changing(*args, **kwargs):
@@ -206,7 +208,7 @@ def test_graph_acquisition_failure_closes_reference_before_propagating(ctx, monk
         ctx.store._bump_authorization_epoch()
         return graph
 
-    monkeypatch.setattr(ctx, "_managed_graph_for", changing)
+    monkeypatch.setattr(ctx, "_build_structural_graph", changing)
     with pytest.raises(AuthorizationChanged):
         ask.search(ctx, "revision", access=EVERYTHING)
     assert held
