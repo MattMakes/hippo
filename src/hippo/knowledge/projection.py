@@ -29,6 +29,7 @@ from hippo.hipporag.graph_index import (
     _community_labels,
     _name_index,
     _path_index,
+    add_code_kind,
     build_igraph,
     canonical_fact_order,
 )
@@ -516,8 +517,7 @@ def project_managed_graph(
             edge.mention = True
         else:
             edge.omega = max(edge.omega, weight)
-            if kind.lower() not in edge.code_kinds:
-                edge.code_kinds.append(kind.lower())
+            add_code_kind(edge, kind.lower())
             arrows.append((subject, target, kind, weight, "authorized_evidence", extra or {}))
 
     code_ids = {node.id for node in nodes}
@@ -807,6 +807,22 @@ def _assemble(
     # A projection already builds its facts in identity order; a composition concatenates
     # one lane after another, so only this makes `version` a property of the evidence.
     facts = canonical_fact_order(facts)
+    # A projection already builds `arrow_ids` from a sorted observation loop; a composition
+    # concatenates one lane's `code_out` after another in whatever order that graph's buckets
+    # happened to hold. Sorting the flat list once, by its own (string-id) identity, makes both
+    # `code_out`/`code_in` below and the `version` payload a property of the evidence rather
+    # than of how the arrows arrived - the same reasoning as `canonical_fact_order` above.
+    arrow_ids = sorted(
+        arrow_ids,
+        key=lambda row: (
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            json.dumps(row[5], sort_keys=True, default=str),
+        ),
+    )
     identities = list(entities) + [node.id for node in nodes] + [passage.id for passage in passages]
     if len(identities) != len(set(identities)):
         raise ProjectionError("Projection node identities collide")

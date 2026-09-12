@@ -31,6 +31,7 @@ it lives in `code_out`/`code_in` for the path tools.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -238,6 +239,46 @@ def canonical_facts(facts: list[Fact], embeddings: np.ndarray) -> tuple[list[Fac
         embeddings[positions] if positions else embeddings,
         {fact.id: i for i, fact in enumerate(ordered)},
     )
+
+
+def canonical_arrows(arrows: list[DirectedEdge]) -> list[DirectedEdge]:
+    """One vertex's outgoing (or incoming) arrows, in the one order every backend agrees on.
+
+    The sibling defect to `canonical_fact_order`: LadybugDB and Neo4j promise no row order for
+    `load_code_edges()` and friends, so `code_out`/`code_in` held each vertex's arrows in
+    whatever order the store returned them, and `view_fingerprint` moved with it. `(dst, kind,
+    provenance)` is already a total order in practice - `add_code_edges` keeps at most one row
+    per `(a, b, kind)`, and `provenance` tells apart the few DEFINED_IN/REFERS_TO/MODIFIES/
+    PRECEDES rows that never go through it - but `omega` and a plain JSON dump of `extra` break
+    any tie a caller manages to create anyway. `json.dumps` rather than `canonical_json`: this
+    runs on every load, and it must not raise on an `extra` value only `view_fingerprint` would
+    reject.
+    """
+    return sorted(
+        arrows,
+        key=lambda arrow: (
+            arrow.dst,
+            arrow.kind,
+            arrow.provenance,
+            arrow.omega,
+            json.dumps(arrow.extra, sort_keys=True, default=str),
+        ),
+    )
+
+
+def add_code_kind(edge: Edge, kind: str) -> None:
+    """Record one code term's name on a pair's `Edge`, kept sorted so no store's row order can move it.
+
+    The same defect as `canonical_arrows`, one field over: `view_fingerprint` hashes
+    `Edge.code_kinds`, and `add_code_edges` allows one row per `(a, b, kind)` - more than one
+    kind naming a pair is the normal shape, not an edge case - so which kind a loader saw first
+    used to decide this list's order. Sorting it after every insertion, here and nowhere else,
+    keeps every caller that appends a kind - `_add_code_term`, `scoped`'s structural-relation
+    loop, `projection._project_structural`'s `relation()` - in the one order every backend agrees on.
+    """
+    if kind not in edge.code_kinds:
+        edge.code_kinds.append(kind)
+        edge.code_kinds.sort()
 
 
 def canonical_selected_generations(rows) -> tuple[tuple[str, str], ...]:
@@ -508,6 +549,12 @@ class GraphIndex:
             # PRECEDES stays out of igraph on purpose: 200 commits would chain every symbol they
             # touched into one neighbourhood. The history tool reads it from code_out.
             directed(row["a"], row["b"], "PRECEDES", 1.0)
+
+        # Not `sorted(...)` on the store rows above: every loader must reach the same order
+        # regardless of which edge type it came from, so it is imposed on the materialised
+        # buckets rather than on one loader's rows.
+        code_out = {vertex: canonical_arrows(arrows) for vertex, arrows in code_out.items()}
+        code_in = {vertex: canonical_arrows(arrows) for vertex, arrows in code_in.items()}
 
         graph = build_igraph(len(node_ids), edges)
         log.info(
@@ -822,8 +869,7 @@ class GraphIndex:
             pair = tuple(sorted((idx_of[row.subject_id], idx_of[row.object_id])))
             edge = edges.setdefault(pair, Edge())
             edge.omega = max(edge.omega, row.weight)
-            if row.predicate.lower() not in edge.code_kinds:
-                edge.code_kinds.append(row.predicate.lower())
+            add_code_kind(edge, row.predicate.lower())
 
         # Hidden-only facts may leave an inert copied pair. It must not change the visible
         # fingerprint, while an explicit tuned=0 edit still belongs to the visible graph.
@@ -860,6 +906,12 @@ class GraphIndex:
                 code_in.setdefault(dst, []).append(kept)
                 if arrow.kind in SPECIFICITY_KINDS:
                     in_degree[dst] = in_degree.get(dst, 0) + 1
+        # A filtered, renumbered subsequence of a canonical bucket is already canonical, so this
+        # is a no-op given a canonical parent - applied anyway, the same way `canonical_facts` is
+        # above: the invariant belongs to every view that materialises `code_out`, not only the
+        # one that loaded it.
+        code_out = {vertex: canonical_arrows(arrows) for vertex, arrows in code_out.items()}
+        code_in = {vertex: canonical_arrows(arrows) for vertex, arrows in code_in.items()}
         for new_v in (idx_of[node_id] for node_id in code_ids):
             passage_count[new_v] = float(in_degree.get(new_v, 0) + 1)
         # Public node metadata must describe the same scoped relations as specificity.
@@ -1037,8 +1089,7 @@ def build_igraph(num_nodes: int, edges: dict[tuple[int, int], Edge], scale: floa
 def _add_code_term(edge: Edge, omega: float, kind: str) -> None:
     """Fold one code relation into a pair's single code term: the best confidence, plus its name."""
     edge.omega = max(edge.omega, omega)
-    if kind not in edge.code_kinds:
-        edge.code_kinds.append(kind)
+    add_code_kind(edge, kind)
 
 
 def _code_node(kind: str, row: dict) -> CodeNode:

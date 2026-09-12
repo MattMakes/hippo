@@ -122,6 +122,86 @@ def test_three_sessions_over_one_corpus_prove_the_same_view(ctx, corpus):
     assert len(set(prints)) == 1
 
 
+# ------------------------------------------------ the same defect, for arrows
+
+
+@pytest.fixture
+def code_corpus(ctx, corpus):
+    """`corpus` plus a symbol whose vertex holds several outgoing arrows, one pair shared.
+
+    `sym_f` -CONTAINS-> `sym_g`, `sym_f` -INVOKES-> `sym_g` and `sym_f` -INVOKES-> `sym_h`:
+    `sym_f`'s `code_out` bucket holds three arrows, and the `(sym_f, sym_g)` pair carries two
+    kinds on one undirected `Edge.code_kinds` list. Both are exactly the shape LadybugDB and
+    Neo4j hand back in no promised order - `add_code_edges` allows one row per `(a, b, kind)`,
+    so a pair naming more than one kind is the normal shape, not an edge case.
+    """
+    passage_id = next(row["id"] for row in ctx.store.load_passages() if row["source_id"] == corpus)
+    sym_f, sym_g, sym_h = "symbol-f", "symbol-g", "symbol-h"
+    ctx.store.add_symbols(
+        [
+            {"id": sym_f, "source_id": corpus, "name": "OrderService", "kind": "class", "lang": "python"},
+            {"id": sym_g, "source_id": corpus, "name": "place", "kind": "method", "lang": "python"},
+            {"id": sym_h, "source_id": corpus, "name": "validate", "kind": "method", "lang": "python"},
+        ]
+    )
+    ctx.store.add_code_edges(
+        [
+            {"a": sym_f, "b": sym_g, "kind": "CONTAINS", "omega": 1.0, "provenance": "syntax"},
+            {"a": sym_f, "b": sym_g, "kind": "INVOKES", "omega": 0.9, "provenance": "same_file"},
+            {"a": sym_f, "b": sym_h, "kind": "INVOKES", "omega": 0.8, "provenance": "same_file"},
+        ]
+    )
+    ctx.store.link_definitions([(sym_f, passage_id), (sym_g, passage_id), (sym_h, passage_id)])
+    ctx.store.bump_graph_version()
+    return sym_f
+
+
+def test_the_store_return_order_for_code_edges_never_reaches_the_graph(ctx, code_corpus, monkeypatch):
+    """The arrow sibling of `test_the_store_return_order_never_reaches_the_graph`.
+
+    Handing the loader the same `CODE_EDGE` rows backwards must not move `code_out`'s bucket
+    for the vertex that holds all three, nor the `(sym_f, sym_g)` pair's `code_kinds`, nor
+    `view_fingerprint`. The Fake store keeps insertion order, so only an explicit reversal
+    exercises this defect here.
+    """
+    rows = ctx.store.load_code_edges()
+    assert len(rows) > 1, "the corpus must give one vertex more than one arrow or nothing is under test"
+
+    graphs = []
+    for served in (rows, list(reversed(rows))):
+        monkeypatch.setattr(ctx.store, "load_code_edges", lambda served=served: [dict(r) for r in served])
+        graphs.append(GraphIndex.load(ctx.store))
+
+    first, second = graphs
+    vertex = first.idx_of[code_corpus]
+    assert vertex == second.idx_of[code_corpus]
+    first_arrows = [(edge.dst, edge.kind) for edge in first.code_out[vertex]]
+    second_arrows = [(edge.dst, edge.kind) for edge in second.code_out[vertex]]
+    assert first_arrows == second_arrows
+
+    other = first.idx_of["symbol-g"]
+    shared = first.edge_between(vertex, other)
+    assert shared.code_kinds == second.edge_between(vertex, other).code_kinds == ["contains", "invokes"]
+    assert view_fingerprint(first) == view_fingerprint(second)
+
+
+def test_repeated_loads_of_a_code_corpus_agree_on_the_fingerprint(ctx, code_corpus):
+    """Three cold loads of an unchanged code-bearing corpus - shared-pair kinds included - are
+    one view, on every backend. On Ladybug this is the real defect, with no monkeypatch."""
+    graphs = [GraphIndex.load(ctx.store) for _ in range(3)]
+    assert len({view_fingerprint(graph) for graph in graphs}) == 1
+
+
+def test_a_composed_code_view_keeps_one_fingerprint_and_version(ctx, code_corpus):
+    """`compose_graphs` flattens `full.scoped(...)`'s `code_out` into `_assemble`'s `arrow_ids`;
+    that concatenation order must not reach `view_fingerprint` or `graph.version` either."""
+    prints = []
+    for _ in range(3):
+        with query_session(reloaded(ctx), EVERYTHING) as session:
+            prints.append((view_fingerprint(session.graph), session.graph.version))
+    assert len(set(prints)) == 1
+
+
 # ------------------------------------------- what the moving order broke
 
 
