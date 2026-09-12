@@ -80,7 +80,7 @@ GREEN, Ladybug — `/tmp/hippo-pa4c-ladybug-green.log`:
 HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_managed_transport_activation.py \
   tests/unit/test_mcp_server.py -q -o addopts='' -W error \
   -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"
-→ 56 passed
+→ 61 passed in 198.75s
 ```
 
 Ruff, on every file changed:
@@ -250,9 +250,16 @@ branches are pinned by `test_the_liveness_probe_*`. No warning was filtered.
    `str(exc)` (`FAILURES`, `managed_activation.py:343-357`), in the same `code: message` shape used
    here, so the printed line is already closed. A legacy row keeps its existing legacy text, which
    the plan preserves.
-6. **Five failures in neighbouring files are pre-existing and belong to 4b**, not to this slice:
-   `test_answer_original_citations.py` ×4 (breakage table row B) and
-   `test_status_access.py::test_status_route_and_page_header_pass_the_request_audience` (row C).
-   Proved rather than asserted: with my three `src/` files checked out back to `ffd2265` the same
-   five fail with the same reasons — `/tmp/hippo-pa4c-prove-preexisting.log`, `5 failed, 32 passed`.
+6. **Six failures in neighbouring files are pre-existing and belong to 4b**, not to this slice:
+   `test_answer_original_citations.py` ×4 (breakage table row B, `DenseSessionUnavailable`
+   `invalid_borrow` from the `derived_graph` fixture),
+   `test_status_access.py::test_status_route_and_page_header_pass_the_request_audience` (row C, the
+   recorded call now carries `structural=True`), and
+   `test_web_auth.py::test_graph_page_and_its_endpoints_are_scoped_and_previewable` (row A,
+   `KeyError: 'seeds'` from `POST /api/graph/light-up`). Proved rather than asserted: with my three
+   `src/` files checked out back to `ffd2265` the same six fail for the same reasons —
+   `/tmp/hippo-pa4c-prove-preexisting.log`, `6 failed, 50 passed`. Everything else in the
+   neighbouring sweep is green: `test_ingest_limits.py`, `test_inventory_snapshot_lifetime.py`,
+   `test_ollama.py`, `test_web_base.py` and `test_import_order.py`, `119 passed` with my changes in
+   place (`/tmp/hippo-pa4c-regress2.log`).
 7. **No Neo4j run.** Out of this brief's scope, and this worker never held the disposable container.
