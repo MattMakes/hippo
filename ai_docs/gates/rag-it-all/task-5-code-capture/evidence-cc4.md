@@ -37,10 +37,14 @@ def capture_repository_inputs(
     observed_at: datetime,
     exclusions: Iterable[str] = (),
     provider_revision: str | None = None,
+    repository: RepositoryDescriptor | None = None,
     max_files: int = CODE_MAX_FILES,
     max_file_bytes: int = readers.MAX_FILE_BYTES,
     should_stop: Callable[[], bool] | None = None,
 ) -> RepositoryCapture: ...
+
+
+def repository_descriptor(url: str) -> RepositoryDescriptor: ...
 
 
 def read_code_provenance(
@@ -63,7 +67,46 @@ brief itself sets:
 - `read_code_provenance` takes `data` because the brief requires a pure module with no store
   handle. The bytes therefore arrive as an argument, exactly as `read_plain_provenance` takes them.
 
-`walk_tree` is public because plan section 6 step 2 names it.
+`walk_tree` is public because plan section 6 step 2 names it. `repository_descriptor` and the
+`repository: RepositoryDescriptor | None = None` argument on `capture_repository_inputs` are the
+design review's M8 amendment (`ai_docs/reports/2026-09-12-code-capture-plan-review.md`), added
+after the first two commits; see "Design review amendment M8" below.
+
+## Design review amendment M8 — full repository path, not `repo_name`
+
+`repos.repo_name` returns `"/".join(parts[-2:])`, so `host/alpha/team/api` and
+`host/beta/team/api` both become `team/api`: two unrelated repositories would share one
+`repository` KnowledgeObject and merge their symbol identities through `symbol_key`.
+`repo_capture.repository_descriptor` replaces it and `repos.repo_name` is referenced in the
+docstring as a reference that is deliberately **not** reused. Two normalizations, stated
+explicitly because the review asked which:
+
+- **The whole path is kept**, minus a trailing `.git`, with empty segments dropped and `.`/`..`
+  refused.
+- **Host and path both fold to lowercase, and transport folds to `https`.** `host/Acme/Robots`,
+  `host/acme/robots`, `http://host/acme/robots`, `ssh://git@host/acme/robots.git` and
+  `git@host:acme/robots.git` are one repository on every major forge and get one identity, spelled
+  `https://host`. An `ssh` port is dropped as a transport detail, and a scheme's own default port
+  is dropped *before* the fold so `http://host:80` and `http://host` cannot become two forges; a
+  genuinely non-default `http(s)` port is kept. The cost is a forge with genuinely case-sensitive
+  paths, which Task 10's connector resolves by replacing this provisional identity with real
+  provider IDs and adding aliases, per ruling 4.
+
+An `http(s)` clone URL carrying userinfo **refuses** rather than being silently stripped, because
+that is how a personal access token is passed; an `ssh://user@host` username is a transport user
+and is accepted then dropped. No `CaptureRefused` message quotes the URL, so a credential cannot
+reach a log or a public error (plan section 10);
+`test_an_embedded_credential_refuses_and_never_reaches_the_message` pins that.
+
+The descriptor is **carried, not hashed**, like `observed_at` and `provider_revision`: it is a
+`KnowledgeObject` key for CC6, not a manifest input. Plan section 5 gives an archive or single
+file no repository, so `capture_repository_inputs` refuses with `repository_without_checkout` as
+soon as `walk_tree` has settled the kind — before any raw write — and the same invariant is kept
+on `RepositoryCapture` as a backstop.
+
+`readers.py` is read-only for this task, as the review's split check requires: this module
+consumes `IGNORED_DIRS`, `is_supported_name`, `is_code_name`, `is_probably_binary` and
+`check_zip_budgets`, and adds no reader predicate.
 
 ## Closed reason sets
 
@@ -78,8 +121,9 @@ submodule, symlink, too_large, unsupported_language
 
 ```
 archive_budget, damaged_archive, duplicate_path, escaping_path, input_bytes,
-nested_archive, reserved_configuration, too_many_files, total_bytes,
-unportable_path, unreadable, unsupported_root
+nested_archive, repository_without_checkout, reserved_configuration,
+too_many_files, total_bytes, unportable_path, unreadable,
+unsupported_repository_url, unsupported_root
 ```
 
 `escaping_path` and `unportable_path` are deliberately separate. A name that climbs out of the
@@ -104,11 +148,13 @@ none was made.
 | --- | --- | --- | --- |
 | Baseline before RED | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_accepted_inputs.py tests/unit/test_ingest_readers.py -q -o addopts='' -W error` | 81 passed | `/tmp/hippo-cc4-baseline.log` |
 | RED | the two new test files | 70 errors, `ModuleNotFoundError: No module named 'hippo.ingest.repo_capture'` | `/tmp/hippo-cc4-red.log` |
-| GREEN, CD3 command | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_repo_capture.py tests/unit/test_code_provenance.py tests/unit/test_accepted_inputs.py -q -o addopts='' -W error` | **126 passed** | `/tmp/hippo-cc4-cd3.log` |
-| GREEN, CD3 plus baseline and the plain-provenance suite | the CD3 files plus `test_ingest_readers.py test_managed_reader_provenance.py` | 198 passed | `/tmp/hippo-cc4-green-cd3.log` |
-| Layering and downstream | `tests/unit/test_layering.py test_managed_chunk_provenance.py test_ingest_chunker.py` | 132 passed | `/tmp/hippo-cc4-layering.log` |
+| GREEN, CD3 command | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_repo_capture.py tests/unit/test_code_provenance.py tests/unit/test_accepted_inputs.py -q -o addopts='' -W error` | **152 passed** | `/tmp/hippo-cc4-cd3.log` |
+| GREEN, CD3 plus baseline and the plain-provenance suite | the CD3 files plus `test_ingest_readers.py test_managed_reader_provenance.py test_layering.py` | 241 passed | `/tmp/hippo-cc4-green-cd3.log` |
+| Downstream suites | `tests/unit/test_layering.py test_managed_chunk_provenance.py test_ingest_chunker.py` | 132 passed | `/tmp/hippo-cc4-layering.log` |
+| RED for the M8 amendment | `tests/unit/test_repo_capture.py` before `repository_descriptor` existed | 21 failed, 27 passed | `/tmp/hippo-cc4-red-m8.log` |
+| RED for the M8 follow-up (http fold, pre-write refusal) | `tests/unit/test_repo_capture.py` | 3 failed, 50 passed | `/tmp/hippo-cc4-red-m8b.log` |
 
-Per file: `test_repo_capture.py` 27 passed, `test_code_provenance.py` 48 passed.
+Per file: `test_repo_capture.py` 53 passed, `test_code_provenance.py` 48 passed.
 
 The CD3 CHECK line as the ledger spells it runs from `/Users/mascott/projects/hippo`; the command
 above is byte-identical but was run from `.worktrees/cc4`, so the gate checker's own run passes
@@ -140,6 +186,7 @@ Ruff, over every file changed:
 | the manifest excludes itself and contains no absolute path | `test_manifest_records_only_relative_logical_paths` |
 | every later read is from the captured raw object | `test_every_accepted_file_is_readable_from_the_captured_raw_object`; `read_code_provenance` takes bytes and verifies them against `raw_input.raw_hash`, so it cannot reach the checkout (`test_bytes_that_do_not_match_the_accepted_identity_refuse`) |
 | identity stable across two captures; rails refuse before any raw write | `test_two_captures_of_the_same_tree_share_one_identity`, `test_capture_instant_and_head_revision_are_carried_but_never_hashed`, `test_the_file_rail_refuses_before_any_raw_write`, `test_the_total_byte_rail_refuses_before_any_raw_write`, `test_the_per_input_byte_rail_refuses_before_any_raw_write` |
+| full repository path, no `repo_name` collision (review M8) | `test_the_full_repository_path_is_kept_so_subgroups_do_not_collide`, `test_the_two_segment_legacy_name_is_the_collision_this_replaces`, `test_transport_host_case_and_git_suffix_all_fold_to_one_identity`, `test_a_nondefault_port_stays_part_of_the_provider_instance`, `test_a_url_with_no_honest_repository_path_refuses`, `test_an_embedded_credential_refuses_and_never_reaches_the_message`, `test_the_descriptor_feeds_repository_identity_unchanged`, `test_a_descriptor_on_something_that_is_not_a_checkout_refuses_before_any_raw_write` |
 | `.zip` and single file go through the same function | `test_an_archive_goes_through_the_same_function`, `test_a_single_code_file_goes_through_the_same_function` |
 
 ## Statements a reviewer should read as claims, not proofs
