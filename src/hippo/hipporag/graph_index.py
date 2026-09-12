@@ -193,6 +193,53 @@ class EdgeEdit:
     weight: float
 
 
+def _canonical_fact_positions(facts: list[Fact]) -> list[int]:
+    """Where each fact belongs, as positions, so a parallel array can be moved the same way."""
+    for fact in facts:
+        fact.passage_ids.sort()
+    return sorted(range(len(facts)), key=lambda position: facts[position].id)
+
+
+def canonical_fact_order(facts: list[Fact]) -> list[Fact]:
+    """The facts of a view in the one order every backend agrees on: by their own id.
+
+    LadybugDB and Neo4j promise no row order, so `store.load_facts()` returns the same
+    corpus differently arranged on every load. `view_fingerprint` hashes both the fact
+    rows and the vector matrix aligned with them, so without this the identity of an
+    *unchanged* view moved run to run: a generated evaluation set failed to re-prove its
+    own stored `evidence_fingerprint` and a saved answer was withheld as stale. The Fake
+    store hid all of it by keeping insertion order, so the order must be imposed here
+    rather than with an `ORDER BY` in one loader.
+
+    The id alone is a total order in practice: it is a content hash, and `fact_index_of`
+    has always been `{fact.id: position}`, so two facts sharing one id were already
+    indistinguishable before this. Nothing here depends on that - the permutation below is
+    positional, so a duplicate would keep its own vector rather than take its twin's.
+    The passage ids inside a fact are ordered too - LadybugDB
+    collects them with no `ORDER BY` and the Fake store holds them in a set, so they move
+    exactly as the fact list does. Every check against a `support_passage_ids` sidecar
+    compares sets and lengths, so ordering them here is invisible to those.
+    """
+    return [facts[position] for position in _canonical_fact_positions(facts)]
+
+
+def canonical_facts(facts: list[Fact], embeddings: np.ndarray) -> tuple[list[Fact], np.ndarray, dict]:
+    """`canonical_fact_order` with the parallel vector rows and the id index moved with it.
+
+    The matrix is indexed by position, not by id, so reordering the list without it would
+    score every fact against another fact's vector; it is permuted by position here for the
+    same reason. Empty is left exactly as it arrived: `_matrix([])` is `(0, 0)` and a scoped
+    verified view substitutes `(0, dimension)`.
+    """
+    positions = _canonical_fact_positions(facts)
+    ordered = [facts[position] for position in positions]
+    return (
+        ordered,
+        embeddings[positions] if positions else embeddings,
+        {fact.id: i for i, fact in enumerate(ordered)},
+    )
+
+
 def canonical_selected_generations(rows) -> tuple[tuple[str, str], ...]:
     """Sorted, unique `(source_id, active_generation_id)` pairs, one generation per source.
 
@@ -380,8 +427,11 @@ class GraphIndex:
             )
             for r in fact_rows
         ]
-        fact_embeddings = _matrix([r["embedding"] for r in fact_rows])
-        fact_index_of = {f.id: i for i, f in enumerate(facts)}
+        # Not `sorted(fact_rows)` above: every loader must reach the same order, so it is
+        # imposed on the materialised facts rather than on one store's rows.
+        facts, fact_embeddings, fact_index_of = canonical_facts(
+            facts, _matrix([r["embedding"] for r in fact_rows])
+        )
 
         edges: dict[tuple[int, int], Edge] = {}
 
@@ -723,8 +773,12 @@ class GraphIndex:
                     Fact(f.id, f.subject, f.predicate, f.object, f.subject_id, f.object_id, shown_in)
                 )
                 fact_positions.append(i)
-        fact_embeddings = self.fact_embeddings[fact_positions] if fact_positions else _matrix([])
-        fact_index_of = {f.id: i for i, f in enumerate(facts)}
+        # A filtered subsequence of a canonical list is already canonical, so this is a
+        # no-op given a canonical parent. It is applied anyway: the invariant belongs to
+        # every view that materialises facts, not only to the one that loaded them.
+        facts, fact_embeddings, fact_index_of = canonical_facts(
+            facts, self.fact_embeddings[fact_positions] if fact_positions else _matrix([])
+        )
 
         # Edges among kept nodes. Fact counts are recomputed from the visible (passage, fact) pairs;
         # mention, synonym, tuned and the code terms carry over as they are per pair, not per passage.

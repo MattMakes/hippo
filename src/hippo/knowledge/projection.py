@@ -30,6 +30,7 @@ from hippo.hipporag.graph_index import (
     _name_index,
     _path_index,
     build_igraph,
+    canonical_fact_order,
 )
 from hippo.hipporag.text import split_identifier
 from hippo.store.code import SPECIFICITY_KINDS
@@ -802,6 +803,10 @@ def _assemble(
     selected_managed_generations=(),
 ):
     nodes = sorted(nodes, key=lambda node: CODE_KINDS.index(node.kind))
+    # Before the matrix and the version payload below, both of which follow this list.
+    # A projection already builds its facts in identity order; a composition concatenates
+    # one lane after another, so only this makes `version` a property of the evidence.
+    facts = canonical_fact_order(facts)
     identities = list(entities) + [node.id for node in nodes] + [passage.id for passage in passages]
     if len(identities) != len(set(identities)):
         raise ProjectionError("Projection node identities collide")
