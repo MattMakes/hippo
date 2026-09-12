@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import nullcontext
+from uuid import uuid4
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
@@ -18,6 +19,7 @@ from ... import ask as ask_service
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import answer_sources
 from ...knowledge.query_access import QuerySession, query_session
+from ...knowledge.source_lifecycle import OPERATION_ID
 from ...status import system_status
 from ...store.base import DEFAULT_SETTINGS, SETTING_RULES, validate_settings
 from ..adhoc import remember_adhoc
@@ -99,18 +101,40 @@ def ask_page(request: Request, q: str = ""):
         )
 
 
+def failure_operation_id() -> str:
+    """A bounded identity for one failed ask, safe to show and safe to log.
+
+    Same shape and same pattern as a managed operation identity, so an operator greps one
+    thing; minted here rather than borrowed from `managed_activation.new_operation_id`,
+    whose `index.` prefix would claim this was a build.
+    """
+    value = f"ask.{uuid4().hex}"
+    if OPERATION_ID.match(value) is None:  # the pattern is the contract, not a guess
+        raise ValueError("Generated operation identity is not bounded")
+    return value
+
+
 def failure_text(exc: BaseException) -> str:
     """What the answer fragment may say about a failure: one closed code, never its words.
 
     The same helper the JSON routes and the app's handlers use, rendered as the one sentence
-    a reader can act on plus the code they can quote. The exception itself goes to the local
-    log at DEBUG, where a public-level capture cannot pick up the model's reply body or an
-    absolute path.
+    a reader can act on, the code they can quote, and the identity that makes the sentence
+    true. `OPERATION_FAILED.message` tells the reader to inspect local logs *by operation
+    ID*, so one has to exist and has to appear on both sides; without it an operator
+    following the instruction finds a class name and nothing to correlate it with.
+
+    The identity and the class go to the local log at WARNING, which is the level the
+    server actually emits (`cli.py` configures `logging.basicConfig(level=logging.INFO)`),
+    so an operator handed an ID can find the line. The traceback stays at DEBUG: it
+    contains the exception's own words, and `test_the_html_ask_form_shows_the_same_closed_code`
+    holds that those do not reach a capture at INFO. An operator who needs the stack raises
+    the level and reproduces; the ID is what makes that possible at all.
     """
     failure = retrieval_failure(exc)
-    log.warning("ask failed: %s", type(exc).__name__)
-    log.debug("ask failure detail", exc_info=True)
-    return f"{failure.message} [{failure.code}]"
+    operation = failure_operation_id()
+    log.warning("ask failed [%s]: %s", operation, type(exc).__name__)
+    log.debug("ask failure detail [%s]", operation, exc_info=True)
+    return f"{failure.message} [{failure.code}] (operation {operation})"
 
 
 @router.post("/ask")

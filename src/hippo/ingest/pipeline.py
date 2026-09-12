@@ -51,10 +51,12 @@ from ..hipporag import openie
 from ..hipporag.indexer import GRAPH_WRITE_LOCK, index_source
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.build_authority import BuildActor, capture_build_authority
+from ..knowledge.raw_artifacts import RawArtifactTooLarge
 from ..knowledge.source_lifecycle import tombstone_managed_source
 from . import readers, repos
+from .accepted_inputs import CaptureTooLarge, InputCaptureError
 from .chunker import chunk_documents
-from .readers import Document, TextBudget, TooLarge
+from .readers import Document, ReadError, TextBudget, TooLarge
 
 
 def _managed():
@@ -320,16 +322,29 @@ def run_indexing(
 
 LEGACY_FAILURE_MESSAGE = "indexing failed; inspect local logs"
 
+# The closed input validators, exactly as `knowledge/public_errors.py` lists them: the
+# readers, the accepted-input capture and the raw object store. The plan's transport table
+# gives this family its own row -- "existing bounded validation text from closed input
+# validators only" -- because what they say is a limit and which knob raises it, which is
+# the whole answer a user needs. Everything else is an arbitrary exception message.
+CLOSED_INPUT_VALIDATORS = (TooLarge, ReadError, CaptureTooLarge, InputCaptureError, RawArtifactTooLarge)
+
 
 def _legacy_failure(err: BaseException) -> str:
     """What a failed legacy lane may say on the Source row: its class, and where the rest is.
 
-    The row is a public surface. The exception's own words are not bounded -- `ReadError`
-    names the file it was reading, `RepoError` a checkout path, and a parse failure can
-    quote the source text -- so only the class name survives, which is what an operator
-    greps `log.exception` above by. Same reason the managed lane stores a closed code
-    rather than its exception (`managed_activation.map_build_failure`).
+    The row is a public surface and an arbitrary exception's words are not bounded -- a
+    repo error names a checkout path, a parse failure can quote the source text -- so only
+    the class name survives, which is what an operator greps the `log.exception` above by.
+    Same reason the managed lane stores a closed code rather than its exception
+    (`managed_activation.map_build_failure`).
+
+    The closed input validators are the exception the plan itself makes: their text is the
+    limit and the setting that raises it, so bounding it would take the answer away and
+    give nothing back. Their message reaches the row as it always did.
     """
+    if isinstance(err, CLOSED_INPUT_VALIDATORS):
+        return f"{type(err).__name__}: {err}"
     return f"{type(err).__name__}: {LEGACY_FAILURE_MESSAGE}"
 
 

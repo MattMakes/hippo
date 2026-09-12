@@ -920,3 +920,102 @@ def test_light_up_and_query_session_agree_on_the_effective_settings(ctx, monkeyp
     from hippo.web.routes import graph as graph_module
 
     assert graph_module.effective_settings is query_access.effective_settings
+
+
+# ------- 4e addendum (4b-i review F1, F4): a page route answers a page, not a JSON blob
+
+
+# The page routes 4b-i owns. None of them is under /api, and each one composes a view whose
+# failure escapes to the app's own handler rather than to a catch of its own. `/partials/sources`
+# is the sharpest: htmx polls it, so a transient failure would replace a fragment of the
+# library page with a JSON blob.
+OWNED_PAGE_ROUTES = ("/", "/sources/s1", "/account", "/ask", "/users", "/partials/sources")
+BROWSER = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+
+
+@pytest.mark.parametrize("url", OWNED_PAGE_ROUTES)
+def test_a_browser_gets_a_page_when_a_mapped_failure_escapes_a_page_route(ctx, monkeypatch, url):
+    """`forbidden_page` negotiates on `Accept`; the public-failure handler must too.
+
+    A page route that answers `application/json` to a browser is a transport-shape defect
+    even when nothing private leaks: the reader sees a JSON blob where the page was.
+    """
+    unloadable(ctx, monkeypatch, ProjectionError)
+    with web(ctx) as client:
+        response = client.get(url, headers=BROWSER)
+    assert response.status_code == 500, response.text
+    assert response.headers["content-type"].startswith("text/html"), response.text
+    assert "Operation failed; inspect local logs by operation ID" in response.text
+    assert PRIVATE not in response.text
+
+
+@pytest.mark.parametrize("url", OWNED_PAGE_ROUTES)
+def test_a_json_client_still_gets_the_closed_body_from_the_same_routes(ctx, monkeypatch, url):
+    """Negotiation, not replacement: a script asking for JSON keeps the body it branches on."""
+    unloadable(ctx, monkeypatch, ProjectionError)
+    with web(ctx) as client:
+        response = client.get(url, headers={"Accept": "application/json"})
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "error": "Operation failed; inspect local logs by operation ID",
+        "code": "operation_failed",
+    }
+
+
+def test_the_api_routes_answer_json_even_to_a_browsers_accept_header(ctx, monkeypatch):
+    """A browser's `Accept` must not turn an `/api` body into a page; the JS reads JSON."""
+    unloadable(ctx, monkeypatch, ProjectionError)
+    with web(ctx) as client:
+        response = client.get("/api/graph/full", headers=BROWSER)
+    assert response.status_code == 500, response.text
+    assert response.headers["content-type"].startswith("application/json"), response.text
+
+
+def test_the_app_handler_and_the_page_renderer_do_not_share_a_name(ctx):
+    """Two `public_failure_page`s in adjacent modules, one an async handler and one a page
+    renderer with a different signature, is one import line away from registering the wrong
+    one as an exception handler -- and it would only surface when something actually failed.
+
+    `app.py` now imports the renderer, so the two names must not collide at all: the
+    handler is `public_failure_handler` and `app.public_failure_page` is render's own.
+    """
+    from hippo.web import app as app_module
+    from hippo.web import render as render_module
+
+    assert app_module.public_failure_page is render_module.public_failure_page
+    assert app_module.public_failure_handler is not render_module.public_failure_page
+    registered = create_app(ctx).exception_handlers
+    assert set(registered.values()) >= {app_module.public_failure_handler}
+
+
+def test_the_ask_fragments_failure_is_logged_at_warning_with_an_operation_id(ctx, monkeypatch, caplog):
+    """The sentence promises an operation ID; the log has to be able to honour it.
+
+    The server runs at INFO, so a DEBUG-only traceback is never emitted in production and
+    an operator following "inspect local logs by operation ID" finds a class name and
+    nothing to correlate it with.
+    """
+    import logging
+    import re
+
+    from hippo.knowledge.source_lifecycle import OPERATION_ID
+    from hippo.web.routes import pages as pages_module
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError(POISON)
+
+    monkeypatch.setattr(pages_module.ask_service, "ask", refuse)
+    with caplog.at_level(logging.INFO):
+        with web(ctx, reader(ctx)) as client:
+            response = client.post("/ask", data={"question": QUESTION})
+    assert response.status_code == 200, response.text
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING and "ask failed" in r.message]
+    assert warnings, caplog.text
+    (record,) = warnings
+    assert type(RuntimeError()).__name__ in record.getMessage()
+    (operation,) = re.findall(r"index\.[0-9a-f]+|ask\.[0-9a-f]+", record.getMessage())
+    assert OPERATION_ID.match(operation)
+    # The reader is handed the same identity the log line carries, or the promise is empty.
+    assert operation in response.text
+    for secret in (*SECRETS, MODEL_BODY):
+        assert secret not in response.text

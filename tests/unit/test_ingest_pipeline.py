@@ -557,24 +557,45 @@ LEGACY_FAILURE = "indexing failed; inspect local logs"
 READING_PRIVATE = "/Users/someone/data/private/notes.md: 'Acme Robotics is in Boulder.'"
 
 
-def test_a_legacy_failure_stores_its_class_and_a_fixed_sentence(
+class Unexpected(RuntimeError):
+    """Stands for every exception class that is not a closed input validator."""
+
+
+def test_an_unknown_legacy_failure_stores_its_class_and_a_fixed_sentence(
     ctx: AppContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The Source row is a public surface; the exception's own words are not bounded.
+    """The Source row is a public surface; an arbitrary exception's words are not bounded.
 
-    `ReadError` names the file it was reading and a build failure can quote source text,
-    so the row keeps the class name -- which is what an operator greps the logs by -- and
-    a sentence that says where the rest of it is.
+    The message here carries both things the row must never show: an absolute path and a
+    sentence of the source's own text. The row keeps the class name, which is what an
+    operator greps the logs by, and a sentence saying where the rest of it is.
     """
-    from hippo.ingest.readers import ReadError
 
     def refuse(*args, **kwargs):
-        raise ReadError(READING_PRIVATE)
+        raise Unexpected(READING_PRIVATE)
 
     monkeypatch.setattr(pipeline, "_read_chunk_index", refuse)
     source_id = pipeline.add_text(ctx, "Notes", "Some text to index.")
     wait(ctx)
     source = ctx.store.get_source(source_id)
     assert source["status"] == "failed"
-    assert source["error"] == f"ReadError: {LEGACY_FAILURE}"
-    assert READING_PRIVATE not in source["error"]
+    assert source["error"] == f"Unexpected: {LEGACY_FAILURE}"
+    assert "/Users/someone" not in source["error"]
+    assert "Acme Robotics" not in source["error"]
+
+
+def test_a_closed_input_validator_keeps_the_limit_it_names(
+    ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plan's own exception: a limit and the knob that raises it is the whole answer."""
+    from hippo.ingest.readers import TooLarge
+
+    def refuse(*args, **kwargs):
+        raise TooLarge("too large: more than 50 characters of text. Raise HIPPO_MAX_TEXT_CHARS.")
+
+    monkeypatch.setattr(pipeline, "_read_chunk_index", refuse)
+    source_id = pipeline.add_text(ctx, "Notes", "Some text to index.")
+    wait(ctx)
+    source = ctx.store.get_source(source_id)
+    assert source["status"] == "failed"
+    assert "HIPPO_MAX_TEXT_CHARS" in source["error"]

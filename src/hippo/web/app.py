@@ -27,7 +27,14 @@ from ..knowledge.dense import DenseUnavailable
 from ..knowledge.projection import ProjectionError
 from ..ollama import OllamaError
 from . import auth
-from .render import STATIC_DIR, public_failure_response, render, retrieval_failure
+from .render import (
+    STATIC_DIR,
+    public_failure_page,
+    public_failure_response,
+    render,
+    retrieval_failure,
+    wants_html,
+)
 from .routes import analyze, api, code, evals, graph, pages, sources, users
 from .security import HostAndOriginGuard
 
@@ -70,7 +77,7 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
     app.add_exception_handler(HTTPException, forbidden_page)
     app.add_exception_handler(AuthorizationChanged, authorization_changed)
     for failure in PUBLIC_FAILURES:
-        app.add_exception_handler(failure, public_failure_page)
+        app.add_exception_handler(failure, public_failure_handler)
     # A managed operation an open or preview identity may not perform is a permission answer,
     # not a failure report. Starlette picks the handler by walking the exception's own class
     # first, so this wins over the ManagedDispatchError row above.
@@ -112,16 +119,30 @@ async def authorization_changed(request: Request, exc: Exception):
     )
 
 
-async def public_failure_page(request: Request, exc: Exception):
+async def public_failure_handler(request: Request, exc: Exception):
     """
     One stable code and one bounded sentence for a failure no route shaped itself.
 
-    The same two helpers every web surface uses, so a client that moves between the pages,
-    the JSON routes and the MCP tools reads one vocabulary: `retrieval_failure` applies the
-    mapper's documented caller rule, and `public_failure_response` keeps the `{"error": ...}`
-    shape the pages' JavaScript already reads while adding `code`.
+    The same helpers every web surface uses, so a client that moves between the pages, the
+    JSON routes and the MCP tools reads one vocabulary: `retrieval_failure` applies the
+    mapper's documented caller rule, and `public_failure_response` keeps the
+    `{"error": ...}` shape the pages' JavaScript already reads while adding `code`.
+
+    It negotiates on `Accept` exactly as `forbidden_page` below does, because the page
+    routes reach this handler too: a page whose own session fails inside its `with` block
+    has nobody else to render it, and answering `application/json` to a browser puts a JSON
+    blob where the page was. `/partials/sources` is the sharpest case -- htmx polls it, so
+    an unnegotiated failure swaps a body fragment into the library table.
+
+    Named `..._handler` rather than `..._page`: `render.public_failure_page` is a page
+    renderer with a different signature, and one shared name across two adjacent modules is
+    one import line away from registering the wrong callable as an exception handler --
+    which would only surface when something actually failed.
     """
-    return public_failure_response(retrieval_failure(exc))
+    failure = retrieval_failure(exc)
+    if wants_html(request):
+        return public_failure_page(request, failure, "failure.html")
+    return public_failure_response(failure)
 
 
 async def forbidden_page(request: Request, exc: HTTPException):
@@ -129,8 +150,7 @@ async def forbidden_page(request: Request, exc: HTTPException):
     A 403 on a page is rendered as a page that says which capability is missing; everything
     else keeps FastAPI's JSON shape ({"detail": ...}), which the pages' JavaScript already reads.
     """
-    wants_html = "text/html" in request.headers.get("accept", "") and not request.url.path.startswith("/api")
-    if exc.status_code == 403 and wants_html:
+    if exc.status_code == 403 and wants_html(request):
         return render(request, "forbidden.html", nav="", message=str(exc.detail), status_code=403)
     return JSONResponse(
         {"detail": exc.detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None)
