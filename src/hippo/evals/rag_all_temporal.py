@@ -29,6 +29,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from pydantic import ValidationError
+
 from ..knowledge import model as k
 from ..knowledge.conflicts import (
     ConflictCandidate,
@@ -56,7 +58,12 @@ LINKER_VERSION = "1"
 LEASE = timedelta(minutes=5)
 LEASE_OWNER = "rag-all-temporal"
 DEFAULT_BARRIERS = {"tombstone": "refetch", "access_loss": "reverify", "purge": "destroy"}
-"""The barrier a suppression carries when no barrier row names one for its source."""
+"""The barrier a suppression carries when no barrier row names one for its source.
+
+Its keys are also the closed set of reasons a suppression row may declare.
+"""
+
+VIEW_APPLICABILITIES = {"current_only", "all_history"}
 
 CLAIM_KEYS = {
     "case",
@@ -134,8 +141,19 @@ def _instant(row: Mapping[str, Any], field: str, *, required: bool) -> datetime 
     return parsed.astimezone(UTC)
 
 
-def _timezone_label(text: str, parsed: datetime) -> str:
-    return "UTC" if parsed.utcoffset() == timedelta(0) else text[-6:]
+def _timezone_label(text: str) -> str:
+    """The zone the provider declared, read from its own text rather than from UTC.
+
+    `_instant` normalizes every value to UTC, so the parsed datetime can no longer
+    say what the source wrote. Section 1 asks for the declared zone, so the offset
+    comes from the text and is rendered canonically: `+0200` and `+02:00` are the
+    same declaration, and only a zero offset is `UTC`.
+    """
+    offset = datetime.fromisoformat(text).utcoffset()
+    if offset == timedelta(0):
+        return "UTC"
+    minutes = int(offset.total_seconds()) // 60
+    return f"{'-' if minutes < 0 else '+'}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
 
 
 def _text(value: Any, label: str) -> str:
@@ -170,7 +188,7 @@ def _precision(value: Any, label: str) -> str:
 def _claim_event(index: int, row: Mapping[str, Any], source: str, recorded_from: datetime) -> TemporalEvent:
     keys = set(row)
     if not CLAIM_KEYS <= keys <= CLAIM_KEYS | CLAIM_OPTIONAL_KEYS:
-        raise TemporalFixtureError(f"claim row {row.get('case')!r} declares unexpected fields")
+        raise TemporalFixtureError(f"claim row {row.get('case')!r} declares unexpected or missing fields")
     claim = row["claim"]
     if not isinstance(claim, dict) or set(claim) != {"predicate", "object"}:
         raise TemporalFixtureError("claim must declare exactly a predicate and an object")
@@ -181,8 +199,10 @@ def _claim_event(index: int, row: Mapping[str, Any], source: str, recorded_from:
     precision = _precision(row["precision"], "precision")
     if (precision == "instant") != (valid_from is not None):
         raise TemporalFixtureError("an exact effective bound and instant precision imply each other")
-    original = row["valid_from"] if valid_from is not None else row["recorded_from"]
-    anchor = valid_from if valid_from is not None else recorded_from
+    # A row with no effective bound declared no source timestamp at all. Writing the
+    # recorded instant here would publish Hippo's own clock as the provider's, which
+    # is exactly the exact-instant claim section 1 forbids an unknown from becoming.
+    original = row["valid_from"] if valid_from is not None else None
     return TemporalEvent(
         index=index,
         case=_text(row["case"], "case"),
@@ -200,7 +220,7 @@ def _claim_event(index: int, row: Mapping[str, Any], source: str, recorded_from:
         source_precision=_precision(row.get("source_precision", "unknown"), "source_precision"),
         content_hash=row.get("content_hash"),
         source_timestamp_original=original,
-        source_timezone=_timezone_label(original, anchor),
+        source_timezone=_timezone_label(original) if original is not None else None,
     )
 
 
@@ -214,6 +234,14 @@ def _suppression_event(
         raise TemporalFixtureError("suppression must declare view applicability, reason and epoch")
     if type(data["epoch"]) is not int or data["epoch"] < 1:
         raise TemporalFixtureError("suppression epoch must be a positive integer")
+    # Both closed sets are checked here, at parse time, so a row the store or the
+    # model would refuse later is refused now, as a fixture error naming its row.
+    if data["reason"] not in DEFAULT_BARRIERS:
+        raise TemporalFixtureError(f"suppression reason must be one of {sorted(DEFAULT_BARRIERS)}")
+    if data["view_applicability"] not in VIEW_APPLICABILITIES:
+        raise TemporalFixtureError(
+            f"suppression view applicability must be one of {sorted(VIEW_APPLICABILITIES)}"
+        )
     return TemporalEvent(
         index=index,
         case=_text(row["case"], "case"),
@@ -240,12 +268,56 @@ def _barrier_event(index: int, row: Mapping[str, Any], source: str, recorded_fro
     )
 
 
-def read_temporal_events(path: str | Path) -> tuple[TemporalEvent, ...]:
-    """Parse every row into a typed recorded event, in chronological order.
+def _event(index: int, row: Mapping[str, Any]) -> TemporalEvent:
+    """One row as a typed event; every refusal names the row it came from."""
+    try:
+        source = _text(row.get("source_id"), "source_id")
+        recorded_from = _instant(row, "recorded_from", required=True)
+        if "suppression" in row:
+            return _suppression_event(index, row, source, recorded_from)
+        if "restoration_barrier" in row:
+            return _barrier_event(index, row, source, recorded_from)
+        if "claim" in row:
+            return _claim_event(index, row, source, recorded_from)
+        raise TemporalFixtureError("is neither a claim, a suppression nor a barrier")
+    except TemporalFixtureError as exc:
+        raise TemporalFixtureError(f"row {index}: {exc}") from exc
 
-    Ties keep their file order, so the fixture's own sequence within one instant
-    is what decides application order - never an ambient clock.
+
+def _ordered(events: Sequence[TemporalEvent]) -> tuple[TemporalEvent, ...]:
+    """Chronological order, with one instant's own series resolved by its ordinals.
+
+    Across sources a tie keeps the file's order, because an ordinal is only
+    comparable inside the series that issued it. Inside one series the adapter's
+    declared ordinal decides, never the file's sequence, so the closure an ordering
+    proves can never be lost to where a row happens to sit; and two rows that tie on
+    both the instant and the ordinal are an ambiguity no adapter declared, so the
+    fixture is refused rather than resolved.
     """
+    ordered = sorted(events, key=lambda event: (event.recorded_from, event.index))
+    series: dict[tuple[datetime, str, str], list[int]] = {}
+    for slot, event in enumerate(ordered):
+        if event.order is not None and event.order.kind == "monotonic":
+            key = (event.recorded_from, event.source_name, event.order.series_key)
+            series.setdefault(key, []).append(slot)
+    for (recorded_from, source, _key), slots in series.items():
+        if len(slots) == 1:
+            continue
+        members = sorted((ordered[slot] for slot in slots), key=lambda event: event.order.monotonic_ordinal)
+        ordinals = [member.order.monotonic_ordinal for member in members]
+        if len(set(ordinals)) != len(ordinals):
+            rows = sorted(member.index for member in members)
+            raise TemporalFixtureError(
+                f"rows {rows} of source {source!r} share {recorded_from.isoformat()} and an "
+                f"ordinal: a fixture series must declare an unambiguous order"
+            )
+        for slot, member in zip(slots, members, strict=True):
+            ordered[slot] = member
+    return tuple(ordered)
+
+
+def read_temporal_events(path: str | Path) -> tuple[TemporalEvent, ...]:
+    """Parse every row into a typed recorded event, in chronological order."""
     events = []
     for index, line in enumerate(Path(path).read_text().splitlines()):
         if not line.strip():
@@ -256,17 +328,8 @@ def read_temporal_events(path: str | Path) -> tuple[TemporalEvent, ...]:
             raise TemporalFixtureError(f"row {index} is not valid JSON") from exc
         if not isinstance(row, dict):
             raise TemporalFixtureError(f"row {index} must be a JSON object")
-        source = _text(row.get("source_id"), "source_id")
-        recorded_from = _instant(row, "recorded_from", required=True)
-        if "suppression" in row:
-            events.append(_suppression_event(index, row, source, recorded_from))
-        elif "restoration_barrier" in row:
-            events.append(_barrier_event(index, row, source, recorded_from))
-        elif "claim" in row:
-            events.append(_claim_event(index, row, source, recorded_from))
-        else:
-            raise TemporalFixtureError(f"row {index} is neither a claim, a suppression nor a barrier")
-    return tuple(sorted(events, key=lambda event: (event.recorded_from, event.index)))
+        events.append(_event(index, row))
+    return _ordered(events)
 
 
 # ------------------------------------------------------------------- loading
@@ -293,6 +356,14 @@ class TemporalLoad:
     workspace_id: str
     applied: tuple[TemporalEvent, ...]
     deferred: tuple[TemporalEvent, ...]
+    declarations: tuple[TemporalEvent, ...]
+    """Barrier rows: file-level declarations about a source, which no clock bounds.
+
+    They are reported apart from `applied`/`deferred` because they are neither - a
+    barrier row writes nothing of its own, and its content is in force for every
+    suppression this source ever gets. See `load_temporal_events`.
+    """
+
     claims: tuple[LoadedClaim, ...]
     source_ids: Mapping[str, str]
     suppressions: Mapping[str, str]
@@ -535,8 +606,18 @@ def _closures(
         if version_id not in own or version_id not in open_ids:
             continue
         row = store._knowledge_get("AssertionVersion", version_id)
-        if row is not None and row.recorded_to is None and row.recorded_from < published_at:
-            closable.append(version_id)
+        if row is None or row.recorded_to is not None:
+            continue
+        if row.recorded_from >= published_at:
+            # Section 5 closes only a segment recorded strictly earlier, so a closure
+            # this ordering proves cannot be expressed at this instant at all. The
+            # store would refuse it; dropping it silently would instead lose a
+            # supersession the fixture exists to make visible.
+            raise TemporalFixtureError(
+                f"cannot close {version_id} recorded at {row.recorded_from.isoformat()} with a "
+                f"publication at {published_at.isoformat()}: a closure needs a strictly earlier segment"
+            )
+        closable.append(version_id)
     return tuple(closable)
 
 
@@ -642,8 +723,17 @@ def load_temporal_events(store, path: str | Path, *, clock: Callable[[], datetim
     `recorded_from`; when that row's adapter ordering retires an earlier claim in
     the same series, the publication carries a `TemporalPublicationPlan` that
     closes the retired segment and appends the new one in one transaction. A
-    suppression row writes its suppression; a barrier row declares the
-    authoritative restoration barrier its source's suppressions carry.
+    suppression row writes its suppression.
+
+    A barrier row is the one carve-out from the clock, and it is deliberate: a
+    `Suppression` is immutable and `restoration_barrier` is not a mutable field, so
+    the barrier a source declares anywhere in the file is the one its suppressions
+    were always going to carry, and a later row could not stamp a committed one.
+    Barrier rows are therefore read from the whole file before any suppression is
+    written, whatever `clock` says, and they are reported in `declarations` rather
+    than in `applied` or `deferred`, neither of which would be true of them. The
+    cost is bounded: a barrier row writes nothing of its own, and this is what keeps
+    an incremental replay byte-identical to a single late one.
     """
     now = clock()
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
@@ -655,7 +745,7 @@ def load_temporal_events(store, path: str | Path, *, clock: Callable[[], datetim
     # were always going to carry. Resolving it later would make an incremental
     # replay try to rewrite a committed suppression.
     barriers = {event.source_name: event.restoration_barrier for event in events if event.kind == "barrier"}
-    applied, deferred = [], []
+    applied, deferred, declarations = [], [], []
     claims: list[LoadedClaim] = []
     suppressions: dict[str, str] = {}
     states: dict[str, _SourceState] = {}
@@ -664,36 +754,45 @@ def load_temporal_events(store, path: str | Path, *, clock: Callable[[], datetim
     open_ids: set[str] = set()
     with _generation_window(store) as window:
         for event in events:
+            if event.kind == "barrier":
+                # Its barrier is already in force; the row itself writes nothing and
+                # the clock never bounded it, so it is neither applied nor deferred.
+                declarations.append(event)
+                continue
             if event.recorded_from > now:
                 deferred.append(event)
                 continue
             window["at"] = event.recorded_from
-            if event.kind == "barrier":
-                # Its barrier is already in force; the row itself writes nothing.
-                applied.append(event)
-                continue
-            if event.source_name not in states:
-                identifier = _source_id(store, event.source_name)
-                workspace_id = store.get_source(identifier)["workspace_id"]
-                if store._knowledge_get("Workspace", workspace_id) is None:
-                    store.put_knowledge(k.Workspace(name="default"))
-                states[event.source_name] = _SourceState(
-                    store, event.source_name, workspace_id, event, barriers.get(event.source_name)
-                )
-            state = states[event.source_name]
-            if event.kind == "suppression":
-                suppressions[event.case] = _apply_suppression(store, state, workspace_id, event)
-            else:
-                loaded = _apply_claim(store, state, workspace_id, event, candidates, open_ids)
-                claims.append(loaded)
-                candidates.append(loaded.candidate)
-                open_ids.add(loaded.version.id)
-                open_ids.difference_update(loaded.closed_version_ids)
+            try:
+                if event.source_name not in states:
+                    identifier = _source_id(store, event.source_name)
+                    workspace_id = store.get_source(identifier)["workspace_id"]
+                    if store._knowledge_get("Workspace", workspace_id) is None:
+                        store.put_knowledge(k.Workspace(name="default"))
+                    states[event.source_name] = _SourceState(
+                        store, event.source_name, workspace_id, event, barriers.get(event.source_name)
+                    )
+                state = states[event.source_name]
+                if event.kind == "suppression":
+                    suppressions[event.case] = _apply_suppression(store, state, workspace_id, event)
+                else:
+                    loaded = _apply_claim(store, state, workspace_id, event, candidates, open_ids)
+                    claims.append(loaded)
+                    candidates.append(loaded.candidate)
+                    open_ids.add(loaded.version.id)
+                    open_ids.difference_update(loaded.closed_version_ids)
+            except ValidationError as exc:
+                # A row the typed model refuses is a malformed fixture row, not a
+                # store failure: report it like every other one, naming its row.
+                raise TemporalFixtureError(
+                    f"row {event.index} ({event.case!r}) is not a record this model accepts: {exc}"
+                ) from exc
             applied.append(event)
     return TemporalLoad(
         workspace_id=workspace_id,
         applied=tuple(applied),
         deferred=tuple(deferred),
+        declarations=tuple(declarations),
         claims=tuple(claims),
         source_ids={name: state.id for name, state in states.items()},
         suppressions=suppressions,

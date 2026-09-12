@@ -43,7 +43,12 @@ BARRIER_KEYS = {"case", "source_id", "provider_order", "restoration_barrier", "r
 INSTANT_KEYS = ("valid_from", "valid_to", "recorded_from", "source_updated_at")
 # The nine scenarios named in plan section 7 step 3, mapped onto the fixture's `case` labels.
 SCENARIO_CASES = {
-    "may ownership correction": ("may_owner_alice", "may_owner_bob", "backdated_correction"),
+    "may ownership correction": (
+        "may_owner_alice",
+        "may_owner_bob",
+        "backdated_correction",
+        "restated_new_state",
+    ),
     "imported old last": ("old_imported_last",),
     "equal ordering datum with different bytes": (
         "equal_order_different_bytes",
@@ -53,7 +58,7 @@ SCENARIO_CASES = {
     "environment collision": ("environment_collision",),
     "independent source alternatives": ("independent_alternative",),
     "ordinary tombstone": ("ordinary_tombstone",),
-    "all-history purge": ("purged_history",),
+    "all-history purge": ("purged_history", "purged_proven_history"),
     "explicit restoration barrier": ("explicit_restoration",),
 }
 
