@@ -162,15 +162,18 @@ def rows_for(view, source_id):
 def presentation(row):
     """One inventory row without the controls a claimed staging build writes.
 
-    `claim_generation_build` records the holder and its fence on the Source row, and the
-    first staged record sets `managed`, which says the managed lane owns this source's
-    cleanup and dispatch. None of those is presentation: everything a reader is shown must
-    be exactly what it was before the conversion started.
+    `claim_generation_build` records the holder and its fence on the Source row, the first
+    staged record sets `managed`, which says the managed lane owns this source's cleanup
+    and dispatch, and `_lock_source` bumps `generation_lock` on every backend but the fake
+    one. None of those is presentation: everything a reader is shown must be exactly what
+    it was before the conversion started. `generation_lock` is excluded by
+    `test_managed_pipeline_activation.row_of` and by `_bootstrap_envelope` for the same
+    reason.
     """
     return {key: value for key, value in row.items() if key not in BUILD_CONTROLS}
 
 
-BUILD_CONTROLS = ("active_build_id", "build_fencing_token", "updated_at", "managed")
+BUILD_CONTROLS = ("active_build_id", "build_fencing_token", "generation_lock", "updated_at", "managed")
 
 
 # ------------------------------------------------------- the store predicate
@@ -305,7 +308,7 @@ def test_a_converting_source_appears_once_in_inventory_with_its_legacy_counts(co
     assert [presentation(row) for row in rows_for(view, source)] == [presentation(before_row)]
     assert source in view.legacy_ids
     # The one row field the conversion does change, and it is a control, not a count.
-    assert before_row["managed"] is False and row_of(view, source)["managed"] is True
+    assert not before_row.get("managed") and row_of(view, source)["managed"] is True
     assert system_status(ctx, access=audience)["stats"] == before_status["stats"]
     assert system_status(ctx, access=audience)["stats"]["sources"] == 1
 
