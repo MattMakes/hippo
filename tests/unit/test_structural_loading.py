@@ -736,6 +736,11 @@ def test_structural_shared_canonical_code_object_does_not_collide_across_sources
         baseline = ctx.graph_for(EVERYTHING)
         try:
             assert len(baseline.code_nodes) == 1
+            # The non-structural managed lane proves the same pairs, so source inventory agrees
+            # whichever view a reader holds.
+            assert baseline.selected_managed_generations == tuple(
+                sorted(((a.source_id, a.id), (b.source_id, b.id)))
+            )
         finally:
             baseline.close_snapshot()
     ctx.ollama = Offline()

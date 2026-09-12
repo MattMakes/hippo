@@ -73,7 +73,7 @@ GenerationMember", which does bind revisions and is already the `members` set in
 | File | Change |
 |---|---|
 | `tests/unit/test_status_access.py` | `status_context()` mock graph gained `id` on its passage, `passage_ids` on its fact, and `structural_code_evidence` / `structural_object_evidence` / `structural_relations` / `selected_managed_generations`, because managed counts now come from those sidecars. Two `graph_for.assert_called_with(access, settings=ANY)` became `..., structural=True` (the status-owned session). `test_status_route_and_page_header_pass_the_request_audience` kept `settings=ANY` **without** `structural=True` and gained a comment: those routes own their own non-structural session until Task 4. `@pytest.mark.filterwarnings` added to the 7 TestClient tests (see below). New `test_proven_selected_pair_renders_the_source_control_presentation`. |
-| `tests/unit/test_structural_loading.py` | New `test_structural_selection_records_its_authorized_pairs_without_model_access`. |
+| `tests/unit/test_structural_loading.py` | New `test_structural_selection_records_its_authorized_pairs_without_model_access`. `test_structural_shared_canonical_code_object_does_not_collide_across_sources` gained one assertion that the non-structural managed lane proves the same pairs. |
 
 `test_managed_source_surfaces_render_only_projected_evidence` is **unchanged and still passing**:
 its fixture monkeypatches `ctx.graph_for` to return a projection with no
@@ -150,9 +150,12 @@ held.
 ```
 HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_source_inventory.py \
   tests/unit/test_status_access.py tests/unit/test_structural_loading.py -q -o addopts='' -W error
-=> 92 passed in 1.68s           # exit 0, no warning filter needed
-                                # log /tmp/hippo-pa2-pa2gate.log
+=> 93 passed, 1 skipped in 1.59s   # exit 0, no warning filter needed
+                                   # log /tmp/hippo-pa2-pa2gate.log
 ```
+
+The skip is the LadybugDB close/reopen assertion, which runs only under
+`HIPPO_TEST_STORE=ladybug`.
 
 ### GREEN on Fake — regressions
 
@@ -195,7 +198,7 @@ The whole `tests/unit` Fake suite was run with both third-party filters:
 HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit -q -o addopts='' -W error \
   -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning" \
   -W "ignore:You should not use the 'timeout' argument with the TestClient"
-=> 3035 passed, 23 skipped in 169.35s     # exit 0, log /tmp/hippo-pa2-fake-green.log
+=> 3036 passed, 24 skipped in 181.81s     # exit 0, log /tmp/hippo-pa2-fake-green.log
 ```
 
 ### Each commit green at its own point
@@ -219,8 +222,13 @@ HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_structural_loading.py \
 HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_managed_source_inventory.py \
   tests/unit/test_structural_loading.py tests/unit/test_status_access.py \
   -q -o addopts='' -W error
-=> 92 passed in 96.43s          # exit 0, log /tmp/hippo-pa2-ladybug-green.log
+=> 94 passed in 84.21s          # exit 0, log /tmp/hippo-pa2-ladybug-green.log
 ```
+
+This includes PA7's inventory half:
+`test_empty_source_visibility_survives_a_ladybug_close_and_reopen` publishes an empty generation,
+renders its inventory row, closes the `LadybugStore`, reopens the same database and asserts the same
+pair and a byte-identical row. It skips under any other backend.
 
 ### Ruff (step 6)
 
@@ -287,7 +295,14 @@ string surgery).
 - `src/hippo/status.py` — `source_view` structural acquisition and pair-based representation,
   `_managed_source` provenance counts and control presentation, `_audience_inventory` structural
   owned session.
-- `tests/unit/test_managed_source_inventory.py` (new, 22 tests).
+- `tests/unit/test_managed_source_inventory.py` (new, 24 tests; one is Ladybug-only).
+
+One of those tests, `test_relation_predicates_cannot_be_counted_twice_as_code_edges`, guards a
+counting invariant rather than a behaviour: `_managed_source` counts inherited code relations from
+`code_out` filtered by `CODE_EDGE_KINDS` and assertion relations from their exact selected pair. The
+two vocabularies are disjoint today (verified: `set(CODE_EDGE_KINDS) & set(PREDICATES) == set()`), so
+no relation is counted twice; if a later task adds a predicate that is also a code edge kind, that
+test fails instead of silently doubling a row's edge count.
 - `tests/unit/test_status_access.py`, `tests/unit/test_structural_loading.py` (see table above).
 
 Nothing under `src/hippo/store/`, `src/hippo/ingest/`, `src/hippo/web/`,
@@ -303,7 +318,22 @@ Nothing under `src/hippo/store/`, `src/hippo/ingest/`, `src/hippo/web/`,
    `tests/unit/test_cli.py` additionally needs the starlette `timeout` filter. All are Task 4 files.
 2. **Task 4 / PA5:** `web/routes/sources.py` `reindex_all` validates a `source_view` after the
    operation returns; it needs a held owner spanning that call (see decision above).
-3. `source_view` called by a route that owns a **non-structural** session still cannot see empty
-   managed sources. That is by construction — Task 4's structural flip closes it — but it means
-   PA2's visibility guarantee is only end-to-end for callers that own a structural session or let
-   `source_view`/`_audience_inventory` own one.
+3. **A non-structural managed view does carry the pairs** (`_build_managed_graph` passes
+   `selected_generations` too), asserted by
+   `test_structural_loading.py::test_structural_shared_canonical_code_object_does_not_collide_across_sources`.
+   The remaining limitation is not the pair but the profile coupling that lane already had:
+   `_current_generations` requires every selected generation's `embedding_profile` to equal
+   `ctx.ollama.embed_model`, so a source built under another profile raises `ProjectionError` on that
+   path regardless of this change. Task 4's structural flip removes that coupling for production
+   readers; nothing here makes it better or worse.
+
+## Known effects
+
+Adding the pairs to the `view_fingerprint` payload invalidates saved fingerprints **once** for a
+managed corpus: a trace or evaluation fingerprint recorded before this branch will not match, so
+`can_reuse_answer` and saved-snapshot reuse return `False` on the first comparison after upgrade and
+the answer is recomputed rather than reused. That is the intended direction of the change (a stale
+fingerprint must not look reusable) and it is bounded to one miss per saved output. Legacy-only
+graphs are unaffected: their pairs are empty, so the payload and therefore the fingerprint are
+byte-identical, which `test_structural_loading.py`'s existing legacy-adapter fingerprint equalities
+prove.

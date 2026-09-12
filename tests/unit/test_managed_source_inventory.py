@@ -8,6 +8,7 @@ agree, so an authorized generation that produced no evidence at all is still
 representable while a policy-denied or tombstoned one is not.
 """
 
+import os
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -476,6 +477,19 @@ def test_retired_contributions_do_not_inflate_current_counts_or_raw_store_counts
         assert all(item.generation_id == second.id for item in graph.structural_code_evidence)
 
 
+def test_relation_predicates_cannot_be_counted_twice_as_code_edges():
+    """The two edge vocabularies must stay disjoint for the row's edge counts to be exact.
+
+    A managed row counts inherited code relations from `code_out` and assertion relations from
+    their exact selected pair. A predicate present in both vocabularies would be counted once
+    per lane, so this guards the separation rather than the current emptiness of the overlap.
+    """
+    from hippo.codegraph.model import CODE_EDGE_KINDS
+    from hippo.knowledge.predicates import PREDICATES
+
+    assert not set(CODE_EDGE_KINDS) & set(PREDICATES)
+
+
 # --------------------------------------------------- validation after output
 
 
@@ -503,3 +517,46 @@ def test_held_session_is_validated_after_dto_construction(ctx, monkeypatch):
                 denied.append("after DTO construction")
                 raise
     assert denied == ["after DTO construction"], "a row built under revoked authority must not be released"
+
+
+# ------------------------------------------------------- Ladybug persistence
+
+
+def test_empty_source_visibility_survives_a_ladybug_close_and_reopen(tmp_path):
+    """PA7's inventory half: the pair is durable, not an artefact of one live session."""
+    if os.environ.get("HIPPO_TEST_STORE", "").strip().lower() != "ladybug":
+        pytest.skip("reopen is a LadybugDB persistence assertion")
+    from hippo.config import Config
+    from hippo.context import AppContext
+    from hippo.store.ladybug import LadybugStore
+
+    path = tmp_path / "inventory.lbug"
+
+    def context(current):
+        # `models=` is supplied so construction never reaches the model manager: a structural
+        # inventory must work with no Ollama at all.
+        return AppContext(
+            config=Config(data_dir=tmp_path / "data"),
+            store=current,
+            ollama=Offline(),
+            models=SimpleNamespace(),
+        )
+
+    store = LadybugStore(path)
+    try:
+        built = empty_published(store, "durable empty")
+        store.update_source(built.source_id, status="ready", progress_done=1, progress_total=1)
+        with query_session(context(store), EVERYTHING, structural=True) as session:
+            before = row_of(source_view(context(store), EVERYTHING, session=session), built.source_id)
+            assert session.graph.selected_managed_generations == (built.pair,)
+            assert before is not None and before["name"] == "durable empty"
+    finally:
+        store.close()
+    reopened = LadybugStore(path)
+    try:
+        with query_session(context(reopened), EVERYTHING, structural=True) as session:
+            assert session.graph.selected_managed_generations == (built.pair,)
+            after = row_of(source_view(context(reopened), EVERYTHING, session=session), built.source_id)
+        assert after == before
+    finally:
+        reopened.close()
