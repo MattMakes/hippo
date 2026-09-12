@@ -271,6 +271,42 @@ class EvidenceAccess:
             and member.mapping_authority in self.mapping_authorities
         )
 
+    def _suppressed(self, query_mode):
+        if query_mode not in {"current", "history"}:
+            raise ValueError("Unknown evidence query mode")
+        return {
+            (item.target_kind, item.target_id)
+            for item in self.store._knowledge_rows("Suppression")
+            if item.workspace_id == self.workspace_id
+            and (item.all_principals or self.access.user_id in item.principal_ids)
+            and (query_mode == "current" or item.view_applicability == "all_history")
+        }
+
+    def _source_allowed(self, identity, source_id, suppressed):
+        source = self.store.get_source(source_id)
+        return bool(
+            identity is not None
+            and source
+            and source.get("workspace_id") == self.workspace_id
+            and ("source", source_id) not in suppressed
+            and identity.can_see_source(source)
+        )
+
+    def require_source(self, source_id: str, *, query_mode="current") -> None:
+        """Authorize source administration input without fabricating evidence.
+
+        This checks the existing reader/workspace/source boundary only; callers
+        still enforce management capability and every original's policy.
+        """
+        epoch = self.epoch_reader()
+        suppressed = self._suppressed(query_mode)
+        identity = self._identity()
+        if not any(
+            row.id == self.workspace_id for row in self.store._knowledge_rows("Workspace")
+        ) or not self._source_allowed(identity, source_id, suppressed):
+            raise AuthorizationChanged("Source is not available to this audience")
+        self._check_current_boundary(epoch, None)
+
     def build(self, selection: EvidenceSelection | None = None) -> AuthorizedEvidence:
         selection = selection or EvidenceSelection()
         epoch, now = self.epoch_reader(), self._now()
@@ -310,13 +346,7 @@ class EvidenceAccess:
             }
         )
 
-        suppressed = {
-            (item.target_kind, item.target_id)
-            for item in rows("Suppression").values()
-            if item.workspace_id == self.workspace_id
-            and (item.all_principals or self.access.user_id in item.principal_ids)
-            and (selection.query_mode == "current" or item.view_applicability == "all_history")
-        }
+        suppressed = self._suppressed(selection.query_mode)
         groups = {
             member.group_id
             for member in rows("GroupMembership").values()
@@ -384,12 +414,7 @@ class EvidenceAccess:
                     or ("source", artifact.source_id) in suppressed
                 ):
                     continue
-                source = self.store.get_source(artifact.source_id)
-                if (
-                    not source
-                    or source.get("workspace_id") != self.workspace_id
-                    or not identity.can_see_source(source)
-                ):
+                if not self._source_allowed(identity, artifact.source_id, suppressed):
                     continue
                 if proof := grant(artifact.policy_id, artifact):
                     artifacts[artifact.id] = artifact
