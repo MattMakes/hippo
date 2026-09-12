@@ -143,7 +143,7 @@ _ROWS: tuple[tuple[type[BaseException], PublicFailure], ...] = (
 # The eleven stable values a Source row's `error` can carry. Ten are `ManagedFailure.code`
 # from `managed_activation.FAILURES` and `UNKNOWN_CODE`; the eleventh, `build_interrupted`,
 # comes from somewhere else entirely -- the store's own restart sweep writes it directly
-# (`store/memory.py`, `INTERRUPTED_REFRESH_ERROR`), because a process that has just come up
+# (`store/generations.py`, `INTERRUPTED_REFRESH_ERROR`), because a process that has just come up
 # has no exception to classify and must not import the pipeline to recover from a crash.
 # So this table is keyed by string rather than by exception for two reasons now: a stored
 # row can be rendered without the build lane, and not every code in it has an exception

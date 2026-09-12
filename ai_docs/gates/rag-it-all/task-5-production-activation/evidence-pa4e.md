@@ -435,9 +435,11 @@ asserts `start_indexing` was never called and the active generation did not move
    `SET` uses, so the two cannot disagree, plus the same `SET` — low risk, but PA7's Neo4j
    parity claim should re-run `test_managed_pipeline_activation.py -k interrupted` on the
    container before it is signed off.
-6. **`evidence-pa4cfix.md` does not exist** anywhere in the tree (nor in the root working
-   copy). `evidence-pa4c.md` and the `task4-notes.md` "Remote-client rule" section were read
-   in its place.
+6. **`evidence-pa4cfix.md` did not exist** anywhere in the tree when this evidence was
+   written (nor in the root working copy). `evidence-pa4c.md` and the `task4-notes.md`
+   "Remote-client rule" section were read in its place. *Corrected 2026-09-12 (PA8 closure,
+   wrap-up finding 16): the file exists at HEAD, 457 lines, committed by `603dadd`. Only the
+   original reading is what this residual records.*
 7. **`api.py`'s brief line numbers were stale.** The brief names `~:50/94/117`; at `0bc378c`
    the file has exactly two such sites, `:50` (`put_settings`) and `:83`
    (`checked_settings`), and both are covered. There is no third.

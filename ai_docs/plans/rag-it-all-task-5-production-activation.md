@@ -263,6 +263,12 @@ Activation is one code/config behavior change with no background conversion swee
 
 Rollback disables new managed dispatch and dense route activation while preserving schema-5 records and current suppressions. It must never launch an older binary that cannot recognize the current schema, clear managed sources, repoint generations, or remove raw data. A managed Source can continue to serve through the reviewed structural/dense reader even when new managed builds are disabled. Restoration and physical deletion require their separate ledgers.
 
+Three consequences of activation are release-note material this task does not resolve; **Task 16 (Update/delete recovery, performance and release evaluation, `docs/rag_it_all.md`) owns all three**, so they are assigned here rather than in a scratch file:
+
+- A gated `hippo index note.md` can now report `model_unavailable` where the legacy lane succeeded, because the reader actor routes it to a managed build. Intended, and a behavior change an operator must be told about.
+- A gated `hippo index` sets no `owner_id`/`access_role_id` for CLI-created sources. Whether it should is an open contract question, not a defect of activation.
+- `add_repo` takes no `build_actor`, so a gated `hippo index <git-url>` stays legacy. Open by design — repositories are legacy in this task — and worth stating so nobody reads it as a gap.
+
 ## Completion checklist
 
 - [ ] PA1–PA8 are implemented and recorded in the gate ledger.
