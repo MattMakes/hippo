@@ -225,16 +225,16 @@ class KnowledgeQueries:
     def ensure_local_workspace_memberships(self, principal_ids: Iterable[str] | None = None) -> int:
         """Map this installation's live local Users into its one default workspace.
 
-        Idempotent: an unchanged mapping writes nothing and bumps no epoch. One
-        change or many commit under a single authorization bump, so a startup
-        that repairs several principals never invalidates readers more than once.
+        Idempotent, and deliberately additive-only: it adds or repairs memberships
+        and adds the local authority, so the only proof it can stale is a *denial*,
+        which fails safe. It therefore never bumps the authorization epoch - the
+        lazy first `ping()` runs this while a request may already hold a query
+        session, and invalidating that reader would be the only harm it could do.
+        Every reduction goes through `permission_mutation`, which owns its bump.
         """
         with self.transaction():
             self._lock_authorization()
-            changes = self._ensure_local_workspace_memberships_locked(principal_ids)
-            if changes:
-                self._bump_authorization_epoch()
-            return changes
+            return self._ensure_local_workspace_memberships_locked(principal_ids)
 
     def _ensure_local_workspace_memberships_locked(self, principal_ids: Iterable[str] | None = None) -> int:
         """The mapping repair itself; the caller owns the transaction, lock and epoch bump."""
@@ -269,6 +269,8 @@ class KnowledgeQueries:
         selected = _selected_principals(principal_ids)
         if selected is None:
             raise ValueError("Retiring a local mapping requires explicit principals")
+        if not self._local_mapping_available():
+            return 0
         return sum(
             self._apply_local_membership(DEFAULT_WORKSPACE_ID, principal_id, enabled=False)
             for principal_id in selected
@@ -291,11 +293,14 @@ class KnowledgeQueries:
             self._check_knowledge_write(record)
             self._write_knowledge(record, create_only=True)
             return 1
-        if (existing.enabled, existing.mapping_authority) == (enabled, LOCAL_MAPPING_AUTHORITY):
+        # Retiring keeps the authority that granted the mapping: the disabled record is
+        # audit state, so a provider- or group-granted row is never rewritten as local.
+        authority = LOCAL_MAPPING_AUTHORITY if enabled else existing.mapping_authority
+        if (existing.enabled, existing.mapping_authority) == (enabled, authority):
             return 0
         repaired = existing.replace(
             enabled=enabled,
-            mapping_authority=LOCAL_MAPPING_AUTHORITY,
+            mapping_authority=authority,
             policy_epoch=existing.policy_epoch + 1,
         )
         self._validate_knowledge(repaired)
@@ -308,6 +313,9 @@ class KnowledgeQueries:
 
         Migration creates the membership records and then the application maps its
         users; a permission mutation against a pre-schema-5 file must not fail.
+        A user created while this is false is therefore left unmapped and stays
+        unmapped - fail-closed, no managed evidence - until the next
+        `on_first_connection` runs the all-user form and repairs it.
         """
         from .migrations import CURRENT_SCHEMA_VERSION
 

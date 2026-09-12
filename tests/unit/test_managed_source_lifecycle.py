@@ -184,11 +184,40 @@ def test_held_current_session_fails_and_a_new_session_excludes_the_source(manage
 
 def test_unmanaged_source_is_refused_before_any_mutation(managed):
     store = managed.store
-    legacy = store.create_source("text", "legacy")
+    # Owned by the same reader: standing is established first, so the refusal this
+    # asserts is the unmanaged one rather than the generic denial below.
+    legacy = store.create_source("text", "legacy", owner_id=managed.user)
     before = epochs(store), store.get_source(legacy)
-    with pytest.raises(ValueError):
+    with pytest.raises(api().UnmanagedSource):
         tombstone(managed, source_id=legacy)
     assert (epochs(store), store.get_source(legacy)) == before
+
+
+def test_an_unauthorized_reader_learns_nothing_about_the_source(managed):
+    """Managed, unmanaged and absent are one generic denial for an actor with no standing.
+
+    Standing is established before the managed recheck, so `UnmanagedSource` is no
+    longer an oracle: the managed and unmanaged denials are byte-identical. The
+    absent-source message comes from `_source_control` and is common to every
+    `capture_build_authority` caller, so the type - which the HTTP layer maps - is
+    what this boundary guarantees.
+    """
+    store = managed.store
+    stranger = store.create_user("stranger", "password", "individual")
+    actor = BuildActor.reader(Principal.for_user(store.get_user(stranger), store.get_role("individual")))
+    unmanaged = store.create_source("text", "legacy", owner_id=managed.user)
+    before = epochs(store), inventory(store)
+
+    denials = []
+    for source_id in (managed.source, unmanaged, "source-that-never-existed"):
+        with pytest.raises(AuthorizationChanged) as raised:
+            tombstone(managed, actor=actor, source_id=source_id)
+        denials.append((type(raised.value), str(raised.value)))
+
+    assert [kind for kind, _ in denials] == [AuthorizationChanged] * 3
+    assert not any(issubclass(kind, api().SourceLifecycleError) for kind, _ in denials)
+    assert denials[0][1] == denials[1][1], denials
+    assert (epochs(store), inventory(store)) == before
 
 
 def test_denied_actor_gets_the_generic_denial_and_changes_nothing(managed):
@@ -271,6 +300,89 @@ def test_only_the_active_unpublished_build_is_failed_and_cancelled(managed):
     assert cancelled.status == "cancelled" and cancelled.error_code == "source_tombstoned"
     assert store._generation(managed.gen.id).status == "active"
     assert store.get_source(managed.source)["active_generation_id"] == managed.gen.id
+
+
+def test_a_tombstoned_source_cannot_reclaim_its_failed_generation(managed, monkeypatch):
+    """The committed tombstone is a store barrier, not a dispatcher courtesy."""
+    store = managed.store
+    staging = generation(store, "refresh", managed.gen)
+    job = claim(store, staging)
+    receipt = tombstone(managed)
+    before = epochs(store), inventory(store), store.get_source(managed.source)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a tombstoned source must not collect its retained attempt")
+
+    monkeypatch.setattr(store, "_collect_generation", refuse)
+    with pytest.raises(ValueError, match="Stale build lease, fence, or generation state"):
+        claim(store, staging, key="retry")
+
+    source = store.get_source(managed.source)
+    assert source["build_fencing_token"] == receipt.fencing_token, "the fence must not advance"
+    assert source["active_build_id"] is None, "a tombstoned source must hold no build"
+    assert store._generation(staging.id).status == "failed"
+    cancelled = store._knowledge_get("MaintenanceJob", job.id)
+    assert cancelled.status == "cancelled" and cancelled.error_code == "source_tombstoned"
+    assert (epochs(store), inventory(store), store.get_source(managed.source)) == before
+
+
+def test_a_refused_reclaim_leaves_the_replayed_fencing_token_pinned(managed):
+    """Nothing after the tombstone can move the fence the receipt reported."""
+    store = managed.store
+    staging = generation(store, "refresh", managed.gen)
+    claim(store, staging)
+    receipt = tombstone(managed)
+
+    with pytest.raises(ValueError, match="Stale build lease, fence, or generation state"):
+        claim(store, staging, key="retry")
+
+    replay = tombstone(managed, actor=BuildActor.trusted_local())
+    assert replay.outcome == "already_tombstoned"
+    assert replay.fencing_token == receipt.fencing_token
+    assert replay.suppression_epoch == receipt.suppression_epoch
+    assert replay.cancelled_generation_id == receipt.cancelled_generation_id
+    assert replay.cancelled_job_id == receipt.cancelled_job_id
+
+
+def test_cancellation_is_requested_before_the_transaction(managed, monkeypatch):
+    store, ctx = managed.store, managed.ctx
+    calls = []
+
+    def spy(key):
+        calls.append((key, store.in_ambient_transaction(), len(suppressions(store, managed.source))))
+
+    monkeypatch.setattr(ctx.jobs, "cancel", spy)
+
+    assert tombstone(managed).outcome == "tombstoned"
+
+    # No transaction open and no suppression written yet: requested, never awaited.
+    assert calls == [(f"index:{managed.source}", False, 0)]
+    assert len(suppressions(store, managed.source)) == 1
+
+
+def test_another_threads_transaction_is_not_the_tombstone_callers_transaction(managed):
+    """The store primitive's guard must answer for the calling thread, not the process."""
+    store = managed.store
+    before = epochs(store), store.get_source(managed.source)
+    outcome = []
+
+    def attempt():
+        try:
+            store.apply_source_tombstone(managed.source, operation_id=OPERATION, created_at=datetime.now(UTC))
+        except BaseException as exc:  # noqa: BLE001 - asserted on the calling thread below
+            outcome.append(exc)
+        else:
+            outcome.append(None)
+
+    thread = Thread(target=attempt, name="unowned-tombstone", daemon=True)
+    with store.transaction():
+        thread.start()
+        thread.join(10)
+        assert not thread.is_alive(), "the unowned caller was admitted instead of refused"
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], RuntimeError) and "requires the caller" in str(outcome[0])
+    assert (epochs(store), store.get_source(managed.source)) == before
+    assert suppressions(store, managed.source) == []
 
 
 def test_tombstone_does_not_wait_for_a_blocked_model_callback(managed):
@@ -374,6 +486,10 @@ def test_tombstone_fence_and_epochs_survive_a_ladybug_reopen(tmp_path, ollama):
         assert store._generation(gen.id).status == "active"
         with query_session(ctx, EVERYTHING, structural=True) as session:
             assert session.graph.passage_by_id(span.id) is None
+        # The barrier is durable too: a reopened file still refuses to reclaim.
+        with pytest.raises(ValueError, match="Stale build lease, fence, or generation state"):
+            claim(store, staging, key="retry")
+        assert store.get_source(gen.source_id) == expected
         replay = tombstone(SimpleNamespace(ctx=ctx, source=gen.source_id, actor=BuildActor.trusted_local()))
         assert replay.outcome == "already_tombstoned"
         assert replay.suppression_epoch == receipt.suppression_epoch

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from hippo.access import Principal
+from hippo.access import EVERYTHING, Principal
 from hippo.knowledge.access import AuthorizationChanged
 from hippo.knowledge.build_authority import BuildActor, capture_build_authority
 from hippo.store.migrations import DEFAULT_WORKSPACE_ID
@@ -166,6 +166,43 @@ def test_delete_user_disables_and_retains_its_membership_in_one_bump(backend):
     assert row.policy_epoch == 2
 
 
+def test_disabling_a_mapping_keeps_the_authority_that_granted_it(backend):
+    """Retiring is audit state: a non-local authority is retained, never rewritten local."""
+    store = backend.start()
+    user = store.create_user("granted", "secret1", "individual")
+    row = one(memberships(store, user))
+    store.update_knowledge(row.replace(mapping_authority="reviewed", policy_epoch=row.policy_epoch + 1))
+    before = store.authorization_epoch()
+
+    store.delete_user(user)
+
+    assert store.authorization_epoch() == before + 1
+    retired = one(memberships(store, user))
+    assert (retired.enabled, retired.mapping_authority, retired.policy_epoch) == (False, "reviewed", 3)
+
+
+def test_delete_user_on_a_pre_schema_store_has_no_mapping_to_retire(tmp_path, monkeypatch):
+    """A permission mutation against a pre-schema-5 file must not fail on either path."""
+    from hippo.store.ladybug import LadybugStore
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LadybugStore, "ensure_schema", LadybugStore._ensure_legacy_schema)
+        store = LadybugStore(tmp_path / "legacy.lbug")
+        try:
+            store.ensure_roles()
+            assert not store.run("CALL show_tables() WHERE name='WorkspaceMembership' RETURN name")
+            user = store.create_user("legacy", "secret1", "individual")
+            # A second principal keeps this off the last-user removal branch, whose own
+            # `Connector` read is a separate pre-schema gap outside this mapping.
+            store.create_user("remaining", "secret1", "individual")
+
+            store.delete_user(user)
+
+            assert store.get_user(user) is None
+        finally:
+            store.close()
+
+
 def test_startup_never_resurrects_a_removed_principal(backend):
     store = backend.start()
     kept = store.create_user("kept", "secret1", "individual")
@@ -211,7 +248,49 @@ def test_damaged_local_mapping_is_repaired_with_a_higher_policy_epoch(backend, d
     repaired = one(memberships(store, user))
     assert (repaired.enabled, repaired.mapping_authority) == (True, "local")
     assert repaired.policy_epoch > broken.policy_epoch
-    assert store.authorization_epoch() == before + 1
+    assert store.authorization_epoch() == before, "repair is additive; it invalidates no reader"
+
+
+def test_many_repairs_count_every_change_and_invalidate_no_reader(backend):
+    """The locked helper counts every change; the additive wrapper bumps no epoch at all."""
+    store = backend.start()
+    users = [store.create_user(f"repairable{index}", "secret1", "individual") for index in range(3)]
+    for user in users:
+        row = one(memberships(store, user))
+        store.update_knowledge(row.replace(enabled=False, policy_epoch=row.policy_epoch + 1))
+    store.set_meta("reviewed_mapping_authorities", [])
+    before = store.authorization_epoch()
+
+    assert store.ensure_local_workspace_memberships() == 4
+
+    assert store.authorization_epoch() == before
+    assert authorities(store) == ["local"]
+    assert [one(memberships(store, user)).enabled for user in users] == [True, True, True]
+
+
+def test_a_held_query_session_survives_the_first_ping_bootstrap(ctx):
+    """The lazy bootstrap is additive, so a reader already in flight stays valid.
+
+    `render()` pings the store while it holds the session it is rendering from, so a
+    bump here would fail the first HTML request against any store that still needs
+    mapping - the exact shape observed in the Task 2 review.
+    """
+    from hippo.knowledge.query_access import query_session
+
+    store = ctx.store
+    store.ensure_roles()
+    store.create_user("inflight", "secret1", "individual")
+    forget_local_mapping(store)
+    store._bootstrapped = False
+    before = store.authorization_epoch()
+
+    with query_session(ctx, EVERYTHING, structural=True) as session:
+        assert store.ping() is True
+        session.validate()
+
+    assert store.authorization_epoch() == before
+    assert authorities(store) == ["local"]
+    assert memberships(store) != []
 
 
 def test_selected_principals_leave_every_other_mapping_untouched(backend):

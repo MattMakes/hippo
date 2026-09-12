@@ -77,7 +77,9 @@ class GenerationQueries:
         The caller must already hold a transaction; the authorization and source
         locks are taken here so the transition cannot run without them.
         """
-        if not getattr(self, "_transaction_depth", 0) and getattr(self, "_transaction", None) is None:
+        # This thread's own transaction, not any thread's: a process-wide probe would
+        # admit a caller holding none whenever some other thread happened to hold one.
+        if not self.in_ambient_transaction():
             raise RuntimeError("Managed tombstone requires the caller's transaction")
         self._lock_source(source_id)
         if not self.source_is_managed(source_id):
@@ -131,11 +133,31 @@ class GenerationQueries:
             raise ValueError("Unknown generation")
         return row
 
+    def _tombstoned(self, source_id, source):
+        """A committed managed tombstone, read under the source lock the caller holds."""
+        if source.get("status") == "deleted":
+            return True
+        scope_key = tombstone_scope_key(source_id)
+        return any(
+            row.target_kind == "source"
+            and row.target_id == source_id
+            and row.reason == "tombstone"
+            and row.view_applicability == "current_only"
+            and row.scope_key == scope_key
+            for row in self._knowledge_rows("Suppression")
+        )
+
     def claim_generation_build(self, generation_id, *, job_key, lease_owner, lease_expires_at):
         with self.transaction():
             gen = self._generation(generation_id)
             self._lock_source(gen.source_id)
             gen = self._generation(generation_id)
+            source = self.get_source(gen.source_id)
+            if self._tombstoned(gen.source_id, source):
+                # The barrier lives here, not in the dispatcher that read the source a
+                # moment ago: refuse before the fence advances, before a holder is
+                # installed, and before the retained attempt could be collected.
+                raise ValueError("Stale build lease, fence, or generation state")
             now = self._now()
             if gen.status not in ("staging", "failed") or lease_expires_at <= now:
                 raise ValueError("Build requires staging or unpublished failed generation and future lease")
@@ -147,7 +169,6 @@ class GenerationQueries:
                 )
             ):
                 raise ValueError("Published generations cannot reopen for retry")
-            source = self.get_source(gen.source_id)
             previous = self._knowledge_get("MaintenanceJob", source.get("active_build_id"))
             if previous is not None and previous.status == "running" and previous.lease_expires_at > now:
                 if (

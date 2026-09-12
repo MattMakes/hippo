@@ -159,12 +159,9 @@ def test_membership_control_records_are_not_public_evidence(store, state):
         is None
     )
     assert store.list_knowledge("WorkspaceMembership", workspace_id=workspace.id, access=access) == []
-    # Removing the user retires its local mapping as audit state rather than deleting it.
-    retained = (
-        membership.replace(enabled=False, mapping_authority="local", policy_epoch=3)
-        if state == "deleted"
-        else membership
-    )
+    # Removing the user retires its local mapping as audit state rather than deleting it,
+    # keeping the authority that granted it ("reviewed" here) as part of that record.
+    retained = membership.replace(enabled=False, policy_epoch=3) if state == "deleted" else membership
     assert (
         store.get_knowledge(
             "WorkspaceMembership", membership.id, workspace_id=workspace.id, access=EVERYTHING

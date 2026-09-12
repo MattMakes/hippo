@@ -50,18 +50,18 @@ def tombstone_managed_source(
 ) -> TombstoneReceipt:
     """Suppress a managed source from the current view and fence its builder.
 
-    Raises `UnmanagedSource` when the caller should have dispatched legacy
-    cleanup, `InvalidOperationId` for an unbounded identity, and the same
+    Raises `InvalidOperationId` for an unbounded identity, then the same
     `AuthorizationChanged` as any unavailable source when the actor may not
-    manage it - including a reader retrying a delete that already committed.
+    manage it - including a reader retrying a delete that already committed -
+    and only then `UnmanagedSource` when the caller should have dispatched
+    legacy cleanup. That order is deliberate: answering "is this source
+    managed?" before the actor has standing would make this refusal an oracle.
     """
     if type(actor) is not BuildActor:
         raise SourceLifecycleError("Explicit build actor required")
     if type(operation_id) is not str or OPERATION_ID.match(operation_id) is None:
         raise InvalidOperationId("Operation identity must be a bounded printable token")
     store = ctx.store
-    if not store.source_is_managed(source_id):
-        raise UnmanagedSource("Legacy cleanup owns unmanaged sources")
     try:
         guard = capture_build_authority(store, source_id=source_id, actor=actor)
     except AuthorizationChanged:
@@ -74,6 +74,8 @@ def tombstone_managed_source(
             raise
         return receipt
     try:
+        if not store.source_is_managed(source_id):
+            raise UnmanagedSource("Legacy cleanup owns unmanaged sources")
         # Cooperative cancellation is a courtesy, not the safety mechanism: it is
         # requested and never awaited, so a blocked model call cannot delay this.
         ctx.jobs.cancel(f"index:{source_id}")
