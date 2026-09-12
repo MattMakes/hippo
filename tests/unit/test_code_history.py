@@ -871,3 +871,39 @@ def test_a_merged_bundle_with_no_history_at_all_still_closes(api, raw_store, tmp
     assert merged.modifies == () and merged.precedes == ()
     assert len(merged.revision_members) == len(code_bundle.revision_members)
     assert merged.coverage["history"] == "disabled"
+
+
+# ------------------------------------------------- reusing an already stored revision
+
+
+def test_a_stored_commit_revision_is_reused_rather_than_reminted(api, raw_store, tmp_path):
+    """A commit this source already holds keeps the instant it was first observed at.
+
+    A `history_event` revision is identified by its sha and its metadata hash, so the
+    second generation of one repository derives the same revision for every commit it
+    already has -- the same collision `code_binding._reuse` handles for a file.
+    """
+    first, *_ = bound(api, raw_store, tmp_path / "first")
+    stored = {revision.id: revision for revision in first.revisions}
+    later = INSTANT + timedelta(days=2)
+    code_bundle, walked, _, _ = fixture(api, raw_store, tmp_path / "second", observed_at=later)
+
+    fresh = bind(api, code_bundle, walked, observed_at=later)
+    reused = bind(api, code_bundle, walked, observed_at=later, stored_revisions=stored)
+
+    assert {revision.observed_at for revision in fresh.revisions} == {later}
+    assert {revision.observed_at for revision in reused.revisions} == {INSTANT}
+    assert [revision.id for revision in reused.revisions] == [revision.id for revision in fresh.revisions]
+    # Only the revision is reused: the observation still records *this* capture instant,
+    # because `recorded_from` is when this generation observed the commit.
+    assert [item.observation for item in reused.commits] == [item.observation for item in fresh.commits]
+    assert reused.evidence_members == fresh.evidence_members
+
+
+def test_a_stored_commit_revision_that_contradicts_this_walk_refuses(api, raw_store, tmp_path):
+    history, code_bundle, walked, _ = bound(api, raw_store, tmp_path)
+    revision = history.revisions[0]
+    conflicting = revision.model_copy(update={"raw_uri": "hippo-commit:" + "f" * 40})
+
+    with pytest.raises(ValueError, match="conflicts with this capture"):
+        bind(api, code_bundle, walked, stored_revisions={revision.id: conflicting})

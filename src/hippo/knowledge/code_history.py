@@ -46,7 +46,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from . import model as k
-from .code_binding import BoundCodePassage, CodeEvidenceBundle, NativeCodeRow
+from .code_binding import BoundCodePassage, CodeEvidenceBundle, NativeCodeRow, _reuse
 from .derivations import dependency_version, view_fingerprint
 from .identity import canonical_json, make_identity, text_hash
 from .lifecycle import generation_namespace as _namespace_of
@@ -891,7 +891,15 @@ def _repository_external_id(repository, source_id: str) -> str:
 
 
 def _commit_records(
-    row, *, external_id, workspace_id, source_id, policy_id, observed_at, repository_object_id
+    row,
+    *,
+    external_id,
+    workspace_id,
+    source_id,
+    policy_id,
+    observed_at,
+    repository_object_id,
+    stored=None,
 ):
     """One commit's artifact, revision, object, message span and observation."""
     sha = _text(row["sha"], "commit sha")
@@ -925,6 +933,11 @@ def _commit_records(
         observed_at=observed_at,
         lifecycle="active",
     )
+    # A commit's revision identity is its sha and its metadata hash, so the second
+    # generation of one repository derives the *same* revision for a commit it already
+    # holds. `observed_at` is when that commit was first observed, exactly as
+    # `code_binding._reuse` treats a file revision.
+    revision = _reuse(revision, stored)
     knowledge_object = k.KnowledgeObject(
         workspace_id=workspace_id,
         kind="commit",
@@ -971,6 +984,7 @@ def bind_history(
     observed_at: datetime,
     history_depth: int,
     shallow_boundary,
+    stored_revisions: Mapping[str, k.ArtifactRevision] | None = None,
 ) -> CodeHistoryBundle:
     """Bind one `read_history` walk to the generation `code_bundle` already settled.
 
@@ -1031,6 +1045,7 @@ def bind_history(
         source_id=source_id,
         generation_namespace=generation_namespace,
         observed_at=observed_at,
+        stored_revisions=stored_revisions,
     )
     coverage = {
         "history": "disabled" if history_depth == 0 else "read",
@@ -1058,7 +1073,15 @@ def bind_history(
 
 
 def _bind_commits(
-    rows, *, code_bundle, external_id, workspace_id, source_id, generation_namespace, observed_at
+    rows,
+    *,
+    code_bundle,
+    external_id,
+    workspace_id,
+    source_id,
+    generation_namespace,
+    observed_at,
+    stored_revisions=None,
 ) -> tuple[BoundCommit, ...]:
     # Imported here rather than at module scope: `hippo.codegraph`'s package body loads
     # the tree-sitter walkers, and no knowledge import should pay for a parser it never
@@ -1085,6 +1108,7 @@ def _bind_commits(
             policy_id=policy_id,
             observed_at=observed_at,
             repository_object_id=code_bundle.repository_object.id,
+            stored=stored_revisions,
         )
         native_row = NativeCommitRow(
             native_id,
