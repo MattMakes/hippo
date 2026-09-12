@@ -214,6 +214,30 @@ def _selected_principals(principal_ids):
     return sorted(set(selected))
 
 
+# The columns a scoped knowledge read may filter on. Every one of them carries a lookup index
+# on Neo4j (`migrations.schema_steps`' index list, plus the v6 step for the three below that the
+# CC1 serving predicate needs), so "one bounded query" is true of the database and not only of
+# the Python that calls it. Anything else is refused: see `_knowledge_rows`.
+SCOPED_FIELDS = frozenset(
+    {
+        "id",
+        "workspace_id",
+        "artifact_id",
+        "revision_id",
+        "generation_id",
+        "predicate",
+        "subject_id",
+        "object_id",
+        "recorded_from",
+        "valid_from",
+        "aggregate_id",
+        "target_kind",
+        "target_id",
+        "input_fingerprint",
+    }
+)
+
+
 def _json_field(model, field):
     from pydantic import BaseModel
 
@@ -381,14 +405,45 @@ class KnowledgeQueries:
 
         return schema_history(self)
 
-    def _knowledge_rows(self, name: str) -> list[k.Record]:
+    def _knowledge_rows(self, name: str, *, generation_id=None, where=None) -> list[k.Record]:
+        """Knowledge records of one kind, optionally narrowed to an exact-match selection.
+
+        `where` is a field -> value map drawn from `SCOPED_FIELDS`, a closed list of the columns
+        that carry a lookup index on the backends that have one. A field outside it is refused
+        rather than answered, because an unindexed filter is a whole-table scan wearing a scoped
+        read's clothes and would make a query-count bound read as passing while the database work
+        stayed linear in the corpus. `generation_id=` is the common case spelled directly.
+
+        Passing neither key still reads the kind whole, which the legacy lane and collection rely
+        on and this slice does not change.
+        """
         model = k.RECORD_TYPES.get(name)
         if model is None:
             raise ValueError("Unknown knowledge record type")
-        if self.knowledge_backend == "fake":
-            return list(self._knowledge_data.get(name, {}).values())
         columns = model.model_fields
-        rows = self.run(f"MATCH (n:{name}) RETURN " + ", ".join(f"n.{field} AS {field}" for field in columns))
+        selection = dict(where or {})
+        if generation_id is not None:
+            selection["generation_id"] = generation_id
+        for field in selection:
+            if field not in SCOPED_FIELDS or field not in columns:
+                raise ValueError(f"{name}.{field} is not a scoped field")
+        if self.knowledge_backend == "fake":
+            rows = self._knowledge_data.get(name, {})
+            if "id" in selection:  # the primary key answers without walking the kind
+                record = rows.get(selection["id"])
+                rows = [record] if record is not None else []
+            else:
+                rows = list(rows.values())
+            return [
+                record
+                for record in rows
+                if all(getattr(record, field) == value for field, value in selection.items())
+            ]
+        clause = " WHERE " + " AND ".join(f"n.{field} = ${field}" for field in selection) if selection else ""
+        rows = self.run(
+            f"MATCH (n:{name}){clause} RETURN " + ", ".join(f"n.{field} AS {field}" for field in columns),
+            **selection,
+        )
         records = []
         for row in rows:
             for field, value in row.items():
@@ -408,7 +463,7 @@ class KnowledgeQueries:
         if name == "Source":
             return self.get_source(record_id)
         if name == "Passage":
-            return next((row for row in self._native_rows("Passage") if row["id"] == record_id), None)
+            return next(iter(self._native_rows("Passage", ids=[record_id])), None)
         if name == "User":
             return self.get_user(record_id)
         if name in {"Symbol", "DataObject", "Commit"}:
@@ -420,7 +475,9 @@ class KnowledgeQueries:
                 f"MATCH (n:{name} {{id:$id}}) RETURN n.source_id AS source_id, n.generation_id AS generation_id",
                 id=record_id,
             )
-        return next((record for record in self._knowledge_rows(name) if record.id == record_id), None)
+        # The primary key, not a walk of the kind: this is called once per row by the checksum
+        # and by every managed native validation, so a whole-table read here is the quadratic.
+        return next(iter(self._knowledge_rows(name, where={"id": record_id})), None)
 
     def _write_knowledge(self, record: k.Record, *, create_only: bool = False) -> None:
         from .migrations import KNOWLEDGE_COLUMNS

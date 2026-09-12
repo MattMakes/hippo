@@ -998,8 +998,8 @@ def test_operation_receipt_requires_its_original_publication_credentials(setup, 
     build(w)
     original = w.store._knowledge_rows
 
-    def rows(kind):
-        values = original(kind)
+    def rows(kind, **scope):
+        values = original(kind, **scope)
         return (
             [value.replace(payload_json='{"job_id":"wrong"}') for value in values]
             if kind == "IndexEvent"

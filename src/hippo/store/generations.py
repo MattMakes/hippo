@@ -87,17 +87,18 @@ class GenerationQueries:
         if not source_row or source_row.get("active_generation_id"):
             return False
         source_id = source_row.get("id")
+        # Both reads name the source. A graph build calls this once per legacy source, so the
+        # unscoped forms were two whole-table reads per source per build.
         if any(
-            event.kind == "published" and event.aggregate_id == source_id
-            for event in self._knowledge_rows("IndexEvent")
+            event.kind == "published"
+            for event in self._knowledge_rows("IndexEvent", where={"aggregate_id": source_id})
         ):
             return False
         return not any(
-            row.target_kind == "source"
-            and row.target_id == source_id
-            and row.all_principals
-            and row.workspace_id == source_row.get("workspace_id")
-            for row in self._knowledge_rows("Suppression")
+            row.all_principals and row.workspace_id == source_row.get("workspace_id")
+            for row in self._knowledge_rows(
+                "Suppression", where={"target_kind": "source", "target_id": source_id}
+            )
         )
 
     def _source_fields(self, source_id, **fields):
@@ -429,13 +430,12 @@ class GenerationQueries:
         gen = self._generation(generation_id)
         jobs = [
             j
-            for j in self._knowledge_rows("MaintenanceJob")
-            if j.kind == "rebuild" and j.input_fingerprint == generation_id
+            for j in self._knowledge_rows("MaintenanceJob", where={"input_fingerprint": generation_id})
+            if j.kind == "rebuild"
         ]
         strict = any(
-            m.generation_id == generation_id
-            and set(m.required_representations) == set(MANDATORY_REPRESENTATIONS)
-            for m in self._knowledge_rows("IndexManifest")
+            set(m.required_representations) == set(MANDATORY_REPRESENTATIONS)
+            for m in self._knowledge_rows("IndexManifest", generation_id=generation_id)
         )
         if gen.status != "staging":
             if legacy_fixture and not jobs and not strict:
@@ -600,105 +600,202 @@ class GenerationQueries:
         ):
             raise ValueError("Sealed assertion proof group cannot gain support")
 
-    def _native_rows(self, kind):
+    def _native_rows(self, kind, *, ids=None, generation_id=None):
+        """Native rows of one kind, optionally scoped to an id set or to one generation.
+
+        Both keys push into a single query, so a caller that knows which rows it wants pays for
+        those rows rather than for the table. `ids` is the key for a write or a mutation, which
+        must still see rows of *other* generations to find a prior row and to refuse a crossing
+        edge; `generation_id` is the key for an inventory or a checksum, which wants exactly one
+        generation. Passing neither is still legal and still reads the table -- the legacy lane
+        and collection are correct that way and are not in this slice.
+
+        Entity and Fact are the shared graph and carry no `generation_id` column, so scoping
+        them by generation is refused rather than silently answered with nothing.
+        """
+        attribute = {
+            "Passage": "passages",
+            "Symbol": "symbols",
+            "DataObject": "data_objects",
+            "Commit": "commits",
+            "Entity": "entities",
+            "Fact": "facts",
+        }[kind]
+        if generation_id is not None and kind in ("Entity", "Fact"):
+            raise ValueError(f"{kind} is shared and is not scoped by generation")
+        if ids is not None:
+            ids = list(dict.fromkeys(ids))
+            if not ids:
+                return []
         if self.knowledge_backend == "fake":
-            return list(
-                getattr(
-                    self,
-                    {
-                        "Passage": "passages",
-                        "Symbol": "symbols",
-                        "DataObject": "data_objects",
-                        "Commit": "commits",
-                        "Entity": "entities",
-                        "Fact": "facts",
-                    }[kind],
-                ).values()
+            rows = getattr(self, attribute)
+            if ids is not None:
+                return [rows[rid] for rid in ids if rid in rows]
+            values = list(rows.values())
+            if generation_id is not None:
+                return [row for row in values if row.get("generation_id") == generation_id]
+            return values
+        where, params = [], {}
+        if ids is not None:
+            where.append("n.id IN $ids")
+            params["ids"] = ids
+        if generation_id is not None:
+            where.append("n.generation_id = $generation_id")
+            params["generation_id"] = generation_id
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        if kind == "Passage":
+            # One statement, not one per row: the owning Source used to cost a lookup per passage.
+            rows = self.run(
+                f"MATCH (n:Passage){clause} OPTIONAL MATCH (n)-[:FROM]->(s:Source) "
+                "RETURN n AS n, s.id AS source_id",
+                **params,
             )
-        rows = self.run(f"MATCH (n:{kind}) RETURN n AS n")
+        else:
+            rows = self.run(f"MATCH (n:{kind}){clause} RETURN n AS n", **params)
         result = []
         for row in rows:
-            native = dict(row["n"])
-            native = {key: value for key, value in native.items() if not key.startswith("_")}
+            native = {key: value for key, value in dict(row["n"]).items() if not key.startswith("_")}
             if kind == "Passage":
-                owner = self.run_one(
-                    "MATCH (n:Passage {id:$id})-[:FROM]->(s:Source) RETURN s.id AS id", id=native["id"]
-                )
-                native["source_id"] = owner["id"] if owner else None
+                native["source_id"] = row["source_id"]
             result.append(native)
         return result
 
-    def _native_relationships(self, ids):
-        specs = {
-            "CODE_EDGE": ("code_edges", ("Symbol", "DataObject"), ("Symbol", "DataObject")),
-            "DEFINED_IN": ("definitions", ("Symbol", "DataObject", "Commit"), ("Passage",)),
-            "MODIFIES": ("modifies", ("Commit",), ("Symbol",)),
-            "PRECEDES": ("precedes", ("Commit",), ("Commit",)),
-            "REFERS_TO": ("refers_to", ("Passage",), ("Symbol", "DataObject")),
-            "MENTIONS": ("mentions", ("Passage",), ("Entity",)),
-            "STATES": ("statements", ("Passage",), ("Fact",)),
-            "SUBJECT": (None, ("Fact",), ("Entity",)),
-            "OBJECT": (None, ("Fact",), ("Entity",)),
-            "SYNONYM": ("synonyms", ("Entity", "Symbol", "DataObject"), ("Entity", "Symbol", "DataObject")),
-            "TUNED": (
-                "tuned",
-                ("Entity", "Passage", "Symbol", "DataObject"),
-                ("Entity", "Passage", "Symbol", "DataObject"),
-            ),
-        }
+    NATIVE_RELATIONSHIP_SPECS = {
+        "CODE_EDGE": ("code_edges", ("Symbol", "DataObject"), ("Symbol", "DataObject")),
+        "DEFINED_IN": ("definitions", ("Symbol", "DataObject", "Commit"), ("Passage",)),
+        "MODIFIES": ("modifies", ("Commit",), ("Symbol",)),
+        "PRECEDES": ("precedes", ("Commit",), ("Commit",)),
+        "REFERS_TO": ("refers_to", ("Passage",), ("Symbol", "DataObject")),
+        "MENTIONS": ("mentions", ("Passage",), ("Entity",)),
+        "STATES": ("statements", ("Passage",), ("Fact",)),
+        "SUBJECT": (None, ("Fact",), ("Entity",)),
+        "OBJECT": (None, ("Fact",), ("Entity",)),
+        "SYNONYM": ("synonyms", ("Entity", "Symbol", "DataObject"), ("Entity", "Symbol", "DataObject")),
+        "TUNED": (
+            "tuned",
+            ("Entity", "Passage", "Symbol", "DataObject"),
+            ("Entity", "Passage", "Symbol", "DataObject"),
+        ),
+    }
+
+    def _edges_touching(self, ids, *, both=False, rels=None):
+        """Every relationship with an endpoint in `ids` (or, with `both`, both endpoints in it).
+
+        The `both=False` form is what keeps the two generation guards alive: it returns the
+        crossing edge *with* its far endpoint, so the caller can still refuse it. A read narrowed
+        to one generation would drop that row and turn a refusal into silent acceptance.
+
+        `rels` limits the scan to some relationship kinds, which is how the second closure hop
+        asks only for `SUBJECT`/`OBJECT` instead of re-walking every kind.
+        """
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            return []
         edges = []
-        for rel, (attr, left, right) in specs.items():
+        for rel, (attribute, left, right) in self.NATIVE_RELATIONSHIP_SPECS.items():
+            if rels is not None and rel not in rels:
+                continue
             if self.knowledge_backend == "fake":
-                if attr is None:
+                selected = set(ids)
+                if attribute is None:
                     field = "subject_id" if rel == "SUBJECT" else "object_id"
-                    edges.extend([rel, row["id"], row[field], {}] for row in self.facts.values())
+                    for row in self.facts.values():
+                        pair = (row["id"], row[field])
+                        if (pair[0] in selected and pair[1] in selected) if both else (set(pair) & selected):
+                            edges.append([rel, pair[0], pair[1], {}])
                     continue
-                values = getattr(self, attr)
+                values = getattr(self, attribute)
                 for key in values:
                     a, b = key[:2]
-                    payload = values[key] if isinstance(values, dict) else {}
-                    edges.append([rel, a, b, payload])
-            else:
-                for a_kind in left:
-                    for b_kind in right:
-                        if rel == "CODE_EDGE" and (a_kind, b_kind) == ("DataObject", "Symbol"):
-                            continue
-                        relation_payload = "properties(r)" if self.knowledge_backend == "neo4j" else "r"
-                        for row in self.run(
-                            f"MATCH (a:{a_kind})-[r:{rel}]->(b:{b_kind}) RETURN a.id AS a,b.id AS b,{relation_payload} AS r"
-                        ):
-                            edges.append(
-                                [
-                                    rel,
-                                    row["a"],
-                                    row["b"],
-                                    {
-                                        key: value
-                                        for key, value in dict(row["r"]).items()
-                                        if not key.startswith("_")
-                                    },
-                                ]
-                            )
-        shared = {row["id"]: dict(row) for kind in ("Entity", "Fact") for row in self._native_rows(kind)}
-        reachable = set(ids)
-        reachable.update(
-            endpoint
-            for _, a, b, _ in edges
-            if a in ids or b in ids
-            for endpoint in (a, b)
-            if endpoint in shared
-        )
-        for relationships in ({"MENTIONS", "STATES"}, {"SUBJECT", "OBJECT"}):
-            reachable.update(b for rel, a, b, _ in edges if rel in relationships and a in reachable)
+                    if (a in selected and b in selected) if both else (a in selected or b in selected):
+                        edges.append([rel, a, b, values[key] if isinstance(values, dict) else {}])
+                continue
+            clause = "a.id IN $ids AND b.id IN $ids" if both else "(a.id IN $ids OR b.id IN $ids)"
+            for a_kind in left:
+                for b_kind in right:
+                    if rel == "CODE_EDGE" and (a_kind, b_kind) == ("DataObject", "Symbol"):
+                        continue
+                    payload = "properties(r)" if self.knowledge_backend == "neo4j" else "r"
+                    for row in self.run(
+                        f"MATCH (a:{a_kind})-[r:{rel}]->(b:{b_kind}) WHERE {clause} "
+                        f"RETURN a.id AS a,b.id AS b,{payload} AS r",
+                        ids=ids,
+                    ):
+                        edges.append(
+                            [
+                                rel,
+                                row["a"],
+                                row["b"],
+                                {
+                                    key: value
+                                    for key, value in dict(row["r"]).items()
+                                    if not key.startswith("_")
+                                },
+                            ]
+                        )
+        return edges
+
+    def _native_relationships(self, *, ids=None, generation_id=None):
+        """The generation's edges plus its shared-graph closure, in three bounded passes.
+
+        `ids` names the selection set; `generation_id` derives the same set from the
+        generation's own native rows. Exactly one is required -- a relationship read with no
+        selection is the whole-database scan this replaces and no caller wants it.
+
+        The passes reproduce the reviewed whole-database enumeration exactly:
+
+        1. every edge touching `ids`, which keeps both endpoints of a crossing edge visible so
+           `Native relationship crosses generations` still fires;
+        2. the `MENTIONS`/`STATES` -> `SUBJECT`/`OBJECT` closure, a second scoped hop from the
+           facts reached in pass 1;
+        3. every edge with *both* endpoints inside the reached shared set, which is disjoint
+           from pass 1 by construction, so the union needs no de-duplication.
+
+        `sorted(..., key=canonical_json)` at the end means enumeration order never enters a
+        checksum, which is why this restructuring is byte-identical.
+        """
+        if (ids is None) == (generation_id is None):
+            raise ValueError("A relationship read needs exactly one scoping key: ids or generation_id")
+        if generation_id is not None:
+            ids = {
+                row["id"]
+                for kind in ("Passage", "Symbol", "DataObject", "Commit")
+                for row in self._native_rows(kind, generation_id=generation_id)
+            }
+        ids = set(ids)
+        edges = self._edges_touching(ids)
+        endpoints = {endpoint for _, a, b, _ in edges for endpoint in (a, b)} - ids
+        shared = {
+            row["id"]: dict(row)
+            for kind in ("Entity", "Fact")
+            for row in self._native_rows(kind, ids=endpoints)
+        }
+        reachable = set(ids) | {endpoint for endpoint in endpoints if endpoint in shared}
+        # The first hop of the reviewed closure (MENTIONS/STATES from a passage in `ids`) can add
+        # nothing that pass 1 did not already reach, so only the SUBJECT/OBJECT hop is walked.
+        for _rel, a, b, _ in self._edges_touching(reachable, rels=("SUBJECT", "OBJECT")):
+            if a in reachable:
+                reachable.add(b)
+        closure = reachable - ids
+        missing = closure - shared.keys()
+        if missing:
+            shared.update(
+                {
+                    row["id"]: dict(row)
+                    for kind in ("Entity", "Fact")
+                    for row in self._native_rows(kind, ids=missing)
+                }
+            )
+        if closure:
+            edges.extend(self._edges_touching(closure, both=True))
         result = []
         for rel, a, b, payload in edges:
-            selected = (a in ids or b in ids) or ({a, b} <= reachable)
-            if not selected:
+            if not ((a in ids or b in ids) or ({a, b} <= reachable)):
                 continue
             if any(endpoint not in ids and endpoint not in shared for endpoint in (a, b)):
                 raise ValueError("Native relationship crosses generations")
             result.append([rel, a, b, payload])
-        for rid in sorted(reachable - set(ids)):
+        for rid in sorted(closure):
             if rid not in shared:
                 raise ValueError("Missing shared graph endpoint")
             payload = {
@@ -720,11 +817,9 @@ class GenerationQueries:
 
         gen = self._generation(generation_id)
         profile = validate_generation_profile(self, gen) if embedding_mode(gen) == "verified_v1" else None
-        members = [m for m in self._knowledge_rows("GenerationMember") if m.generation_id == generation_id]
-        exact = [
-            m for m in self._knowledge_rows("GenerationEvidenceMember") if m.generation_id == generation_id
-        ]
-        bindings = [b for b in self._knowledge_rows("NativeBinding") if b.generation_id == generation_id]
+        members = self._knowledge_rows("GenerationMember", generation_id=generation_id)
+        exact = self._knowledge_rows("GenerationEvidenceMember", generation_id=generation_id)
+        bindings = self._knowledge_rows("NativeBinding", generation_id=generation_id)
         evidence = {}
 
         def visit(record):
@@ -754,7 +849,7 @@ class GenerationQueries:
                 "profile_fingerprint": profile.profile.fingerprint,
                 "config_fingerprint": profile.config_fingerprint,
             }
-        dense = [r for r in self._native_rows("Passage") if r.get("generation_id") == generation_id]
+        dense = self._native_rows("Passage", generation_id=generation_id)
         # Minimum capability coverage; a pipeline also verifies its declared chunk
         # inventory. Nested/support spans need not each have a separate vector.
         if not dense and any(
@@ -766,8 +861,7 @@ class GenerationQueries:
         native = [
             (kind, r)
             for kind in ("Symbol", "DataObject", "Commit")
-            for r in self._native_rows(kind)
-            if r.get("generation_id") == generation_id
+            for r in self._native_rows(kind, generation_id=generation_id)
         ]
         revisions = {m.artifact_revision_id for m in members}
         exact_ids = {(m.record_kind, m.record_id) for m in exact}
@@ -823,12 +917,12 @@ class GenerationQueries:
                 len(row.embedding) for row in (*extraction.payload.entities, *extraction.payload.triples)
             )
         for row in dense:
-            self._validate_managed_native("Passage", row, gen)
+            self._validate_managed_native("Passage", row, gen, selected=revisions)
             if ("EvidenceSpan", row["span_id"]) not in exact_ids:
                 raise ValueError("Passage span missing from exact manifest")
             dimensions.add(len(row["embedding"]))
         for kind, row in native:
-            self._validate_managed_native(kind, row, gen)
+            self._validate_managed_native(kind, row, gen, selected=revisions)
             if not any(b.native_kind == kind and b.native_id == row["id"] for b in bindings):
                 raise ValueError("Native row lacks evidence binding")
             if row.get("embedding"):
@@ -843,7 +937,7 @@ class GenerationQueries:
             "dense": sorted([self._canonical_native("Passage", r) for r in dense], key=canonical_json),
             "native": [
                 *sorted([[kind, self._canonical_native(kind, r)] for kind, r in native], key=canonical_json),
-                *self._native_relationships(ids),
+                *self._native_relationships(ids=ids),
             ],
         }
         return tuple(
@@ -1220,17 +1314,27 @@ class GenerationQueries:
             shaped["embedding"] = float32_vector(shaped["embedding"])
         return shaped
 
-    def _validate_managed_native(self, kind, row, gen):
+    def _selected_revisions(self, generation_id):
+        """The generation's member revisions. Hoist this out of a per-row loop before calling."""
+        return {
+            m.artifact_revision_id
+            for m in self._knowledge_rows("GenerationMember", generation_id=generation_id)
+        }
+
+    def _validate_managed_native(self, kind, row, gen, *, selected=None):
+        """Validate one managed native row.
+
+        `selected` is the generation's member revisions. A caller in a loop passes it once --
+        reading it here per row is the same whole-table read repeated N times, which is what made
+        writing a 50,000-symbol generation quadratic rather than linear.
+        """
         if row.get("source_id") != gen.source_id or row.get("generation_id") != gen.id:
             raise ValueError("Native row source or generation differs")
         if kind == "Passage":
             span = self._knowledge_get("EvidenceSpan", row.get("span_id"))
             revision = self._knowledge_get("ArtifactRevision", row.get("artifact_revision_id"))
-            selected = {
-                m.artifact_revision_id
-                for m in self._knowledge_rows("GenerationMember")
-                if m.generation_id == gen.id
-            }
+            if selected is None:
+                selected = self._selected_revisions(gen.id)
             view = None
             if row.get("retrieval_view_id") is not None:
                 from ..knowledge.derivations import validate_view
@@ -1268,7 +1372,7 @@ class GenerationQueries:
                 raise ValueError("Dense passage requires a vector")
             parent = row.get("parent_passage_id")
             if parent:
-                parent_row = next((r for r in self._native_rows("Passage") if r["id"] == parent), None)
+                parent_row = next(iter(self._native_rows("Passage", ids=[parent])), None)
                 if (
                     parent_row is None
                     or parent_row.get("generation_id") != gen.id
@@ -1321,7 +1425,21 @@ def native_write(kind):
         def wrapped(store, rows):
             with store.transaction():
                 store._lock_authorization()
-                existing = {row["id"]: row for row in store._native_rows(kind)}
+                # Scoped by id, not by generation: the write has to find a row that may carry no
+                # generation at all, which is the fallback that keeps untagged legacy writes
+                # working, so the batch's own ids are the only key available here.
+                existing = {
+                    row["id"]: row for row in store._native_rows(kind, ids=[row["id"] for row in rows])
+                }
+                selected = {}  # generation id -> member revisions, read once per generation
+                generations = {}  # the same, for the Generation row itself
+                checked = set()  # generations already proven writable in this call
+
+                def writable(generation_id):
+                    if generation_id not in checked:
+                        store._assert_generation_writable(generation_id)
+                        checked.add(generation_id)
+
                 pending = []
                 managed = []
                 for row in rows:
@@ -1335,10 +1453,13 @@ def native_write(kind):
                             raise ValueError("Managed native writes require generation context")
                         pending.append(row)
                         continue
-                    gen = store._generation(generation_id)
-                    store._validate_managed_native(kind, row, gen)
+                    if generation_id not in generations:
+                        generations[generation_id] = store._generation(generation_id)
+                        selected[generation_id] = store._selected_revisions(generation_id)
+                    gen = generations[generation_id]
+                    store._validate_managed_native(kind, row, gen, selected=selected[generation_id])
                     if gen.status == "staging":
-                        store._assert_generation_writable(generation_id)
+                        writable(generation_id)
                     shaped = store._canonical_native(kind, row)
                     if prior is not None:
                         if {
@@ -1354,7 +1475,7 @@ def native_write(kind):
                         }:
                             raise ValueError("Managed native payload is immutable")
                         continue
-                    store._assert_generation_writable(generation_id)
+                    writable(generation_id)
                     pending.append({**row, **shaped})
                     managed.append(shaped)
                 result = function(store, pending) if pending else None
@@ -1420,12 +1541,28 @@ def native_mutation(function):
 
         args = materialize(args)
         kwargs = materialize(kwargs)
+
+        def strings(value):
+            """Every string anywhere in the call, which is the candidate set of native ids."""
+            if isinstance(value, str):
+                return {value}
+            if isinstance(value, dict):
+                return set().union(*(strings(key) | strings(item) for key, item in value.items()), set())
+            if isinstance(value, (list, tuple, set)):
+                return set().union(*(strings(item) for item in value), set())
+            return set()
+
         with store.transaction():
             store._lock_authorization()
+            # Membership in the native tables used to be decided by materialising all six of
+            # them. The arguments bound the question instead: every string the call mentions is
+            # a candidate, and one scoped read per kind says which of them are real. Rows of
+            # *other* generations stay visible, so the cross-generation check below is unchanged.
+            candidates = strings(args) | strings(kwargs)
             natives = {
                 row["id"]: row
                 for kind in ("Passage", "Symbol", "DataObject", "Commit", "Entity", "Fact")
-                for row in store._native_rows(kind)
+                for row in store._native_rows(kind, ids=candidates)
             }
 
             def ids(value):
