@@ -259,14 +259,15 @@ GREEN Fake, log `/tmp/hippo-t5a1fix-fake-green.log`, every command `exit=0`:
 - T5A1 `tests/unit/test_temporal_evidence.py` -> `46 passed` (was 35)
 - T5A2 `tests/unit/test_temporal_conflicts.py` -> `30 passed`
 - T5A3 `-k 'history_manifest or recorded_correction or suppression_history or purge_history'` -> `23 passed, 53 deselected` (was 12; `recorded_correction` still matches nothing, it is part 2)
-- T5A5 `test_knowledge_contracts.py test_store_knowledge.py test_evidence_access.py test_generation_store.py test_snapshot_store.py test_generation_graph_loader.py` -> `210 passed, 1 skipped`
+- T5A5 `test_knowledge_contracts.py test_store_knowledge.py test_evidence_access.py test_generation_store.py test_snapshot_store.py test_generation_graph_loader.py` -> `211 passed, 1 skipped`
 - Extra `test_snapshot_store.py test_query_snapshots.py test_evidence_access.py test_evidence_epochs.py test_generation_store.py test_managed_source_lifecycle.py test_managed_source_inventory.py test_build_authority.py` -> `201 passed, 1 skipped`
-- Collateral check for the shared model/classification changes, `/tmp/hippo-t5a1fix-extra.log`: `test_rag_eval.py test_query_snapshot_service.py test_saved_snapshot_retention.py test_generation_profiles.py test_generation_failure.py test_generation_counts.py` -> `134 passed`
+- Adjacent, for the shared model/classification/identity changes: `test_rag_eval.py test_query_snapshot_service.py test_saved_snapshot_retention.py test_generation_profiles.py test_generation_failure.py test_generation_counts.py test_structural_loading.py test_lease_heartbeat.py` -> `190 passed`
+- **Beyond the brief, and a deviation worth naming:** the whole Fake unit suite was run once as a collateral check for the `RECORD_EPOCHS` reclassification, `/tmp/hippo-t5a1fix-fullfake.log`, `-W error` plus the sanctioned form (b) `BlockingPortal` filter: `3264 passed, 26 skipped, 14 failed`. All fourteen are `tests/unit/test_cli.py` server/`[remote]` cases failing with `StoreLockedError: data/hippo.lbug is already open in another hippo process` — they reach for the shared development store, which the running server holds. Environmental, nothing written, no file in this diff is on a CLI or web path. That run predates the identity carve-out; the gate commands above were all re-run after it.
 
 GREEN Ladybug, log `/tmp/hippo-t5a1fix-ladybug-green.log`, every command `exit=0`:
 
-- T5A4 same `-k` filter -> `23 passed, 53 deselected` in 22.89s
-- `test_snapshot_store.py test_query_snapshots.py test_evidence_epochs.py` -> `30 passed` in 15.96s
+- T5A4 same `-k` filter -> `23 passed, 53 deselected` in 22.49s
+- `test_snapshot_store.py test_query_snapshots.py test_evidence_epochs.py` -> `30 passed` in 15.46s
 
 Ruff over all eleven files (the ledger's ten plus `src/hippo/store/authorization.py`),
 `/tmp/hippo-t5a1fix-ruff.log`: `ruff check` -> `All checks passed!`; `ruff format --check` ->
@@ -279,10 +280,11 @@ Warning handling: every command above ran under a bare `-W error`. No file in th
 ### Files changed by this fix
 
 Implementation: `src/hippo/knowledge/temporal.py`, `src/hippo/knowledge/snapshots.py`,
-`src/hippo/knowledge/model.py` (selector fields and the cutoff docstring only),
+`src/hippo/knowledge/model.py` (selector fields, the cutoff docstring, and the identity carve-out
+the orchestrator approved),
 `src/hippo/store/snapshots.py`, `src/hippo/store/authorization.py` (classification only).
 Tests: `tests/unit/test_temporal_evidence.py` (11 new cases, one renamed),
-`tests/unit/test_knowledge_contracts.py` (one new case),
+`tests/unit/test_knowledge_contracts.py` (two new cases),
 `tests/unit/test_snapshot_store.py` (new `purged_history_evidence` kwargs).
 Docs: this file, the plan's section 4 notes, and the T5A3/T5A4 EVIDENCE lines in `GATES.md`.
 Untouched: `knowledge/{conflicts,access,lifecycle,query_access,ask}.py`, `src/hippo/ingest/*`,
