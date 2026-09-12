@@ -114,6 +114,7 @@ the same way in `code-capture-notes.md` item 5d.
 | `modifies` is carried as `NativeModifies`, not raw dicts | The bundle has to be immutable and comparable between two runs, and `hunk_json` as canonical JSON is what makes that true. `row` rebuilds `add_modifies`'s input exactly, pinned by `test_modifies_rows_keep_their_hunks_and_bind_only_to_symbols_of_this_generation`, which compares `[row.row for row in bundle.modifies]` to the `History` it was given. |
 | `CodeHistoryBundle`'s flat inventories are derived properties of `commits` | One source of truth. A bundle whose `spans` tuple could disagree with its `commits` tuple is a class of bug that simply does not exist here. |
 | `coverage` uses flat `history_*` keys | `coverage_json` is assembled by CC9b from several slices' contributions; a flat prefixed namespace merges without a nesting convention and `history_skipped` is already the name `git_history.py:131` gives the number in `Source.meta["code"]`. |
+| `shallow_boundary` is accepted as any iterable of SHA strings, refused if an entry is not nonempty text, and normalized to a sorted list in coverage | Nothing produces it today (finding 11), so this boundary cannot depend on one producer's type. Sorting makes two runs of one repository compare equal whatever order the caller read `.git/shallow` in. |
 
 ## Two additions to the brief's signature, both forced by CC6's code
 
@@ -228,8 +229,8 @@ Ruff, over both files changed and over this document:
 ### The tests were proved to discriminate
 
 Every test in the new module failed at RED for one reason — the module did not exist — which proves
-only that they run. Nine targeted mutations were applied to the finished module, one at a time, with
-the suite re-run and the module restored after each:
+only that they run. Eight targeted mutations, plus a control, were applied to the finished module one
+at a time, with the suite re-run and the module restored byte for byte after each:
 
 | Mutation | Caught by |
 | --- | --- |
@@ -270,7 +271,7 @@ the suite re-run and the module restored after each:
    own — `hippo.codegraph`'s package body loads the tree-sitter walkers — and `codegraph` is not
    `ingest`, so `tests/unit/test_layering.py` is unaffected and still green.
 3. **The three-commit fixture is hand-built, by design.** `read_history` itself is covered by
-   `tests/unit/test_git_history.py` against real repositories (17 tests, green in the CD6 command).
+   `tests/unit/test_git_history.py` against real repositories (34 tests, green in the CD6 command).
    CC7 is tested against `History`'s *contract*, so a change to git's diff behaviour fails there, not
    here.
 4. **`omega` is passed through, never recomputed.** `MODIFIES_OMEGA` stays `git_history`'s constant.
@@ -291,9 +292,11 @@ the suite re-run and the module restored after each:
 2. **CC9b must set `HISTORY_CONFIGURATION_KEY` before calling `code_generation`.** Order:
    `configuration[code_history.HISTORY_CONFIGURATION_KEY] = code_history.CODE_HISTORY_RULE_VERSION`,
    then `CodeGenerationInputs(configuration=...)`, then `code_generation`, then the rest of section 6's
-   order. The same configuration must reach `capture_repository_inputs(configuration=...)`, because
-   `validate_generation_profile` re-derives identity from the manifest's copy. `bind_history` refuses
-   the build if the key is missing or different.
+   order. The configuration that reaches `capture_repository_inputs(configuration=...)` must be the
+   **folded** one — `CodeGenerationInputs.folded(chunk_rule_version)`, so it carries `code_derivation`
+   as well as this key — because `validate_generation_profile:181-197` re-derives identity from the
+   manifest's copy and CC6 hashed the folded dict. `bind_history` refuses the build if the key is
+   missing or different.
 3. **CC9b must subtract the unbound-symbol complement from `History.modifies` and record it in
    coverage.** This is CC6's finding 10 reaching the history lane. `bind_history` **refuses** a
    `MODIFIES` edge whose symbol has no native row in the bundle rather than dropping it, because a
@@ -334,3 +337,15 @@ the suite re-run and the module restored after each:
 10. **`BoundCommit.records` is the per-commit dependency group.** `(span, derived_record, dependencies,
     view, observation)`, in dependency order, so CC8's "batches are complete dependency groups" can
     batch a commit at a time without recomputing the ordering.
+11. **Nothing produces `shallow_boundary` yet — the brief is wrong about CC4.** The CC7 brief says
+    "CC4 records the shallow-clone boundary and `files_skipped` on its capture result". It does not:
+    `src/hippo/ingest/repo_capture.py` contains no occurrence of `shallow`, and `RepositoryCapture`
+    (`:298-331`) carries `kind, root, inputs, exclusions, accepted, observed_at, provider_revision,
+    repository` and nothing else. `git_history._shallow` (`:292`) does read `.git/shallow`, but it is
+    private and its result is consumed inside the walk — `History` never surfaces it. So
+    `shallow_boundary` is a caller-supplied argument here and **CC9b must obtain it itself**, either by
+    reading `<checkout>/.git/shallow` in the coordinator or by having whoever next owns
+    `git_history.py` promote `_shallow` to a public helper (the cleaner option: it already handles the
+    full-clone, worktree and no-repository cases by returning an empty set). Passing `None` or `()` is
+    accepted and records an empty boundary, which is correct for a full clone and **wrong and silent**
+    for a shallow one — which is exactly why this needs naming rather than defaulting.
