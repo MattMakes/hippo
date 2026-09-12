@@ -205,12 +205,20 @@ def test_an_exception_whose_str_raises_is_still_mapped():
 # `ManagedFailure.code` from `src/hippo/ingest/managed_activation.py` (Task 3a).
 # The managed lane maps an exception once, at the point of failure, and stores the
 # code on the Source row; a route reading that row hours later has no exception to
-# re-derive from. These nine are the stable set, recorded in the Task 3a review.
+# re-derive from. These eleven are the stable set: the nine recorded in the Task 3a
+# review, plus the two Task 3b added -- `retrieval_rebuild_required`, when the managed
+# table learned to read a stale embedding profile ahead of the wider `OllamaError`, and
+# `build_interrupted`, which the store's restart sweep writes without any exception to
+# classify (see `test_a_code_the_store_writes_without_an_exception_still_has_an_answer`).
 MANAGED_CODES = {
     "build_cancelled": FAILED,
+    "build_interrupted": FAILED,
     "build_busy": FAILED,
     "authorization_changed": None,
     "model_unavailable": UNAVAILABLE,
+    "retrieval_rebuild_required": REBUILD,
+    # Not a build-lane code: this module's own, so the table is closed over its output.
+    "retrieval_unavailable": UNAVAILABLE,
     "source_too_large": SIZE,
     "unsupported_source": TYPE,
     "invalid_configuration": FAILED,
@@ -241,11 +249,88 @@ def test_a_stored_code_and_its_own_exception_agree():
         ("build_busy", BuildBusy(POISON)),
         ("authorization_changed", AuthorizationChanged(POISON)),
         ("model_unavailable", OllamaError(POISON)),
+        # The one code whose two vocabularies now agree exactly: the managed table reads
+        # a stale or mismatched profile ahead of the wider `OllamaError` row, so a stored
+        # `retrieval_rebuild_required` round-trips to the failure the same exception maps
+        # to in a query. Before Task 3b it was stored as `model_unavailable` and read back
+        # as a 503 retry for evidence that will never be compatible again.
+        ("retrieval_rebuild_required", EmbeddingProfileMismatch(POISON)),
+        ("retrieval_rebuild_required", EmbeddingProfileChanged(POISON)),
         ("source_too_large", TooLarge(POISON)),
         ("unsupported_source", UnsupportedProvenanceFormat(POISON)),
         ("invalid_source", InputCaptureError(POISON)),
     ):
         assert module.public_failure_for_code(code) == module.public_failure(exc), code
+
+
+def test_a_code_the_store_writes_without_an_exception_still_has_an_answer():
+    """`build_interrupted` has no exception family, so its round trip is the stored string.
+
+    A process that has just restarted has no exception to classify: the sweep in
+    `store/memory.py` writes `INTERRUPTED_REFRESH_ERROR` onto the row directly, and must
+    not import the pipeline to do it. The literal is spelled out here for the same reason
+    the pairing above is -- importing the store into this test would pull a driver -- so
+    what this pins is the shape contract between the two modules: whatever the sweep
+    writes has to split on `": "` into a code this table knows and a bounded sentence.
+    """
+    module = api()
+    stored = "build_interrupted: The build was interrupted by a restart. Reindex to run it again."
+    code, separator, message = stored.partition(": ")
+    assert separator and message
+    failure = module.public_failure_for_code(code)
+    assert failure is not None, "a stored code with no public answer renders as the wrong status"
+    assert (failure.code, failure.message, failure.http_status) == FAILED
+    # Not 409: that sentence claims the corpus cannot serve a query until it is rebuilt,
+    # and an interrupted refresh leaves the published generation serving throughout.
+    assert failure.http_status == 500
+    assert failure != module.public_failure_for_code("retrieval_rebuild_required")
+
+
+def test_every_public_code_round_trips_to_a_failure_carrying_that_code():
+    """The table is closed over its own output, so rendering twice is not a downgrade.
+
+    A caller that has already rendered a failure once -- an eval replaying a stored
+    result, a route re-reading its own answer -- would otherwise fall off the table and
+    be told `operation_failed` for something already classified as unavailable.
+    """
+    module = api()
+    every = (
+        module.REBUILD_REQUIRED,
+        module.RETRIEVAL_UNAVAILABLE,
+        module.INVALID_SOURCE_TYPE,
+        module.INVALID_SOURCE_SIZE,
+        module.OPERATION_FAILED,
+    )
+    for failure in every:
+        answer = module.public_failure_for_code(failure.code)
+        assert answer is not None, f"{failure.code} is not closed over its own output"
+        assert answer.code == failure.code
+
+
+@pytest.mark.parametrize("code", sorted(MANAGED_CODES))
+def test_the_code_mapping_is_idempotent(code):
+    """Applying it to its own result changes nothing -- with one inherent exception.
+
+    `INVALID_SOURCE_TYPE` (400) and `INVALID_SOURCE_SIZE` (413) deliberately share the
+    code `invalid_source`, so a code alone cannot say which, and `invalid_source` resolves
+    to the 400. A `source_too_large` row therefore round-trips to the right code and the
+    wrong *status* -- which is exactly why a stored code is rendered as `code: message`
+    and never as an HTTP status; the 413 belongs to `public_failure(exc)`, where something
+    still knows which exception it was. Pinned by name rather than skipped, so nobody
+    builds on the assumption that a stored code remembers a status.
+    """
+    module = api()
+    first = module.public_failure_for_code(code)
+    if first is None:  # authorization_changed keeps the response it already had
+        return
+    again = module.public_failure_for_code(first.code)
+    assert again is not None
+    assert again.code == first.code
+    if code == "source_too_large":
+        assert first.http_status == 413
+        assert again.http_status == 400, "the 413/400 collision moved; re-read the table comment"
+        return
+    assert again == first
 
 
 def test_an_unknown_or_malformed_code_falls_through_like_an_unknown_exception():

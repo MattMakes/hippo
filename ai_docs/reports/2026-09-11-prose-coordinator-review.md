@@ -247,7 +247,8 @@ transaction opens, and expose it:
 
 ```python
 # in each store's transaction(), alongside the depth increment
-self._transaction_thread = threading.get_ident()   # cleared when depth returns to 0
+self._transaction_thread = threading.get_ident()  # cleared when depth returns to 0
+
 
 # shared
 def in_ambient_transaction(self):
@@ -270,11 +271,12 @@ correct semantics with a `threading.local` depth counter
 if self.heartbeat is not None:
     self.heartbeat.check()
 
+
 # :227-231
 def pause(self):
-    heartbeat, self.heartbeat = self.heartbeat, None    # <- nulls the attribute first
+    heartbeat, self.heartbeat = self.heartbeat, None  # <- nulls the attribute first
     if heartbeat is not None:
-        heartbeat.close()                               # <- only then joins the thread
+        heartbeat.close()  # <- only then joins the thread
 ```
 
 `pause()` clears `self.heartbeat` *before* it closes and joins the worker, so the renewal thread is by

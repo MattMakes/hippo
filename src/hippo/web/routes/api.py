@@ -13,12 +13,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ... import ask as ask_service
+from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import answer_sources, retrieval_fields
 from ...knowledge.query_access import query_session
-from ...ollama import OllamaError
 from ...status import system_status
+from ...store.base import validate_settings
 from ..auth import principal_of, require
-from ..render import ctx_of
+from ..render import ctx_of, public_failure_response, retrieval_failure
 
 router = APIRouter(prefix="/api")
 
@@ -70,10 +71,34 @@ def pull_models(request: Request):
 # (QA1 surprise 3).
 
 
+def checked_settings(settings: dict[str, Any] | None) -> None:
+    """The caller's own numbers keep the store validator's message; nothing else does.
+
+    Validating them here, before a session exists, is what makes the failure mapping below
+    unambiguous: past this line a `ValueError` is never the caller's request, so it can be
+    mapped to a closed public code without swallowing "damping must be between 0 and 1".
+    """
+    try:
+        validate_settings(dict(settings or {}))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def query_failure(exc: BaseException) -> JSONResponse:
+    """One closed code for a failed query, never the exception's own words.
+
+    A model path must not let an unknown exception reach the client. `retrieval_failure` is
+    that caller rule, shared with the page surfaces and the app's own handlers so the three
+    cannot drift apart.
+    """
+    return public_failure_response(retrieval_failure(exc))
+
+
 @router.post("/ask")
 def ask(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     access = principal_of(request).access
+    checked_settings(body.settings)
     try:
         with query_session(ctx, access, settings=body.settings) as session:
             trace, answer = ask_service.ask(
@@ -90,16 +115,19 @@ def ask(request: Request, body: QuestionBody):
             }
             session.validate()
             return payload
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except OllamaError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
+    # A permission change while the answer was being built outranks whatever failed: it is
+    # the only thing a caller must act on, and the app answers it with the same 409 as ever.
+    except AuthorizationChanged:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the closed table decides what a client learns
+        return query_failure(exc)
 
 
 @router.post("/search")
 def search(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     access = principal_of(request).access
+    checked_settings(body.settings)
     try:
         with query_session(ctx, access, settings=body.settings) as session:
             trace = ask_service.search(
@@ -113,10 +141,10 @@ def search(request: Request, body: QuestionBody):
             }
             session.validate()
             return payload
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except OllamaError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
+    except AuthorizationChanged:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the closed table decides what a client learns
+        return query_failure(exc)
 
 
 # ------------------------------------------------------------- graph lookups

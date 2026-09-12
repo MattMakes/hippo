@@ -158,7 +158,7 @@ def reconstruct_trace(graph, original: Trace, *, question: str) -> Trace:
     requested = {(row.get("a"), row.get("b"), row.get("kind")) for row in original.paths}
     arrows = [
         edge
-        for values in graph.code_out.values()
+        for _vertex, values in sorted(graph.code_out.items())
         for edge in values
         if (graph.node_ids[edge.src], graph.node_ids[edge.dst], edge.kind) in requested
     ]

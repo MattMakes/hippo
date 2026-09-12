@@ -874,6 +874,11 @@ class GenerationQueries:
     def _validate_publication_plan(self, gen, plan):
         """Prove every closure and every append before the publication writes anything."""
         workspace = self.get_source(gen.source_id)["workspace_id"]
+        staged = {
+            (m.record_kind, m.record_id)
+            for m in self._knowledge_rows("GenerationEvidenceMember")
+            if m.generation_id == gen.id
+        }
         series = set()
         for segment in plan.closures:
             row = self._plan_row(segment.record_kind, segment.record_id)
@@ -886,12 +891,13 @@ class GenerationQueries:
                 raise ValueError("Correction plan target is already closed")
             if row.recorded_from >= plan.published_at:
                 raise ValueError("Correction plan target was not recorded before the publication")
+            if (segment.record_kind, segment.record_id) in staged:
+                # A correction closes what an earlier generation published. Closing
+                # a row this very generation carries would mint a recorded window
+                # over which Hippo exposed nothing, because the generation holding
+                # the row was not active for any of it.
+                raise ValueError("Correction plan target belongs to the generation being published")
             series.add(self._plan_series(segment.record_kind, row))
-        staged = {
-            (m.record_kind, m.record_id)
-            for m in self._knowledge_rows("GenerationEvidenceMember")
-            if m.generation_id == gen.id
-        }
         revisions = {
             m.artifact_revision_id
             for m in self._knowledge_rows("GenerationMember")
@@ -911,6 +917,11 @@ class GenerationQueries:
                 for s in self._knowledge_rows("AssertionSupport")
                 if s.assertion_version_id == row.id and segment.record_kind == "AssertionVersion"
             }
+            # Defense in depth, not the operative guard: `validate_generation_seal`
+            # already refuses a member version whose proof group is incomplete
+            # (`:703-710`, re-run above), so every route here through publication
+            # is refused earlier. This is what proves the dependency if a plan is
+            # ever validated against a generation that check did not cover.
             if not dependencies <= revisions or not supports <= staged:
                 raise ValueError("Corrected segment depends on evidence outside its generation")
 
@@ -995,10 +1006,16 @@ class GenerationQueries:
             self.validate_generation_seal(gen.id)
             if plan is not None:
                 self._validate_publication_plan(gen, plan)
-                self._close_recorded_intervals(
-                    tuple((s.record_kind, s.record_id) for s in plan.closures),
-                    recorded_to=plan.published_at,
-                )
+                # The capability is minted only here, only on a proved plan, and
+                # only for as long as its closures take: it is what makes this
+                # primitive the sole coordinator rather than merely the usual
+                # caller of a private method.
+                with self._recorded_closure_capability(gen.id, plan) as capability:
+                    self._close_recorded_intervals(
+                        tuple((s.record_kind, s.record_id) for s in plan.closures),
+                        recorded_to=plan.published_at,
+                        capability=capability,
+                    )
                 if fault_hook:
                     fault_hook("closure")
             result = self._publish_generation(

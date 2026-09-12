@@ -1,14 +1,18 @@
 """One pinned graph survives model work and rendering, with deterministic release."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 from hippo import ask, cli, mcp_server
 from hippo.access import Principal
 from hippo.hipporag.indexer import Chunk, index_source
 from hippo.knowledge.access import AuthorizationChanged
+from hippo.knowledge.public_errors import OPERATION_FAILED
 from hippo.knowledge.replay import view_fingerprint
+from hippo.mcp_server import DENIED, DENIED_CODE
 from hippo.web.routes import api
 
 QUESTION = "Who designed the Orion arm?"
@@ -79,8 +83,29 @@ def test_model_failure_releases_graph_and_revocation_wins(observed, monkeypatch,
         raise RuntimeError("model failed")
 
     monkeypatch.setattr(ctx.ollama, "embed_one", fail)
-    with pytest.raises(AuthorizationChanged if revoke else RuntimeError):
-        invoke(surface, ctx)
+    # Each transport now renders a failure in its own closed vocabulary instead of letting the
+    # exception out (Task 5, "Safe transport failures"). What the exception *was* is no longer
+    # visible at the boundary, so what this test still pins there is which of the two
+    # conditions won — a revocation always outranks the model failure — and, on every surface
+    # alike, that the graph was acquired once and released once.
+    if surface.startswith("http") and not revoke:
+        response = invoke(surface, ctx)
+        assert response.status_code == OPERATION_FAILED.http_status
+        assert json.loads(bytes(response.body)) == {
+            "error": OPERATION_FAILED.message,
+            "code": OPERATION_FAILED.code,
+        }
+    elif surface.startswith("mcp"):
+        with pytest.raises(ToolError) as raised:
+            invoke(surface, ctx)
+        expected = (
+            f"{DENIED_CODE}: {DENIED}" if revoke else f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message}"
+        )
+        assert str(raised.value) == expected
+        assert "model failed" not in str(raised.value)
+    else:
+        with pytest.raises(AuthorizationChanged if revoke else RuntimeError):
+            invoke(surface, ctx)
     assert len(acquired) == 1
     assert released == acquired
 

@@ -38,6 +38,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..access import CAPABILITIES, Principal, top_role
 from ..context import AppContext
+from ..knowledge.build_authority import BuildActor
 from ..knowledge.query_access import query_session
 from ..status import source_view
 from .render import ctx_of, render
@@ -216,6 +217,22 @@ def require(request: Request, capability: str) -> Principal:
             f"({CAPABILITIES[capability].rstrip('.')}). Ask an admin.",
         )
     return principal
+
+
+def build_actor_of(principal: Principal) -> BuildActor | None:
+    """
+    The caller's own build actor, or None for an identity that may not build managed evidence.
+
+    Open mode and role previews are not readers: a new source of theirs keeps the legacy
+    lane (the dispatch table's "no actor" column), and `plan_dispatch` refuses them before
+    it touches an existing managed one. `BuildActor.trusted_local()` is for explicit
+    internal calls; web code must never manufacture it as an authentication fallback, so it
+    is not reachable from here.
+    """
+    try:
+        return BuildActor.reader(principal)
+    except ValueError:
+        return None
 
 
 def require_capability(capability: str):
@@ -409,6 +426,7 @@ __all__ = [
     "AuthGate",
     "StoreDown",
     "SESSION_COOKIE",
+    "build_actor_of",
     "principal_from_bearer",
     "principal_of",
     "public_user",
