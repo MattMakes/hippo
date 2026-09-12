@@ -25,11 +25,12 @@ from ...hipporag import paths
 from ...ingest import pipeline
 from ...ingest.pipeline import Busy
 from ...ingest.repos import RepoError
+from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import retrieval_fields
 from ...knowledge.eval_access import EvalAccess
 from ...knowledge.query_access import QuerySession, query_session
 from ...status import source_view
-from ..auth import principal_of, require
+from ..auth import build_actor_of, principal_of, require
 from ..render import STOP_POLLING, ctx_of, render
 from . import graph as graph_routes
 
@@ -341,11 +342,27 @@ def new_source_access(request: Request, visibility: str | None) -> dict[str, Any
     return {"owner_id": principal.user_id, "access_role_id": role_id}
 
 
+def new_managed_source(request: Request, visibility: str | None) -> dict[str, Any]:
+    """
+    `new_source_access` plus the caller's own build actor, for the two ingress families
+    whose pipeline entry point accepts one.
+
+    The actor is the opt-in to the reviewed managed build. It is always the identity this
+    request already proved: an open or preview caller brings None and keeps the legacy lane,
+    and the pipeline, not this route, decides whether the saved source kind can use it at
+    all. Nothing here is captured by the background job except that immutable actor.
+    """
+    return {
+        **new_source_access(request, visibility),
+        "build_actor": build_actor_of(principal_of(request)),
+    }
+
+
 @router.post("/sources/upload")
 async def upload_form(request: Request, files: list[UploadFile] = File(...), visibility: str = Form(None)):
     ctx = ctx_of(request)
     try:
-        access = new_source_access(request, visibility)
+        access = new_managed_source(request, visibility)
     except HTTPException as exc:
         return RedirectResponse(f"/?error={quote(str(exc.detail))}", status_code=303)
     if message := too_big(request, ctx):
@@ -368,7 +385,7 @@ async def upload_form(request: Request, files: list[UploadFile] = File(...), vis
 @router.post("/sources/text")
 def text_form(request: Request, name: str = Form(""), text: str = Form(""), visibility: str = Form(None)):
     try:
-        access = new_source_access(request, visibility)
+        access = new_managed_source(request, visibility)
     except HTTPException as exc:
         return RedirectResponse(f"/?error={quote(str(exc.detail))}", status_code=303)
     if not text.strip():
@@ -441,7 +458,7 @@ def list_sources(request: Request) -> list[dict[str, Any]]:
 
 @api.post("/text")
 def add_text(request: Request, body: TextBody, visibility: str | None = None):
-    access = new_source_access(request, body.visibility if body.visibility is not None else visibility)
+    access = new_managed_source(request, body.visibility if body.visibility is not None else visibility)
     try:
         return {"source_id": pipeline.add_text(ctx_of(request), body.name, body.text, **access)}
     except ValueError as exc:
@@ -450,7 +467,7 @@ def add_text(request: Request, body: TextBody, visibility: str | None = None):
 
 @api.post("/upload")
 async def add_upload(request: Request, file: UploadFile = File(...), visibility: str = Form(None)):
-    access = new_source_access(request, visibility)
+    access = new_managed_source(request, visibility)
     if message := too_big(request, ctx_of(request)):
         return JSONResponse({"error": message}, status_code=413)
     data = await file.read()
@@ -480,16 +497,19 @@ def reindex_all(request: Request):
     """Re-index every source with the current embedding model (the fix for a changed HIPPO_EMBED_MODEL)."""
     principal = require(request, "edit_graph")  # retains the existing global operation permission
     ctx = ctx_of(request)
-    view = source_view(ctx, principal.access)
-    try:
-        pipeline.reindex_all(ctx)
-    except Busy as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
-    view.validate()
-    source_view(ctx, principal.access).validate()
-    # The pipeline reports only a global count, without per-source outcomes.
-    # Acknowledge acceptance without claiming which visible jobs started.
-    return {"accepted": True}
+    # One owner spans the whole operation: the inventory this caller proved, the pipeline
+    # call, and the proof that nothing about their audience changed while it ran. The route
+    # used to validate a view it had already released and then acquire a second one.
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        try:
+            pipeline.reindex_all(ctx)
+        except Busy as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        view.validate()
+        # The pipeline reports only a global count, without per-source outcomes.
+        # Acknowledge acceptance without claiming which visible jobs started.
+        return {"accepted": True}
 
 
 @api.get("/{source_id}")
@@ -525,6 +545,10 @@ def delete_source(request: Request, source_id: str):
         pipeline.delete_source(ctx, source_id)
     except Busy as exc:
         return JSONResponse({"error": str(exc)}, status_code=409)
+    except AuthorizationChanged as exc:
+        # A reader retrying their own delete must not learn that the source is still there,
+        # tombstoned: an unavailable source and a suppressed one answer the same way.
+        raise HTTPException(404, "no such source") from exc
     return {"deleted": source_id}
 
 
@@ -532,7 +556,9 @@ def delete_source(request: Request, source_id: str):
 def reindex(request: Request, source_id: str):
     ctx = ctx_of(request)
     manageable_source(request, source_id)
+    # The principal `manageable_source` just authorized is the one that rebuilds.
+    actor = build_actor_of(principal_of(request))
     try:
-        return {"started": pipeline.reindex(ctx, source_id)}
+        return {"started": pipeline.reindex(ctx, source_id, build_actor=actor)}
     except Busy as exc:
         return JSONResponse({"error": str(exc)}, status_code=409)
