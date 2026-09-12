@@ -322,7 +322,10 @@ def test_a_gated_local_index_is_owned_by_its_creator_and_kept_to_their_tier(
     monkeypatch.setenv(mcp_server.TOKEN_ENV, creator["token"])
     note = tmp_path / "zed.md"
     note.write_text("Zed Labs is located in Lisbon.\n")
-    assert cli.main(["index", str(note)]) in (0, 1)  # the build may fail; the row is the point
+    # 1, for the same reason as `test_a_gated_local_index_really_reaches_the_managed_lane`:
+    # a reader actor over an eligible input dispatches the managed lane, which the shared
+    # fake cannot serve. The row it left behind is what this test is about.
+    assert cli.main(["index", str(note)]) == 1
     capsys.readouterr()
 
     row = cli_ctx.store.list_sources()[0]
