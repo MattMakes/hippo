@@ -394,3 +394,123 @@ def test_every_accepted_file_is_readable_from_the_captured_raw_object(api, raw_s
     assert {
         item.logical_path: raw_store.read_bytes(item.raw_artifact) for item in result.accepted.inputs
     } == files
+
+
+# --------------------------------------------- provisional repository identity
+
+
+def test_the_full_repository_path_is_kept_so_subgroups_do_not_collide(api):
+    alpha = api.repository_descriptor("https://gitlab.example.com/alpha/team/api")
+    beta = api.repository_descriptor("https://gitlab.example.com/beta/team/api")
+    assert alpha.provider_repository_id == "alpha/team/api"
+    assert beta.provider_repository_id == "beta/team/api"
+    assert alpha.provider_instance == beta.provider_instance == "https://gitlab.example.com"
+    assert alpha != beta
+    with pytest.raises(FrozenInstanceError):
+        alpha.provider_instance = "https://elsewhere"
+
+
+def test_the_two_segment_legacy_name_is_the_collision_this_replaces(api):
+    from hippo.ingest.repos import repo_name
+
+    first, second = (
+        "https://gitlab.example.com/alpha/team/api",
+        "https://gitlab.example.com/beta/team/api",
+    )
+    assert repo_name(first) == repo_name(second) == "team/api"
+    assert api.repository_descriptor(first) != api.repository_descriptor(second)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://GitHub.com/Acme/Robots.git",
+        "https://github.com/acme/robots",
+        "https://github.com/acme/robots/",
+        "ssh://git@github.com/acme/robots.git",
+        "ssh://git@github.com:2222/acme/robots.git",
+        "git@github.com:acme/robots.git",
+        "http://github.com/acme/robots.git",
+        "http://github.com:80/acme/robots",
+        "https://github.com:443/acme/robots",
+    ],
+)
+def test_transport_host_case_and_git_suffix_all_fold_to_one_identity(api, url):
+    descriptor = api.repository_descriptor(url)
+    assert descriptor.provider_instance == "https://github.com"
+    assert descriptor.provider_repository_id == "acme/robots"
+
+
+def test_a_nondefault_port_stays_part_of_the_provider_instance(api):
+    descriptor = api.repository_descriptor("https://forge.example.com:8443/team/api.git")
+    assert descriptor.provider_instance == "https://forge.example.com:8443"
+    assert api.repository_descriptor("https://forge.example.com:443/team/api").provider_instance == (
+        "https://forge.example.com"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com",
+        "https://github.com/",
+        "https://github.com/acme/../robots",
+        "https://github.com/acme/./robots",
+        "/local/path/repo",
+        "file:///local/repo",
+        "-oProxyCommand=evil",
+        "https://github.com/acme/robots?x=1",
+        "",
+    ],
+)
+def test_a_url_with_no_honest_repository_path_refuses(api, url):
+    with pytest.raises(api.CaptureRefused) as error:
+        api.repository_descriptor(url)
+    assert error.value.reason == "unsupported_repository_url"
+
+
+def test_an_embedded_credential_refuses_and_never_reaches_the_message(api):
+    with pytest.raises(api.CaptureRefused) as error:
+        api.repository_descriptor("https://someone:s3cr3t-token@github.com/acme/robots.git")
+    assert error.value.reason == "unsupported_repository_url"
+    assert "s3cr3t-token" not in str(error.value) and "someone" not in str(error.value)
+
+
+def test_an_archive_or_single_file_carries_no_repository_descriptor(api, raw_store, tmp_path):
+    path = tree(tmp_path / "repo", {"solo.py": b"x = 1\n"}) / "solo.py"
+    assert capture(api, raw_store, path).repository is None
+
+
+def test_a_descriptor_on_something_that_is_not_a_checkout_refuses_before_any_raw_write(
+    api, raw_store, tmp_path
+):
+    path = tree(tmp_path / "repo", {"solo.py": b"x = 1\n"}) / "solo.py"
+    before = raw_object_count(tmp_path / "raw")
+    with pytest.raises(api.CaptureRefused) as error:
+        capture(
+            api,
+            raw_store,
+            path,
+            repository=api.repository_descriptor("https://github.com/acme/robots"),
+        )
+    assert error.value.reason == "repository_without_checkout"
+    assert raw_object_count(tmp_path / "raw") == before
+
+
+def test_the_repository_descriptor_is_carried_but_never_hashed(api, raw_store, tmp_path):
+    files = {"pkg/mod.py": b"x = 1\n"}
+    descriptor = api.repository_descriptor("https://github.com/acme/robots.git")
+    plain = capture(api, raw_store, tree(tmp_path / "one", files))
+    named = capture(api, raw_store, tree(tmp_path / "two", files), repository=descriptor)
+    assert named.repository == descriptor
+    assert plain.repository is None
+    assert named.accepted.manifest.sha256 == plain.accepted.manifest.sha256
+
+
+def test_the_descriptor_feeds_repository_identity_unchanged(api):
+    from hippo.knowledge.identity import repository_identity
+
+    descriptor = api.repository_descriptor("git@github.com:acme/robots.git")
+    assert repository_identity(
+        "workspace-one", descriptor.provider_instance, descriptor.provider_repository_id
+    ) == repository_identity("workspace-one", "https://github.com", "acme/robots")

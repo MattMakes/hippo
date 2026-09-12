@@ -26,20 +26,30 @@ timestamps out of identity, and the head commit enters through the repository
 so the canonical manifest records every exclusion under that one name. The finer
 reason lives on `RepositoryCapture.exclusions` and reaches the generation through
 `coverage_json` (plan section 9).
+
+`repository_descriptor` derives the provisional repository identity of a clone URL.
+It keeps the whole path rather than `repos.repo_name`'s last two segments, which
+collide for any subgroup layout, and it is carried on the result rather than hashed.
+
+`readers.py` is read-only here: this module consumes `IGNORED_DIRS`,
+`is_supported_name`, `is_code_name`, `is_probably_binary` and `check_zip_budgets`,
+and adds no reader predicate of its own.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
+from urllib.parse import unquote, urlsplit
 from zipfile import BadZipFile, ZipFile, ZipInfo
 
 from ..codegraph.model import CODE_MAX_FILES
-from ..knowledge.identity import normalize_relative_path
+from ..knowledge.identity import normalize_provider_url, normalize_relative_path
 from ..knowledge.inputs import (
     AcceptedInputs,
     ByteInput,
@@ -71,11 +81,13 @@ REFUSAL_REASONS = (
     "escaping_path",
     "input_bytes",
     "nested_archive",
+    "repository_without_checkout",
     "reserved_configuration",
     "too_many_files",
     "total_bytes",
     "unportable_path",
     "unreadable",
+    "unsupported_repository_url",
     "unsupported_root",
 )
 # The reserved key `capture_repository_inputs` adds to the captured configuration.
@@ -89,15 +101,136 @@ ARCHIVE_SUFFIXES = (".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar")
 SourceKind = Literal["repo", "archive", "file"]
 Descriptor = ByteInput | FileInput
 
+# `git@host:owner/name.git`, the scp-like clone form that carries no scheme. The
+# path may not start with `/`, which is what keeps `https://host/...` out of it.
+_SCP_LIKE = re.compile(r"^(?:[A-Za-z0-9._\-]+@)?(?P<host>[A-Za-z0-9.\-]+):(?P<path>[^/].*)$")
+
 
 class CaptureRefused(InputCaptureError):
-    """No inventory was produced; `reason` is one of `REFUSAL_REASONS`."""
+    """No inventory was produced; `reason` is one of `REFUSAL_REASONS`.
+
+    Messages never quote the offending URL or path: a clone URL can carry a
+    credential, and plan section 10 keeps both out of logs and public errors.
+    """
 
     def __init__(self, message: str, *, reason: str) -> None:
         if reason not in REFUSAL_REASONS:
             raise ValueError(f"Unknown capture refusal reason: {reason!r}")
         super().__init__(message)
         self.reason = reason
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryDescriptor:
+    """The provisional repository identity a clone URL stands for, until a connector.
+
+    `provider_instance` is the forge, in the canonical form
+    `knowledge.identity.repository_key` normalizes; `provider_repository_id` is the
+    repository's **full** path on it. Feed the pair straight to
+    `identity.repository_identity`.
+    """
+
+    provider_instance: str
+    provider_repository_id: str
+
+    def __post_init__(self) -> None:
+        if self.provider_instance != normalize_provider_url(self.provider_instance):
+            raise ValueError("The provider instance must already be canonical")
+        parts = self.provider_repository_id.split("/")
+        if (
+            not self.provider_repository_id
+            or not all(parts)
+            or self.provider_repository_id != "/".join(part.lower() for part in parts)
+        ):
+            raise ValueError("The repository id must be a nonempty lowercase relative path")
+
+
+def repository_descriptor(url: str) -> RepositoryDescriptor:
+    """Derive the provisional repository identity of a clone URL (plan section 5).
+
+    Two normalizations are chosen here, because minting two identities for one
+    repository is the failure that matters and a later connector can add an alias
+    but cannot un-merge evidence:
+
+    * **The whole path is kept.** `repos.repo_name` returns only the last two
+      segments, so `host/alpha/team/api` and `host/beta/team/api` collide into one
+      `repository` object and merge their symbol identities. It is referenced here
+      and deliberately not reused.
+    * **Host and path both fold to lowercase, and transport is ignored.**
+      `host/Acme/Robots`, `host/acme/robots`, the `ssh://` form and the scp-like
+      form are one repository on every major forge, so they get one identity. The
+      cost is a forge with case-sensitive paths, which Task 10's connector fixes by
+      replacing this provisional identity with real provider IDs.
+
+    A trailing `.git` is dropped. An `http(s)` URL carrying userinfo refuses rather
+    than being silently stripped: that is how a personal access token is passed.
+    """
+    if not isinstance(url, str) or not (candidate := url.strip()):
+        raise CaptureRefused("A repository needs a clone URL", reason="unsupported_repository_url")
+    if candidate.startswith("-") or any(character.isspace() for character in candidate):
+        raise CaptureRefused("The clone URL is not a remote URL", reason="unsupported_repository_url")
+    if any(character in candidate for character in "?#\\"):
+        raise CaptureRefused(
+            "A clone URL carries no query, fragment or backslash", reason="unsupported_repository_url"
+        )
+    scheme, host, port, path = _split_clone_url(candidate)
+    instance = f"{scheme}://[{host}]" if ":" in host else f"{scheme}://{host}"
+    try:
+        return RepositoryDescriptor(
+            normalize_provider_url(instance if port is None else f"{instance}:{port}"),
+            _repository_path(path),
+        )
+    except ValueError as error:
+        raise CaptureRefused(
+            "The clone URL names no repository on a usable host", reason="unsupported_repository_url"
+        ) from error
+
+
+def _split_clone_url(candidate: str) -> tuple[str, str, int | None, str]:
+    """Lowercase host, identity-bearing port and raw path of a clone URL.
+
+    Every transport folds to `https`, the label a forge is identified by, so one
+    repository reached over `https`, `http`, `ssh` or the scp-like form is one
+    identity. An `ssh` port is a transport detail and is dropped; a scheme's own
+    default port is dropped before the fold, so `http://host:80` and `http://host`
+    cannot become two forges.
+    """
+    if match := _SCP_LIKE.match(candidate):
+        return "https", match["host"].lower(), None, match["path"]
+    parsed = urlsplit(candidate)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("https", "http", "ssh"):
+        raise CaptureRefused(
+            "A clone URL must be https, http, ssh or the scp-like form",
+            reason="unsupported_repository_url",
+        )
+    if parsed.password is not None or (parsed.username is not None and scheme != "ssh"):
+        raise CaptureRefused("A clone URL must not carry credentials", reason="unsupported_repository_url")
+    try:
+        host, port = parsed.hostname, parsed.port
+    except ValueError as error:
+        raise CaptureRefused(
+            "The clone URL has no usable host", reason="unsupported_repository_url"
+        ) from error
+    if not host:
+        raise CaptureRefused("The clone URL has no usable host", reason="unsupported_repository_url")
+    if scheme == "ssh" or (scheme, port) in (("https", 443), ("http", 80)):
+        port = None
+    return "https", host.lower(), port, parsed.path
+
+
+def _repository_path(path: str) -> str:
+    segments = [segment for segment in unquote(path).split("/") if segment]
+    if segments and segments[-1].lower().endswith(".git"):
+        segments[-1] = segments[-1][: -len(".git")]
+    if (
+        not segments
+        or not all(segments)
+        or any(segment in (".", "..") for segment in segments)
+        or any(ord(character) < 32 or ord(character) == 127 for segment in segments for character in segment)
+    ):
+        raise CaptureRefused("The clone URL names no repository path", reason="unsupported_repository_url")
+    return "/".join(segment.lower() for segment in segments)
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,10 +305,17 @@ class RepositoryCapture:
     accepted: AcceptedInputs
     observed_at: datetime
     provider_revision: str | None
+    repository: RepositoryDescriptor | None = None
 
     def __post_init__(self) -> None:
         if type(self.accepted) is not AcceptedInputs:
             raise ValueError("A repository capture requires an immutable accepted inventory")
+        if self.repository is not None and type(self.repository) is not RepositoryDescriptor:
+            raise ValueError("A repository capture requires a frozen RepositoryDescriptor")
+        # Backstop for the refusal `capture_repository_inputs` raises before any raw
+        # write; plan section 5 gives an archive or a single file no repository.
+        if self.repository is not None and self.kind != "repo":
+            raise ValueError("Only a checkout can carry a repository descriptor")
         object.__setattr__(self, "inputs", tuple(self.inputs))
         object.__setattr__(self, "exclusions", tuple(self.exclusions))
         if type(self.observed_at) is not datetime or self.observed_at.utcoffset() is None:
@@ -456,6 +596,7 @@ def capture_repository_inputs(
     observed_at: datetime,
     exclusions: Iterable[str] = (),
     provider_revision: str | None = None,
+    repository: RepositoryDescriptor | None = None,
     max_files: int = CODE_MAX_FILES,
     max_file_bytes: int = readers.MAX_FILE_BYTES,
     should_stop: Callable[[], bool] | None = None,
@@ -477,6 +618,12 @@ def capture_repository_inputs(
     if type(limits) is not CaptureLimits:
         raise ValueError("Capture requires typed limits")
     inventory = walk_tree(root, exclusions=exclusions, max_files=max_files, max_file_bytes=max_file_bytes)
+    # Plan section 5: only a checkout has a repository. Checked here, where the kind
+    # is first known, so the refusal still precedes every raw write.
+    if repository is not None and inventory.kind != "repo":
+        raise CaptureRefused(
+            "Only a checkout can carry a repository descriptor", reason="repository_without_checkout"
+        )
     if inventory.total_bytes > limits.max_total_bytes:
         raise CaptureRefused(
             f"The tree holds {inventory.total_bytes} capturable bytes; the limit is {limits.max_total_bytes}",
@@ -510,6 +657,7 @@ def capture_repository_inputs(
         accepted=accepted,
         observed_at=observed_at,
         provider_revision=provider_revision,
+        repository=repository,
     )
 
 
@@ -523,7 +671,9 @@ __all__ = [
     "CaptureRefused",
     "ExcludedFile",
     "RepositoryCapture",
+    "RepositoryDescriptor",
     "capture_repository_inputs",
     "normalized_exclusions",
+    "repository_descriptor",
     "walk_tree",
 ]
