@@ -402,3 +402,105 @@ def test_a_source_tombstoned_mid_conversion_appears_in_neither_lane(code_index):
     assert source not in view.legacy_ids
     assert not [row for row in view.graph.passages if row.source_id == source]
     assert not search(ctx, CODE_QUESTION).passages
+
+
+# ------------------------------------------- the graph surfaces, end to end
+
+ANYIO_ALIAS = "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"
+
+
+def surfaces(ctx):
+    """A `TestClient` over the app, imported inside the test so no collection warning fires."""
+    from fastapi.testclient import TestClient
+
+    from hippo.web.app import create_app
+
+    return TestClient(create_app(ctx), base_url="http://localhost", raise_server_exceptions=False)
+
+
+@pytest.mark.filterwarnings(ANYIO_ALIAS)
+def test_a_converting_source_shows_exactly_its_legacy_rows_on_every_graph_surface(code_index):
+    """Both halves of the rule at once: the legacy rows serve, the staged row does not.
+
+    The source has an untagged graph and a generation staging over it, so it is in the
+    legacy lane and the loader takes exactly its untagged rows. Nothing the generation
+    wrote may reach a reader before it publishes.
+    """
+    ctx, source = code_index
+    known = sorted(ctx.graph_for(EVERYTHING).entity_names.values())[0]
+    with surfaces(ctx) as client:
+        before = client.get("/api/graph/full").json()
+        staged = stage(ctx.store, source, profile=ctx.ollama.embed_model, vector=embed_text(MANAGED_TEXT))
+
+        full = client.get("/api/graph/full").json()
+        assert full == before
+        assert MANAGED_TEXT not in repr(full) and staged.passage_id not in repr(full)
+
+        entities = client.get("/api/entities", params={"q": known}).json()
+        assert entities and MANAGED_TEXT not in repr(entities)
+
+        symbols = client.get("/api/code/symbols?q=place").json()
+        assert symbols and MANAGED_TEXT not in repr(symbols)
+
+        page = client.get("/graph")
+        assert page.status_code == 200
+        assert source in page.text and MANAGED_TEXT not in page.text
+
+
+@pytest.mark.filterwarnings(ANYIO_ALIAS)
+def test_a_staging_only_source_shows_nothing_on_any_graph_surface_or_eval_label(ctx):
+    """The source that was never legacy: staged rows only, so no untagged row to serve.
+
+    It is in the legacy lane by the predicate and absent from it by presentation, which is
+    the whole difference from the converting case above. Until it publishes, no surface and
+    no evaluation label may name it.
+    """
+    from hippo.knowledge.eval_access import EvalAccess
+
+    source = ctx.store.create_source("text", "PRIVATE BOOTSTRAP")
+    staged = stage(ctx.store, source, profile=ctx.ollama.embed_model, vector=embed_text(MANAGED_TEXT))
+    assert ctx.store.source_serves_legacy(ctx.store.get_source(source)) is True
+
+    with surfaces(ctx) as client:
+        full = client.get("/api/graph/full")
+        assert full.status_code == 200
+        assert source not in full.text and "PRIVATE BOOTSTRAP" not in full.text
+        assert MANAGED_TEXT not in full.text and staged.passage_id not in full.text
+
+        assert client.get("/api/entities?q=managed").json() == []
+        assert client.get("/api/code/symbols?q=place").json() == []
+
+        page = client.get("/graph")
+        assert page.status_code == 200
+        assert source not in page.text and "PRIVATE BOOTSTRAP" not in page.text
+
+        # Inside the client, because leaving its lifespan closes the store connection.
+        view = source_view(ctx, EVERYTHING)
+        assert row_of(view, source) is None
+        service = EvalAccess(ctx, EVERYTHING)
+        with service.read_scope() as scope:
+            assert scope.get_source(source) is None
+
+
+@pytest.mark.filterwarnings(ANYIO_ALIAS)
+def test_a_failed_generation_leaves_the_converting_source_serving_its_legacy_rows(code_index):
+    """A failed build is still a `Generation` row, so the converting rule keeps applying.
+
+    Failure is not publication: the source has neither an active pointer nor a published
+    event, so it stays in the legacy lane and keeps presenting the untagged graph it
+    served before the attempt.
+    """
+    ctx, source = code_index
+    with surfaces(ctx) as client:
+        before = client.get("/api/graph/full").json()
+        staged = stage(ctx.store, source, profile=ctx.ollama.embed_model, vector=embed_text(MANAGED_TEXT))
+        ctx.store.fail_generation_build(staged.generation.id, **staged.authority)
+        assert ctx.store._knowledge_get("Generation", staged.generation.id).status == "failed"
+
+        assert client.get("/api/graph/full").json() == before
+        assert client.get("/api/code/symbols?q=place").json()
+
+        # Inside the client, because leaving its lifespan closes the store connection.
+        view = source_view(ctx, EVERYTHING)
+        assert source in view.legacy_ids
+        assert row_of(view, source) is not None and row_of(view, source)["kind"] != "managed"

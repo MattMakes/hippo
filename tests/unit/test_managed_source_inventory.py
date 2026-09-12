@@ -22,6 +22,7 @@ from hippo.knowledge.projection import ProjectionError, _assemble, compose_graph
 from hippo.knowledge.query_access import query_session
 from hippo.knowledge.replay import view_fingerprint
 from hippo.status import source_view
+from tests.conftest import index_prose_sample
 from tests.unit.test_store_knowledge import reader
 from tests.unit.test_structural_loading import Offline, published, shared_code, shared_pair
 
@@ -39,6 +40,7 @@ def empty_published(
     publish=True,
     owner=None,
     access_role_id=None,
+    existing_source=None,
 ):
     """One exact generation whose raw manifest carries no interpreted evidence.
 
@@ -49,10 +51,13 @@ def empty_published(
     dense passage coverage.
     """
     now = datetime.now(UTC)
+    # `existing_source` builds the generation on a source that already has a legacy graph,
+    # which is the converting shape; without it the source is new and owns only staged rows.
     source = (
         parent.source_id
         if parent
-        else store.create_source("text", key, owner_id=owner, access_role_id=access_role_id)
+        else existing_source
+        or store.create_source("text", key, owner_id=owner, access_role_id=access_role_id)
     )
     workspace = store.get_source(source)["workspace_id"]
     policy = k.AccessPolicy(
@@ -229,12 +234,12 @@ def test_current_only_source_suppression_removes_the_pair_and_the_row(ctx):
 
 @pytest.mark.parametrize("outcome", ["staging", "failed"])
 def test_unpublished_generations_never_produce_a_pair(ctx, outcome):
-    """No pair, and the source is still presented by the legacy lane it has not left.
+    """No pair, and nothing for the legacy lane to present either: no untagged row exists.
 
-    An unpublished generation used to take its whole source out of the inventory, which is
-    what made a multi-transaction conversion disappear; `store.source_serves_legacy` keeps
-    it in the legacy lane, with no managed presentation and no counts of its own, until it
-    publishes.
+    An unpublished generation holds its source in the legacy lane, but the legacy lane
+    serves untagged rows, and this source has never owned one -- every row it has is staged
+    under the generation. So it is absent from the inventory entirely until it publishes.
+    `test_converting_source_keeps_its_legacy_pairless_row` is the other half of the rule.
     """
     built = empty_published(ctx.store, "unpublished", publish=False)
     if outcome == "failed":
@@ -245,9 +250,34 @@ def test_unpublished_generations_never_produce_a_pair(ctx, outcome):
     with query_session(ctx, EVERYTHING, structural=True) as session:
         assert session.graph.selected_managed_generations == ()
         view = source_view(ctx, EVERYTHING, session=session)
-        row = row_of(view, built.source_id)
-        assert built.source_id in view.legacy_ids
-        assert row is not None and row.get("kind") != "managed" and row["passages"] == 0
+        assert built.source_id not in view.legacy_ids
+        assert row_of(view, built.source_id) is None
+
+
+@pytest.mark.parametrize("outcome", ["staging", "failed"])
+def test_converting_source_keeps_its_legacy_pairless_row(ctx, outcome):
+    """The same generation on a source that was already legacy: the legacy row stays.
+
+    One untagged row is the whole difference. A conversion that stages over many
+    transactions must not make its source disappear, so the row is presented from the
+    legacy lane with its own legacy count -- and still no pair and no managed
+    presentation, because the generation has not published.
+    """
+    source = index_prose_sample(ctx)
+    legacy = ctx.store.get_source(source)["passages"]
+    assert legacy > 0
+    built = empty_published(ctx.store, "converting", publish=False, existing_source=source)
+    if outcome == "failed":
+        ctx.store.fail_generation_build(built.generation.id, **built.authority)
+        assert ctx.store._knowledge_get("Generation", built.generation.id).status == "failed"
+    assert ctx.store.get_source(source).get("active_generation_id") is None
+    ctx.ollama = Offline()
+    with query_session(ctx, EVERYTHING, structural=True) as session:
+        assert session.graph.selected_managed_generations == ()
+        view = source_view(ctx, EVERYTHING, session=session)
+        row = row_of(view, source)
+        assert source in view.legacy_ids
+        assert row is not None and row.get("kind") != "managed" and row["passages"] == legacy
 
 
 def test_retired_generation_is_replaced_by_its_successor_pair(ctx):
