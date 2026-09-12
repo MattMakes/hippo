@@ -771,6 +771,13 @@ class LinkGeneration(Record):
     identity_fields = ("workspace_id", "input_manifest_hash", "linker_version", "assertion_version_ids")
 
 
+def canonical_ids(values: tuple[str, ...], *, label: str) -> tuple[str, ...]:
+    """Reject any ordering a caller could use to make two identical sets differ."""
+    if len(set(values)) != len(values) or list(values) != sorted(values):
+        raise ValueError(f"{label} must be sorted and unique")
+    return values
+
+
 class HistoryManifest(Record):
     workspace_id: Text
     revision_ids: tuple[Text, ...]
@@ -788,7 +795,16 @@ class HistoryManifest(Record):
         "knowledge_cutoff",
         "temporal_selector_json",
         "retention_gaps",
+        # Coverage is part of what a manifest asserts, not a note about it: two
+        # audiences can prove the same IDs from different inventories, and an
+        # identity that ignored the difference would make one overwrite the other.
+        "coverage_json",
     )
+
+    @field_validator("revision_ids", "assertion_version_ids", "link_generation_ids", "retention_gaps")
+    @classmethod
+    def canonical_manifest_ids(cls, value):
+        return canonical_ids(value, label="History manifest identifiers")
 
     @field_validator("temporal_selector_json")
     @classmethod
@@ -1126,12 +1142,21 @@ class ConflictSet(Record):
     resolution_rule: Text | None = None
     identity_fields = ("workspace_id", "scope_key", "assertion_version_ids", "valid_from", "valid_to")
 
+    @field_validator("assertion_version_ids", "support_span_ids")
+    @classmethod
+    def canonical_conflict_ids(cls, value):
+        return canonical_ids(value, label="Conflict identifiers")
+
     @model_validator(mode="after")
     def conflict_bounds(self) -> Self:
         if len(set(self.assertion_version_ids)) < 2:
             raise ValueError("Conflict requires distinct versions")
         if self.valid_from is not None and self.valid_to is not None and self.valid_to <= self.valid_from:
             raise ValueError("Conflict interval is reversed or empty")
+        # An unknown lower bound is not negative infinity, so an upper bound alone
+        # would silently widen the window; unprovable overlap keeps both bounds null.
+        if self.valid_to is not None and self.valid_from is None:
+            raise ValueError("A conflict upper bound requires a proven lower bound")
         if self.resolution_status == "resolved" and self.resolution_rule is None:
             raise ValueError("Resolved conflict requires an authoritative rule")
         return self

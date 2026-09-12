@@ -846,3 +846,61 @@ def test_generation_evidence_membership_roundtrips_and_rejects_arbitrary_labels(
         member.replace(record_kind="User")
     with pytest.raises(ValidationError):
         member.replace(record_kind="EvidenceSpan) DETACH DELETE n")
+
+
+def history_manifest(m, **changes):
+    fields = dict(
+        workspace_id="w",
+        revision_ids=("revision-a", "revision-b"),
+        assertion_version_ids=("version-a",),
+        link_generation_ids=(),
+        knowledge_cutoff=NOW,
+        temporal_selector_json='{"mode":"current"}',
+    )
+    return m.HistoryManifest(**(fields | changes))
+
+
+def test_history_manifest_requires_sorted_unique_ids_and_keeps_open_selectors():
+    m = model()
+    manifest = history_manifest(m)
+    assert manifest.retention_gaps == ()
+    assert m.HistoryManifest.model_validate_json(manifest.model_dump_json()) == manifest
+    for field, value in (
+        ("revision_ids", ("revision-b", "revision-a")),
+        ("revision_ids", ("revision-a", "revision-a")),
+        ("assertion_version_ids", ("version-b", "version-a")),
+        ("link_generation_ids", ("link-b", "link-a")),
+        ("retention_gaps", ("gap-b", "gap-a")),
+        ("retention_gaps", ("gap-a", "gap-a")),
+    ):
+        with pytest.raises(ValidationError, match="sorted and unique"):
+            history_manifest(m, **{field: value})
+
+
+def conflict_set(m, **changes):
+    fields = dict(
+        workspace_id="w",
+        scope_key="prod",
+        assertion_version_ids=("version-a", "version-b"),
+        resolution_status="possible",
+        support_span_ids=("span-a", "span-b"),
+    )
+    return m.ConflictSet(**(fields | changes))
+
+
+def test_conflict_set_requires_sorted_unique_ids_and_a_proven_lower_bound():
+    m = model()
+    conflict = conflict_set(m)
+    assert conflict.valid_from is None and conflict.valid_to is None
+    assert conflict_set(m, valid_from=NOW, resolution_status="unresolved").valid_to is None
+    for field, value in (
+        ("assertion_version_ids", ("version-b", "version-a")),
+        ("support_span_ids", ("span-b", "span-a")),
+        ("support_span_ids", ("span-a", "span-a")),
+    ):
+        with pytest.raises(ValidationError, match="sorted and unique"):
+            conflict_set(m, **{field: value})
+    with pytest.raises(ValidationError, match="proven lower bound"):
+        conflict_set(m, valid_to=NOW)
+    with pytest.raises(ValidationError, match="reversed or empty"):
+        conflict_set(m, valid_from=NOW, valid_to=NOW)

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -540,6 +540,20 @@ class EvidenceAccess:
             authorization_epoch=epoch,
             valid_until=valid_until,
         )
+
+    def build_history(self, selection: EvidenceSelection | None = None) -> AuthorizedEvidence:
+        """Prove retained evidence for a historical request without forking policy.
+
+        This is `build` with the history query mode pinned, so live identity,
+        workspace membership, artifact policy, complete AND support groups and
+        `all_history` suppression all still decide the proof before any caller
+        filters it by time. Only an ordinary `current_only` tombstone stops
+        hiding rows, which is exactly the distinction `query_mode` already draws.
+        """
+        selection = selection or EvidenceSelection()
+        if selection.query_mode != "history":
+            selection = replace(selection, query_mode="history")
+        return self.build(selection)
 
     def _check_current_boundary(self, epoch: int, valid_until: datetime | None) -> None:
         if (valid_until is not None and self._now() >= valid_until) or self.epoch_reader() != epoch:
