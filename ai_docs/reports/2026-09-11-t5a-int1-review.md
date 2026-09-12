@@ -364,12 +364,14 @@ checked with the resolver's *selection-time* clock, so a caller passing `clock=`
 HistoryCoverageCode: TypeAlias = Literal["history_unavailable", "retention_gap", "link_coverage_incomplete"]
 TemporalRecordKind: TypeAlias = Literal["ObjectObservation", "AssertionVersion"]
 
+
 @dataclass(frozen=True)
 class HistoryDecision:
     record_id: str
     record_kind: TemporalRecordKind
     recorded_reason: TemporalReason
     match: TemporalMatch
+
 
 @dataclass(frozen=True)
 class HistorySelection:
@@ -393,9 +395,12 @@ class HistorySelection:
     @property
     def codes(self) -> tuple[HistoryCoverageCode, ...]: ...
 
+
 def pinned_selector(resolved: ResolvedTemporalSelector) -> k.TemporalSelector: ...
 
+
 def history_access(store, workspace_id: str, access, *, clock=utc_now) -> EvidenceAccess: ...
+
 
 def select_history(
     store,
@@ -407,25 +412,37 @@ def select_history(
     clock=utc_now,
 ) -> HistorySelection: ...
 
+
 @dataclass(frozen=True)
 class ResolvedTemporalSelector:
     selector: k.TemporalSelector
     known_at: datetime
-    known_at_source: KnownAtSource            # "explicit" | "inherited" | "latest"
+    known_at_source: KnownAtSource  # "explicit" | "inherited" | "latest"
     latest_known_at: datetime
     inherited_from: k.CompareSelector | None = None
     selector_json: str = field(init=False, default="")
+
 
 # src/hippo/knowledge/access.py
 class EvidenceAccess:
     def build_history(self, selection: EvidenceSelection | None = None) -> AuthorizedEvidence: ...
 
+
 # src/hippo/knowledge/model.py
 def canonical_ids(values: tuple[str, ...], *, label: str) -> tuple[str, ...]: ...
+
+
 HistoryManifest.identity_fields = (
-    "workspace_id", "revision_ids", "assertion_version_ids", "link_generation_ids",
-    "knowledge_cutoff", "temporal_selector_json", "retention_gaps", "coverage_json",
+    "workspace_id",
+    "revision_ids",
+    "assertion_version_ids",
+    "link_generation_ids",
+    "knowledge_cutoff",
+    "temporal_selector_json",
+    "retention_gaps",
+    "coverage_json",
 )
+
 
 # src/hippo/knowledge/snapshots.py
 def acquire_history_snapshot(
@@ -438,12 +455,14 @@ def acquire_history_snapshot(
     clock=utc_now,
 ) -> QuerySnapshotBundle: ...
 
+
 # src/hippo/store/snapshots.py
 @dataclass(frozen=True)
 class PurgedEvidence:
     target_kind: Literal["revision"]
     target_id: str
     code: Literal["evidence_purged"] = "evidence_purged"
+
 
 class SnapshotQueries:
     def purged_history_evidence(self, manifest_id) -> tuple[PurgedEvidence, ...]: ...

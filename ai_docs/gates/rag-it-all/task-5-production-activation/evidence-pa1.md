@@ -21,9 +21,11 @@ another worker; nothing in this branch activates a production route.
 # src/hippo/store/knowledge.py — KnowledgeQueries
 LOCAL_MAPPING_AUTHORITY = "local"
 
+
 def ensure_local_workspace_memberships(self, principal_ids: Iterable[str] | None = None) -> int: ...
 def _ensure_local_workspace_memberships_locked(self, principal_ids: Iterable[str] | None = None) -> int: ...
 def _disable_local_workspace_memberships_locked(self, principal_ids: Iterable[str]) -> int: ...
+
 
 # src/hippo/store/generations.py — GenerationQueries
 @dataclass(frozen=True, slots=True)
@@ -33,8 +35,10 @@ class SourceTombstone:
     cancelled_generation_id: str | None
     cancelled_job_id: str | None
 
-def tombstone_scope_key(source_id: str) -> str: ...          # f"source:{source_id}:delete"
+
+def tombstone_scope_key(source_id: str) -> str: ...  # f"source:{source_id}:delete"
 def apply_source_tombstone(self, source_id, *, operation_id, created_at) -> SourceTombstone: ...
+
 
 # src/hippo/knowledge/source_lifecycle.py
 @dataclass(frozen=True)
@@ -47,11 +51,19 @@ class TombstoneReceipt:
     cancelled_generation_id: str | None
     cancelled_job_id: str | None
 
+
 class SourceLifecycleError(ValueError): ...
+
+
 class UnmanagedSource(SourceLifecycleError): ...
+
+
 class InvalidOperationId(SourceLifecycleError): ...
 
-def tombstone_managed_source(ctx, *, source_id: str, actor: BuildActor, operation_id: str) -> TombstoneReceipt: ...
+
+def tombstone_managed_source(
+    ctx, *, source_id: str, actor: BuildActor, operation_id: str
+) -> TombstoneReceipt: ...
 ```
 
 `operation_id` is bounded by `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`: printable,
