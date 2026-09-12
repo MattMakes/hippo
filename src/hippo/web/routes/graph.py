@@ -2,10 +2,14 @@
 The Graph page: the whole memory as a 3D picture you can search, filter and
 "light up" with a question.
 
-What it shows is exactly what the caller may see (hippo/access.py): the nodes
-come from `ctx.graph_for(access)`, so a hidden passage, and an entity or fact
-only hidden passages support, is simply not there. Users who may manage
-others can pick a role and see the graph as that tier would.
+What it shows is exactly what the caller may see (hippo/access.py): the nodes come
+from one structural `query_session` held for the whole response, so a hidden
+passage, and an entity or fact only hidden passages support, is simply not there.
+Users who may manage others can pick a role and see the graph as that tier would.
+
+Browsing needs no model and keeps working while Ollama is down. Light-up is the one
+endpoint here that runs a search, so it is the one that dispatches its held owner
+through `retrieval_session` and answers a failure with a stable public code.
 
     GET  /graph                          the page
     GET  /api/graph/full                 nodes + edges (filters: q, source, kind, min_weight, as_role; capped)
@@ -21,8 +25,8 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ... import ask as ask_service
@@ -32,11 +36,13 @@ from ...hipporag import paths as path_tools
 from ...hipporag.graph_index import CODE_KINDS, DATA, ENTITY, PASSAGE, SYMBOL, GraphIndex
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import retrieval_fields
+from ...knowledge.dense_session import retrieval_session
 from ...knowledge.query_access import AuthorizedModel, current_access, query_session
 from ...ollama import OllamaError
 from ...status import source_view
+from ...store.base import validate_settings
 from ..auth import principal_of
-from ..render import ctx_of, render
+from ..render import ctx_of, public_failure_response, render, retrieval_failure
 
 router = APIRouter()
 api = APIRouter(prefix="/api/graph")
@@ -324,13 +330,21 @@ def light_up(request: Request, body: LightUpBody):
     """
     ctx = ctx_of(request)
     principal, _preview, validate_viewer = viewer(request, body.as_role or None)
+    # The caller's own settings are checked here, exactly as the session would check
+    # them, so that the only `ValueError`s left inside the scope below are activation
+    # failures. Otherwise a bad slider value and an incoherent view would answer alike.
     try:
-        with query_session(ctx, principal.access, settings=body.settings) as session:
-            return _light_up_response(ctx, principal, body, session, validate_viewer)
-    except ValueError as exc:
+        validate_settings({**ctx.store.get_settings(), **(body.settings or {})})
+    except (ValueError, TypeError) as exc:
+        validate_viewer()
         raise HTTPException(400, str(exc)) from exc
-    except OllamaError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=502)
+    try:
+        with retrieval_session(ctx, principal.access, settings=body.settings) as session:
+            return _light_up_response(ctx, principal, body, session, validate_viewer)
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        # `AuthorizationChanged` is a RuntimeError and is deliberately not caught: it
+        # keeps the existing permission response, which the `finally` below re-proves.
+        return public_failure_response(retrieval_failure(exc))
     finally:
         validate_viewer()
 

@@ -18,6 +18,7 @@ from .codegraph.model import CODE_EDGE_KINDS
 from .context import AppContext
 from .hipporag.graph_index import GraphIndex
 from .knowledge.access import AuthorizationChanged
+from .knowledge.public_errors import OPERATION_FAILED, public_failure_for_code
 from .knowledge.query_access import QuerySession, current_access, query_session
 from .ollama import OllamaError
 
@@ -132,8 +133,7 @@ def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
         "created_at": (source.get("created_at") or "") if proven else "",
         "status": (source.get("status") or "") if proven else "ready",
         "stage": (source.get("stage") or "") if proven else "",
-        # Managed failure text is Task 3's closed exception mapper, not a stored Source string.
-        "error": "",
+        "error": _public_error(source) if proven else "",
         "progress_done": int(source.get("progress_done") or 0) if proven else 0,
         "progress_total": int(source.get("progress_total") or 0) if proven else 0,
         "passages": len(passages),
@@ -151,6 +151,27 @@ def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
         if nodes or edge_counts
         else {},
     }
+
+
+def _public_error(source: dict) -> str:
+    """The managed lane's own classification, read back; never the sentence stored beside it.
+
+    `managed_activation.record_build_failure` classifies a build failure once, where it
+    happened, and stores `"<code>: <message>"` on the Source row. The code is the stable
+    half, so the row is rendered from `public_failure_for_code` and the stored text is
+    never echoed -- not because that text is unsafe today, but because a row is only ever
+    as bounded as whoever last wrote it, and this is the only rendering path a managed
+    source has.
+
+    A row that is presenting a failure cannot fall silent either: a code this table does
+    not map (`authorization_changed`, or anything a future build lane adds) takes the
+    caller fallback `public_errors` documents rather than an empty cell.
+    """
+    stored = source.get("error") or ""
+    if not stored:
+        return ""
+    code = stored.split(":", 1)[0].strip()
+    return (public_failure_for_code(code) or OPERATION_FAILED).message
 
 
 def system_status(
