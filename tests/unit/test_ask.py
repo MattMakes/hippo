@@ -35,7 +35,10 @@ def test_search_returns_a_trace_using_the_stored_settings(indexed: AppContext) -
     trace = search(indexed, DIRECT)
     assert isinstance(trace, Trace)
     assert trace.settings == indexed.store.get_settings()
-    assert trace.graph_version == indexed.store.graph_version()
+    # Structural selection makes a view's version its content fingerprint rather than
+    # the store's counter -- the same thing a scoped legacy reader already recorded.
+    # `/analyze` compares it against the view it re-acquires, so both sides moved.
+    assert trace.graph_version and trace.graph_version != indexed.store.graph_version()
     assert trace.passages[0].title == "The company"
     assert not trace.used_dpr_fallback
 
@@ -88,12 +91,15 @@ def test_search_on_an_empty_memory_falls_back(ctx: AppContext) -> None:
 
 def test_the_graph_reloads_after_new_text_is_indexed(indexed: AppContext) -> None:
     first = indexed.graph()
+    before = search(indexed, DIRECT)
     other = indexed.store.create_source("text", "More")
     index_source(
         indexed.store, indexed.ollama, other, [Chunk(0, "Extra", "Skyline Software is located in Portland.")]
     )
     assert indexed.graph() is not first
-    assert search(indexed, DIRECT).graph_version == indexed.store.graph_version()
+    after = search(indexed, "Where is Skyline Software located?")
+    assert after.graph_version != before.graph_version
+    assert "Extra" in {p.title for p in after.passages}
 
 
 # ==================================================================== the code graph
