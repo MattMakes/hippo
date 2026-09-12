@@ -24,7 +24,14 @@ from ...knowledge.eval_access import EvalAccess, EvalAccessDenied
 from ...knowledge.public_errors import OPERATION_FAILED, public_failure_for_code
 from ...store.base import validate_settings
 from ..auth import principal_of, require_capability
-from ..render import STOP_POLLING, ctx_of, render
+from ..render import (
+    STOP_POLLING,
+    caller_error,
+    ctx_of,
+    public_failure_response,
+    render,
+    retrieval_failure,
+)
 
 router = APIRouter(dependencies=[Depends(require_capability("run_evals"))])
 
@@ -369,8 +376,20 @@ def start_run(request: Request, set_id: str, body: RunBody | None = None):
             validate_settings(body.settings or {}),
             access=principal_of(request).access,
         )
+    except EvalAccessDenied as exc:
+        # The exact type, not a substring of the message. This route used to pick 404 by
+        # matching "unknown question set" in the exception's words, so rewording
+        # `require_set`'s sentence silently turned the 404 into a 400.
+        raise HTTPException(404, "no such question set") from exc
     except ValueError as exc:
-        raise HTTPException(404 if "unknown question set" in str(exc) else 400, str(exc)) from exc
+        # `runner.start_run` calls `EvalAccess.require_set`, which opens a session, so
+        # `ProjectionError`, `DenseSessionUnavailable` and `QuerySnapshotUnavailable` --
+        # every one a `ValueError` subclass -- can arrive here. Printing them as a 400
+        # blames the request for an activation failure and reads a sentence this route
+        # never wrote. Only `validate_settings`' own exact `ValueError` is the caller's.
+        if not caller_error(exc):
+            return public_failure_response(retrieval_failure(exc))
+        raise HTTPException(400, str(exc)) from exc
     return {"run_id": run_id}
 
 

@@ -164,8 +164,10 @@ def test_a_source_with_no_text_fails_with_a_message(ctx: AppContext) -> None:
     wait(ctx)
     source = ctx.store.get_source(source_id)
     assert source["status"] == "failed"
-    # The row keeps the class and the fixed sentence; "no readable text" stays in the log.
-    assert source["error"] == "ValueError: indexing failed; inspect local logs"
+    # `ReadError` is one of the closed input validators, so the plan's transport table keeps
+    # its own sentence on the row: what it says is what the user has to fix. A bare
+    # `ValueError` here would be bounded away to "indexing failed; inspect local logs".
+    assert source["error"] == "ReadError: no readable text was found in this source"
 
 
 # --------------------------------------------------------------- repos

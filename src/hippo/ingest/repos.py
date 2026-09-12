@@ -90,7 +90,15 @@ def clone_repo(url: str, dest: Path, timeout: int = 300, depth: int = 1) -> Path
 
 
 def _explain_git_failure(url: str, stderr: str) -> str:
-    """Translate git's stderr into one friendly sentence, keeping git's last line for the curious."""
+    """Translate git's stderr into one friendly sentence. Git's own words stay in the log.
+
+    The returned string becomes a `RepoError` message, and `RepoError` is a `ValueError`
+    the web layer answers a 400 with (`web/routes/sources.py::add_repo`) and the legacy
+    lane stores on the Source row. Git's stderr is not bounded: it can name the server's
+    checkout path, a proxy, a credential helper or a remote's own banner. The four
+    `reason` clauses below are the actionable half and are this module's own words, so
+    only they survive; the full stderr is logged for the operator who can read it.
+    """
     lower = stderr.lower()
     if "could not resolve host" in lower or "could not read from remote" in lower:
         reason = "the host could not be reached"
@@ -104,12 +112,9 @@ def _explain_git_failure(url: str, stderr: str) -> str:
         reason = "no repository was found at that address"
     else:
         reason = "git reported an error"
-    last_line = stderr.strip().splitlines()[-1] if stderr.strip() else ""
-    return (
-        f"could not clone {url}: {reason}. git said: {last_line}"
-        if last_line
-        else f"could not clone {url}: {reason}."
-    )
+    if stderr.strip():
+        log.warning("git clone of %s failed: %s", url, stderr.strip())
+    return f"could not clone {url}: {reason}."
 
 
 def walk_repo(root: Path, budget: readers.TextBudget | None = None) -> list[Document]:

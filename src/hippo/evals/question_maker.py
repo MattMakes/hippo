@@ -180,7 +180,16 @@ def _single_hop_questions(
             )
         except OllamaError as exc:
             # One bad passage should not stop the whole set; the log keeps the reason.
-            log.warning("Question generation skipped passage %s: %s", passage.id, exc)
+            # Bounded like `runner._run_all`: the passage id locates the skip and the
+            # closed code says what happened. `str(exc)` may not be logged -- `Ollama._request`
+            # puts 300 characters of the model's reply body into its message, and that body
+            # is generated out of this corpus's own passages.
+            log.warning(
+                "Question generation skipped passage %s: code=%s exception=%s",
+                passage.id,
+                (public_failure(exc) or OPERATION_FAILED).code,
+                type(exc).__name__,
+            )
             reply = {}
         for item in reply.get("questions", [])[:per_passage]:
             question, answer = str(item.get("question", "")).strip(), str(item.get("answer", "")).strip()
@@ -264,7 +273,14 @@ def _ask_multihop(
             max_tokens=GEN_MAX_TOKENS,
         )
     except OllamaError as exc:
-        log.warning("Multi-hop generation skipped passages %s + %s: %s", a.id, b.id, exc)
+        # The single-hop line's twin, bounded for the same reason.
+        log.warning(
+            "Multi-hop generation skipped passages %s + %s: code=%s exception=%s",
+            a.id,
+            b.id,
+            (public_failure(exc) or OPERATION_FAILED).code,
+            type(exc).__name__,
+        )
         return None
     question, answer = str(reply.get("question", "")).strip(), str(reply.get("answer", "")).strip()
     if not question or not answer:

@@ -390,7 +390,12 @@ def _read_chunk_index(ctx: AppContext, source: dict[str, Any], *, should_stop) -
 
     chunks = chunk_documents(docs, config.chunk_size_chars, config.chunk_overlap_chars, code=code)
     if not chunks:
-        raise ValueError("no readable text was found in this source")
+        # `ReadError`, not a bare `ValueError`: this is a closed input validator's answer --
+        # what the user has to fix is in the sentence -- and only that family keeps its own
+        # words on the Source row (`_legacy_failure`) and in a 4xx (`render.caller_error`).
+        # A bare `ValueError` here reached the Library page as "indexing failed; inspect
+        # local logs", which is true and useless.
+        raise ReadError("no readable text was found in this source")
     if len(chunks) > MAX_CHUNKS:
         raise TooLarge(
             f"too large: this source makes {len(chunks):,} passages; the limit is {MAX_CHUNKS:,}. "

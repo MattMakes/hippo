@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 
@@ -132,15 +133,31 @@ def test_clone_explains_missing_git(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         clone_repo("https://github.com/acme/robots", tmp_path / "dest")
 
 
-def test_clone_explains_git_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_clone_explains_git_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The reason is ours and reaches the user; git's own words reach the log only.
+
+    A `RepoError` message is answered as a 400 by `/api/sources/repo` and stored on the
+    Source row by the legacy lane, so it may carry no server path, no proxy and no
+    credential-helper banner -- all of which git writes to stderr. The four reason
+    clauses are what a user can act on, and they are this module's own sentences.
+    """
+    noise = "fatal: repository not found\nfatal: could not read /Users/ops/.git-credentials\n"
+
     def failing(command, **kwargs):
-        return subprocess.CompletedProcess(command, 128, stdout="", stderr="fatal: repository not found\n")
+        return subprocess.CompletedProcess(command, 128, stdout="", stderr=noise)
 
     monkeypatch.setattr(subprocess, "run", failing)
-    with pytest.raises(RepoError) as info:
-        clone_repo("https://github.com/acme/missing", tmp_path / "dest")
+    with caplog.at_level(logging.WARNING, logger="hippo.ingest.repos"):
+        with pytest.raises(RepoError) as info:
+            clone_repo("https://github.com/acme/missing", tmp_path / "dest")
     assert "no repository was found" in str(info.value)
-    assert "repository not found" in str(info.value)
+    assert "git said" not in str(info.value)
+    assert "repository not found" not in str(info.value)
+    assert ".git-credentials" not in str(info.value)
+    # The operator who can read a path still gets the whole of it.
+    assert ".git-credentials" in caplog.text
 
 
 def test_clone_really_runs_git_and_reports_unreachable_hosts(tmp_path: Path) -> None:

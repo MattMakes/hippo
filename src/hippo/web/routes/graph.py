@@ -35,15 +35,22 @@ from ...analysis.explain import explain
 from ...hipporag import paths as path_tools
 from ...hipporag.graph_index import CODE_KINDS, DATA, ENTITY, PASSAGE, SYMBOL, GraphIndex
 from ...ingest.managed_activation import managed_eligibility
+from ...knowledge import dense_session
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import retrieval_fields
-from ...knowledge.dense_session import retrieval_session
 from ...knowledge.query_access import AuthorizedModel, current_access, effective_settings, query_session
 from ...ollama import OllamaError
 from ...status import source_view
 from ...store.base import validate_settings
 from ..auth import principal_of
-from ..render import ctx_of, public_failure_page, public_failure_response, render, retrieval_failure
+from ..render import (
+    caller_error,
+    ctx_of,
+    public_failure_page,
+    public_failure_response,
+    render,
+    retrieval_failure,
+)
 
 router = APIRouter()
 api = APIRouter(prefix="/api/graph")
@@ -383,6 +390,12 @@ def light_up(request: Request, body: LightUpBody):
         validate_settings(dict(body.settings or {}))
     except (ValueError, TypeError) as exc:
         validate_viewer()
+        # The last isinstance 4xx catch in the web layer, closed the same way as the two
+        # decision 2 removed: only `validate_settings`' own exact `ValueError` names a
+        # knob the caller sent. A subclass (or the `TypeError` a non-mapping settings body
+        # would raise) is not the caller's sentence and goes to the closed table.
+        if not caller_error(exc):
+            return public_failure_response(retrieval_failure(exc))
         raise HTTPException(400, str(exc)) from exc
     try:
         effective_settings(ctx, body.settings)
@@ -390,7 +403,7 @@ def light_up(request: Request, body: LightUpBody):
         validate_viewer()
         return public_failure_response(retrieval_failure(exc))
     try:
-        with retrieval_session(ctx, principal.access, settings=body.settings) as session:
+        with dense_session.retrieval_session(ctx, principal.access, settings=body.settings) as session:
             return _light_up_response(ctx, principal, body, session, validate_viewer)
     except (ValueError, OllamaError, httpx.TransportError) as exc:
         # `AuthorizationChanged` is a RuntimeError and is deliberately not caught: it

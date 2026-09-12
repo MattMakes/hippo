@@ -394,6 +394,32 @@ def test_legacy_validation_routes_keep_their_own_messages(web):
     assert repo.status_code == 400 and "does not look like a git URL" in repo.json()["error"]
 
 
+def test_only_the_exact_repo_error_is_printed_at_the_repo_route(web, monkeypatch):
+    """`add_repo` prints `RepoError` itself and nothing derived from it.
+
+    The wrap-up review read `sources.py:507` as a live leak because `RepoError` messages
+    are not all bounded. They are not, but the unbounded ones (`repos.py`'s destination
+    path, and git's stderr before `_explain_git_failure` was bounded) are raised inside
+    `clone_repo`, which runs in the background job; the only `RepoError`
+    `pipeline.add_repo` raises synchronously is the git-URL hint above. This pins that
+    reading: a subclass carrying something the route has not read is mapped, not quoted.
+    """
+
+    class CloneExploded(pipeline.repos.RepoError):
+        pass
+
+    def exploding(*args, **kwargs):
+        raise CloneExploded("/Users/ops/.rag-dev-data/repos/abc123 fatal: could not read password")
+
+    monkeypatch.setattr(pipeline, "add_repo", exploding)
+    response = web.client.post(
+        "/api/sources/repo", json={"url": "https://github.com/acme/robots"}, headers=web.reader_headers
+    )
+    assert response.status_code == OPERATION_FAILED.http_status, response.text
+    assert response.json() == {"error": OPERATION_FAILED.message, "code": OPERATION_FAILED.code}
+    assert "rag-dev-data" not in response.text and "password" not in response.text
+
+
 def test_a_background_managed_failure_never_reaches_any_surface(web, monkeypatch, caplog):
     """An unknown build failure carrying every private thing stays out of every response."""
     from hippo.ingest import managed_activation
