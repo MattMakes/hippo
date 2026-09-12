@@ -38,6 +38,13 @@ def view_fingerprint(graph) -> str:
         payload.append(extension)
     if extension := structural_code_payload(graph):
         payload.append(extension)
+    if graph.selected_managed_generations:
+        # An empty generation contributes no node, vector or provenance row, so without its pair
+        # publishing empty G2 over empty G1 would leave the audience fingerprint unchanged and a
+        # saved answer would look reusable against evidence that has actually been replaced.
+        payload.append(
+            {"selected_managed_generations_v1": [list(pair) for pair in graph.selected_managed_generations]}
+        )
     fingerprint = hashlib.sha256(canonical_json(payload).encode()).hexdigest()
     graph.validate_authorization()
     return fingerprint

@@ -193,6 +193,26 @@ class EdgeEdit:
     weight: float
 
 
+def canonical_selected_generations(rows) -> tuple[tuple[str, str], ...]:
+    """Sorted, unique `(source_id, active_generation_id)` pairs, one generation per source.
+
+    A source has exactly one current pointer, so two generations for one source is a
+    composition mistake rather than a richer view, and silently keeping both would let a
+    retired or staged generation be counted as current.
+    """
+    if type(rows) is not tuple or any(
+        type(pair) is not tuple
+        or len(pair) != 2
+        or any(type(value) is not str or not value for value in pair)
+        for pair in rows
+    ):
+        raise ValueError("Selected generations must be immutable nonempty (source, generation) pairs")
+    pairs = tuple(sorted(set(rows)))
+    if len({source for source, _generation in pairs}) != len(pairs):
+        raise ValueError("Selected generations name one source twice")
+    return pairs
+
+
 @dataclass
 class GraphIndex:
     """
@@ -239,6 +259,10 @@ class GraphIndex:
     structural_code_evidence: tuple[StructuralCodeEvidence, ...] = ()
     structural_object_evidence: tuple[StructuralObjectEvidence, ...] = ()
     structural_relations: tuple[StructuralRelationEvidence, ...] = ()
+    # The (source, active generation) pairs this audience proved for this view. Evidence-selection
+    # metadata, not a dense contributor list: a pair can exist with no node of its own, which is the
+    # only way an authorized generation that produced nothing is representable at all.
+    selected_managed_generations: tuple[tuple[str, str], ...] = ()
     # One rebuilt igraph per non-default code_structural_scale; see graph_for_scale.
     _scaled: dict[float, ig.Graph] = field(default_factory=dict, repr=False, compare=False)
     # vertex -> its display name, filled by `paths.display_at`; a walk asks for it per edge.
@@ -251,6 +275,7 @@ class GraphIndex:
         self.structural_code_evidence = canonical_code_evidence(self.structural_code_evidence)
         self.structural_object_evidence = canonical_object_evidence(self.structural_object_evidence)
         self.structural_relations = canonical_relation_evidence(self.structural_relations)
+        self.selected_managed_generations = canonical_selected_generations(self.selected_managed_generations)
         validate_dense_graph(self)
 
     def require_dense(self, profile_fingerprint: str | None = None) -> None:
@@ -648,6 +673,9 @@ class GraphIndex:
             and all(row.source_id in visible for row in self.structural_code_evidence)
             and all(row.source_id in visible for row in self.structural_object_evidence)
             and all(set(row.original_span_ids) <= visible_originals for row in self.structural_relations)
+            # An empty selected source contributes no passage, node or relation, so without this
+            # the identity shortcut would carry its pair into a view that cannot see it at all.
+            and all(source in visible for source, _generation in self.selected_managed_generations)
         ):
             # Staged nodes/facts can lack passage support; visible passages alone cannot authorize them.
             return self
@@ -862,6 +890,9 @@ class GraphIndex:
             structural_code_evidence=code_evidence,
             structural_object_evidence=object_evidence,
             structural_relations=relations,
+            selected_managed_generations=tuple(
+                pair for pair in self.selected_managed_generations if pair[0] in visible
+            ),
             legacy_dense_vectors=tuple(
                 replace(
                     row,
