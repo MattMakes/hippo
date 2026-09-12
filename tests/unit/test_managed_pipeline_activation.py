@@ -924,3 +924,28 @@ def test_a_failed_managed_refresh_retains_every_raw_object_and_saved_byte(no_des
     after = raw_inventory(w.ctx)
     assert before and all(after.get(name) == data for name, data in before.items())
     assert (pipeline.source_dir(w.ctx, source) / "text.md").read_text() == SECOND_TEXT
+
+
+def test_a_failure_that_cannot_be_presented_still_reports_nothing_private(setup, monkeypatch, caplog):
+    """A store outage while presenting a failure must not hand the job runner the traceback."""
+    w = setup
+    w.quiet_jobs()
+    source = w.stage_text()
+    poison = "sk-live-secret /private/var/folders/data/sources/text.md ACME builds Robot. <model body>"
+    original = w.module.present
+
+    def boom(ctx, **kwargs):
+        raise RuntimeError(poison)
+
+    def flaky(ctx, source_id, **fields):
+        if fields.get("status") == "failed":
+            raise RuntimeError("the store went away")
+        return original(ctx, source_id, **fields)
+
+    monkeypatch.setattr(w.module, "build_plain_source", boom)
+    monkeypatch.setattr(w.module, "present", flaky)
+    with caplog.at_level("DEBUG", logger="hippo"):
+        w.build(source)  # must not raise: `Jobs.start` would log the whole chained traceback
+    recorded = "\n".join(r.getMessage() for r in caplog.records)
+    for part in ("sk-live-secret", "/private/var", "ACME builds Robot.", "model body"):
+        assert part not in recorded

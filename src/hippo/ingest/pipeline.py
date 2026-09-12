@@ -315,9 +315,18 @@ def _run_managed_indexing(ctx: AppContext, source_id: str, plan) -> None:
             job_key=job_key(source_id),
         )
     except Exception as err:  # noqa: BLE001 - every managed failure is presented generically
-        managed_activation.record_build_failure(
-            ctx, source_id=source_id, operation_id=plan.operation_id, error=err
-        )
+        try:
+            managed_activation.record_build_failure(
+                ctx, source_id=source_id, operation_id=plan.operation_id, error=err
+            )
+        except Exception:  # noqa: BLE001 - a failure that cannot be written is still not a report
+            # Raising here would hand `Jobs.start` a chained traceback holding the original
+            # exception's text, which is the one thing a managed failure must never say.
+            log.warning(
+                "Managed build failure could not be presented: source=%s operation=%s",
+                source_id,
+                plan.operation_id,
+            )
         return
     managed_activation.record_build_receipt(ctx, source_id=source_id, receipt=receipt)
 
