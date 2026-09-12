@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -16,10 +17,11 @@ from ... import ask as ask_service
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import answer_sources, retrieval_fields
 from ...knowledge.query_access import query_session
+from ...ollama import OllamaError
 from ...status import system_status
 from ...store.base import validate_settings
 from ..auth import principal_of, require
-from ..render import ctx_of, public_failure_response, retrieval_failure
+from ..render import caller_error, ctx_of, public_failure_response, retrieval_failure
 
 router = APIRouter(prefix="/api")
 
@@ -45,10 +47,15 @@ def get_settings(request: Request):
 @router.put("/settings")
 def put_settings(request: Request, changes: dict[str, Any]):
     require(request, "edit_graph")
+    # The caller's own numbers are refused with the store validator's sentence, which is
+    # the one 4xx `detail` the plan protects. `update_settings` validates the same dict
+    # again, so past this line nothing it raises is the caller's mistake: a storage
+    # failure carries whatever it was reading and belongs to the closed public table.
+    checked_settings(changes)
     try:
         return ctx_of(request).store.update_settings(changes)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+    except (ValueError, OllamaError, httpx.TransportError) as exc:
+        return public_failure_response(retrieval_failure(exc))
 
 
 @router.post("/models/pull")
@@ -77,10 +84,16 @@ def checked_settings(settings: dict[str, Any] | None) -> None:
     Validating them here, before a session exists, is what makes the failure mapping below
     unambiguous: past this line a `ValueError` is never the caller's request, so it can be
     mapped to a closed public code without swallowing "damping must be between 0 and 1".
+
+    `caller_error` is what makes "nothing else does" true rather than hopeful. The store
+    validator raises the exact `ValueError`; any subclass reaching this line came from
+    somewhere that names a path or quotes stored text, and is re-raised for the mapper.
     """
     try:
         validate_settings(dict(settings or {}))
     except ValueError as exc:
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
 
 
@@ -98,8 +111,11 @@ def query_failure(exc: BaseException) -> JSONResponse:
 def ask(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     access = principal_of(request).access
-    checked_settings(body.settings)
     try:
+        # Inside the mapped scope, not before it: the settings check itself answers 400 for
+        # the caller's own numbers (an `HTTPException`, re-raised untouched below), and
+        # anything else it raises is a failure the closed table has to name.
+        checked_settings(body.settings)
         with query_session(ctx, access, settings=body.settings) as session:
             trace, answer = ask_service.ask(
                 ctx, body.question.strip(), body.settings, access=access, session=session
@@ -119,6 +135,8 @@ def ask(request: Request, body: QuestionBody):
     # the only thing a caller must act on, and the app answers it with the same 409 as ever.
     except AuthorizationChanged:
         raise
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001 - the closed table decides what a client learns
         return query_failure(exc)
 
@@ -127,8 +145,8 @@ def ask(request: Request, body: QuestionBody):
 def search(request: Request, body: QuestionBody):
     ctx = ctx_of(request)
     access = principal_of(request).access
-    checked_settings(body.settings)
     try:
+        checked_settings(body.settings)  # see `ask` above for why this is inside the scope
         with query_session(ctx, access, settings=body.settings) as session:
             trace = ask_service.search(
                 ctx, body.question.strip(), body.settings, access=access, session=session
@@ -142,6 +160,8 @@ def search(request: Request, body: QuestionBody):
             session.validate()
             return payload
     except AuthorizationChanged:
+        raise
+    except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001 - the closed table decides what a client learns
         return query_failure(exc)

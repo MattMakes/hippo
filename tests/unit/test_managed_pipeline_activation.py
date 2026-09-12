@@ -1421,7 +1421,8 @@ def test_a_failed_managed_preflight_clears_nothing_and_starts_nothing(mixed, no_
     before_rows, before_files = rows_of(w), data_inventory(w.ctx)
     seen, prepared = bulk_lanes(monkeypatch)
 
-    assert pipeline.reindex_all(w.ctx, build_actor=w.actor) == 0
+    with pytest.raises(w.module.ManagedPreflightRefused):
+        pipeline.reindex_all(w.ctx, build_actor=w.actor)
 
     wait(w.ctx)
     assert seen == [] and prepared == []
@@ -1540,3 +1541,158 @@ def test_a_ladybug_reopen_preserves_pointers_manifests_raw_references_and_the_to
         assert THIRD_TEXT not in before_texts  # the tombstone stays out of the current view
     finally:
         reopened.close()
+
+
+# --------------------------------------------------- 4e: pipeline wrap-up
+
+
+def test_the_restart_sweep_constants_live_with_the_managed_lifecycle_vocabulary():
+    """`store/memory.py` is the Neo4j backend, not a shared base, so two other backends
+    importing a domain constant from it makes them depend on a third backend's module.
+    `store/generations.py` is where managed-lifecycle vocabulary already lives."""
+    from hippo.store import generations
+
+    assert generations.REFRESHING_PREFIX == "refreshing:"
+    assert generations.INTERRUPTED_REFRESH_STAGE == "refresh_failed"
+    assert generations.INTERRUPTED_REFRESH_ERROR.startswith("build_interrupted: ")
+
+
+def test_the_refreshing_stage_is_written_from_the_prefix_the_sweep_matches():
+    """The sweep's predicate and the writer of the value it matches cannot drift apart.
+
+    If `_present_progress` ever spelled its prefix differently the sweep would silently
+    stop matching, the interrupted-refresh bug would return, and every test would stay
+    green. Binding both to one constant is what removes that.
+    """
+    from hippo.store.generations import REFRESHING_PREFIX
+
+    module = api()
+    presented: list[dict] = []
+    ctx = SimpleNamespace()
+    original = module.present
+    try:
+        module.present = lambda _ctx, _source_id, **fields: presented.append(fields)
+        module._present_progress(
+            ctx, "source", module.BuildProgress(phase="extract", completed=1, total=2), refresh=True
+        )
+    finally:
+        module.present = original
+    assert presented[0]["stage"].startswith(REFRESHING_PREFIX)
+    assert module._starting_fields(refresh=True)["stage"].startswith(REFRESHING_PREFIX)
+    assert not module._starting_fields(refresh=False)["stage"].startswith(REFRESHING_PREFIX)
+
+
+def test_a_reindex_right_after_a_restart_is_not_refused_by_the_holder_the_crash_left(setup):
+    """The sweep's own sentence must not be refused by the lane it tells the operator to use.
+
+    A crash mid-refresh leaves `active_build_id` naming a `MaintenanceJob` still `running`
+    with a lease up to the whole lease duration in the future, and `_install` refuses a new
+    build while that holder is live. "Reindex to run it again" therefore answered
+    `build_busy` for that window. The sweep now releases the holder with the same
+    transition the delete path performs, and touches no other job.
+    """
+    from datetime import timedelta
+
+    w = setup
+    source = managed_source(w)
+    seen: list[dict] = []
+
+    def inspect(path, body):
+        if path == "/api/chat" and not seen:
+            seen.append(row_of(w, source))
+
+    (pipeline.source_dir(w.ctx, source) / "text.md").write_text(SECOND_TEXT)
+    w.runtime.hook = inspect
+    assert pipeline.reindex(w.ctx, source, build_actor=w.actor) is True
+    wait(w.ctx)
+    w.runtime.hook = None
+    (in_flight,) = seen
+    held = in_flight["active_build_id"]
+    assert held, "the refresh was not holding a build when it was observed in flight"
+
+    # The row a crash leaves behind: the stage it was carrying and its live build holder.
+    job = w.store._knowledge_get("MaintenanceJob", held)
+    w.store._write_knowledge(
+        job.replace(status="running", lease_expires_at=w.store._now() + timedelta(minutes=5))
+    )
+    w.store._source_fields(source, active_build_id=held)
+    w.store.update_source(source, status="ready", stage=in_flight["stage"], error=None)
+
+    assert w.store.mark_interrupted_jobs() == 1
+    recovered = row_of(w, source)
+    assert recovered.get("active_build_id") is None
+    assert w.store._knowledge_get("MaintenanceJob", held).status == "cancelled"
+
+    (pipeline.source_dir(w.ctx, source) / "text.md").write_text(THIRD_TEXT)
+    assert pipeline.reindex(w.ctx, source, build_actor=w.actor) is True
+    wait(w.ctx)
+    assert not str(row_of(w, source)["error"] or "").startswith("build_busy")
+
+
+def test_an_unbounded_operation_identity_is_refused_even_when_the_row_is_already_gone(setup):
+    """Identity validation happens before the lane is known, so a vanished row cannot skip it."""
+    w = setup
+    with pytest.raises(w.module.ManagedDispatchError):
+        pipeline.delete_source(w.ctx, "no-such-source", operation_id="x" * 400)
+
+
+def test_a_failed_managed_preflight_raises_a_refusal_that_names_no_source_and_no_count(
+    mixed, no_destruction, monkeypatch
+):
+    """`0` meant both "nothing to do" and "refused", and a route cannot recover the difference.
+
+    The refusal is a bounded exception carrying neither a source id nor a per-source
+    breakdown, so the route can answer a stable code without re-reading the inventory.
+    """
+    w = mixed
+    denied = deny_one(w)
+    before_rows, before_files = rows_of(w), data_inventory(w.ctx)
+    seen, prepared = bulk_lanes(monkeypatch)
+
+    with pytest.raises(w.module.ManagedPreflightRefused) as raised:
+        pipeline.reindex_all(w.ctx, build_actor=w.actor)
+
+    assert issubclass(w.module.ManagedPreflightRefused, w.module.ManagedDispatchError)
+    message = str(raised.value)
+    assert denied not in message and w.managed not in message and w.eligible not in message
+    assert not any(character.isdigit() for character in message)
+    wait(w.ctx)
+    assert seen == [] and prepared == []
+    assert rows_of(w) == before_rows and data_inventory(w.ctx) == before_files
+
+
+def test_an_empty_inventory_is_still_nothing_to_do_rather_than_a_refusal(setup):
+    """`0` keeps its one remaining meaning: there was genuinely nothing to start."""
+    w = setup
+    for source in w.store.list_sources():
+        w.store.delete_source(source["id"])
+    assert pipeline.reindex_all(w.ctx, build_actor=w.actor) == 0
+
+
+def test_a_lane_that_changes_lane_after_the_plan_does_not_strand_the_lanes_behind_it(mixed, monkeypatch):
+    """One lane's late refusal may not leave earlier lanes cleared, queued and jobless.
+
+    `start_indexing` re-plans, and `plan_dispatch` raises for a source that became managed
+    since the snapshot. Raising out of the submission loop would leave every legacy source
+    ordered after it with no passages, `queued`, and no job to refill them -- the exact
+    thing the plan's per-lane containment forbids.
+    """
+    w = mixed
+    seen, prepared = bulk_lanes(monkeypatch)
+    submitted: list[str] = []
+    original = pipeline.start_indexing
+
+    def submit(ctx, source_id, **kwargs):
+        if source_id == w.eligible:
+            raise w.module.ManagedActorRequired("A managed source cannot be rebuilt without a build actor")
+        submitted.append(source_id)
+        return original(ctx, source_id, **kwargs)
+
+    monkeypatch.setattr(pipeline, "start_indexing", submit)
+    started = pipeline.reindex_all(w.ctx, build_actor=w.actor)
+    wait(w.ctx)
+
+    assert started == 2, "the surviving lanes still started"
+    assert set(submitted) == {w.managed, w.unsupported}
+    # Every lane the bulk cleared was also submitted: none was left emptied and jobless.
+    assert prepared == [w.unsupported] and set(prepared) <= set(submitted)

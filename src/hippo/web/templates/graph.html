@@ -10,6 +10,7 @@
   <div>
     <h1>The graph{% if preview_role %} <span class="muted">as {{ preview_role.name }}</span>{% endif %}</h1>
     <p class="muted">Every entity, passage, symbol, data object and commit {% if preview_role %}a <b>{{ preview_role.name }}</b>{% else %}you{% endif %} can see, in 3D. Search names, filter by source or kind, then type a question to watch the search spread from its seeds to the passages it picks. Drag to orbit, scroll to zoom, click a node for details.</p>
+    {% if preview_notice %}<p class="small muted" role="note">{{ preview_notice }}</p>{% endif %}
   </div>
   {% if previewable %}
   <form method="get" action="/graph" class="row" title="See the graph as another tier would (only tiers at or below yours)">

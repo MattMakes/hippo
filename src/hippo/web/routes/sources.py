@@ -17,24 +17,39 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from ...access import Principal, roles_at_or_below
 from ...hipporag import paths
 from ...ingest import pipeline
+from ...ingest.managed_activation import ManagedPreflightRefused
 from ...ingest.pipeline import Busy
 from ...ingest.repos import RepoError
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import retrieval_fields
 from ...knowledge.eval_access import EvalAccess
+from ...knowledge.public_errors import INVALID_SOURCE_TYPE
 from ...knowledge.query_access import QuerySession, query_session
 from ...status import source_view
 from ..auth import build_actor_of, principal_of, require
-from ..render import STOP_POLLING, ctx_of, render
+from ..render import STOP_POLLING, caller_error, coded_response, ctx_of, render
 from . import graph as graph_routes
 
 router = APIRouter()
+
+# Two stable codes these routes own. Neither is one of the closed retrieval codes --
+# nothing failed and nothing is stale -- so they live with the routes that answer them, like
+# `web/app.py`'s `authorization_changed`.
+#
+# `remote.py` reads `code` before anything else, so a body without one loses its own
+# sentence to the generic `operation_failed` fallback whatever its status says. That is why
+# the bounded messages below gain a code rather than being replaced by the closed table's.
+BULK_REFUSED = "bulk_refused"
+INDEXING_BUSY = "indexing_busy"
+# The plan's transport table assigns the closed input validators one code: the upload byte
+# cap, the unsupported type, the empty text and the malformed git URL are all this row.
+INVALID_SOURCE = INVALID_SOURCE_TYPE.code
 
 PASSAGES_PER_PAGE = 25
 BUSY_STATUSES = {"queued", "reading", "indexing"}  # a source in one of these still changes on its own
@@ -462,19 +477,26 @@ def add_text(request: Request, body: TextBody, visibility: str | None = None):
     try:
         return {"source_id": pipeline.add_text(ctx_of(request), body.name, body.text, **access)}
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        # Exact type only: `ManagedDispatchError` is a `ValueError` too, and reporting one as
+        # a 400 would blame the caller in the managed lane's own words. Same rule as the
+        # other 4xx sites in the web layer (`render.caller_error`).
+        if not caller_error(exc):
+            raise
+        return coded_response(str(exc), INVALID_SOURCE, 400)
 
 
 @api.post("/upload")
 async def add_upload(request: Request, file: UploadFile = File(...), visibility: str = Form(None)):
     access = new_managed_source(request, visibility)
     if message := too_big(request, ctx_of(request)):
-        return JSONResponse({"error": message}, status_code=413)
+        return coded_response(message, INVALID_SOURCE, 413)
     data = await file.read()
     try:
         return {"source_id": pipeline.add_upload(ctx_of(request), file.filename or "upload", data, **access)}
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        if not caller_error(exc):
+            raise
+        return coded_response(str(exc), INVALID_SOURCE, 400)
 
 
 @api.post("/repo")
@@ -482,8 +504,12 @@ def add_repo(request: Request, body: RepoBody):
     access = new_source_access(request, body.visibility)
     try:
         return {"source_id": pipeline.add_repo(ctx_of(request), body.url, **access)}
-    except (RepoError, ValueError) as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    except RepoError as exc:
+        return coded_response(str(exc), INVALID_SOURCE, 400)
+    except ValueError as exc:
+        if not caller_error(exc):
+            raise
+        return coded_response(str(exc), INVALID_SOURCE, 400)
 
 
 @api.post("/sample")
@@ -507,7 +533,17 @@ def reindex_all(request: Request):
             # managed refresh inside it builds as. A bulk run never widens that.
             pipeline.reindex_all(ctx, build_actor=build_actor_of(principal))
         except Busy as exc:
-            return JSONResponse({"error": str(exc)}, status_code=409)
+            return coded_response(str(exc), INDEXING_BUSY, 409)
+        except ManagedPreflightRefused:
+            # A refused preflight clears nothing and starts nothing, so `{"accepted": true}`
+            # would be untrue and the only other trace is a local log line. The refusal
+            # names no source and carries no count, and neither does this: the caller learns
+            # that the bulk did not run, not which lane stopped it.
+            view.validate()
+            return coded_response("Bulk reindex refused", BULK_REFUSED, 409)
+        # `ManagedActorRequired` is deliberately not caught: a managed operation this
+        # identity may not perform is a permission answer, and `web/app.py` already gives
+        # every route the same one.
         view.validate()
         # The pipeline reports only a global count, without per-source outcomes.
         # Acknowledge acceptance without claiming which visible jobs started.
@@ -549,7 +585,7 @@ def delete_source(request: Request, source_id: str):
     try:
         pipeline.delete_source(ctx, source_id, build_actor=build_actor_of(principal_of(request)))
     except Busy as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
+        return coded_response(str(exc), INDEXING_BUSY, 409)
     except AuthorizationChanged as exc:
         # A reader retrying their own delete must not learn that the source is still there,
         # tombstoned: an unavailable source and a suppressed one answer the same way.
@@ -566,4 +602,4 @@ def reindex(request: Request, source_id: str):
     try:
         return {"started": pipeline.reindex(ctx, source_id, build_actor=actor)}
     except Busy as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
+        return coded_response(str(exc), INDEXING_BUSY, 409)

@@ -281,12 +281,31 @@ def add_code_kind(edge: Edge, kind: str) -> None:
         edge.code_kinds.sort()
 
 
+class ProjectionError(ValueError):
+    """The supplied graph/evidence cannot establish a coherent current view.
+
+    Defined here rather than in `knowledge/projection.py`, which raises it for every other
+    composition failure, because that module imports this one: the exception has to live on
+    the side of the dependency that has no way back. `projection.ProjectionError` is this
+    class, so callers may keep importing it from either place.
+
+    The type is what every transport reads. A bare `ValueError` is the shape the closed
+    input validators use, and `mcp_server.tool_failure` passes that shape's own words
+    through verbatim, so an incoherent selection raised as a bare `ValueError` reached a
+    client as its own internals and reached the HTTP routes as a code-less 500.
+    """
+
+
 def canonical_selected_generations(rows) -> tuple[tuple[str, str], ...]:
     """Sorted, unique `(source_id, active_generation_id)` pairs, one generation per source.
 
     A source has exactly one current pointer, so two generations for one source is a
     composition mistake rather than a richer view, and silently keeping both would let a
     retired or staged generation be counted as current.
+
+    A refusal here is `ProjectionError` rather than a bare `ValueError`, which is what
+    lets every graph-only owner on every transport map it through the closed public table
+    without a catch of its own.
     """
     if type(rows) is not tuple or any(
         type(pair) is not tuple
@@ -294,10 +313,10 @@ def canonical_selected_generations(rows) -> tuple[tuple[str, str], ...]:
         or any(type(value) is not str or not value for value in pair)
         for pair in rows
     ):
-        raise ValueError("Selected generations must be immutable nonempty (source, generation) pairs")
+        raise ProjectionError("Selected generations must be immutable nonempty (source, generation) pairs")
     pairs = tuple(sorted(set(rows)))
     if len({source for source, _generation in pairs}) != len(pairs):
-        raise ValueError("Selected generations name one source twice")
+        raise ProjectionError("Selected generations name one source twice")
     return pairs
 
 

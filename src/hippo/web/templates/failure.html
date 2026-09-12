@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Something went wrong{% endblock %}
+{% block content %}
+{# The page a browser gets when a mapped failure escapes a route that renders pages. It
+   carries the mapper's own bounded sentence and its stable code, never the exception. #}
+<div class="page-head"><h1>Something went wrong</h1></div>
+<div class="callout warn">{{ error }}</div>
+<p class="muted">Quote <code>{{ failure_code }}</code> if you report this.</p>
+<a class="btn" href="/">Back to the Library</a>
+{% endblock %}

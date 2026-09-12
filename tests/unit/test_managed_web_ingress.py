@@ -287,10 +287,14 @@ def test_deleting_brings_the_authorized_managers_actor(web, monkeypatch):
 def test_bulk_reindex_brings_the_bulk_managers_actor(web, monkeypatch):
     managed_source(web)
     seen = spy(monkeypatch, "reindex_all")
+    started = spy(monkeypatch, "start_indexing")
     response = web.client.post("/api/sources/reindex-all", headers=web.admin_headers)
     assert response.status_code == 200 and response.json() == {"accepted": True}
     assert [actor.kind for actor in seen] == ["reader"]
     assert seen[0].user_id == web.admin
+    # `{"accepted": true}` has to mean something was accepted: the actor alone would stay
+    # green on a bulk that silently started nothing (4b-i review F7).
+    assert started, "the bulk acknowledged acceptance without submitting a lane"
 
 
 # ------------------------------------------------------- closed public codes
@@ -525,3 +529,207 @@ def test_bulk_reindex_holds_one_owner_across_the_pipeline_call(web, monkeypatch)
     assert during == [(1, 0)]
     assert len(seen) == 1 and len(closed) == 1
     wait(web.ctx)
+
+
+# ------------------------------------- 4e: a bulk that started nothing says so
+
+
+def test_a_bulk_whose_managed_preflight_refuses_answers_a_closed_refusal_code(web, monkeypatch):
+    """`{"accepted": true}` has to keep meaning that something was accepted.
+
+    A refused preflight clears nothing and starts nothing, and the only trace used to be a
+    local log line: an operator was told their bulk was accepted and had to read the server
+    log to find out it was not. The refusal carries no source id and no count, so the body
+    names the condition and nothing about the inventory.
+    """
+    from hippo.knowledge.access import AuthorizationChanged as Changed
+
+    source_id = managed_source(web)
+    before = web.store.get_source(source_id)["active_generation_id"]
+    started = spy(monkeypatch, "start_indexing")
+    # The real refusal, through the real `_preflight_managed` and the real route: the
+    # authority this actor would need is gone. Nothing about `reindex_all` is patched.
+    monkeypatch.setattr(pipeline, "capture_build_authority", raises(Changed("gone")))
+
+    response = web.client.post("/api/sources/reindex-all", headers=web.admin_headers)
+
+    assert response.status_code == 409, response.text
+    assert response.json() == {"error": "Bulk reindex refused", "code": "bulk_refused"}
+    wait(web.ctx)
+    assert started == [], "a refused preflight must start nothing"
+    assert web.store.get_source(source_id)["active_generation_id"] == before
+
+
+def test_a_bulk_over_a_managed_inventory_with_no_actor_is_the_generic_permission_answer(web, monkeypatch):
+    """A managed operation an identity may not perform is a permission answer, not a report."""
+
+    def refuse(ctx, **kwargs):
+        raise ManagedActorRequired("A managed source cannot be rebuilt without a build actor")
+
+    monkeypatch.setattr(pipeline, "reindex_all", refuse)
+    response = web.client.post("/api/sources/reindex-all", headers=web.admin_headers)
+    assert response.status_code == 409, response.text
+    assert response.json() == {
+        "error": "Permissions changed; repeat the query",
+        "code": "authorization_changed",
+    }
+
+
+# ------------- 4e addendum (4b-i review F3, F5, probes 5 and 6): every body carries its code
+
+
+def test_every_json_failure_body_the_source_routes_answer_carries_its_code(web, monkeypatch):
+    """`remote.py` branches on `code` first: an uncoded body loses its own sentence.
+
+    The remote client prints `code: message` when both are present, a 4xx `detail` when it
+    is, and the fixed `operation_failed` sentence for anything else. A 413 that says which
+    knob to raise, with no `code` and no `detail`, therefore reaches the user as
+    "Operation failed; inspect local logs by operation ID (HTTP 413)" -- the actionable
+    half discarded because the server never classified it.
+    """
+    bodies = []
+
+    # 1-2: the closed input validators the plan's `invalid_source` row names.
+    over = "x" * 40
+    monkeypatch.setattr(pipeline, "max_upload_bytes", lambda ctx: 4)
+    bodies.append(
+        (
+            413,
+            web.client.post(
+                "/api/sources/upload",
+                files={"file": ("big.md", over.encode(), "text/markdown")},
+                headers=web.reader_headers,
+            ),
+        )
+    )
+    monkeypatch.undo()
+    bodies.append(
+        (
+            400,
+            web.client.post(
+                "/api/sources/upload",
+                files={"file": ("photo.png", b"\x89PNG\x00\x00", "image/png")},
+                headers=web.reader_headers,
+            ),
+        )
+    )
+    # 3-4: the two legacy validators the plan protects; they keep their message and gain a code.
+    bodies.append(
+        (
+            400,
+            web.client.post(
+                "/api/sources/text", json={"name": "N", "text": "   "}, headers=web.reader_headers
+            ),
+        )
+    )
+    bodies.append(
+        (
+            400,
+            web.client.post("/api/sources/repo", json={"url": "not a url"}, headers=web.reader_headers),
+        )
+    )
+    for status, response in bodies:
+        assert response.status_code == status, response.text
+        body = response.json()
+        assert body["code"] == "invalid_source", body
+        assert body["error"], body
+
+
+@pytest.mark.parametrize(
+    "route,method",
+    [
+        ("/api/sources/reindex-all", "post"),
+        ("/api/sources/{id}", "delete"),
+        ("/api/sources/{id}/reindex", "post"),
+    ],
+    ids=["bulk", "delete", "reindex"],
+)
+def test_the_three_indexing_preconditions_answer_a_coded_409(web, monkeypatch, route, method):
+    """`Busy` is a bounded sentence with no code, so a client cannot branch on "try later".
+
+    A legacy source, because a managed delete has no `Busy` precondition by design: it
+    sweeps nothing, so waiting for an unrelated index job would only keep a source readable
+    that its owner asked to withdraw (Task 3b decision 1).
+    """
+    created = web.client.post("/api/sources/sample", headers=web.reader_headers)
+    assert created.status_code == 200, created.text
+    source_id = created.json()["source_id"]
+    wait(web.ctx)
+    monkeypatch.setattr(pipeline, "_refuse_if_indexing", raises(pipeline.Busy("something else is indexing")))
+    call = getattr(web.client, method)
+    response = call(route.format(id=source_id), headers=web.admin_headers)
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["code"] == "indexing_busy" and "indexing" in body["error"]
+
+
+def test_an_ingress_route_reports_a_managed_dispatch_error_through_the_closed_table(web, monkeypatch):
+    """`ManagedDispatchError` is a `ValueError`, so a broad catch would blame the caller.
+
+    Latent today -- nothing on these two routes can raise it synchronously -- but the
+    closed handlers have to keep ownership if it ever becomes reachable, and the rule is
+    the same exact-type rule the 4xx catches elsewhere use.
+    """
+    from hippo.ingest.managed_activation import ManagedIngressError
+
+    monkeypatch.setattr(pipeline, "add_text", raises(ManagedIngressError(POISON)))
+    response = web.client.post(
+        "/api/sources/text", json={"name": "N", "text": FIRST_TEXT}, headers=web.reader_headers
+    )
+    assert response.status_code == 500, response.text
+    assert response.json() == {
+        "error": "Operation failed; inspect local logs by operation ID",
+        "code": "operation_failed",
+    }
+    say_nothing_private(response.text)
+
+
+def test_an_actorless_delete_and_bulk_over_a_managed_inventory_answer_the_same_coded_409(web, monkeypatch):
+    """Promoted from the 4b-i review's probe 5: end to end, not through a patched pipeline."""
+    source_id = managed_source(web)
+    from hippo.web.routes import sources as source_routes
+
+    # The route imports the helper into its own namespace, so that is where it is replaced.
+    monkeypatch.setattr(source_routes, "build_actor_of", lambda principal: None)
+    deleted = web.client.delete(f"/api/sources/{source_id}", headers=web.admin_headers)
+    bulk = web.client.post("/api/sources/reindex-all", headers=web.admin_headers)
+    for response in (deleted, bulk):
+        assert response.status_code == 409, response.text
+        assert response.json() == {
+            "error": "Permissions changed; repeat the query",
+            "code": "authorization_changed",
+        }
+    # Nothing was suppressed and nothing was rebuilt.
+    row = web.store.get_source(source_id)
+    assert (row["status"], row["stage"]) != ("deleted", "tombstoned")
+
+
+def test_the_index_job_closure_captures_nothing_request_scoped(web):
+    """Promoted from the 4b-i review's probe 6: what a background job may hold.
+
+    A closure that captured a `Request`, a cookie or a request-scoped token would outlive
+    the request that made it and rebuild as whoever happened to be signed in.
+    """
+    submitted = []
+    real = web.ctx.jobs.start
+
+    def capture(key, fn, *args, **kwargs):
+        submitted.append(fn)
+        return real(key, fn, *args, **kwargs)
+
+    web.ctx.jobs.start = capture
+    try:
+        response = web.client.post(
+            "/api/sources/text", json={"name": "Notes", "text": FIRST_TEXT}, headers=web.reader_headers
+        )
+        assert response.status_code == 200, response.text
+        wait(web.ctx)
+    finally:
+        web.ctx.jobs.start = real
+    (job,) = submitted
+    assert sorted(job.__code__.co_freevars) == ["actor", "ctx", "operation", "source_id"]
+    captured = dict(
+        zip(job.__code__.co_freevars, [cell.cell_contents for cell in job.__closure__], strict=True)
+    )
+    assert type(captured["actor"]).__name__ in ("BuildActor", "NoneType")
+    assert isinstance(captured["source_id"], str) and isinstance(captured["operation"], str)

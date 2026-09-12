@@ -51,10 +51,12 @@ from ..hipporag import openie
 from ..hipporag.indexer import GRAPH_WRITE_LOCK, index_source
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.build_authority import BuildActor, capture_build_authority
+from ..knowledge.raw_artifacts import RawArtifactTooLarge
 from ..knowledge.source_lifecycle import tombstone_managed_source
 from . import readers, repos
+from .accepted_inputs import CaptureTooLarge, InputCaptureError
 from .chunker import chunk_documents
-from .readers import Document, TextBudget, TooLarge
+from .readers import Document, ReadError, TextBudget, TooLarge
 
 
 def _managed():
@@ -313,11 +315,37 @@ def run_indexing(
         log.exception("Indexing source %s failed", source_id)
         if not _sweep_if_deleted(ctx, source_id):
             _clear_passages(ctx, source_id)
-            ctx.store.update_source(
-                source_id, status="failed", stage="failed", error=f"{type(err).__name__}: {err}"
-            )
+            ctx.store.update_source(source_id, status="failed", stage="failed", error=_legacy_failure(err))
     else:
         _sweep_if_deleted(ctx, source_id)
+
+
+LEGACY_FAILURE_MESSAGE = "indexing failed; inspect local logs"
+
+# The closed input validators, exactly as `knowledge/public_errors.py` lists them: the
+# readers, the accepted-input capture and the raw object store. The plan's transport table
+# gives this family its own row -- "existing bounded validation text from closed input
+# validators only" -- because what they say is a limit and which knob raises it, which is
+# the whole answer a user needs. Everything else is an arbitrary exception message.
+CLOSED_INPUT_VALIDATORS = (TooLarge, ReadError, CaptureTooLarge, InputCaptureError, RawArtifactTooLarge)
+
+
+def _legacy_failure(err: BaseException) -> str:
+    """What a failed legacy lane may say on the Source row: its class, and where the rest is.
+
+    The row is a public surface and an arbitrary exception's words are not bounded -- a
+    repo error names a checkout path, a parse failure can quote the source text -- so only
+    the class name survives, which is what an operator greps the `log.exception` above by.
+    Same reason the managed lane stores a closed code rather than its exception
+    (`managed_activation.map_build_failure`).
+
+    The closed input validators are the exception the plan itself makes: their text is the
+    limit and the setting that raises it, so bounding it would take the answer away and
+    give nothing back. Their message reaches the row as it always did.
+    """
+    if isinstance(err, CLOSED_INPUT_VALIDATORS):
+        return f"{type(err).__name__}: {err}"
+    return f"{type(err).__name__}: {LEGACY_FAILURE_MESSAGE}"
 
 
 def _run_managed_indexing(ctx: AppContext, source_id: str, plan) -> None:
@@ -533,6 +561,10 @@ def delete_source(
     source's own job and waits a moment for it to stop. The managed lane does neither; see
     `_tombstone`.
     """
+    # A caller-supplied identity is validated before the lane is known and before the row is
+    # read, so a source that has already gone does not quietly skip the check: an unbounded
+    # token is the caller's mistake whatever the inventory happens to hold.
+    _managed().check_operation_id(operation_id)
     source = ctx.store.get_source(source_id)
     if source is not None:
         # One classification for both lanes; it refuses a managed source with no actor, and
@@ -586,7 +618,9 @@ def reindex_all(ctx: AppContext, *, build_actor: BuildActor | None = None) -> in
     caller brought an actor, and a current tombstone is skipped. Every managed lane's
     authority is proven before the first legacy clear: a clear that cannot be followed by a
     rebuild would lose that source's evidence, so one lane that cannot be built stops the
-    whole bulk. Without an actor a managed inventory refuses here, for the same reason.
+    whole bulk with `ManagedPreflightRefused`. Without an actor a managed inventory refuses
+    here, for the same reason. The returned integer therefore means only what it says: how
+    many lanes were started, `0` when there was genuinely nothing to do.
     """
     _refuse_if_indexing(ctx)
     # Classify the whole inventory before touching any of it. A managed source with no actor
@@ -596,25 +630,42 @@ def reindex_all(ctx: AppContext, *, build_actor: BuildActor | None = None) -> in
         for source in ctx.store.list_sources()
     ]
     lanes = [lane for lane in lanes if lane[1].mode != "skip"]  # a tombstone is never rebuilt
-    if not _preflight_managed(ctx, lanes, build_actor):
-        return 0
+    _preflight_managed(ctx, lanes, build_actor)
     # Clear every legacy source first, then start the jobs: once a job runs, no more orphan sweeps.
     for source_id, plan in lanes:
         if plan.mode == "legacy":
             _prepare_reindex(ctx, source_id)
-    return sum(
-        1
-        for source_id, plan in lanes
-        if start_indexing(ctx, source_id, build_actor=plan.actor, operation_id=plan.operation_id)
-    )
+    return sum(1 for source_id, plan in lanes if _submit_lane(ctx, source_id, plan))
 
 
-def _preflight_managed(ctx: AppContext, lanes: list[tuple[str, Any]], actor: BuildActor | None) -> bool:
-    """True when this actor can still build every managed lane of a bulk reindex.
+def _submit_lane(ctx: AppContext, source_id: str, plan) -> bool:
+    """Submit one lane of a bulk; a lane that changed lane since the plan is skipped, not fatal.
+
+    `start_indexing` re-plans, and `plan_dispatch` raises for a source that has become
+    managed since the inventory was classified. Raising out of the submission loop would
+    leave every legacy lane ordered after it cleared, `queued` and with no job to refill
+    it -- one source's failure making another's evidence unavailable, which is exactly what
+    the plan forbids of an asynchronous lane failure. The log line names the source and
+    nothing about why; the public answer is still the whole bulk's.
+    """
+    try:
+        return start_indexing(ctx, source_id, build_actor=plan.actor, operation_id=plan.operation_id)
+    except _managed().ManagedDispatchError:
+        log.warning("Bulk reindex skipped source %s: it changed lane after the plan", source_id)
+        return False
+
+
+def _preflight_managed(ctx: AppContext, lanes: list[tuple[str, Any]], actor: BuildActor | None) -> None:
+    """Refuse the whole bulk unless this actor can still build every managed lane.
 
     The authority captured here is released immediately; each build captures its own. This
-    only answers "would it be refused?" while refusing is still free. The caller learns
-    nothing about which source failed -- the public response is the same either way.
+    only answers "would it be refused?" while refusing is still free -- before the first
+    clear, so a lane that cannot be rebuilt is never emptied first.
+
+    It raises rather than returning `0`, because `0` also means "there was nothing to do"
+    and a route cannot recover the difference afterwards without re-reading the inventory
+    it was just refused. The caller still learns nothing about which source failed:
+    `ManagedPreflightRefused` names no source and carries no count.
     """
     for source_id, plan in lanes:
         if plan.mode != "managed":
@@ -623,8 +674,9 @@ def _preflight_managed(ctx: AppContext, lanes: list[tuple[str, Any]], actor: Bui
             capture_build_authority(ctx.store, source_id=source_id, actor=actor).close()
         except AuthorizationChanged:
             log.warning("Bulk reindex started nothing: source %s cannot be built by this actor", source_id)
-            return False
-    return True
+            raise _managed().ManagedPreflightRefused(
+                "One managed lane of this bulk cannot be built"
+            ) from None
 
 
 def reindex(ctx: AppContext, source_id: str, *, build_actor: BuildActor | None = None) -> bool:

@@ -89,6 +89,43 @@ def retrieval_failure(exc: BaseException) -> PublicFailure:
     return public_failure(exc) or OPERATION_FAILED
 
 
+def caller_error(exc: BaseException) -> bool:
+    """True only for the exact `ValueError` the closed input validators raise.
+
+    Every managed, retrieval and ingest exception is a `ValueError` *subclass* --
+    `ReadError` names the file it was reading, `ProjectionError` describes a selection,
+    `ManagedDispatchError` a lane -- so an `except ValueError` that answers
+    `HTTPException(4xx, str(exc))` prints any of them at the caller. The exact-type test
+    is what keeps them out of a 4xx `detail` and hands them to `retrieval_failure`
+    instead. `mcp_server.tool_failure` applies the same rule, so a client moving between
+    HTTP and MCP is told the same thing by the same rule.
+    """
+    return type(exc) is ValueError
+
+
+def wants_html(request: Request) -> bool:
+    """Whether this caller asked for a page rather than a body it can branch on.
+
+    One definition, used by the 403 handler and the public-failure handler, because a
+    surface that negotiates and a surface that does not is exactly how a browser ends up
+    reading a JSON blob where the page was. Every `/api` path answers JSON whatever the
+    browser's `Accept` header says: the pages' own JavaScript sends the browser's header.
+    """
+    return "text/html" in request.headers.get("accept", "") and not request.url.path.startswith("/api")
+
+
+def coded_response(message: str, code: str, status_code: int) -> JSONResponse:
+    """A bounded message a route owns, in the one body shape every web surface answers.
+
+    `public_failure_response` below is for the closed table's own sentences. This is for
+    the routes the plan lets keep their existing text -- the closed input validators and
+    the indexing preconditions -- so that adding `code` costs them nothing. It matters
+    because `remote.py` branches on `code` first: an uncoded body falls through to the
+    generic `operation_failed` sentence and its own actionable text is discarded.
+    """
+    return JSONResponse({"error": message, "code": code}, status_code=status_code)
+
+
 def public_failure_response(failure: PublicFailure) -> JSONResponse:
     """One JSON body for every public failure: the `error` clients already read, plus `code`.
 
@@ -96,7 +133,7 @@ def public_failure_response(failure: PublicFailure) -> JSONResponse:
     bounded sentence; `code` is the stable value a client branches on. Neither is ever
     derived from the raised exception's text.
     """
-    return JSONResponse({"error": failure.message, "code": failure.code}, status_code=failure.http_status)
+    return coded_response(failure.message, failure.code, failure.http_status)
 
 
 def public_failure_page(request: Request, failure: PublicFailure, template: str, nav: str = ""):

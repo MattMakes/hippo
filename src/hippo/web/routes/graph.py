@@ -34,10 +34,11 @@ from ...access import EVERYONE_RANK, Principal
 from ...analysis.explain import explain
 from ...hipporag import paths as path_tools
 from ...hipporag.graph_index import CODE_KINDS, DATA, ENTITY, PASSAGE, SYMBOL, GraphIndex
+from ...ingest.managed_activation import managed_eligibility
 from ...knowledge.access import AuthorizationChanged
 from ...knowledge.answer_evidence import retrieval_fields
 from ...knowledge.dense_session import retrieval_session
-from ...knowledge.query_access import AuthorizedModel, current_access, query_session
+from ...knowledge.query_access import AuthorizedModel, current_access, effective_settings, query_session
 from ...ollama import OllamaError
 from ...status import source_view
 from ...store.base import validate_settings
@@ -141,6 +142,31 @@ def tiers_of(ctx, index: GraphIndex, sources) -> tuple[dict[str, dict[str, Any]]
 # ----------------------------------------------------------------- page
 
 
+# A preview audience has no identity (`knowledge/access.py:253` returns `None` for anything
+# that is not internal or a reader with a user id), so it proves no managed evidence and the
+# picture it draws is the open reader's, whatever the previewed tier can actually see.
+# Preview audiences stay on legacy evidence for this increment, so the page says which
+# picture it is showing rather than telling an admin something false about a tier.
+PREVIEW_NOTICE = (
+    "Preview shows evidence available to open readers; managed sources require a signed-in member of the tier"
+)
+
+
+def managed_evidence_exists(ctx) -> bool:
+    """Whether this workspace holds any selected managed generation.
+
+    The preview's fidelity gap only exists when there is managed evidence to miss, so the
+    notice is conditioned on the workspace rather than shown on every preview.
+    `managed_eligibility` is the one definition of "managed"; a tombstoned source is not
+    counted, because its evidence is suppressed for every audience and the preview is
+    therefore not hiding it from anybody.
+    """
+    return any(
+        managed_eligibility(source) == "managed" and source.get("active_generation_id")
+        for source in ctx.store.list_sources()
+    )
+
+
 @router.get("/graph")
 def graph_page(request: Request, as_role: str = "", q: str = ""):
     ctx = ctx_of(request)
@@ -159,7 +185,9 @@ def graph_page(request: Request, as_role: str = "", q: str = ""):
                 if view:
                     view.validate()
 
-            roles = ctx.store.list_roles() if ctx.store.ping() else []
+            online = ctx.store.ping()
+            roles = ctx.store.list_roles() if online else []
+            notice = PREVIEW_NOTICE if preview and online and managed_evidence_exists(ctx) else ""
             can_preview = actor.can("manage_users") or actor.can("manage_roles")
             previewable = (
                 [r for r in roles if actor.is_open or r["rank"] <= actor.rank] if can_preview else []
@@ -171,6 +199,7 @@ def graph_page(request: Request, as_role: str = "", q: str = ""):
                 nav="graph",
                 principal=principal,
                 preview_role=preview,
+                preview_notice=notice,
                 previewable=previewable,
                 sources=view.sources if view else [],
                 authorization_check=validate,
@@ -356,7 +385,7 @@ def light_up(request: Request, body: LightUpBody):
         validate_viewer()
         raise HTTPException(400, str(exc)) from exc
     try:
-        validate_settings({**ctx.store.get_settings(), **(body.settings or {})})
+        effective_settings(ctx, body.settings)
     except (ValueError, TypeError) as exc:
         validate_viewer()
         return public_failure_response(retrieval_failure(exc))

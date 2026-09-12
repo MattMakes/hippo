@@ -52,11 +52,10 @@ from ...hipporag.paths import (
     shortest_code_path,
     triple_rows,
 )
-from ...knowledge.public_errors import public_failure
 from ...knowledge.query_access import query_session
 from ...ollama import OllamaError
 from ..auth import principal_of
-from ..render import ctx_of, public_failure_response, retrieval_failure
+from ..render import caller_error, ctx_of, public_failure_response, retrieval_failure
 
 api = APIRouter(prefix="/api/code")
 
@@ -216,12 +215,13 @@ def _answer(build: Callable[[], Any], validate: Callable[[], None]) -> Any:
     except UnknownSymbol as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
-        # `ProjectionError`, `DenseUnavailable` and every other row of the closed table are
-        # `ValueError`s too. They are not the caller's mistake wherever they are raised, so
-        # the separation is by type rather than by "it can only happen at acquisition":
-        # re-raised here, the mapper outside the view owns them. `mcp_server.tool_failure`
-        # orders the same two vocabularies the same way.
-        if public_failure(exc) is not None:
+        # `ProjectionError`, `DenseUnavailable`, `ReadError` and every other activation
+        # failure is a `ValueError` too. They are not the caller's mistake wherever they
+        # are raised, so the separation is by exact type rather than by "the closed table
+        # knows this one": asking the table would still print a `ValueError` subclass it
+        # has no row for, and several of those name a path. Re-raised here, the mapper
+        # outside the view owns them. `mcp_server.tool_failure` applies the same rule.
+        if not caller_error(exc):
             raise
         raise HTTPException(400, str(exc)) from exc
     finally:
