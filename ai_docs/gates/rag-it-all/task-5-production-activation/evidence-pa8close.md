@@ -12,16 +12,17 @@ to `tail`. **No Neo4j was used and the disposable container was never claimed.**
 
 ## Commits
 
-Three, not the brief's two. Item 1/4/5 landed first because they touch no code and the audit
-refresh had to be stamped at a HEAD; items 2 and 3 are separate because item 2 changes
-behaviour and item 3 only adds coverage, and a reviewer of one should not have to read the
-other.
+Three of my own, not the brief's two, plus one merge the orchestrator asked for. Item 1/4/5
+landed first because they touch no code and the audit refresh had to be stamped at a HEAD;
+items 2 and 3 are separate because item 2 changes behaviour and item 3 only adds coverage,
+and a reviewer of one should not have to read the other.
 
 | # | Hash | Subject | Contents |
 |---|---|---|---|
 | 1 | `4e235bb` | Refresh the call-site audit and assign the three deferred rollout notes | Items 1, 4, 5 |
 | 2 | `ccb6635` | Guard the last isinstance catches and close the LOW activation batch | Item 2 |
-| 3 | (this commit) | Cover the activation gaps the plan's adversarial cases name | Item 3 + this file |
+| 3 | `4be9920` | Cover the activation gaps the plan's adversarial cases name | Item 3 + this file |
+| 4 | `fed22c3` | Merge rag-it-all-tibs (`013317f`) so the PA6 line is clean | The CC1 fix, on the orchestrator's instruction |
 
 ## Findings, one row each
 
@@ -40,11 +41,11 @@ other.
 | wrap-up 6 (`CLOSED_INPUT_VALIDATORS` is an unchecked copy) | **CLOSED** | `ccb6635` | `test_the_pipelines_closed_validator_tuple_is_the_public_tables_own_family` compares it with `public_errors._ROWS`' `invalid_source` family, so a sixth validator cannot be added on one side alone |
 | wrap-up 13 (the borrow pair is documented, untested) | **CLOSED** | `ccb6635` | `test_run_question_hands_the_dispatcher_a_session_or_an_audience_but_never_both`, including the dispatcher's own `invalid_borrow` refusal of the pair the runner never forms |
 | PA4d 2 (nothing makes `changeset_access.apply`'s guard fire) | **CLOSED** | `ccb6635` | `test_a_changeset_naming_managed_evidence_is_refused_by_the_unrestricted_read`. A managed span is in the *authorized* graph (so the draft saves) and not in the *native* one, which is the whole distinction the guard encodes |
-| PA2 6 (`compose_graphs`' `populated` shortcut version unasserted) | **CLOSED** | commit 3 | `test_a_lane_holding_only_an_empty_generation_still_owns_the_composed_version` |
-| PA3a 3 (single-source `reindex` of an unsupported source with an actor) | **CLOSED** | commit 3 | `test_a_single_reindex_of_an_unsupported_source_with_an_actor_stays_legacy` |
-| PA3a 5 (`on_first_connection` / `status.source_view` not in the raw-root test) | **CLOSED** | commit 3 | `test_the_raw_root_and_embedding_cache_appear_only_for_a_managed_build`, extended with both. See the backend note below |
-| PA3b 8 (the restart-sweep tests lack the "nothing else moved" half) | **CLOSED** | commit 3 | `test_an_interrupted_refresh_is_retired_and_the_published_generation_keeps_serving`, extended with a `before = row_of(...)` comparison over every field except `stage`, `error`, `updated_at`, plus an explicit `progress_done`/`progress_total` assertion. **No defect exposed**: the sweep leaves them stale, which is what the review expected |
-| T3 (verified dense over HTTP; revocation on the verified lane) | **CLOSED** | commit 3 | `test_a_reader_reaches_verified_dense_over_http`, `test_revoking_during_a_verified_dispatch_is_the_generic_permission_answer` |
+| PA2 6 (`compose_graphs`' `populated` shortcut version unasserted) | **CLOSED** | `4be9920` | `test_a_lane_holding_only_an_empty_generation_still_owns_the_composed_version` |
+| PA3a 3 (single-source `reindex` of an unsupported source with an actor) | **CLOSED** | `4be9920` | `test_a_single_reindex_of_an_unsupported_source_with_an_actor_stays_legacy` |
+| PA3a 5 (`on_first_connection` / `status.source_view` not in the raw-root test) | **CLOSED** | `4be9920` | `test_the_raw_root_and_embedding_cache_appear_only_for_a_managed_build`, extended with both. See the backend note below |
+| PA3b 8 (the restart-sweep tests lack the "nothing else moved" half) | **CLOSED** | `4be9920` | `test_an_interrupted_refresh_is_retired_and_the_published_generation_keeps_serving`, extended with a `before = row_of(...)` comparison over every field except `stage`, `error`, `updated_at`, plus an explicit `progress_done`/`progress_total` assertion. **No defect exposed**: the sweep leaves them stale, which is what the review expected |
+| T3 (verified dense over HTTP; revocation on the verified lane) | **CLOSED** | `4be9920` | `test_a_reader_reaches_verified_dense_over_http`, `test_revoking_during_a_verified_dispatch_is_the_generic_permission_answer` |
 | S1 (`session-audit.md` one row behind HEAD) | **CLOSED** | `4e235bb` | The audit's three sweep commands re-run at `c893a95`; 58 rows, 0 unclassified, `cli.py:567 _sources_locally` classified |
 | The five DEFERRED items (plan assignment) | **CLOSED** | `4e235bb` | Three lines in the plan's "Rollout and rollback boundary" assign the `model_unavailable` behaviour change, the CLI ownership question and `add_repo`'s legacy status to Task 16 |
 | **PA2 5 (a relation supported by two generations)** | **OPEN** | — | See below. Owner: *orchestrator: dedicated interleaved-fixture task after `pa8close`* |
@@ -185,7 +186,7 @@ plan invariant 5 (staging evidence must not affect visibility or counts) and PA6
 criterion. `context.py`, `status.py` and `store/generations.py` belong to the code-capture
 fleet and to this brief's "do NOT touch" list.
 
-### Green at commit 3, still on the `c893a95` base
+### Green at `4be9920`, still on the `c893a95` base
 
 Every line verbatim from `GATES.md`, Fake, at the tip of this branch before the merge below.
 
@@ -205,20 +206,67 @@ diff <(grep '^FAILED' /tmp/hippo-pa8close-base-pa6.log | sort) \
      <(grep '^FAILED' /tmp/hippo-pa8close-green-pa6.log | sort)   # no output
 ```
 
-### After merging the CC1 fix
+### Final: after merging the CC1 fix — all six gates green
 
 `rag-it-all-tibs` moved to `013317f` while this batch was finishing, carrying the fix for the
 regression above. The orchestrator instructed a merge into `wp/pa8close` so the final PA6
-line is clean rather than six-red; that is the one merge this worker made, and it is recorded
-here because the rulebook otherwise forbids one.
+line proves this batch's own work rather than six failures it does not own. That merge is
+**`fed22c3`**, and it is the one merge this worker made; it is called out here because the
+rulebook otherwise forbids one. The venv was reinstalled after it (`-e '.[dev,neo4j]'` then
+the `mcp==2.1.1` pin) because the merge brought new modules.
 
 | Gate | Result | Log |
 |---|---|---|
-| PA6 after merge | *see the merge section at the end* | `/tmp/hippo-pa8close-merged-pa6.log` |
+| PA1 | **188 passed, 2 skipped — EXIT 0** | `/tmp/hippo-pa8close-merged-pa1.log` |
+| PA2 | **97 passed, 1 skipped — EXIT 0** | `/tmp/hippo-pa8close-merged-pa2.log` |
+| PA3 | **191 passed, 3 skipped — EXIT 0** | `/tmp/hippo-pa8close-merged-pa3.log` |
+| PA4 | **117 passed — EXIT 0** | `/tmp/hippo-pa8close-merged-pa4.log` |
+| PA5 | **188 passed, 2 skipped — EXIT 0** | `/tmp/hippo-pa8close-merged-pa5.log` |
+| PA6 | **728 passed — EXIT 0** in 99.71s | `/tmp/hippo-pa8close-merged-pa6.log` |
 
-Ladybug, the two files the brief names (`HIPPO_TEST_STORE=ladybug`, verbatim, bare
-`-W error`): `/tmp/hippo-pa8close-ladybug-1.log` (item 2 only) and
-`/tmp/hippo-pa8close-ladybug-2.log` (final, after item 3 and the merge).
+PA2 and PA5 gain a further test each over the pre-merge numbers, and PA6 six, from the merged
+CC1 fix's own tests; the six failures are gone.
+
+### Ladybug: 5 failed, 135 passed — and none of the five is this batch's
+
+`HIPPO_TEST_STORE=ladybug`, the two files the brief names, verbatim, bare `-W error`:
+**5 failed, 135 passed in 1293.02s**, `/tmp/hippo-pa8close-ladybug-2.log`. A first run over
+item 2 alone (`/tmp/hippo-pa8close-ladybug-1.log`) was stopped **by PID** partway through,
+because the merge changed `src/hippo` underneath it and its result would have described
+neither tree; no `pkill` was used and no other worker's run was touched.
+
+All five are in `test_managed_pipeline_activation.py`:
+
+- `test_the_raw_root_and_embedding_cache_appear_only_for_a_managed_build` *(a test this batch extended)*
+- `test_managed_add_refresh_and_conversion_never_destroy_source_wide_evidence`
+- `test_a_mixed_bulk_refreshes_managed_evidence_and_converts_without_a_legacy_clear`
+- `test_one_lane_failing_asynchronously_leaves_every_other_source_intact`
+- `test_a_ladybug_reopen_preserves_pointers_manifests_raw_references_and_the_tombstone`
+
+**They are pre-existing at the merged base, proved rather than assumed.** The same five were
+re-run with *both* files this batch touches in that area checked out from `013317f`:
+
+```
+git checkout 013317f -- tests/unit/test_managed_pipeline_activation.py \
+                        src/hippo/ingest/managed_activation.py
+HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_managed_pipeline_activation.py \
+    -q -o addopts='' -W error -k '<the five>'
+# 5 failed, 103 deselected in 216.06s   -> /tmp/hippo-pa8close-ladybug-basecheck.log
+git checkout HEAD -- <the same two files>     # restored; worktree clean
+```
+
+Identical failures without this batch's edits. Isolated first
+(`/tmp/hippo-pa8close-ladybug-subset.log`, 5 failed, 105 deselected), so it is not an
+ordering or contention artifact either.
+
+Every one has the same shape: the managed build does not publish, so the Source row lands on
+`stage="refresh_failed"` instead of `"ready"`. The log line is
+`managed_activation.py:440 Managed build did not publish: source=… code=operation_failed
+exception=UnicodeDecodeError` (and `exception=ValueError` on the refresh cases). This is the
+**Ladybug lane only** — PA1, PA3 and PA5 run these same files on Fake and are green.
+
+Reported to the orchestrator. **PA7's ledger line names this file on Ladybug, so PA7 cannot be
+recorded until it is fixed**, and the fix is in store/ingest territory this brief forbids.
 
 ### Ruff
 
