@@ -14,7 +14,7 @@ OWNS: src/hippo/knowledge/{temporal,conflicts}.py, tests/unit/test_temporal_evid
 
 - [x] T5A2: Deterministic replacement and conflict sets never use ingestion order.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/python -m pytest tests/unit/test_temporal_conflicts.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=.............................                                            [100%] | 29 passed in 0.02s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=..............................                                           [100%] | 30 passed in 0.02s
   CRITERIA: only adapter-declared monotonic order supersedes same-source current candidates; old-imported-last/equality-only/equal-token-different-bytes remain ambiguous; independent sources remain alternatives; single versus multiple cardinality, effective overlap, unknown overlap and environment/scope isolation produce deterministic sorted ConflictSets with exact support.
   EXPECT: passed
 
@@ -30,7 +30,7 @@ OWNS: src/hippo/knowledge/{temporal,conflicts}.py, tests/unit/test_temporal_evid
 
 - [x] T5A5: Existing evidence, generation, snapshot, migration and projection contracts remain compatible.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/python -m pytest tests/unit/test_knowledge_contracts.py tests/unit/test_store_knowledge.py tests/unit/test_evidence_access.py tests/unit/test_generation_store.py tests/unit/test_snapshot_store.py tests/unit/test_generation_graph_loader.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=...............................................................          [100%] | 206 passed, 1 skipped in 1.15s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=...............................................................          [100%] | 206 passed, 1 skipped in 1.13s
   CRITERIA: existing current selectors and query snapshots keep their behavior; history never widens access; recorded_to is the only mutable historical field; generation sealing/publication/collection and structural projections remain valid.
   EXPECT: passed
 

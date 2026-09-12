@@ -16,10 +16,12 @@ from hippo.knowledge.conflicts import (
     select_same_source,
 )
 
+JAN_1 = datetime(2026, 1, 1, tzinfo=UTC)
 MAY_1 = datetime(2026, 5, 1, tzinfo=UTC)
 MAY_5 = datetime(2026, 5, 5, tzinfo=UTC)
 MAY_10 = datetime(2026, 5, 10, tzinfo=UTC)
 JUNE_1 = datetime(2026, 6, 1, tzinfo=UTC)
+NEXT_JAN_1 = datetime(2027, 1, 1, tzinfo=UTC)
 
 FIXTURE = Path(__file__).resolve().parents[2] / "tests/fixtures/rag_all/temporal_events.jsonl"
 PRECISIONS = {"instant", "second", "minute", "day", "month", "year", "unknown"}
@@ -71,6 +73,7 @@ def candidate(
     series_key="service-a-owner",
     support_suffix="one",
     recorded_from=MAY_1,
+    precision=None,
 ):
     assertion = k.Assertion(
         workspace_id="workspace-a",
@@ -96,7 +99,7 @@ def candidate(
         validity_kind=validity_kind,
         recorded_from=recorded_from,
         temporal_basis=temporal_basis,
-        temporal_precision="instant" if validity_kind == "explicit_interval" else "unknown",
+        temporal_precision=precision or ("instant" if validity_kind == "explicit_interval" else "unknown"),
     )
     return ConflictCandidate(
         assertion=assertion,
@@ -412,6 +415,40 @@ def test_explicit_overlap_records_exact_half_open_intersection():
     assert conflict.resolution_status == "unresolved"
     assert conflict.valid_from == MAY_5
     assert conflict.valid_to == MAY_10
+
+
+def test_coarse_effective_precision_can_never_prove_a_conflict_overlap():
+    year_alice = candidate(
+        "alice",
+        source_id="catalog-a",
+        valid_from=JAN_1,
+        valid_to=NEXT_JAN_1,
+        precision="year",
+        support_suffix="alice",
+    )
+    instant_bob = candidate(
+        "bob", source_id="catalog-b", valid_from=MAY_1, valid_to=JUNE_1, support_suffix="bob"
+    )
+
+    imprecise = build_conflict_sets((year_alice, instant_bob), cardinality="single")
+
+    assert imprecise == build_conflict_sets((instant_bob, year_alice), cardinality="single")
+    assert len(imprecise) == 1
+    assert imprecise[0].resolution_status == "possible"
+    assert imprecise[0].valid_from is imprecise[0].valid_to is None
+
+    instant_alice = candidate(
+        "alice",
+        source_id="catalog-a",
+        valid_from=JAN_1,
+        valid_to=NEXT_JAN_1,
+        support_suffix="alice",
+    )
+    exact = build_conflict_sets((instant_alice, instant_bob), cardinality="single")
+
+    assert len(exact) == 1
+    assert exact[0].resolution_status == "unresolved"
+    assert (exact[0].valid_from, exact[0].valid_to) == (MAY_1, JUNE_1)
 
 
 def test_unknown_effective_overlap_is_possible_without_an_invented_interval():

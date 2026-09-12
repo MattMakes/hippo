@@ -169,13 +169,19 @@ def _logical_key(candidate):
 
 
 def _explicit_intersection(candidates) -> tuple[datetime | None, datetime | None] | None:
-    """Exact half-open overlap: `None` when unprovable and `()` when provably empty."""
+    """Exact half-open overlap: `None` when unprovable and `()` when provably empty.
+
+    A bound coarser than an exact instant proves neither overlap nor disjointness, so a
+    coarse-precision member makes the whole group unprovable rather than widening its window.
+    """
     if all(candidate.version.validity_kind == "atemporal" for candidate in candidates):
         return (None, None)
     if any(
         candidate.version.validity_kind != "explicit_interval" or candidate.version.valid_from is None
         for candidate in candidates
     ):
+        return None
+    if any(candidate.version.temporal_precision != "instant" for candidate in candidates):
         return None
     spans = [_HalfOpen(item.version.valid_from, item.version.valid_to) for item in candidates]
     overlap = spans[0]
