@@ -67,6 +67,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
         self._migrating = False
         self._transaction_depth = 0
         self._transaction_failed = False
+        self._transaction_owner = None
         self.sources: dict[str, dict[str, Any]] = {}
         self.passages: dict[str, dict[str, Any]] = {}
         self.entities: dict[str, dict[str, Any]] = {}
@@ -116,6 +117,12 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
 
         migrate_store(self)
 
+    def in_ambient_transaction(self) -> bool:
+        """True only when the calling thread has an open transaction on this store."""
+        # Deliberately lock-free: the holder keeps `_lock` for its whole transaction body, so
+        # taking it here would block every other thread instead of answering them.
+        return self._transaction_owner == threading.get_ident()
+
     @contextmanager
     def transaction(self):
         with self._lock:
@@ -128,6 +135,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 "_lock",
                 "_transaction_depth",
                 "_transaction_failed",
+                "_transaction_owner",
                 "_migrating",
                 "_migration_blocked",
                 "_schema_checked",
@@ -140,6 +148,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             )
             if outer:
                 self._transaction_failed = False
+                self._transaction_owner = threading.get_ident()
             self._transaction_depth += 1
             try:
                 yield self
@@ -155,6 +164,7 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 self._transaction_depth -= 1
                 if outer:
                     self._transaction_failed = False
+                    self._transaction_owner = None
 
     def get_settings(self) -> dict[str, Any]:
         self._ensure_knowledge_ready()

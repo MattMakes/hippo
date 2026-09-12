@@ -268,6 +268,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
         self._lock = threading.RLock()
         self._bootstrapped = False
         self._transaction_depth = 0
+        self._transaction_owner = None
         self._migration_blocked = False
         self._migrating = False
         try:
@@ -375,6 +376,12 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
 
         migrate_store(self)
 
+    def in_ambient_transaction(self) -> bool:
+        """True only when the calling thread has an open transaction on this store."""
+        # Deliberately lock-free: the holder keeps `_lock` for its whole transaction body, so
+        # taking it here would block every other thread instead of answering them.
+        return self._transaction_owner == threading.get_ident()
+
     @contextmanager
     def transaction(self):
         with self._lock:
@@ -382,6 +389,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             if outer:
                 self.run("BEGIN TRANSACTION")
                 self._transaction_failed = False
+                self._transaction_owner = threading.get_ident()
             self._transaction_depth += 1
             try:
                 yield self
@@ -401,6 +409,7 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 self._transaction_depth -= 1
                 if outer:
                     self._transaction_failed = False
+                    self._transaction_owner = None
 
     def _ensure_legacy_schema(self) -> None:
         """

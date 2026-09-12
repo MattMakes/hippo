@@ -164,10 +164,6 @@ class _Overlay:
         return self.store.authorization_epoch()
 
 
-def _ambient(store):
-    return bool(getattr(store, "_transaction_depth", 0) or getattr(store, "_transaction", None) is not None)
-
-
 class BuildAuthority:
     def __init__(self, store, actor, accepted, source_control, epochs, clock):
         self._store, self._actor, self._accepted = store, actor, accepted
@@ -300,7 +296,9 @@ class BuildAuthority:
 
     def check(self, *, checkpoint=None):
         """Bracket optional external work; never invoke callbacks under a store transaction."""
-        if _ambient(self._store):
+        # The caller's own transaction, not any thread's: a concurrent build holding one is not
+        # this caller's ambient transaction, and rejecting it would break concurrent builds.
+        if self._store.in_ambient_transaction():
             raise RuntimeError("External build checks require no ambient transaction")
         self.check_local()
         try:
