@@ -6,11 +6,19 @@ an authorization/snapshot proof, then use these predicates to narrow its IDs.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal, TypeAlias
 
 from . import model as k
+from .access import (
+    AuthorizationChanged,
+    AuthorizedEvidence,
+    EvidenceAccess,
+    EvidenceSelection,
+    utc_now,
+)
 from .identity import canonical_json
 
 TemporalDisposition: TypeAlias = Literal["proven", "contextual", "excluded"]
@@ -86,6 +94,7 @@ class ResolvedTemporalSelector:
     known_at: datetime
     known_at_source: KnownAtSource
     latest_known_at: datetime
+    inherited_from: k.CompareSelector | None = None
     selector_json: str = field(init=False, default="")
 
     def __post_init__(self):
@@ -107,6 +116,22 @@ class ResolvedTemporalSelector:
                 raise ValueError("Knowledge-cutoff origin contradicts explicit selector cutoff")
         elif self.known_at_source == "explicit":
             raise ValueError("An explicit knowledge-cutoff origin requires a selector cutoff")
+        # A `latest` label claims the injected cutoff was used verbatim, and an
+        # `inherited` one claims a comparison parent supplied it. Both are checkable,
+        # so neither may be asserted by a caller the record itself contradicts.
+        if self.known_at_source == "latest" and self.known_at != self.latest_known_at:
+            raise ValueError("A latest knowledge cutoff must equal the latest available knowledge")
+        if self.known_at_source == "inherited":
+            parent = self.inherited_from
+            if (
+                not isinstance(parent, k.CompareSelector)
+                or parent.known_at is None
+                or _utc(parent.known_at, field="Inherited knowledge cutoff") != self.known_at
+                or self.selector not in (parent.left, parent.right)
+            ):
+                raise ValueError("An inherited knowledge cutoff requires its comparison parent")
+        elif self.inherited_from is not None:
+            raise ValueError("Only an inherited knowledge cutoff carries a comparison parent")
         object.__setattr__(self, "selector_json", _selector_payload(self.selector, self.known_at))
 
 
@@ -164,12 +189,12 @@ def _selector_payload(selector, known_at: datetime) -> str:
     return canonical_json(payload)
 
 
-def _resolve_single(selector, *, latest_known_at: datetime, inherited_known_at: datetime | None = None):
+def _resolve_single(selector, *, latest_known_at: datetime, parent: k.CompareSelector | None = None):
     explicit = getattr(selector, "known_at", None)
     if explicit is not None:
         return ResolvedTemporalSelector(selector, explicit, "explicit", latest_known_at)
-    if inherited_known_at is not None:
-        return ResolvedTemporalSelector(selector, inherited_known_at, "inherited", latest_known_at)
+    if parent is not None and parent.known_at is not None:
+        return ResolvedTemporalSelector(selector, parent.known_at, "inherited", latest_known_at, parent)
     return ResolvedTemporalSelector(selector, latest_known_at, "latest", latest_known_at)
 
 
@@ -180,8 +205,8 @@ def resolve_selector(
     latest = _utc(latest_known_at, field="Latest knowledge cutoff")
     if isinstance(selector, k.CompareSelector):
         return (
-            _resolve_single(selector.left, latest_known_at=latest, inherited_known_at=selector.known_at),
-            _resolve_single(selector.right, latest_known_at=latest, inherited_known_at=selector.known_at),
+            _resolve_single(selector.left, latest_known_at=latest, parent=selector),
+            _resolve_single(selector.right, latest_known_at=latest, parent=selector),
         )
     return _resolve_single(selector, latest_known_at=latest)
 
@@ -320,3 +345,245 @@ def serialize_temporal_evidence(inputs: TemporalInputs) -> dict:
         "observed_at": _iso(inputs.observed_at),
         "published_at": _iso(inputs.published_at),
     }
+
+
+HistoryCoverageCode: TypeAlias = Literal["history_unavailable", "retention_gap", "link_coverage_incomplete"]
+TemporalRecordKind: TypeAlias = Literal["ObjectObservation", "AssertionVersion"]
+_RECORDED_FAILURES = frozenset({"recorded_after_cutoff", "recorded_closed"})
+_RETAINED_GENERATIONS = frozenset({"active", "retired"})
+
+
+@dataclass(frozen=True)
+class HistoryDecision:
+    """One authorized row's recorded eligibility beside its effective disposition.
+
+    `recorded_reason` is where a positive recorded-eligibility decision is finally
+    reported: the pure predicates only ever name the failures, so `recorded_match`
+    belongs here, at the one layer that selects recorded-only proofs.
+    """
+
+    record_id: str
+    record_kind: TemporalRecordKind
+    recorded_reason: TemporalReason
+    match: TemporalMatch
+
+
+@dataclass(frozen=True)
+class HistorySelection:
+    """A persisted manifest plus the proof and inventory that justify every ID."""
+
+    manifest: k.HistoryManifest
+    selector: k.TemporalSelector
+    resolved: ResolvedTemporalSelector
+    selection: EvidenceSelection
+    decisions: tuple[HistoryDecision, ...]
+    resolver: EvidenceAccess = field(repr=False)
+    broad: AuthorizedEvidence = field(repr=False)
+    proof: AuthorizedEvidence = field(repr=False)
+
+    def _by(self, disposition: TemporalDisposition) -> tuple[HistoryDecision, ...]:
+        return tuple(item for item in self.decisions if item.match.disposition == disposition)
+
+    @property
+    def proven(self) -> tuple[HistoryDecision, ...]:
+        return self._by("proven")
+
+    @property
+    def contextual(self) -> tuple[HistoryDecision, ...]:
+        """Recorded-eligible rows whose effective time nothing in the source proves."""
+        return self._by("contextual")
+
+    @property
+    def excluded(self) -> tuple[HistoryDecision, ...]:
+        return self._by("excluded")
+
+    @property
+    def coverage(self) -> dict:
+        return json.loads(self.manifest.coverage_json)
+
+    @property
+    def codes(self) -> tuple[HistoryCoverageCode, ...]:
+        return tuple(self.coverage["codes"])
+
+
+def pinned_selector(resolved: ResolvedTemporalSelector) -> k.TemporalSelector:
+    """The selector as persisted: an implicit cutoff bound to the resolved instant.
+
+    `selector_json` stays the pure audit identity, which deliberately replaces
+    `known_at` with `resolved_known_at` and therefore is not a `TemporalSelector`.
+    A stored manifest instead has to reparse as one, so the resolved cutoff is
+    written back into the selector's own field and validated against the manifest.
+    """
+    selector = resolved.selector
+    if "known_at" in type(selector).model_fields:
+        return selector.replace(known_at=resolved.known_at)
+    return selector
+
+
+def history_access(store, workspace_id: str, access, *, clock=utc_now) -> EvidenceAccess:
+    """One `EvidenceAccess` over the configured reviewed authorities, not a fork."""
+    authorities = store.get_meta("reviewed_mapping_authorities") or []
+    if not isinstance(authorities, list) or any(
+        not isinstance(item, str) or not item for item in authorities
+    ):
+        raise RuntimeError("Invalid reviewed membership authority configuration")
+    return EvidenceAccess(
+        store, workspace_id, access, mapping_authorities=frozenset(authorities), clock=clock
+    )
+
+
+def _authorized_temporal_rows(store, proof: AuthorizedEvidence):
+    rows = []
+    for kind, attribute in (
+        ("ObjectObservation", "observation_ids"),
+        ("AssertionVersion", "assertion_version_ids"),
+    ):
+        for identity in sorted(getattr(proof, attribute)):
+            record = store._knowledge_get(kind, identity)
+            if record is not None:
+                rows.append((kind, record))
+    return tuple(rows)
+
+
+def _decide(kind: TemporalRecordKind, record, resolved) -> HistoryDecision:
+    match = match_temporal(TemporalInputs(record=record), resolved)
+    eligible = match.reason not in _RECORDED_FAILURES
+    return HistoryDecision(record.id, kind, "recorded_match" if eligible else match.reason, match)
+
+
+def _revision_closure(store, decisions, proof, rows):
+    """Only revisions the proof already carries, reached from proven rows alone."""
+    records = {record.id: record for _, record in rows}
+    proven = {item.record_id for item in decisions if item.match.disposition == "proven"}
+    revisions = {
+        records[item.record_id].revision_id
+        for item in decisions
+        if item.record_id in proven and item.record_kind == "ObjectObservation"
+    }
+    for group in proof.support_groups:
+        if group.assertion_version_id not in proven:
+            continue
+        for span_id in sorted(group.span_ids):
+            span = store._knowledge_get("EvidenceSpan", span_id)
+            if span is not None:
+                revisions.add(span.revision_id)
+    return revisions & set(proof.revision_ids)
+
+
+def _link_generations(store, workspace_id: str, versions: set[str]):
+    """A link generation whose inputs straddle the cutoff is reported, not trimmed."""
+    compatible, incomplete = [], False
+    for link in store._knowledge_rows("LinkGeneration"):
+        members = set(link.assertion_version_ids)
+        if link.workspace_id != workspace_id or not members:
+            continue
+        if members <= versions:
+            compatible.append(link.id)
+        elif members & versions:
+            incomplete = True
+    return sorted(compatible), incomplete
+
+
+def _retention_gaps(store, revisions: set[str]):
+    """Selected revisions whose retained generation membership was collected away."""
+    retained = set()
+    for member in store._knowledge_rows("GenerationMember"):
+        generation = store._knowledge_get("Generation", member.generation_id)
+        if generation is not None and generation.status in _RETAINED_GENERATIONS:
+            retained.add(member.artifact_revision_id)
+    return sorted(revisions - retained)
+
+
+def _counts(decisions, disposition):
+    return {
+        "observations": sum(
+            1
+            for item in decisions
+            if item.match.disposition == disposition and item.record_kind == "ObjectObservation"
+        ),
+        "assertion_versions": sum(
+            1
+            for item in decisions
+            if item.match.disposition == disposition and item.record_kind == "AssertionVersion"
+        ),
+    }
+
+
+def select_history(
+    store,
+    *,
+    workspace_id: str,
+    access,
+    selector: k.TemporalSelector,
+    request_cutoff: datetime,
+    clock=utc_now,
+) -> HistorySelection:
+    """Authorize, time-filter and persist one retained-evidence manifest.
+
+    The order is fixed: resolve the cutoff, prove the broad retained evidence,
+    then narrow it by time. Nothing may enter the manifest that the proof did not
+    already contain, and a cutoff older than the earliest retained recorded
+    interval returns an empty `history_unavailable` manifest, never current rows.
+    """
+    resolved = resolve_selector(selector, latest_known_at=request_cutoff)
+    if isinstance(resolved, tuple):
+        raise ValueError("A compare selector needs one independently pinned manifest per side")
+    resolver = history_access(store, workspace_id, access, clock=clock)
+    broad = resolver.build_history()
+    rows = _authorized_temporal_rows(store, broad)
+    decisions = tuple(_decide(kind, record, resolved) for kind, record in rows)
+    earliest = min((record.recorded_from for _, record in rows), default=None)
+    unavailable = earliest is None or resolved.known_at < earliest
+
+    revisions = _revision_closure(store, decisions, broad, rows)
+    versions = {
+        item.record_id
+        for item in decisions
+        if item.match.disposition == "proven" and item.record_kind == "AssertionVersion"
+    }
+    links, incomplete = _link_generations(store, workspace_id, versions)
+    gaps = _retention_gaps(store, revisions)
+    codes = sorted(
+        ({"history_unavailable"} if unavailable else set())
+        | ({"retention_gap"} if gaps else set())
+        | ({"link_coverage_incomplete"} if incomplete else set())
+    )
+    pinned = pinned_selector(resolved)
+    manifest = k.HistoryManifest(
+        workspace_id=workspace_id,
+        revision_ids=tuple(sorted(revisions)),
+        assertion_version_ids=tuple(sorted(versions)),
+        link_generation_ids=tuple(links),
+        knowledge_cutoff=resolved.known_at,
+        temporal_selector_json=canonical_json(pinned.model_dump(mode="json")),
+        coverage_json=canonical_json(
+            {
+                "proven": _counts(decisions, "proven"),
+                "contextual": _counts(decisions, "contextual"),
+                "codes": codes,
+            }
+        ),
+        retention_gaps=tuple(gaps),
+    )
+    store.put_knowledge(manifest)
+    selection = EvidenceSelection(
+        revision_ids=frozenset(manifest.revision_ids),
+        assertion_version_ids=frozenset(manifest.assertion_version_ids),
+        query_mode="history",
+    )
+    proof = resolver.build(selection)
+    if not (
+        proof.revision_ids <= broad.revision_ids
+        and proof.assertion_version_ids <= broad.assertion_version_ids
+    ):
+        raise AuthorizationChanged("History selection left its authorization proof")
+    return HistorySelection(
+        manifest=manifest,
+        selector=pinned,
+        resolved=resolved,
+        selection=selection,
+        decisions=decisions,
+        resolver=resolver,
+        broad=broad,
+        proof=proof,
+    )

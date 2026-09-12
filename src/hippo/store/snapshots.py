@@ -20,6 +20,15 @@ class CollectionResult:
 
 
 @dataclass(frozen=True)
+class PurgedEvidence:
+    """A named removal, never retained text: a purged ID resolves to nothing else."""
+
+    target_kind: Literal["revision"]
+    target_id: str
+    code: Literal["evidence_purged"] = "evidence_purged"
+
+
+@dataclass(frozen=True)
 class RecoveryResult:
     failed_builds: int = 0
     abandoned_generations: int = 0
@@ -141,17 +150,52 @@ class SnapshotQueries:
             if reference.released_at is None:
                 self._write_knowledge(reference.replace(released_at=self._now()))
 
+    def _purged_revisions(self, workspace_id):
+        """Resolve every committed purge barrier down to the revisions it removed."""
+        barrier = {
+            (row.target_kind, row.target_id)
+            for row in self._knowledge_rows("Suppression")
+            if row.workspace_id == workspace_id and row.reason == "purge"
+        }
+        if not barrier:
+            return frozenset()
+        purged = {identity for kind, identity in barrier if kind == "revision"}
+        artifacts = {identity for kind, identity in barrier if kind == "artifact"}
+        sources = {identity for kind, identity in barrier if kind == "source"}
+        if artifacts or sources:
+            for revision in self._knowledge_rows("ArtifactRevision"):
+                artifact = self._knowledge_get("Artifact", revision.artifact_id)
+                if artifact is not None and (artifact.id in artifacts or artifact.source_id in sources):
+                    purged.add(revision.id)
+        return frozenset(purged)
+
+    def purged_history_evidence(self, manifest_id):
+        """Name a pinned manifest's purged evidence so a reader gets markers, not text."""
+        history = self._knowledge_get("HistoryManifest", manifest_id)
+        if history is None:
+            raise SnapshotUnavailable("Unknown history manifest")
+        purged = self._purged_revisions(history.workspace_id)
+        return tuple(
+            PurgedEvidence("revision", revision_id)
+            for revision_id in sorted(set(history.revision_ids) & purged)
+        )
+
     def _snapshot_reaches(self, snapshot, generation_id):
         if any(item.generation_id == generation_id for item in snapshot.sources):
             return True
+        if not snapshot.history_manifest_ids:
+            return False
         revision_ids = {
             r.artifact_revision_id
             for r in self._knowledge_rows("GenerationMember")
             if r.generation_id == generation_id
         }
+        # A purge barrier outranks retained-history reachability: purged evidence
+        # must resolve to `evidence_purged`, so it cannot keep a generation alive.
+        purged = self._purged_revisions(snapshot.workspace_id)
         for history_id in snapshot.history_manifest_ids:
             history = self._knowledge_get("HistoryManifest", history_id)
-            if history and revision_ids.intersection(history.revision_ids):
+            if history and revision_ids.intersection(set(history.revision_ids) - purged):
                 return True
         return False
 

@@ -204,3 +204,50 @@ def test_historical_reference_cannot_pin_never_published_ready_generation(store)
             lease_expires_at=NOW + timedelta(minutes=2),
             require_current=False,
         )
+
+
+def test_history_manifest_and_its_pin_survive_ladybug_reopen(tmp_path):
+    """A durable manifest is reachability: it survives a reopen, a purge outranks it."""
+    from hippo.access import EVERYTHING
+    from hippo.knowledge import snapshots as snapshot_service
+    from hippo.store.ladybug import LadybugStore
+    from hippo.store.snapshots import PurgedEvidence
+    from tests.unit.test_temporal_evidence import MAY_5, MAY_12, history_world, select
+
+    path = tmp_path / "history.lbug"
+    store = LadybugStore(path)
+    try:
+        world = history_world(store)
+        history = select(world)
+        snapshot_service.acquire_history_snapshot(
+            store, EVERYTHING, history=history, settings_fingerprint="s", clock=lambda: MAY_12
+        )
+    finally:
+        store.close()
+    reopened = LadybugStore(path)
+    try:
+        reopened._generation_clock = lambda: MAY_12
+        restored = reopened._knowledge_get("HistoryManifest", history.manifest.id)
+        assert restored == history.manifest
+        assert restored.knowledge_cutoff == MAY_5
+        assert restored.revision_ids == (world.revision_one.id,)
+        assert reopened.collect_generation(world.first.id).blocked_reason == "snapshot_reference"
+        reopened.put_knowledge(
+            k.Suppression(
+                workspace_id=world.workspace,
+                target_kind="revision",
+                target_id=world.revision_one.id,
+                scope_key="source:" + world.source,
+                view_applicability="all_history",
+                reason="purge",
+                epoch=1,
+                created_at=MAY_12,
+                restoration_barrier="destroy",
+            )
+        )
+        assert reopened.purged_history_evidence(history.manifest.id) == (
+            PurgedEvidence("revision", world.revision_one.id),
+        )
+        assert reopened.collect_generation(world.first.id).blocked_reason is None
+    finally:
+        reopened.close()

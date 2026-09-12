@@ -1,17 +1,23 @@
 """Pure bitemporal selector and evidence-clock behavior."""
 
 from datetime import UTC, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
+from hippo.access import EVERYTHING, Access
 from hippo.knowledge import model as k
+from hippo.knowledge import snapshots as snapshot_service
+from hippo.knowledge.access import AuthorizationChanged
 from hippo.knowledge.temporal import (
     ResolvedTemporalSelector,
     TemporalInputs,
     match_temporal,
     resolve_selector,
+    select_history,
     serialize_temporal_evidence,
 )
+from tests.unit.test_store_knowledge import reader
 
 MAY_1 = datetime(2026, 5, 1, tzinfo=UTC)
 MAY_5 = datetime(2026, 5, 5, 12, tzinfo=UTC)
@@ -394,3 +400,469 @@ def test_model_rejects_empty_effective_and_recorded_intervals():
         version(valid_from=MAY_1, valid_to=MAY_1)
     with pytest.raises(ValueError, match="Recorded interval"):
         version(recorded_from=MAY_1, recorded_to=MAY_1)
+
+
+def test_resolved_selector_rejects_origin_labels_its_own_data_contradicts():
+    """N1: `latest` must match the injected cutoff and `inherited` needs its parent."""
+    parent = k.CompareSelector(
+        known_at=MAY_10, left=k.CurrentSelector(), right=k.AsOfSelector(valid_at=MAY_5)
+    )
+    inherited = ResolvedTemporalSelector(k.CurrentSelector(), MAY_10, "inherited", MAY_12, parent)
+
+    assert inherited.known_at_source == "inherited"
+    with pytest.raises(ValueError, match="latest knowledge cutoff"):
+        ResolvedTemporalSelector(k.CurrentSelector(), MAY_10, "latest", MAY_12)
+    with pytest.raises(ValueError, match="comparison parent"):
+        ResolvedTemporalSelector(k.CurrentSelector(), MAY_10, "inherited", MAY_12)
+    with pytest.raises(ValueError, match="comparison parent"):
+        ResolvedTemporalSelector(k.CurrentSelector(), MAY_12, "latest", MAY_12, parent)
+    with pytest.raises(ValueError, match="comparison parent"):
+        ResolvedTemporalSelector(k.AsOfSelector(valid_at=MAY_1), MAY_10, "inherited", MAY_12, parent)
+
+
+# --- Section 4: authorized history selection, manifests and snapshot pinning ---
+
+
+def _publish_window(store):
+    store._generation_clock = lambda: MAY_12
+
+
+def _credentials(job):
+    return dict(job_id=job.id, lease_owner=job.lease_owner, fencing_token=job.fencing_token)
+
+
+def _generation(store, source, key, parent=None):
+    row = k.Generation(
+        source_id=source,
+        parent_id=parent.id if parent else None,
+        status="staging",
+        parser_version="1",
+        linker_version="1",
+        embedding_profile="p",
+        created_at=MAY_1,
+        manifest_hash=key,
+    )
+    store.put_knowledge(row)
+    _publish_window(store)
+    return row
+
+
+def _claim(store, gen):
+    return store.claim_generation_build(
+        gen.id,
+        job_key=gen.manifest_hash,
+        lease_owner="worker",
+        lease_expires_at=MAY_12 + timedelta(minutes=5),
+    )
+
+
+def _publish(store, gen, job):
+    store.seal_generation(
+        gen.id,
+        k.IndexManifest(
+            generation_id=gen.id,
+            profile_fingerprint="p",
+            config_fingerprint="c",
+            required_representations=("evidence", "dense", "native"),
+            checksums=store.generation_checksums(gen.id),
+            ready=True,
+        ),
+        **_credentials(job),
+    )
+    store.publish_staged_generation(
+        gen.id,
+        expected_parent_id=gen.parent_id,
+        expected_suppression_epoch=store.suppression_epoch(),
+        published_at=MAY_12,
+        **_credentials(job),
+    )
+
+
+def _revision(store, artifact, text, observed_at):
+    row = k.ArtifactRevision(
+        artifact_id=artifact.id,
+        content_hash=text,
+        raw_uri="blob:" + text,
+        observed_at=observed_at,
+        lifecycle="active",
+    )
+    store.put_knowledge(row)
+    return row
+
+
+def _span(store, revision, name, policy):
+    row = k.EvidenceSpan(
+        revision_id=revision.id,
+        locator_kind="field",
+        locator_json='{"kind":"field","field_path":"' + name + '"}',
+        text=name,
+        policy_id=policy.id,
+    )
+    store.put_knowledge(row)
+    return row
+
+
+def _object(store, workspace, kind, name):
+    row = k.KnowledgeObject(workspace_id=workspace, kind=kind, canonical_key='["' + name + '"]')
+    store.put_knowledge(row)
+    return row
+
+
+def _observation(store, obj, span, recorded_from, *, valid_from=None, validity_kind="explicit_interval"):
+    explicit = validity_kind == "explicit_interval"
+    row = k.ObjectObservation(
+        object_id=obj.id,
+        revision_id=span.revision_id,
+        span_id=span.id,
+        evidence_class="declared",
+        recorded_from=recorded_from,
+        valid_from=valid_from if explicit else None,
+        validity_kind=validity_kind,
+        temporal_basis="source_explicit" if explicit else "unknown",
+        temporal_precision="instant" if explicit else "unknown",
+    )
+    store.put_knowledge(row)
+    return row
+
+
+def _version(store, assertion, recorded_from, valid_from):
+    row = k.AssertionVersion(
+        assertion_id=assertion.id,
+        evidence_class="declared",
+        rule_version="fixture-v1",
+        confidence=1.0,
+        status="active",
+        recorded_from=recorded_from,
+        valid_from=valid_from,
+        validity_kind="explicit_interval",
+        temporal_basis="source_explicit",
+        temporal_precision="instant",
+    )
+    store.put_knowledge(row)
+    return row
+
+
+def history_world(store):
+    """May-1 ownership, retired on May-10 by a correction in a second generation."""
+    source = store.create_source("text", "owners")
+    workspace = store.get_source(source)["workspace_id"]
+    if store._knowledge_get("Workspace", workspace) is None:
+        store.put_knowledge(k.Workspace(name="default"))
+    assert store._knowledge_get("Workspace", workspace) is not None
+    public = k.AccessPolicy(
+        workspace_id=workspace,
+        origin="local_curated",
+        scope_key="source:" + source,
+        mode="workspace",
+        verified_at=MAY_1,
+    )
+    private = k.AccessPolicy(
+        workspace_id=workspace,
+        origin="local_curated",
+        scope_key="source:" + source + "/private",
+        mode="restricted",
+        allow_users=("keeper",),
+        verified_at=MAY_1,
+    )
+    store.put_knowledge(public)
+    store.put_knowledge(private)
+    artifact = k.Artifact(
+        workspace_id=workspace,
+        source_id=source,
+        kind="file",
+        external_id="owners.md",
+        canonical_uri="source:owners.md",
+        policy_id=public.id,
+    )
+    store.put_knowledge(artifact)
+
+    first = _generation(store, source, "gen-one")
+    job = _claim(store, first)
+    with store.generation_write(first.id, **_credentials(job)):
+        revision_one = _revision(store, artifact, "may-1", MAY_1)
+        store.put_knowledge(k.GenerationMember(generation_id=first.id, artifact_revision_id=revision_one.id))
+        span_one = _span(store, revision_one, "owners-may-1", public)
+        secret_span = _span(store, revision_one, "owners-private", private)
+        service = _object(store, workspace, "service", "checkout")
+        ada = _object(store, workspace, "person", "ada")
+        vault = _object(store, workspace, "service", "vault")
+        legacy = _object(store, workspace, "service", "legacy")
+        _observation(store, service, span_one, MAY_1, valid_from=MAY_1)
+        _observation(store, ada, span_one, MAY_1, valid_from=MAY_1)
+        secret = _observation(store, vault, secret_span, MAY_1, valid_from=MAY_1)
+        undated = _observation(store, legacy, span_one, MAY_1, validity_kind="unknown")
+        owned_by_ada = k.checked_assertion(service, "OWNED_BY", ada, scope_key="prod")
+        store.put_knowledge(owned_by_ada)
+        version_one = _version(store, owned_by_ada, MAY_1, MAY_1)
+        store.put_knowledge(
+            k.AssertionSupport(
+                assertion_version_id=version_one.id, span_id=span_one.id, derivation_group="direct"
+            )
+        )
+    _publish(store, first, job)
+
+    second = _generation(store, source, "gen-two", first)
+    job = _claim(store, second)
+    with store.generation_write(second.id, **_credentials(job)):
+        revision_two = _revision(store, artifact, "may-10", MAY_10)
+        store.put_knowledge(k.GenerationMember(generation_id=second.id, artifact_revision_id=revision_two.id))
+        span_two = _span(store, revision_two, "owners-may-10", public)
+        bo = _object(store, workspace, "person", "bo")
+        _observation(store, service, span_two, MAY_10, valid_from=MAY_10)
+        _observation(store, bo, span_two, MAY_10, valid_from=MAY_10)
+        owned_by_bo = k.checked_assertion(service, "OWNED_BY", bo, scope_key="prod")
+        store.put_knowledge(owned_by_bo)
+        version_two = _version(store, owned_by_bo, MAY_10, MAY_10)
+        store.put_knowledge(
+            k.AssertionSupport(
+                assertion_version_id=version_two.id, span_id=span_two.id, derivation_group="direct"
+            )
+        )
+        version_one = store.update_knowledge(version_one.replace(recorded_to=MAY_10))
+        version_one = store._knowledge_get("AssertionVersion", version_one)
+    _publish(store, second, job)
+
+    return SimpleNamespace(
+        store=store,
+        source=source,
+        workspace=workspace,
+        public=public,
+        private=private,
+        artifact=artifact,
+        first=first,
+        second=second,
+        revision_one=revision_one,
+        revision_two=revision_two,
+        span_one=span_one,
+        secret_span=secret_span,
+        secret=secret,
+        undated=undated,
+        version_one=version_one,
+        version_two=version_two,
+    )
+
+
+def select(world, *, valid_at=MAY_5, known_at=MAY_5, access=EVERYTHING, selector=None):
+    return select_history(
+        world.store,
+        workspace_id=world.workspace,
+        access=access,
+        selector=selector or k.AsOfSelector(valid_at=valid_at, known_at=known_at),
+        request_cutoff=MAY_12,
+        clock=lambda: MAY_12,
+    )
+
+
+def test_history_manifest_selects_retired_evidence_at_a_fixed_knowledge_cutoff(store):
+    world = history_world(store)
+
+    old = select(world)
+    now = select(world, valid_at=MAY_12, known_at=MAY_12)
+
+    assert old.manifest.assertion_version_ids == (world.version_one.id,)
+    assert old.manifest.revision_ids == (world.revision_one.id,)
+    assert old.manifest.knowledge_cutoff == MAY_5
+    assert '"known_at":"2026-05-05T12:00:00Z"' in old.manifest.temporal_selector_json
+    assert now.manifest.assertion_version_ids == (world.version_two.id,)
+    # Only the ownership assertion was corrected: the May-1 object observations
+    # are still recorded-open, so their revision stays beside the correction's.
+    assert now.manifest.revision_ids == tuple(sorted((world.revision_one.id, world.revision_two.id)))
+    assert store._knowledge_get("HistoryManifest", old.manifest.id) == old.manifest
+
+
+def test_history_manifest_rejects_a_compare_selector_without_pinned_sides(store):
+    world = history_world(store)
+    compare = k.CompareSelector(
+        left=k.AsOfSelector(valid_at=MAY_1, known_at=MAY_5),
+        right=k.AsOfSelector(valid_at=MAY_10, known_at=MAY_12),
+    )
+
+    with pytest.raises(ValueError, match="compare"):
+        select(world, selector=compare)
+
+
+def test_history_manifest_keeps_current_policy_mandatory(store):
+    world = history_world(store)
+    principal = reader(store, world.workspace, "bystander")
+
+    internal = select(world)
+    audience = select(world, access=Access(user_id=principal))
+
+    assert world.secret.id in {item.record_id for item in internal.decisions}
+    assert world.secret.id not in {item.record_id for item in audience.decisions}
+    assert audience.manifest.assertion_version_ids == (world.version_one.id,)
+
+
+def test_history_manifest_separates_contextual_inventory_from_proven_evidence(store):
+    world = history_world(store)
+
+    old = select(world)
+
+    contextual = {item.record_id: item for item in old.contextual}
+    assert world.undated.id in contextual
+    assert contextual[world.undated.id].match.reason == "effective_unknown"
+    assert contextual[world.undated.id].recorded_reason == "recorded_match"
+    assert world.undated.id not in {item.record_id for item in old.proven}
+    assert old.coverage["contextual"]["observations"] >= 1
+    assert old.coverage["proven"]["assertion_versions"] == 1
+
+
+def test_history_manifest_never_adds_an_id_outside_the_authorization_proof(store):
+    world = history_world(store)
+
+    old = select(world)
+
+    assert set(old.manifest.revision_ids) <= set(old.broad.revision_ids)
+    assert set(old.manifest.assertion_version_ids) <= set(old.broad.assertion_version_ids)
+    assert set(old.proof.revision_ids) <= set(old.broad.revision_ids)
+    assert world.revision_two.id not in old.manifest.revision_ids
+    assert {item.record_id for item in old.decisions} <= (
+        set(old.broad.observation_ids) | set(old.broad.assertion_version_ids)
+    )
+
+
+def test_history_manifest_reports_history_unavailable_before_the_earliest_interval(store):
+    world = history_world(store)
+    before = datetime(2026, 4, 28, tzinfo=UTC)
+
+    empty = select(world, valid_at=before, known_at=before)
+
+    assert empty.codes == ("history_unavailable",)
+    assert empty.manifest.revision_ids == ()
+    assert empty.manifest.assertion_version_ids == ()
+    assert empty.proof.span_ids == frozenset()
+
+
+def test_history_manifest_records_a_retention_gap_without_fabricating_revisions(store):
+    world = history_world(store)
+    assert store.collect_generation(world.first.id).blocked_reason is None
+
+    old = select(world)
+
+    assert old.manifest.retention_gaps == (world.revision_one.id,)
+    assert "retention_gap" in old.codes
+    assert world.revision_one.id in old.manifest.revision_ids
+
+
+def test_history_manifest_includes_only_compatible_link_generations(store):
+    world = history_world(store)
+    compatible = k.LinkGeneration(
+        workspace_id=world.workspace,
+        input_manifest_hash="retained",
+        linker_version="l",
+        assertion_version_ids=(world.version_one.id,),
+        created_at=MAY_1,
+    )
+    straddling = k.LinkGeneration(
+        workspace_id=world.workspace,
+        input_manifest_hash="straddling",
+        linker_version="l",
+        assertion_version_ids=tuple(sorted((world.version_one.id, world.version_two.id))),
+        created_at=MAY_10,
+    )
+    store.put_knowledge(compatible)
+    store.put_knowledge(straddling)
+
+    old = select(world)
+
+    assert old.manifest.link_generation_ids == (compatible.id,)
+    assert "link_coverage_incomplete" in old.codes
+
+
+def test_history_manifest_pins_a_query_snapshot_and_releases_its_reference(store):
+    world = history_world(store)
+    old = select(world)
+
+    bundle = snapshot_service.acquire_history_snapshot(
+        store, EVERYTHING, history=old, settings_fingerprint="settings", clock=lambda: MAY_12
+    )
+    with bundle:
+        snapshot = bundle.snapshots[0]
+        assert snapshot.history_manifest_ids == (old.manifest.id,)
+        assert snapshot.sources == ()
+        assert snapshot.knowledge_cutoff == MAY_5
+        assert snapshot.temporal.known_at == MAY_5
+        bundle.validate()
+    assert all(ref.released_at is not None for ref in store._knowledge_rows("SnapshotReference"))
+
+
+def test_suppression_history_keeps_a_current_only_tombstone_selectable(store):
+    world = history_world(store)
+    store.put_knowledge(
+        k.Suppression(
+            workspace_id=world.workspace,
+            target_kind="source",
+            target_id=world.source,
+            scope_key="source:" + world.source + ":delete",
+            view_applicability="current_only",
+            reason="tombstone",
+            epoch=1,
+            created_at=MAY_12,
+            restoration_barrier="refetch",
+        )
+    )
+
+    old = select(world)
+
+    assert old.manifest.assertion_version_ids == (world.version_one.id,)
+    assert old.resolver.build().span_ids == frozenset()
+
+
+def test_suppression_history_denies_an_old_snapshot_after_all_history_access_loss(store):
+    world = history_world(store)
+    old = select(world)
+    bundle = snapshot_service.acquire_history_snapshot(
+        store, EVERYTHING, history=old, settings_fingerprint="settings", clock=lambda: MAY_12
+    )
+    try:
+        bundle.validate()
+        store.put_knowledge(
+            k.Suppression(
+                workspace_id=world.workspace,
+                target_kind="artifact",
+                target_id=world.artifact.id,
+                scope_key="source:" + world.source,
+                view_applicability="all_history",
+                reason="access_loss",
+                epoch=2,
+                created_at=MAY_12,
+                restoration_barrier="reverify",
+            )
+        )
+        with pytest.raises(AuthorizationChanged):
+            bundle.validate()
+    finally:
+        bundle.close()
+
+
+def test_purge_history_overrides_retained_snapshot_roots(store):
+    world = history_world(store)
+    old = select(world)
+    bundle = snapshot_service.acquire_history_snapshot(
+        store, EVERYTHING, history=old, settings_fingerprint="settings", clock=lambda: MAY_12
+    )
+    try:
+        assert store.collect_generation(world.first.id).blocked_reason == "snapshot_reference"
+        store.put_knowledge(
+            k.Suppression(
+                workspace_id=world.workspace,
+                target_kind="revision",
+                target_id=world.revision_one.id,
+                scope_key="source:" + world.source,
+                view_applicability="all_history",
+                reason="purge",
+                epoch=3,
+                created_at=MAY_12,
+                restoration_barrier="destroy",
+            )
+        )
+        assert store.collect_generation(world.first.id).blocked_reason is None
+        markers = store.purged_history_evidence(old.manifest.id)
+        assert [(item.target_kind, item.target_id, item.code) for item in markers] == [
+            ("revision", world.revision_one.id, "evidence_purged")
+        ]
+        assert not any(hasattr(item, "text") for item in markers)
+        with pytest.raises(AuthorizationChanged):
+            bundle.validate()
+    finally:
+        bundle.close()

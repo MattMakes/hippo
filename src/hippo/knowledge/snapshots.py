@@ -198,3 +198,61 @@ def acquire_query_snapshots(
         )
         bundle._validate_authorization()
         return bundle
+
+
+def acquire_history_snapshot(
+    store,
+    access: Access,
+    *,
+    history,
+    settings_fingerprint: str,
+    lease_duration: timedelta = timedelta(minutes=5),
+    clock=utc_now,
+) -> QuerySnapshotBundle:
+    """Pin an already-persisted history manifest for one historical request.
+
+    A history snapshot pins reachability, not serving evidence: it names no active
+    generation, so it can never be mistaken for a current answer, and its proof is
+    rebuilt and rechecked here and on every later use exactly like a current pin.
+    """
+    if lease_duration <= timedelta(0):
+        raise ValueError("Snapshot lease duration must be positive")
+    if type(settings_fingerprint) is not str or not settings_fingerprint:
+        raise ValueError("Snapshot settings must be a nonempty fingerprint")
+    manifest = history.manifest
+    owner, request_key = str(uuid4()), str(uuid4())
+    with store.transaction():
+        epoch = store.authorization_epoch()
+        if current_access(store, access) is None:
+            raise ValueError("Snapshots require an explicit audience")
+        now = _now(clock)
+        resolver = history.resolver
+        proof = resolver.build(history.selection)
+        if proof.authorization_epoch != epoch:
+            raise AuthorizationChanged("Authorization changed during the history read")
+        snapshot = QuerySnapshot(
+            workspace_id=manifest.workspace_id,
+            sources=(),
+            history_manifest_ids=(manifest.id,),
+            knowledge_cutoff=manifest.knowledge_cutoff,
+            temporal=history.selector,
+            # No embedding profile is claimed: the manifest itself is what this pin
+            # reproduces, and inventing a profile would imply dense reachability.
+            profile_fingerprint="history:" + manifest.id,
+            settings_fingerprint=settings_fingerprint,
+            policy_fingerprint=proof.policy_fingerprint,
+            suppression_epoch=store.suppression_epoch(),
+            created_at=now,
+        )
+        reference = store.acquire_snapshot_reference(
+            snapshot,
+            reference_key=request_key,
+            lease_owner=owner,
+            lease_expires_at=now + lease_duration,
+            require_current=False,
+        )
+        bundle = QuerySnapshotBundle(
+            store, (snapshot,), ((resolver, proof),), (reference,), epoch, owner, lease_duration, clock
+        )
+        bundle._validate_authorization()
+        return bundle
