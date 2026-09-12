@@ -245,11 +245,19 @@ branches are pinned by `test_the_liveness_probe_*`. No warning was filtered.
 4. **`whoami_tool` was left alone.** It reaches a session only through
    `status.visible_source_count`, whose acquisition is `status.py:242`'s and therefore 4b's.
    Wrapping it here would have put two owners in one file's hands.
-5. **`cmd_index` prints the Source row's stored `error` verbatim.** Checked rather than assumed:
-   `managed_activation.map_build_failure` stores a closed code and a bounded sentence and never
-   `str(exc)` (`FAILURES`, `managed_activation.py:343-357`), in the same `code: message` shape used
-   here, so the printed line is already closed. A legacy row keeps its existing legacy text, which
-   the plan preserves.
+5. **`cmd_index` prints the Source row's stored `error` verbatim.** Checked rather than assumed —
+   but only for one of the two lanes. `managed_activation.map_build_failure` stores a closed code
+   and a bounded sentence and never `str(exc)` (`FAILURES`, `managed_activation.py:343-357`), in
+   the same `code: message` shape used here, so a *managed* row's printed line is already closed.
+   A legacy row was the half this did not check: it stores `f"{type(err).__name__}: {err}"`, which
+   is not a rendering at all, and `cmd_index` printed it verbatim.
+   **Amended 2026-09-12 (the final cleanup batch).** The 4c follow-up's `_stored_error`
+   (`cli.py:359`) now bounds both print sites: a leading token that is not a closed public code is
+   replaced with `indexing failed; inspect local logs for source {source_id}`. Pinned by
+   `test_cli_index_prints_a_closed_stored_error_unchanged`,
+   `test_cli_index_never_prints_an_unclosed_stored_error` and — for the remote branch, which had
+   no test until this batch — `test_remote_index_applies_the_same_stored_error_rule_as_the_local_one`,
+   all in `tests/unit/test_managed_transport_activation.py`.
 6. **Six failures in neighbouring files are pre-existing and belong to 4b**, not to this slice:
    `test_answer_original_citations.py` ×4 (breakage table row B, `DenseSessionUnavailable`
    `invalid_borrow` from the `derived_graph` fixture),

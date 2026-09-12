@@ -385,7 +385,7 @@ is flagging the other half rather than changing 4c's files.
 
 **A bare `ValueError` from a graph-only route still escapes the closed vocabulary.**
 `GraphIndex.canonical_selected_generations` raises a plain `ValueError`
-(`src/hippo/hipporag/graph_index.py:209,212`) during structural acquisition, and
+(`src/hippo/hipporag/graph_index.py:316,319`) during structural acquisition, and
 `public_failure` maps a bare `ValueError` to `None` by design (pa4a decision 1). The model routes
 handle it: `/api/ask`, `/api/search` and the HTML ask fragment apply `retrieval_failure` themselves,
 so it becomes `operation_failed`. The graph-only routes do not — `entities`, `neighborhood`,
@@ -401,6 +401,13 @@ a code-stability gap, not a redaction gap, and the same gap exists on 4b-ii's gr
 routes and 4d's surfaces, so it is one cross-slice decision rather than eleven route edits: either
 that field validator raises `ProjectionError` (in `knowledge/`, which no 4b slice may touch) or every
 graph-only owner grows a mapping. Recorded rather than fixed for that reason.
+
+**Closed at the source (2026-09-12, the final cleanup batch's note).** Task 4e decision 8
+took the first option: both raises are `ProjectionError` today, which `public_errors._ROWS`
+already had a row for, so the condition reaches a client as a mapped `operation_failed`
+with its code rather than as an uncoded 500. The line numbers above were stale twice over
+— `:209,212` when this file was written, then `:297,300` in the orchestrator's notes; the
+sites at HEAD are `graph_index.py:316,319` and the exception class is no longer bare.
 
 ## Ladybug result
 
