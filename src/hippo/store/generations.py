@@ -59,6 +59,30 @@ class GenerationQueries:
         source = self.get_source(source_id)
         return bool(source and source.get("managed"))
 
+    def source_serves_legacy(self, source_row) -> bool:
+        """True while a source still answers queries from its legacy graph.
+
+        The `managed` flag means "the managed lane owns this source's cleanup and
+        dispatch", and it is still set the moment the first row is staged, so every
+        destructive guard keeps firing throughout a conversion. What it deliberately does
+        not mean is "serve managed evidence": a repository bootstrap stages over many
+        transactions, and until it publishes there is no generation to serve. So this
+        predicate reads publication alone -- no active pointer and no published
+        `IndexEvent` -- and a staging or failed generation leaves its source serving
+        exactly the legacy graph it was already serving.
+
+        A pure read of the row plus the published events: no lock and no clock, so a query
+        path may call it per source. The pointer clause answers every published source
+        without touching the event rows.
+        """
+        if not source_row or source_row.get("active_generation_id"):
+            return False
+        source_id = source_row.get("id")
+        return not any(
+            event.kind == "published" and event.aggregate_id == source_id
+            for event in self._knowledge_rows("IndexEvent")
+        )
+
     def _source_fields(self, source_id, **fields):
         if self.knowledge_backend == "fake":
             self.sources[source_id].update(fields)

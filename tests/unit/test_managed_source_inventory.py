@@ -229,6 +229,13 @@ def test_current_only_source_suppression_removes_the_pair_and_the_row(ctx):
 
 @pytest.mark.parametrize("outcome", ["staging", "failed"])
 def test_unpublished_generations_never_produce_a_pair(ctx, outcome):
+    """No pair, and the source is still presented by the legacy lane it has not left.
+
+    An unpublished generation used to take its whole source out of the inventory, which is
+    what made a multi-transaction conversion disappear; `store.source_serves_legacy` keeps
+    it in the legacy lane, with no managed presentation and no counts of its own, until it
+    publishes.
+    """
     built = empty_published(ctx.store, "unpublished", publish=False)
     if outcome == "failed":
         ctx.store.fail_generation_build(built.generation.id, **built.authority)
@@ -237,7 +244,10 @@ def test_unpublished_generations_never_produce_a_pair(ctx, outcome):
     ctx.ollama = Offline()
     with query_session(ctx, EVERYTHING, structural=True) as session:
         assert session.graph.selected_managed_generations == ()
-        assert row_of(source_view(ctx, EVERYTHING, session=session), built.source_id) is None
+        view = source_view(ctx, EVERYTHING, session=session)
+        row = row_of(view, built.source_id)
+        assert built.source_id in view.legacy_ids
+        assert row is not None and row.get("kind") != "managed" and row["passages"] == 0
 
 
 def test_retired_generation_is_replaced_by_its_successor_pair(ctx):

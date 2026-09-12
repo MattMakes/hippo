@@ -168,6 +168,10 @@ class AppContext:
             return view
 
     def _graph_for(self, access: Access | None, epoch: int, *, settings=None, structural=False) -> GraphIndex:
+        # Which loader can answer at all, not which lane serves a source: `self.graph()`
+        # below is `GraphIndex.load`, which reads every native row with no generation
+        # filter, so one managed row anywhere means the generation-aware loader must run.
+        # The serving lane is decided per source inside it, by `source_serves_legacy`.
         managed_sources = {record.source_id for record in self.store._knowledge_rows("Artifact")}
         managed_sources.update(record.source_id for record in self.store._knowledge_rows("Generation"))
         managed_sources.update(row["id"] for row in self.store.list_sources() if row.get("managed"))
@@ -211,11 +215,13 @@ class AppContext:
 
         profile = self.ollama.embed_model
         sources = self.store.list_sources(access)
-        legacy_ids = frozenset(row["id"] for row in sources if row["id"] not in managed_sources)
+        # The serving lane, one level below the loader choice: a source converting to
+        # managed generations has staged rows and so is in `managed_sources`, but until it
+        # publishes it has no generation to serve and belongs here, where the loader takes
+        # exactly its untagged rows. Selection is the active pointer and nothing else.
+        legacy_ids = frozenset(row["id"] for row in sources if self.store.source_serves_legacy(row))
         selected = {
-            row["id"]: row["active_generation_id"]
-            for row in sources
-            if row["id"] in managed_sources and row.get("active_generation_id")
+            row["id"]: row["active_generation_id"] for row in sources if row.get("active_generation_id")
         }
         strict = {
             manifest.generation_id
@@ -254,9 +260,7 @@ class AppContext:
             local = {
                 row["id"]: row["active_generation_id"]
                 for row in sources
-                if row["workspace_id"] == workspace_id
-                and row["id"] in managed_sources
-                and row.get("active_generation_id")
+                if row["workspace_id"] == workspace_id and row.get("active_generation_id")
             }
             engine, proof = self.store._reader_proof(
                 workspace_id,
@@ -336,7 +340,9 @@ class AppContext:
         from .knowledge.snapshots import acquire_query_snapshots
 
         sources = self.store.list_sources(access)
-        legacy_ids = frozenset(row["id"] for row in sources if row["id"] not in managed_sources)
+        # The same split as `_build_managed_graph`: `managed_sources` chose this loader,
+        # `source_serves_legacy` chooses the lane, and the active pointer chooses evidence.
+        legacy_ids = frozenset(row["id"] for row in sources if self.store.source_serves_legacy(row))
         strict = {
             row.generation_id
             for row in self.store._knowledge_rows("IndexManifest")
@@ -344,7 +350,7 @@ class AppContext:
         }
         selected, proofs, by_workspace = {}, [], {}
         for source in sorted(sources, key=lambda row: row["id"]):
-            if source["id"] in managed_sources and source.get("active_generation_id"):
+            if source.get("active_generation_id"):
                 by_workspace.setdefault(source["workspace_id"], []).append(source)
         for workspace, rows in sorted(by_workspace.items()):
             identities = frozenset(source["active_generation_id"] for source in rows)
