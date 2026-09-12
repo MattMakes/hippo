@@ -277,7 +277,16 @@ def served(w):
     ever matches a legacy-tagged generation.
     """
     graph = w.ctx.graph_for(EVERYTHING, structural=True)
-    return {row.id for row in graph.passages}, {node.id for node in graph.code_nodes}
+    try:
+        return {row.id for row in graph.passages}, {node.id for node in graph.code_nodes}
+    finally:
+        # A structural graph over a published generation holds a snapshot reference with
+        # a lease; `context.graph_for` releases it on its own failure path and the caller
+        # owns it otherwise. Leaving it open pins the generation and, on LadybugDB, the
+        # next build's publication waits on it.
+        close = getattr(graph, "close_snapshot", None)
+        if close is not None:
+            close()
 
 
 def generation(w, identity):
