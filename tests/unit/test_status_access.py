@@ -37,12 +37,9 @@ def status_context():
         # The lane split the inventory classifies by. A source with no `Generation` row is
         # classified by its managed records alone, as it was before CC1; one that has a
         # generation is converting, and stays in the legacy lane until it publishes while it
-        # still owns an untagged row, which is what these four reads answer.
+        # still owns an untagged row, which is what the bounded native read answers.
         source_serves_legacy=Mock(side_effect=lambda row: not row.get("active_generation_id")),
-        load_passages=Mock(return_value=[{"source_id": "public", "generation_id": None}]),
-        load_symbols=Mock(return_value=[]),
-        load_data_objects=Mock(return_value=[]),
-        load_commits=Mock(return_value=[]),
+        _native_rows=Mock(return_value=[]),
         authorization_epoch=Mock(return_value=1),
         count_users=Mock(return_value=1),
         get_user=Mock(return_value={"id": "reader", "role_id": "individual", "disabled": False}),
@@ -124,8 +121,11 @@ def test_converting_source_with_legacy_rows_keeps_the_legacy_lane_until_it_publi
     ctx.store._knowledge_rows.side_effect = lambda kind: (
         [NS(source_id="converting")] if kind == "Generation" else []
     )
-    ctx.store.load_passages.return_value.append({"source_id": "converting", "generation_id": None})
-    ctx.store.load_passages.return_value.append({"source_id": "converting", "generation_id": "staged"})
+    ctx.store._native_rows.side_effect = lambda kind, **keys: (
+        [{"id": "converting:0", "source_id": "converting", "generation_id": None}]
+        if kind == "Passage" and keys.get("source_id") == "converting" and keys.get("untagged")
+        else []
+    )
     ctx.jobs.running_keys.return_value.append("index:converting")
     value = system_status(ctx, access=Access(user_id="reader"))
     assert value["stats"]["sources"] == 2

@@ -37,23 +37,18 @@ def _release_snapshot(bundle):
         log.warning("Snapshot reference release deferred to lease expiry", exc_info=True)
 
 
-NATIVE_READS = ("load_passages", "load_symbols", "load_data_objects", "load_commits")
+NATIVE_KINDS = ("Passage", "Symbol", "DataObject", "Commit")
 
 
-def _untagged_source_ids(store) -> frozenset[str]:
-    """The sources that still own at least one native row no generation claims.
+def _owns_untagged_rows(store, source_id: str) -> bool:
+    """Whether this source still owns one native row no generation claims.
 
-    Four unscoped reads filtered in Python, because the Store has no bounded
-    "untagged rows of source" read and `store/` is another slice's file. The one this
-    wants is `source_ids_with_untagged_native_rows() -> frozenset[str]`, a single
-    `generation_id IS NULL` scan over `Passage`/`Symbol`/`DataObject`/`Commit`.
+    CC2's `source_id` + `untagged=True` key (`store/generations.py::_native_rows`, ruling
+    14) is one bounded query per kind on every backend, and the loop stops at the first
+    kind that answers, so a converting source with passages costs a single query. Only a
+    source that has a generation and has not published is ever asked.
     """
-    return frozenset(
-        row["source_id"]
-        for name in NATIVE_READS
-        for row in getattr(store, name)()
-        if row.get("generation_id") is None and row.get("source_id")
-    )
+    return any(store._native_rows(kind, source_id=source_id, untagged=True) for kind in NATIVE_KINDS)
 
 
 def legacy_lane(store, sources, managed_records) -> tuple[frozenset[str], frozenset[str]]:
@@ -80,18 +75,14 @@ def legacy_lane(store, sources, managed_records) -> tuple[frozenset[str], frozen
     for a transaction and its legacy graph never blinks out: Blocker A stays fixed.
     """
     generation_sources = {record.source_id for record in store._knowledge_rows("Generation")}
-    untagged, legacy, converting = None, set(), set()
+    legacy, converting = set(), set()
     for row in sources:
         identity = row["id"]
         if identity not in generation_sources:
             if identity not in managed_records:
                 legacy.add(identity)
             continue
-        if not store.source_serves_legacy(row):
-            continue
-        if untagged is None:
-            untagged = _untagged_source_ids(store)
-        if identity in untagged:
+        if store.source_serves_legacy(row) and _owns_untagged_rows(store, identity):
             legacy.add(identity)
             converting.add(identity)
     return frozenset(legacy), frozenset(converting)
