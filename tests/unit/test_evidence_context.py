@@ -7,6 +7,7 @@ from hippo.hipporag.indexer import Chunk, index_source
 from tests.unit.test_store_knowledge import foundation
 
 
+@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")
 @pytest.mark.parametrize("surface", ["reader_graph", "/api/entities?q=SECRET", "/api/graph/full"])
 def test_orphan_native_nodes_are_hidden_even_when_all_passages_are_visible(ctx, surface):
     from fastapi.testclient import TestClient
