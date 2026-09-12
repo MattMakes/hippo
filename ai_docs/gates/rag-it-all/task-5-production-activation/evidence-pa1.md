@@ -316,6 +316,8 @@ with `policy_epoch` raised above `1`.
    after the tombstone, a replay would report the higher value. The suppression
    epoch, which is what the barrier is keyed on, is always the committed one.
 
+   *Superseded 2026-09-11 — see "Follow-up 2026-09-11", deviation 7 restated.*
+
 8. **Cooperative cancellation is requested, never awaited.**
    `ctx.jobs.cancel(f"index:{source_id}")` is called before the transaction
    opens; `Jobs.cancel` only sets an event.
@@ -328,3 +330,256 @@ with `policy_epoch` raised above `1`.
 Pipeline `delete_source`/`reindex` dispatch (Task 3 calls this service), any
 HTTP/MCP/CLI route, physical purge, restoration, retention, Neo4j runs, and
 projection/inventory (Task 2). No Neo4j database was contacted.
+
+---
+
+# Follow-up 2026-09-11 — review fixes (worker `opus-4`)
+
+Worker `opus-4`. Branch `wp/pa1fix`, worktree `.worktrees/pa1fix`, base `82bd317`,
+then `git merge rag-it-all-tibs` (fast-forward to `afb8960`, orchestrator-authorized)
+to pick up `in_ambient_transaction()` on all three stores from `wp/txown`.
+Python `.venv/bin/python` 3.12.11, pytest 9.1.1, Ruff 0.16.6, real_ladybug 0.15.3,
+mcp pinned to 2.1.1. No Neo4j database was contacted; every Ladybug run is a real
+`LadybugStore` file under `tmp_path`.
+
+Brief: `ai_docs/handoffs/briefs/fix-pa1.md`. Source review:
+`ai_docs/reports/2026-09-11-pa1-review.md` (1 major, 7 minor), plus two decisions
+the orchestrator added mid-task (7 and 8).
+
+## What changed
+
+| # | Decision | Change |
+|---|---|---|
+| 1 | major — tombstone is not a store barrier | `claim_generation_build` refuses a tombstoned source |
+| 2 | minor — disable rewrote the authority | `_apply_local_membership` retains `mapping_authority` when disabling |
+| 3 | minor — guard parity | `_disable_local_workspace_memberships_locked` gets `_local_mapping_available()` |
+| 4 | minor — managed/unmanaged oracle | `tombstone_managed_source` establishes standing before the managed check |
+| 5 | minor — tests only | cancellation request asserted; many-changes epoch behaviour asserted |
+| 6 | documented, no code change | `_local_mapping_available` docstring states the unmapped-create consequence |
+| 7 | added — ambient guard was a false negative | `apply_source_tombstone` asks `in_ambient_transaction()` |
+| 8 | added — lazy bootstrap invalidated in-flight readers | `ensure_local_workspace_memberships` never bumps the authorization epoch |
+
+### 1. A committed tombstone is a store-level barrier
+
+`src/hippo/store/generations.py`. `claim_generation_build` now reads the Source row
+once, immediately after `self._lock_source(gen.source_id)` and the generation re-read,
+and refuses through the new `_tombstoned(source_id, source)` helper when either
+`source["status"] == "deleted"` or a `Suppression` matches
+`target_kind="source"`, `target_id=source_id`, `reason="tombstone"`,
+`view_applicability="current_only"`, `scope_key=tombstone_scope_key(source_id)`.
+
+**Exact refusal used:** `ValueError("Stale build lease, fence, or generation state")`
+— verbatim the string `_check_build` already raises (`generations.py:210` pre-change),
+the only existing "stale fence/state" shape in this module. No new public message and
+no new exception type appears. The refusal happens before `_collect_generation`,
+before the fence increment and before `active_build_id` is written, and the enclosing
+`with self.transaction()` rolls back the `_lock_source` write on Ladybug.
+
+The duplicate `source = self.get_source(gen.source_id)` that used to sit further down
+was removed; the single read now serves both the barrier and the live-holder check.
+
+Proof, `tests/unit/test_managed_source_lifecycle.py`:
+
+- `test_a_tombstoned_source_cannot_reclaim_its_failed_generation` — reproduces PROBE9
+  exactly (claim a refresh generation, tombstone it, then reclaim the `failed`
+  generation). `store._collect_generation` is monkeypatched to raise, so "did not
+  collect" is an assertion rather than an inference. Asserts the fence still equals
+  `receipt.fencing_token`, `active_build_id is None`, the cancelled generation is
+  still `failed`, the cancelled job still carries `source_tombstoned`, and
+  `(epochs, inventory, Source row)` are byte-identical to before the attempt.
+- `test_a_refused_reclaim_leaves_the_replayed_fencing_token_pinned` — after the refused
+  claim, a `trusted_local` replay of the same operation id reports the *same*
+  `fencing_token`, `suppression_epoch`, `cancelled_generation_id` and
+  `cancelled_job_id` as the original receipt.
+- `test_tombstone_fence_and_epochs_survive_a_ladybug_reopen` — the reopened file also
+  refuses the reclaim, and the Source row is still the one captured before the close.
+
+### 2. Retiring a mapping keeps the authority that granted it
+
+`src/hippo/store/knowledge.py`, `_apply_local_membership`:
+`authority = LOCAL_MAPPING_AUTHORITY if enabled else existing.mapping_authority`.
+The no-change comparison and the `replace(...)` both use that value, so the enable
+path still repairs a foreign authority to `local` (plan step 2) while the disable path
+retains it (plan step 3). Proof:
+`test_local_workspace_membership.py::test_disabling_a_mapping_keeps_the_authority_that_granted_it`
+— a `reviewed` membership survives `delete_user` as `(False, "reviewed", 3)`.
+
+Consequential edit outside the owned list: `tests/unit/test_evidence_store_access.py:164`
+changed from `membership.replace(enabled=False, mapping_authority="local", policy_epoch=3)`
+to `membership.replace(enabled=False, policy_epoch=3)`. That is the exact edit the
+review prescribed (finding 2) — the file encoded the defect. It is neither in the
+brief's "own" nor its "do NOT touch" list; flagging it explicitly.
+
+### 3. Guard parity on the disable path
+
+`_disable_local_workspace_memberships_locked` now returns 0 when
+`_local_mapping_available()` is false, after the explicit-principals check so a bad
+argument is still refused on a legacy file. Proof:
+`test_delete_user_on_a_pre_schema_store_has_no_mapping_to_retire` — a real
+`LadybugStore` with `ensure_schema` bound to `_ensure_legacy_schema` (the fixture
+shape from `tests/unit/test_store_migrations.py:147`), `WorkspaceMembership` confirmed
+absent via `show_tables()`, `create_user` then `delete_user` with no raise.
+
+**Accepted residual (orchestrator-acknowledged):** `delete_user` of the *last* user on
+a pre-schema-5 file still raises, because `src/hippo/store/authorization.py:86` reads
+`_knowledge_rows("Connector")` on the last-user branch and that table is also absent
+on a v1 file. `authorization.py` is on this brief's do-NOT-touch list, so the test
+creates two principals and deletes one. Same narrow reachability as finding 3: a real
+`LadybugStore(path)` migrates to v5 before its first transaction.
+
+### 4. Standing before the managed check
+
+`src/hippo/knowledge/source_lifecycle.py`. Order is now: actor type → `operation_id`
+regex → `capture_build_authority` (with the unchanged `AuthorizationChanged` → replay
+branch) → **inside the `try`/`finally` that closes the guard** →
+`source_is_managed` → `UnmanagedSource`. The managed check therefore cannot answer
+"is this source managed?" for an actor with no standing, and the guard is closed on
+the `UnmanagedSource` path too (it previously could not be reached with a guard open).
+The function docstring states the ordering and why.
+
+Proof, `test_an_unauthorized_reader_learns_nothing_about_the_source`: a `stranger`
+reader attempting a managed source, an unmanaged source and a nonexistent id gets
+`AuthorizationChanged` all three times, none of them a `SourceLifecycleError`, with
+epochs and the whole retained inventory unchanged.
+
+**Residual, recorded not fixed:** the managed and unmanaged denials are byte-identical
+(`"Build actor cannot manage source"`), which is the oracle finding 7 named and it is
+closed. A *nonexistent* source id yields `"Plain build source is unavailable"`, raised
+by `_source_control` (`src/hippo/knowledge/build_authority.py:65`) — a do-NOT-touch
+file, and a property common to every `capture_build_authority` caller rather than to
+this boundary. The test asserts type identity for all three (the type is what the HTTP
+layer maps) and message identity for managed vs unmanaged. Normalizing the absent-source
+message is a `build_authority.py` change for whoever owns it.
+
+`test_unmanaged_source_is_refused_before_any_mutation` now creates its legacy source
+with `owner_id=managed.user` and asserts `UnmanagedSource` specifically. Without an
+owner the reader has no standing and the new ordering would (correctly) return the
+generic denial, which would no longer test what the test is named for. `AuthorizationChanged`
+is a `RuntimeError`, not a `ValueError`, so the old `pytest.raises(ValueError)` would
+also have stopped holding.
+
+### 5. Assertions the review asked for
+
+- `test_cancellation_is_requested_before_the_transaction` — `ctx.jobs.cancel` is
+  monkeypatched with a spy recording `(key, store.in_ambient_transaction(),
+  len(suppressions(...)))`. Asserts exactly `[("index:<source_id>", False, 0)]`: one
+  call, the right key, no transaction open and nothing committed yet. Deleting the
+  `ctx.jobs.cancel` line now fails a test.
+- `test_many_repairs_count_every_change_and_invalidate_no_reader` — three damaged
+  memberships plus an emptied authority list give `ensure_local_workspace_memberships()
+  == 4`. Its epoch assertion is `== before` rather than `== before + 1` because of
+  decision 8 below.
+
+### 6. Documented, no code change
+
+`_local_mapping_available`'s docstring now states that a user created while the guard
+is false is left unmapped — fail-closed, no managed evidence — until the next
+`on_first_connection` runs the all-user form. The Neo4j `Store.on_first_connection` +
+`users.py` lane remains untested here (finding 8, orchestrator-owned parity item).
+
+### 7. The ambient-transaction guard was a false negative
+
+`apply_source_tombstone`'s guard read `self._transaction_depth` / `self._transaction`,
+which are process-wide: while **any** thread held a transaction, a thread holding
+**none** passed the check and its fence, presentation and suppression writes
+auto-committed one statement at a time. Replaced with
+`if not self.in_ambient_transaction():` — the per-thread method `wp/txown` landed on
+all three stores — keeping the same `RuntimeError("Managed tombstone requires the
+caller's transaction")`.
+
+Proof, `test_another_threads_transaction_is_not_the_tombstone_callers_transaction`: the
+main thread holds a transaction, a helper thread calls `apply_source_tombstone` with
+none and must be refused. The helper is joined with a timeout inside the held
+transaction, so the pre-fix behaviour (admitted, then parked on the store lock) fails
+as an assertion instead of hanging the suite. Epochs, the Source row and the absence of
+any suppression are all asserted afterwards.
+
+### 8. The lazy bootstrap must not invalidate an in-flight reader
+
+`ensure_local_workspace_memberships` no longer bumps the authorization epoch at all.
+Rationale (orchestrator decision, plan sentence amended by the orchestrator): the
+public form is additive-only — it adds or repairs memberships and adds the local
+authority — so the only proof it can stale is a *denial*, which fails safe. Every
+reduction goes through `permission_mutation`, which takes the lock, calls the *locked*
+helper and owns its own single bump; `create_user`/`delete_user` behaviour is therefore
+unchanged.
+
+The defect: `Store.ping()` runs `on_first_connection` → `ensure_local_workspace_memberships`
+lazily, and `src/hippo/web/render.py:85` pings while holding the query session it is
+rendering from, so the first HTML request against any store that still needed mapping
+raised `AuthorizationChanged("Permissions changed; repeat the query")`.
+
+Proof: `test_a_held_query_session_survives_the_first_ping_bootstrap` — a store with a
+user, its mapping forgotten and `_bootstrapped` reset, holds a structural
+`query_session` across `store.ping()` and then calls `session.validate()`. Asserts the
+authorization epoch is unchanged and that the bootstrap did its work anyway
+(`authorities == ["local"]`, memberships present).
+
+Two existing assertions were updated from `+1` to unchanged:
+`test_damaged_local_mapping_is_repaired_with_a_higher_policy_epoch` and the new
+many-repairs test. `test_repeated_startup_changes_nothing_and_bumps_no_epoch`,
+`test_create_user_maps_the_new_principal_in_one_authorization_bump` and
+`test_delete_user_disables_and_retains_its_membership_in_one_bump` are untouched and
+still hold — the per-mutation bumps are `permission_mutation`'s, not this wrapper's.
+
+## Deviation 7, restated (supersedes the original)
+
+`already_tombstoned` reports the current `build_fencing_token` rather than a persisted
+copy. **With decision 1 in place this is no longer reachable through
+`claim_generation_build`:** a tombstoned source refuses the claim before its fence can
+advance, which is asserted by
+`test_a_refused_reclaim_leaves_the_replayed_fencing_token_pinned` on the fake backend
+and by the Ladybug reopen test. It remains true in principle that the field is read
+live rather than stored, so any *future* store operation that increments
+`build_fencing_token` on a tombstoned source would change what a replay reports.
+`receipt.suppression_epoch` is the field keyed to the barrier and is always the
+committed one; idempotency decisions should use it.
+
+## Test runs
+
+All from `.worktrees/pa1fix` with `.venv/bin/pytest`, `HIPPO_TEST_STORE` set explicitly,
+`-q -o addopts='' -W error`. Runs that include a module-level `fastapi.testclient`
+importer also carry rulebook form (b) verbatim:
+`-W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"`.
+No ini-wide `filterwarnings` was added.
+
+| # | Backend / files | Result | Log |
+|---|---|---|---|
+| 1 | fake baseline — `test_managed_source_lifecycle`, `test_local_workspace_membership`, `test_generation_store`, `test_generation_failure` | **126 passed**, EXIT 0 | `/tmp/hippo-pa1fix-baseline.log` |
+| 2 | fake RED (decisions 1–5, 7) — the two owned test files | **8 failed, 77 passed**, EXIT 1 | `/tmp/hippo-pa1fix-red.log` |
+| 3 | fake RED (decision 8) — held-session regression + the two render/citation tests, bump temporarily restored | **3 failed, 11 passed**, EXIT 1 | `/tmp/hippo-pa1fix-d8-red.log` |
+| 4 | fake GREEN — 18 files (the two owned, generation store/failure, build authority, evidence access/epochs/store-access/derived, store knowledge, migrations, policy migration, query snapshots, transaction ownership, ingest concurrency, query session, answer original citations, lookup snapshot lifetime); form (b) | **420 passed, 9 skipped**, EXIT 0 | `/tmp/hippo-pa1fix-fake-green.log` |
+| 5 | ladybug GREEN — managed source lifecycle, local workspace membership, generation store, store migrations, transaction ownership, build authority, evidence store access, generation failure, query session, answer original citations; form (b) | **269 passed**, EXIT 0, 122.8s | `/tmp/hippo-pa1fix-ladybug-green.log` |
+
+The step-2 RED failures, each for the intended reason:
+
+| Test | RED reason |
+|---|---|
+| `test_a_tombstoned_source_cannot_reclaim_its_failed_generation` | `AssertionError: a tombstoned source must not collect its retained attempt` (PROBE9 reproduced) |
+| `test_a_refused_reclaim_leaves_the_replayed_fencing_token_pinned` | `DID NOT RAISE ValueError` |
+| `test_an_unauthorized_reader_learns_nothing_about_the_source` | `UnmanagedSource: Legacy cleanup owns unmanaged sources` leaked to a stranger |
+| `test_another_threads_transaction_is_not_the_tombstone_callers_transaction` | `the unowned caller was admitted instead of refused` |
+| `test_tombstone_fence_and_epochs_survive_a_ladybug_reopen` | `DID NOT RAISE ValueError` |
+| `test_disabling_a_mapping_keeps_the_authority_that_granted_it` (fake, ladybug) | `(False, 'local', 3) == (False, 'reviewed', 3)` |
+| `test_delete_user_on_a_pre_schema_store_has_no_mapping_to_retire` | `Binder exception: Table WorkspaceMembership does not exist.` |
+
+Decision-5 tests were green on arrival, which is correct — finding 6 and the
+many-changes half of finding 5 were missing *assertions*, not wrong behaviour.
+
+Ruff 0.16.6 on every changed file
+(`store/generations.py`, `store/knowledge.py`, `knowledge/source_lifecycle.py`,
+`tests/unit/test_managed_source_lifecycle.py`,
+`tests/unit/test_local_workspace_membership.py`,
+`tests/unit/test_evidence_store_access.py`):
+`All checks passed!` / `6 files already formatted`.
+
+## Still open after this follow-up
+
+- Finding 4's optional `log.warning` on a silent guard short-circuit: not added; the
+  docstring sentence (decision 6) is the sanctioned form.
+- Finding 8, the Neo4j lane (`store/__init__.py:81`, `store/users.py`): untested here,
+  orchestrator-owned (PA7/PA8 parity from an isolated reservation).
+- The absent-source denial message in `build_authority.py:65` (see decision 4 above).
+- `delete_user` of the last user on a pre-schema-5 file (`authorization.py:86`,
+  accepted residual).
+- No route, dispatcher or production path was activated.
