@@ -186,6 +186,16 @@ def is_supported_name(name: str) -> bool:
     return suffix == "" and stem in KNOWN_TEXT_NAMES
 
 
+def is_plain_prose_name(name: str) -> bool:
+    """True for a stored file name a managed plain-prose build can read.
+
+    Closed on `PROSE_EXTENSIONS` and decided by name alone: an extensionless or
+    sniffed-as-text file is readable but has no honest plain-prose original, and
+    a claimed content type is never consulted.
+    """
+    return _suffix(str(name).replace("\\", "/")) in PROSE_EXTENSIONS
+
+
 def is_supported(path: Path) -> bool:
     """True if `read_file` would try to read it. Extensionless files are sniffed for text."""
     if is_supported_name(path.name):
