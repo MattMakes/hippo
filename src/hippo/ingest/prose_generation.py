@@ -9,8 +9,6 @@ import math
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from itertools import chain
-from threading import RLock
-from uuid import uuid4
 
 from ..knowledge import model as k
 from ..knowledge.access import AuthorizationChanged
@@ -29,7 +27,7 @@ from ..knowledge.input_binding import (
     AcceptedArtifactBinding,
     materialize_chunk_evidence,
 )
-from ..knowledge.lease_heartbeat import LeaseHeartbeat
+from ..knowledge.lease_heartbeat import LeaseHeartbeat  # noqa: F401  -- see "moved names" below
 from ..knowledge.lifecycle import generation_for_inputs
 from ..knowledge.openie_runtime import GuardedOpenIE, resolve_openie_profile
 from ..knowledge.prose_preparation import PlainProseInputs, prepare_plain_prose, prose_configuration
@@ -37,6 +35,15 @@ from ..knowledge.raw_artifacts import RawArtifact
 from ..knowledge.staged_prose import _seal, _write_batch, _write_batches
 from ..store.generation_counts import generation_counts
 from .accepted_inputs import CaptureLimits, capture_raw_inputs
+from .build_run import (
+    BuildBusy,
+    BuildCancelled,
+    BuildProgress,  # noqa: F401  -- see "moved names" below
+    BuildReceipt,
+    BuildRun,
+    authority_fields,
+    credentials,
+)
 from .chunker import MIN_CHUNK_CHARS
 from .prepared_chunks import prepare_prose_chunks
 from .provenance import read_plain_provenance
@@ -49,13 +56,18 @@ BOOTSTRAP_BUDGET_VERSION = "plain-bootstrap-budget-v1"
 BOOTSTRAP_LIFECYCLE_RECORDS = 12
 BOOTSTRAP_LIFECYCLE_BYTES = 16 * 1024
 
-
-class BuildCancelled(RuntimeError):
-    """Cancellation reached a cooperative checkpoint before commit admission."""
-
-
-class BuildBusy(ValueError):
-    """Another invocation owns the live source build or changed its head."""
+# Moved names. The run state, its two failure types, the progress and receipt
+# values and the two credential helpers now live in `build_run.py`, shared with
+# the code coordinator; nothing about them changed. They stay bound here because
+# `from hippo.ingest.prose_generation import BuildReceipt` is a reviewed import
+# path (`managed_activation.py`, `knowledge/public_errors.py`) and because this
+# module is the seam the coordinator's own tests substitute -- `LeaseHeartbeat`
+# and `capture_build_authority` are patched through it, so `build_plain_source`
+# passes the latter to the run explicitly rather than letting `build_run` bind
+# its own.
+_Run = BuildRun
+_credentials = credentials
+_authority_fields = authority_fields
 
 
 @dataclass(frozen=True)
@@ -107,157 +119,6 @@ class PlainBuildOptions:
                 raise ValueError("Build lease intervals must be finite and positive")
         if self.renewal_interval_seconds >= self.lease_duration_seconds / 2:
             raise ValueError("Build renewal must precede lease expiry")
-
-
-@dataclass(frozen=True)
-class BuildProgress:
-    phase: str
-    completed: int = 0
-    total: int = 0
-
-
-@dataclass(frozen=True)
-class BuildReceipt:
-    source_id: str
-    generation_id: str
-    event_id: str
-    accepted_input_hash: str
-    outcome: str
-
-
-def _credentials(job):
-    return dict(job_id=job.id, lease_owner=job.lease_owner, fencing_token=job.fencing_token)
-
-
-def _authority_fields(guard):
-    return dict(
-        expected_authorization_epoch=guard.expected_authorization_epoch,
-        expected_suppression_epoch=guard.expected_suppression_epoch,
-    )
-
-
-class _Run:
-    def __init__(self, ctx, actor, source_id, options, should_stop, on_progress):
-        self.store, self.actor, self.options = ctx.store, actor, options
-        self.should_stop, self.on_progress = should_stop, on_progress
-        self.guard = capture_build_authority(
-            self.store, source_id=source_id, actor=actor, clock=self.store._now
-        )
-        self.heartbeat, self.job, self.generation, self.receipt = None, None, None, None
-        self.owner = uuid4().hex
-        self._lock, self._closed = RLock(), False
-        self._failure = None
-
-    def _fail(self, error):
-        with self._lock:
-            if self._failure is None:
-                self._failure = error
-
-    def _cancel(self):
-        with self._lock:
-            closed = self._closed
-            failure = self._failure
-        if failure is not None:
-            raise failure
-        if closed or self.should_stop():
-            raise BuildCancelled("Plain source build cancelled")
-
-    def check(self):
-        try:
-            self._check()
-        except BaseException as error:
-            self._fail(error)
-            raise
-
-    def _check(self):
-        self._cancel()
-        # One read: pause() clears the attribute before it joins this worker, so
-        # re-reading it would test one worker and use another (or None).
-        heartbeat = self.heartbeat
-        if heartbeat is not None:
-            heartbeat.check()
-        # Store transaction depth is shared across threads. The caller already
-        # guarantees no ambient transaction; another renewal is not one. Hold
-        # only local reads here and invoke arbitrary callbacks outside the lock.
-        with self._lock:
-            with self.store.transaction():
-                self.guard.check_local()
-                if self.job is not None:
-                    self.store._check_build(
-                        self.generation.id, **_credentials(self.job), states=("staging", "ready")
-                    )
-                self.guard.check_local()
-        if heartbeat is not None:
-            heartbeat.check()
-        self._cancel()
-
-    def renew(self):
-        try:
-            self.check()
-            with self._lock:
-                if self.job is not None:
-                    with self.store.transaction():
-                        self.guard.check_local()
-                        current = self.store._check_build(
-                            self.generation.id, **_credentials(self.job), states=("staging", "ready")
-                        )
-                        expiry = max(
-                            self.store._now() + timedelta(seconds=self.options.lease_duration_seconds),
-                            current.lease_expires_at
-                            + timedelta(seconds=self.options.renewal_interval_seconds),
-                        )
-                        self.store.renew_generation_build(
-                            self.job.id,
-                            **{
-                                key: value for key, value in _credentials(self.job).items() if key != "job_id"
-                            },
-                            lease_expires_at=expiry,
-                        )
-                        self.guard.check_local()
-        except BuildCancelled:
-            raise  # Cancellation is the caller's own decision, not a lost lease.
-        except BaseException as error:
-            failure = AuthorizationChanged("Plain build lease renewal failed")
-            self._fail(failure)
-            raise failure from error
-
-    def start(self):
-        self.heartbeat = LeaseHeartbeat(self.renew, interval=self.options.renewal_interval_seconds)
-        try:
-            self.heartbeat.start()
-        except BaseException as error:
-            self._fail(error)
-            raise
-
-    def pause(self):
-        heartbeat, self.heartbeat = self.heartbeat, None
-        if heartbeat is not None:
-            heartbeat.close()
-            heartbeat.check()
-
-    def progress(self, phase, completed=0, total=0):
-        self.check()
-        if self.on_progress is not None:
-            try:
-                self.on_progress(BuildProgress(phase, completed, total))
-            except BaseException as error:
-                self._fail(error)
-                raise
-            finally:
-                self.check()
-
-    def adopt(self, guard):
-        with self._lock:
-            previous, self.guard = self.guard, guard
-            previous.close()
-
-    def close(self):
-        try:
-            self.pause()
-        finally:
-            with self._lock:
-                self._closed = True
-            self.guard.close()
 
 
 def _pair(store, artifact, revision):
@@ -650,7 +511,9 @@ def build_plain_source(
         raise ValueError("Stable operation identity and live cancellation required")
     if ctx.store.in_ambient_transaction():
         raise ValueError("Coordinator requires no ambient transaction")
-    run = _Run(ctx, actor, source_id, options, should_stop, on_progress)
+    # `capture` is this module's own name, not `build_run`'s: the guard capture is
+    # a seam the tests here substitute, and it must stay one after the extraction.
+    run = _Run(ctx, actor, source_id, options, should_stop, on_progress, capture=capture_build_authority)
     installed = False
     try:
         bootstrap = not run.guard.source_control.managed

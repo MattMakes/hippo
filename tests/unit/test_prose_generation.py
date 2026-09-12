@@ -170,7 +170,19 @@ def test_bootstrap_uses_real_http_and_publishes_complete_bound_originals(setup):
     assert len(w.store._knowledge_rows("ProseExtraction")) == 1
     assert {a.kind for a in w.store._knowledge_rows("Artifact")} == {"file", "manifest"}
     assert len(w.store._knowledge_rows("GenerationMember")) == 2
-    assert set(vars(result)) == {"source_id", "generation_id", "event_id", "accepted_input_hash", "outcome"}
+    # Still no path, no text and no exception body. The two counters the shared
+    # receipt gained for the code lane stay zero here; prose never resumes or
+    # rebaselines, and a receipt says only what happened, in identities and counts.
+    assert set(vars(result)) == {
+        "source_id",
+        "generation_id",
+        "event_id",
+        "accepted_input_hash",
+        "outcome",
+        "resumed_from_batches",
+        "rebaselines",
+    }
+    assert (result.resumed_from_batches, result.rebaselines) == (0, 0)
     with query_session(w.ctx, EVERYTHING, structural=True) as session:
         assert any(c.text == "ACME builds Robot." for c in session.graph.original_citations)
         assert session.graph.facts[0].predicate == "builds"
