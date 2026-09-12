@@ -18,9 +18,16 @@ The `hippo` command line.
     hippo user role <name> <r>  move a user to another role
     hippo user remove <name>    delete a user
 
-The CLI talks to Neo4j directly, so it is not gated by users: it is how you
-create the first admin from `docker exec` (see hippo/access.py). `hippo mcp`
-identifies its caller with the HIPPO_TOKEN environment variable.
+Who the CLI is. Administration is not gated by users: creating the first admin
+from `docker exec` is exactly what it is for (see hippo/access.py). Everything
+that reads or writes *evidence* is, and by the same rule the MCP server uses:
+once users exist, HIPPO_TOKEN names the reader, and `index`, `ask`, `sources`
+and the four code commands act as them - building as their `BuildActor.reader`,
+and seeing the slice of the memory they may see. A missing or unknown token
+refuses before anything is created. While no user exists the memory is open, so
+those commands use the open audience, which reads legacy evidence unrestricted
+but proves no managed generation. `hippo mcp` identifies its caller the same
+way, over stdio.
 
 Every command builds its `AppContext` from environment variables (see
 config.py and .env.example), exactly like the web app does, so the CLI and the
@@ -44,10 +51,26 @@ from typing import Any
 
 from .config import load_config
 from .context import AppContext
-from .remote import RemoteAmbiguous, RemoteError, RemoteHippo
+from .remote import TOKEN_ENV, RemoteAmbiguous, RemoteError, RemoteHippo
 from .store import StoreLockedError
 
 WAIT_SECONDS = 3600.0  # a big repo on a slow CPU model really can take an hour
+
+# Commands that read or write evidence. They resolve a principal, and a failure inside
+# one is answered with the closed public code rather than whatever was raised - see
+# `_public_failure`. The rest are administration and keep their own messages.
+EVIDENCE_COMMANDS = frozenset({"index", "ask", "sources", "path", "blast", "raises", "history"})
+
+NO_TOKEN = (
+    f"this hippo has users, so it needs to know who you are: set {TOKEN_ENV} to your token "
+    "(Account page, /account) and run the command again"
+)
+STORE_DOWN = "hippo cannot reach its database, so nobody can be signed in right now"
+DENIED = "your permissions changed; check your token and repeat the command"
+
+
+class Denied(RuntimeError):
+    """This command may not run as whoever is holding the terminal. The message is fit to print."""
 
 
 # ------------------------------------------------------------ arguments
@@ -142,11 +165,78 @@ def main(argv: list[str] | None = None) -> int:
         for candidate in exc.candidates:
             print(f"  {candidate}", file=sys.stderr)
         return 2
-    except (StoreLockedError, RemoteError) as exc:
+    except (StoreLockedError, RemoteError, Denied) as exc:
         # The embedded database belongs to one process at a time; usually `hippo serve` has it, and then
         # the command went to the server instead, which may have refused (no token, no permission).
+        # A remote refusal already carries the server's own stable code (remote.py).
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except BaseException as exc:
+        failure = _public_failure(exc, command=args.command)
+        if failure is None:
+            raise
+        print(f"error: {failure.code}: {failure.message}", file=sys.stderr)
+        return 2
+
+
+def _public_failure(exc: BaseException, *, command: str):
+    """The stable code and bounded sentence for a failure, or `None` to let it through.
+
+    Same table as the HTTP routes and the MCP tools, so one condition reads the same
+    everywhere. An evidence command adds `or OPERATION_FAILED`, which is the caller rule
+    `knowledge/public_errors.py` documents: a pure mapper cannot tell where an exception
+    was raised, so the path that could have touched stored text says so itself. An
+    administrative command keeps whatever it already did with its own errors.
+    """
+    from .knowledge.access import AuthorizationChanged
+    from .knowledge.public_errors import OPERATION_FAILED, PublicFailure, public_failure
+
+    if isinstance(exc, AuthorizationChanged):
+        return PublicFailure("authorization_changed", DENIED, 409)
+    if command not in EVIDENCE_COMMANDS:
+        return public_failure(exc)
+    return public_failure(exc) or OPERATION_FAILED
+
+
+def _principal(ctx: AppContext):
+    """Who is running this command: the HIPPO_TOKEN reader, or the open audience.
+
+    `principal_from_bearer` is the same resolver the stdio MCP server uses, so a token
+    that works for one works for the other. `require_online=True` matters: without it a
+    database hiccup on a process that has never seen a user answers `Principal.open()`,
+    which would hand the top role to a request that proved nothing.
+    """
+    import os
+
+    from .access import Principal
+    from .web.auth import StoreDown, principal_from_bearer
+
+    try:
+        principal = principal_from_bearer(ctx, os.environ.get(TOKEN_ENV) or None, require_online=True)
+    except StoreDown as exc:
+        raise Denied(STORE_DOWN) from exc
+    if principal is None:
+        raise Denied(NO_TOKEN)
+    assert isinstance(principal, Principal)
+    return principal
+
+
+def _build_actor(principal):
+    """The actor this identity may build as, or `None` for legacy-only open mode.
+
+    `mcp_server.reader_actor` is the same three lines: this module stays out of the web
+    and MCP import graphs on purpose, so that `hippo ask` never pays for FastAPI.
+    """
+    from .knowledge.build_authority import BuildActor
+
+    if principal.is_open or principal.access.unrestricted:
+        return None
+    return BuildActor.reader(principal)
+
+
+def _require(principal, capability: str) -> None:
+    if not principal.can(capability):
+        raise Denied(f"your role ({principal.role_name}) may not {capability.replace('_', ' ')}")
 
 
 # ------------------------------------------------------------- commands
@@ -193,15 +283,21 @@ def cmd_index(args: argparse.Namespace) -> int:
     ctx, remote = _context_or_running_server()
     if remote is not None:
         return _index_remotely(remote, args)
+    # Before a Source row or a saved byte exists: an identity that may not add sources
+    # must not leave one behind.
+    principal = _principal(ctx)
+    _require(principal, "add_sources")
+    actor = _build_actor(principal)
     target: str = args.target
     if repos.is_git_url(target):
+        # A repository is not an accepted managed input, so it has no actor to take.
         source_id = pipeline.add_repo(ctx, target)
     else:
         path = Path(target)
         if not path.exists():
             print(f"{target} does not exist and is not a git URL", file=sys.stderr)
             return 1
-        source_id = pipeline.add_upload(ctx, *_upload_for_path(path))
+        source_id = pipeline.add_upload(ctx, *_upload_for_path(path), build_actor=actor)
     if args.name:
         ctx.store.update_source(source_id, name=args.name)
 
@@ -230,8 +326,9 @@ def cmd_ask(args: argparse.Namespace) -> int:
         fallback = trace.get("used_dpr_fallback"), trace.get("fallback_reason")
         print(_format_answer(answer, thought, passages, fallback))
     else:
-        with query_session(ctx) as session:
-            trace_obj, answer_obj = ask(ctx, args.question, session=session)
+        access = _principal(ctx).access
+        with query_session(ctx, access) as session:
+            trace_obj, answer_obj = ask(ctx, args.question, access=access, session=session)
             output = _format_answer(
                 answer_obj.answer,
                 answer_obj.thought,
@@ -271,18 +368,27 @@ class CodeNameError(RuntimeError):
 
 
 def _code_locally(ctx: AppContext, build) -> dict[str, Any]:
-    """`build(code, index, theta)` on this process's graph, with the path tools' errors normalised."""
+    """`build(code, index, theta)` over one held view, with the path tools' errors normalised.
+
+    The view is this caller's, not the whole graph: a walk that crossed into code they
+    may not see would be presentation of evidence they never proved. It is held through
+    the build and validated on the way out, so a permission change mid-answer denies
+    rather than prints.
+    """
     from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
+    from .knowledge.query_access import query_session
     from .web.routes import code
 
-    index = ctx.graph()
-    theta = float(ctx.store.get_settings().get("code_theta", 0.5))
-    try:
-        return build(code, index, theta)
-    except AmbiguousSymbol as exc:
-        raise CodeNameError(str(exc), exc.candidates) from exc
-    except (UnknownSymbol, ValueError) as exc:
-        raise CodeNameError(str(exc)) from exc
+    with query_session(ctx, _principal(ctx).access) as session:
+        theta = float(session.settings["code_theta"])
+        try:
+            return build(code, session.graph, theta)
+        except AmbiguousSymbol as exc:
+            raise CodeNameError(str(exc), exc.candidates) from exc
+        except (UnknownSymbol, ValueError) as exc:
+            raise CodeNameError(str(exc)) from exc
+        finally:
+            session.validate()
 
 
 def _code_remotely(call) -> dict[str, Any]:
@@ -355,7 +461,7 @@ def cmd_history(args: argparse.Namespace) -> int:
 
 def cmd_sources(args: argparse.Namespace) -> int:
     ctx, remote = _context_or_running_server()
-    rows = remote.sources() if remote is not None else ctx.store.list_sources()
+    rows = remote.sources() if remote is not None else _sources_locally(ctx)
     if not rows:
         print("The memory is empty. Try: hippo index <file>")
         return 0
@@ -376,6 +482,24 @@ def cmd_sources(args: argparse.Namespace) -> int:
         ],
     )
     return 0
+
+
+def _sources_locally(ctx: AppContext) -> list[dict[str, Any]]:
+    """The caller's own library, from the same view the web app and MCP list.
+
+    `store.list_sources()` unrestricted would be a different answer to the same question
+    depending on which surface asked it, and would count a refreshed managed source's
+    passages twice over. `status.source_view` counts from the held graph's provenance.
+    """
+    from .knowledge.query_access import query_session
+    from .status import source_view
+
+    access = _principal(ctx).access
+    with query_session(ctx, access) as session:
+        view = source_view(ctx, access, session=session)
+        rows = list(view.sources)
+        view.validate()
+        return rows
 
 
 def cmd_settings(args: argparse.Namespace) -> int:
