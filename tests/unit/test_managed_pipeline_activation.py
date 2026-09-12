@@ -338,6 +338,31 @@ def test_an_existing_managed_source_without_an_actor_refuses_before_any_legacy_h
     assert seen == [] and source_row(w) == before
 
 
+def test_the_actorless_refusal_names_the_delete_path_it_also_guards(setup):
+    """Wrap-up finding 17 / PA3b finding 3: one refusal serves two operations.
+
+    `plan_dispatch` is the single classification both `reindex` and `delete_source` run, and
+    `delete_source` reaches it (`pipeline.py:563`) *before* `_tombstone`'s own already-correct
+    "cannot be deleted" sentence, so that one is unreachable. The message said only "rebuilt",
+    which is wrong on the delete path and is what an operator reads in the local log. Naming
+    both operations is correct on both paths; a verb swap would only move the error.
+
+    It reaches no client either way -- `web/app.py` maps `ManagedActorRequired` to the fixed
+    permission body -- so this is the exception's own words and the log line, nothing more.
+    """
+    w = setup
+    w.quiet_jobs()
+    source = w.stage_text()
+    w.store.begin_managed_source(source)
+    for call in (
+        lambda: pipeline.reindex(w.ctx, source),
+        lambda: pipeline.delete_source(w.ctx, source),
+    ):
+        with pytest.raises(w.module.ManagedActorRequired) as caught:
+            call()
+        assert "rebuilt or deleted" in str(caught.value), str(caught.value)
+
+
 def test_an_existing_managed_source_with_an_actor_refreshes_and_never_prepares_legacy(setup, monkeypatch):
     w = setup
     seen = lanes(monkeypatch)
@@ -1684,7 +1709,9 @@ def test_a_lane_that_changes_lane_after_the_plan_does_not_strand_the_lanes_behin
 
     def submit(ctx, source_id, **kwargs):
         if source_id == w.eligible:
-            raise w.module.ManagedActorRequired("A managed source cannot be rebuilt without a build actor")
+            raise w.module.ManagedActorRequired(
+                "A managed source cannot be rebuilt or deleted without a build actor"
+            )
         submitted.append(source_id)
         return original(ctx, source_id, **kwargs)
 

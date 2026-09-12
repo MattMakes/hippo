@@ -586,6 +586,29 @@ def test_an_unknown_legacy_failure_stores_its_class_and_a_fixed_sentence(
     assert "Acme Robotics" not in source["error"]
 
 
+def test_the_pipelines_closed_validator_tuple_is_the_public_tables_own_family() -> None:
+    """Wrap-up finding 6: `CLOSED_INPUT_VALIDATORS` is a copy, so something must compare it.
+
+    `pipeline.py` hand-lists the five classes whose message the Source row may keep, and its
+    comment says they are "exactly as `knowledge/public_errors.py` lists them". The evidence
+    claimed the two cannot drift; nothing checked it, so adding a sixth closed validator to
+    the public table would silently leave it unbounded on the row -- the one surface the
+    whole redaction rule exists for.
+
+    The public table's own definition of the family is the `invalid_source` code: both its
+    400 and its 413 sentence are what a limit-and-knob message is allowed to say. Comparing
+    against that, rather than against a second hand-written list, is what makes this a drift
+    guard instead of a third copy.
+    """
+    from hippo.knowledge import public_errors
+
+    invalid_source = public_errors.INVALID_SOURCE_TYPE.code
+    published = {kind for kind, failure in public_errors._ROWS if failure.code == invalid_source}
+    assert set(pipeline.CLOSED_INPUT_VALIDATORS) == published, (
+        "pipeline.CLOSED_INPUT_VALIDATORS and public_errors' `invalid_source` family disagree"
+    )
+
+
 def test_a_closed_input_validator_keeps_the_limit_it_names(
     ctx: AppContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:

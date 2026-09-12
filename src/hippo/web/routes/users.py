@@ -25,13 +25,13 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ...access import CAPABILITIES, Principal, top_role
 from ...knowledge.query_access import query_session
 from ...status import source_view
 from ..auth import principal_of, public_user, require, set_session_cookie
-from ..render import ctx_of, render
+from ..render import caller_error, ctx_of, render
 
 router = APIRouter()
 api = APIRouter(prefix="/api")
@@ -225,6 +225,14 @@ async def create_role_form(request: Request):
             ),
         )
     except (HTTPException, ValueError) as exc:
+        # Three things are the caller's own and are shown: the route's `HTTPException`
+        # detail, `ValidationError` from the model this form is parsed into (which is why
+        # it is built inside the try -- its message is the form's own fields and rules),
+        # and the exact `ValueError` a store validator raises. Every other `ValueError`
+        # subclass came from further down carrying whatever it was reading, and is
+        # re-raised to the mapper rather than printed in the form's error banner.
+        if isinstance(exc, ValueError) and not (caller_error(exc) or isinstance(exc, ValidationError)):
+            raise
         return _back(getattr(exc, "detail", str(exc)))
     return _back(saved="Role added")
 
@@ -247,6 +255,14 @@ async def update_role_form(request: Request, role_id: str):
             ),
         )
     except (HTTPException, ValueError) as exc:
+        # Three things are the caller's own and are shown: the route's `HTTPException`
+        # detail, `ValidationError` from the model this form is parsed into (which is why
+        # it is built inside the try -- its message is the form's own fields and rules),
+        # and the exact `ValueError` a store validator raises. Every other `ValueError`
+        # subclass came from further down carrying whatever it was reading, and is
+        # re-raised to the mapper rather than printed in the form's error banner.
+        if isinstance(exc, ValueError) and not (caller_error(exc) or isinstance(exc, ValidationError)):
+            raise
         return _back(getattr(exc, "detail", str(exc)))
     return _back(saved="Role saved")
 
@@ -334,6 +350,11 @@ def _create_user(request: Request, body: UserBody) -> tuple[dict[str, Any], bool
     try:
         user_id = ctx.store.create_user(body.username, body.password, role["id"], body.display_name)
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
     return ctx.store.get_user(user_id) or {}, first
 
@@ -360,6 +381,11 @@ def patch_user(request: Request, user_id: str, body: UserPatch) -> dict[str, Any
     try:
         updated = ctx.store.update_user(user_id, **changes) if changes else user
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
     with query_session(ctx, principal.access) as session:
         view = source_view(ctx, principal.access, session=session)
@@ -400,6 +426,11 @@ def create_role(request: Request, body: RoleBody) -> dict[str, Any]:
     try:
         role_id = ctx.store.create_role(body.name, body.rank, body.description, body.capabilities)
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
     return ctx.store.get_role(role_id) or {}
 
@@ -431,6 +462,11 @@ def patch_role(request: Request, role_id: str, body: RolePatch) -> dict[str, Any
         if changes:
             ctx.store.update_role(role_id, **changes)
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
     with query_session(ctx, principal.access) as session:
         view = source_view(ctx, principal.access, session=session)
@@ -454,5 +490,10 @@ def delete_role(request: Request, role_id: str) -> dict[str, Any]:
     try:
         ctx.store.delete_role(role_id)
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
     return {"deleted": role_id}

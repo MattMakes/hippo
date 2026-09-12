@@ -551,6 +551,12 @@ def reindex_all(request: Request):
             # managed refresh inside it builds as. A bulk run never widens that.
             pipeline.reindex_all(ctx, build_actor=build_actor_of(principal))
         except Busy as exc:
+            # The same check the two branches below make, for the same reason: a caller whose
+            # audience was revoked while the pipeline ran is told that, not that the machine
+            # was busy with a library they may no longer see. `query_session` would catch it
+            # on release anyway, but only by discarding a response this branch had already
+            # built, and the view's own proof is not the session's.
+            view.validate()
             return coded_response(str(exc), INDEXING_BUSY, 409)
         except ManagedPreflightRefused:
             # A refused preflight clears nothing and starts nothing, so `{"accepted": true}`

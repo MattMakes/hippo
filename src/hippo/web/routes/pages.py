@@ -24,7 +24,7 @@ from ...status import system_status
 from ...store.base import DEFAULT_SETTINGS, SETTING_RULES, validate_settings
 from ..adhoc import remember_adhoc
 from ..auth import principal_of, require
-from ..render import ctx_of, render, retrieval_failure
+from ..render import caller_error, ctx_of, render, retrieval_failure
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -208,13 +208,14 @@ async def settings_submit(request: Request):
         # just typed and the range it must be in, and re-rendering the form without that
         # sentence would leave them guessing which field was refused.
         #
-        # What is protected is the validator's sentence, not this catch: `update_settings`
-        # can also raise a `ValueError` *subclass*, and this handler would render that
-        # too. The JSON twin of this route guards exactly that
-        # (`test_a_settings_write_that_fails_is_mapped_rather_than_quoted_back_as_a_400`);
-        # applying `render.caller_error` here would close the same shape on the page and
-        # keep the sentence, and belongs with the other deferred isinstance catches
-        # (wrap-up finding 18) rather than with this comment.
+        # What is protected is the validator's sentence, not the catch. `update_settings`
+        # can also raise a `ValueError` *subclass*, which is a storage failure carrying
+        # whatever it was reading, and this handler would have rendered it into the page.
+        # The exact-type guard keeps the sentence and closes the shape, which is what the
+        # JSON twin has always done (`test_a_settings_write_that_fails_is_mapped_rather_
+        # _than_quoted_back_as_a_400`).
+        if not caller_error(exc):
+            raise
         return render(
             request,
             "settings.html",
