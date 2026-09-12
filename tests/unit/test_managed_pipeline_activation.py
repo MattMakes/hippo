@@ -22,6 +22,7 @@ import pytest
 
 from hippo.access import EVERYTHING, Principal
 from hippo.ingest import pipeline
+from hippo.knowledge.access import AuthorizationChanged
 from hippo.knowledge.build_authority import BuildActor
 from hippo.knowledge.query_access import query_session
 from hippo.knowledge.source_lifecycle import tombstone_managed_source
@@ -32,6 +33,7 @@ from tests.unit.test_prose_generation import Runtime
 SETTLE_SECONDS = 60
 FIRST_TEXT = "ACME builds Robot."
 SECOND_TEXT = "ACME now builds Robot."
+THIRD_TEXT = "Zed Corp is located in Dallas."
 # Long enough to make several chunks, so every extract phase is observable.
 LONG_TEXT = "ACME builds Robot. " * 200
 OPERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -122,6 +124,34 @@ def setup(ctx, tmp_path, monkeypatch):
         def quiet_jobs(self):
             """Create sources without running their background job."""
             monkeypatch.setattr(self.ctx.jobs, "start", lambda key, work: True)
+
+        def inline_jobs(self):
+            """Run every submitted job in the caller's thread, in submission order.
+
+            A bulk reindex submits several lanes at once; running them here keeps
+            two managed builds off one mock transport and makes the order the test
+            reads the order the pipeline chose.
+            """
+            started: list[str] = []
+
+            def start(key, work):
+                started.append(key)
+                work()
+                return True
+
+            monkeypatch.setattr(self.ctx.jobs, "start", start)
+            return started
+
+        def held_jobs(self):
+            """Capture each submitted job without running it, so a race can commit first."""
+            held: list[tuple[str, object]] = []
+
+            def start(key, work):
+                held.append((key, work))
+                return True
+
+            monkeypatch.setattr(self.ctx.jobs, "start", start)
+            return held
 
         def stage_text(self, text=FIRST_TEXT, name="Notes"):
             self.source = pipeline.add_text(self.ctx, name, text, owner_id=self.user)
@@ -239,6 +269,16 @@ def test_new_pasted_text_without_an_actor_stays_legacy(setup, monkeypatch):
     w = setup
     seen = lanes(monkeypatch)
     source = pipeline.add_text(w.ctx, "Notes", FIRST_TEXT)
+    wait(w.ctx)
+    assert seen == [("legacy", source)]
+
+
+@pytest.mark.parametrize("filename", ["notes.txt", "notes.md", "notes.rst"])
+def test_an_eligible_plain_upload_without_an_actor_stays_legacy(setup, monkeypatch, filename):
+    """The same file that opts in with an actor is an ordinary legacy upload without one."""
+    w = setup
+    seen = lanes(monkeypatch)
+    source = w.stage_upload(filename, FIRST_TEXT.encode())
     wait(w.ctx)
     assert seen == [("legacy", source)]
 
@@ -375,6 +415,9 @@ def test_an_eligible_legacy_reindex_converts_atomically_and_serves_legacy_until_
     monkeypatch.setattr(
         pipeline, "_clear_passages", lambda *a, **k: pytest.fail("managed conversion cleared legacy rows")
     )
+    monkeypatch.setattr(
+        pipeline, "_prepare_reindex", lambda *a, **k: pytest.fail("legacy preparation for a conversion")
+    )
     seen = []
 
     def inspect(path, body):
@@ -384,10 +427,12 @@ def test_an_eligible_legacy_reindex_converts_atomically_and_serves_legacy_until_
             seen.append(True)
 
     w.runtime.hook = inspect
-    w.build(source)
+    w.inline_jobs()  # the conversion branch of `reindex` itself, not just the worker it submits
+    assert pipeline.reindex(w.ctx, source, build_actor=w.actor) is True
     assert seen
     row_ = source_row(w)
     assert row_["managed"] and row_["status"] == "ready" and row_["active_generation_id"]
+    assert "legacy" in w.store.passage_ids_for_source(source), "the legacy rows outlive the publish"
 
 
 def test_the_saved_logical_name_is_the_sanitized_stored_filename(setup, monkeypatch):
@@ -810,6 +855,43 @@ def test_failure_mapping_is_closed_and_generation_aware(setup):
     assert len(codes) > 1
 
 
+def test_a_stale_embedding_profile_asks_for_a_rebuild_rather_than_a_retry(setup):
+    """Both are `OllamaError`s, and reading the wider row first would store the retry code."""
+    module = setup.module
+    from hippo.knowledge.embedding_profile import (
+        EmbeddingProfileChanged,
+        EmbeddingProfileMismatch,
+        EmbeddingProfileUnavailable,
+    )
+    from hippo.ollama import OllamaError
+
+    for error in (EmbeddingProfileMismatch("stale"), EmbeddingProfileChanged("stale")):
+        for active in (False, True):
+            failure = module.map_build_failure(error, has_active_generation=active)
+            assert failure.code == "retrieval_rebuild_required"
+            assert failure.status == ("ready" if active else "failed")
+    for error in (EmbeddingProfileUnavailable("offline"), OllamaError("offline")):
+        assert module.map_build_failure(error, has_active_generation=False).code == "model_unavailable"
+
+
+def test_a_refresh_that_meets_a_changed_profile_reads_back_as_the_rebuild_code(setup, monkeypatch):
+    w = setup
+    w.quiet_jobs()
+    source = w.stage_text()
+    w.build(source, operation="op-1")
+    (pipeline.source_dir(w.ctx, source) / "text.md").write_text(SECOND_TEXT)
+    from hippo.knowledge.embedding_profile import EmbeddingProfileChanged
+
+    def stale(ctx, **kwargs):
+        raise EmbeddingProfileChanged("Installed embedding model identity changed")
+
+    monkeypatch.setattr(w.module, "build_plain_source", stale)
+    w.build(source, operation="op-2")
+    row_ = source_row(w)
+    assert (row_["status"], row_["stage"]) == ("ready", "refresh_failed")
+    assert row_["error"].startswith("retrieval_rebuild_required: ")
+
+
 def test_an_unknown_failure_never_reaches_the_source_row_or_the_logs(setup, monkeypatch, caplog):
     w = setup
     w.quiet_jobs()
@@ -823,7 +905,9 @@ def test_an_unknown_failure_never_reaches_the_source_row_or_the_logs(setup, monk
     with caplog.at_level("DEBUG", logger="hippo"):
         w.build(source)
     row_ = source_row(w)
-    recorded = json.dumps(row_, default=str) + "\n".join(r.getMessage() for r in caplog.records)
+    # `caplog.text`, not `record.getMessage()`: a message alone omits the formatted
+    # traceback, which is exactly where a leaked exception string would appear.
+    recorded = json.dumps(row_, default=str) + caplog.text
     for part in ("sk-live-secret", "/private/var", "ACME builds Robot.", "model body"):
         assert part not in recorded
     assert row_["status"] == "failed" and "operation_failed" in (row_["error"] or "")
@@ -946,6 +1030,513 @@ def test_a_failure_that_cannot_be_presented_still_reports_nothing_private(setup,
     monkeypatch.setattr(w.module, "present", flaky)
     with caplog.at_level("DEBUG", logger="hippo"):
         w.build(source)  # must not raise: `Jobs.start` would log the whole chained traceback
-    recorded = "\n".join(r.getMessage() for r in caplog.records)
+    recorded = caplog.text  # includes any formatted traceback, not just the message
     for part in ("sk-live-secret", "/private/var", "ACME builds Robot.", "model body"):
         assert part not in recorded
+
+
+# ------------------------------------------------ stored settings and restarts
+
+
+@pytest.mark.parametrize("stored", [1.5, -0.1, "0.8", None, float("nan"), True])
+def test_an_out_of_contract_stored_synonym_threshold_is_refused(setup, monkeypatch, stored):
+    """The threshold reaches the profile the build's authority is bound to; it is not a hint."""
+    w = setup
+    monkeypatch.setattr(w.store, "get_settings", lambda: {"synonymy_threshold": stored})
+    with pytest.raises(w.module.ManagedConfigurationError):
+        w.module.build_options(w.ctx)
+
+
+def test_a_build_refuses_a_stored_threshold_generically_and_without_a_model_call(setup, monkeypatch):
+    w = setup
+    w.quiet_jobs()
+    source = w.stage_text()
+    monkeypatch.setattr(w.store, "get_settings", lambda: {"synonymy_threshold": 2})
+    w.build(source)
+    row_ = source_row(w)
+    assert row_["status"] == "failed" and row_["error"].startswith("invalid_configuration: ")
+    assert not w.runtime.calls and not knowledge_root(w.ctx).exists()
+
+
+def test_a_refresh_interrupted_by_a_restart_is_retired_without_losing_g1(setup):
+    """A crash mid-refresh must not leave `refreshing: ...` on the row for ever.
+
+    The stage is taken from a real refresh in flight rather than invented, then written
+    back as the row a restart would find.
+    """
+    w = setup
+    source = managed_source(w)
+    seen: list[dict] = []
+
+    def inspect(path, body):
+        if path == "/api/chat" and not seen:
+            seen.append(row_of(w, source))
+
+    (pipeline.source_dir(w.ctx, source) / "text.md").write_text(SECOND_TEXT)
+    w.runtime.hook = inspect
+    assert pipeline.reindex(w.ctx, source, build_actor=w.actor) is True
+    wait(w.ctx)
+    w.runtime.hook = None
+    (in_flight,) = seen
+    assert in_flight["status"] == "ready" and in_flight["stage"].startswith("refreshing: ")
+    generation = row_of(w, source)["active_generation_id"]
+
+    w.store.update_source(source, status="ready", stage=in_flight["stage"], error=None)
+    assert w.store.mark_interrupted_jobs() == 1
+
+    recovered = row_of(w, source)
+    assert (recovered["status"], recovered["stage"]) == ("ready", "refresh_failed")
+    assert recovered["active_generation_id"] == generation
+    code, _, message = recovered["error"].partition(": ")
+    assert code == "build_interrupted"
+    assert code.isascii() and 0 < len(message) <= w.module.MAX_MESSAGE_CHARS
+    assert citations(w.ctx) == {SECOND_TEXT}  # the published generation never stopped serving
+
+
+def test_an_interrupted_refresh_is_retired_by_the_next_ladybug_open(setup):
+    if setup.store.knowledge_backend != "ladybug":
+        pytest.skip("real Ladybug close/reopen contract")
+    from hippo.store.ladybug import LadybugStore
+
+    w = setup
+    source = managed_source(w)
+    generation = row_of(w, source)["active_generation_id"]
+    w.store.update_source(source, status="ready", stage="refreshing: extract", error=None)
+    w.store.close()
+
+    path = w.store.path
+    reopened = LadybugStore(path)
+    try:
+        w.ctx.store = w.store = reopened
+        reopened.on_first_connection()  # what a restart does before serving anything
+        recovered = row_of(w, source)
+        assert (recovered["status"], recovered["stage"]) == ("ready", "refresh_failed")
+        assert recovered["error"].startswith("build_interrupted: ")
+        assert recovered["active_generation_id"] == generation
+        assert citations(w.ctx) == {FIRST_TEXT}
+    finally:
+        reopened.close()
+
+
+# --------------------------------------------------------- managed delete
+
+
+def row_of(w, source_id) -> dict:
+    return {key: value for key, value in w.store.get_source(source_id).items() if key != "generation_lock"}
+
+
+def rows_of(w) -> dict[str, dict]:
+    return {source["id"]: row_of(w, source["id"]) for source in w.store.list_sources()}
+
+
+def data_inventory(ctx) -> dict[str, bytes]:
+    """Every saved byte below the data directory: ingress files, raw objects, cache entries."""
+    root = Path(ctx.config.data_dir)
+    if not root.is_dir():
+        return {}
+    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def suppressions(w, source_id) -> list:
+    return [
+        r
+        for r in w.store._knowledge_rows("Suppression")
+        if r.target_kind == "source" and r.target_id == source_id
+    ]
+
+
+def managed_source(w, text=FIRST_TEXT, name="Notes") -> str:
+    """One published managed source, built through the coordinator."""
+    source = pipeline.add_text(w.ctx, name, text, owner_id=w.user, build_actor=w.actor)
+    wait(w.ctx)
+    assert w.store.get_source(source)["managed"], "the source was not built as managed evidence"
+    return source
+
+
+def legacy_source(w, monkeypatch, name="Legacy", text="Zed Corp is located in Austin.") -> str:
+    """One ordinary legacy source with real passages, indexed by the legacy pipeline."""
+    monkeypatch.setattr(w.ctx, "ollama", w.legacy_ollama)
+    try:
+        source = pipeline.add_text(w.ctx, name, text)
+        wait(w.ctx)
+    finally:
+        monkeypatch.setattr(w.ctx, "ollama", w.managed_ollama)
+    assert w.store.passage_ids_for_source(source)
+    return source
+
+
+@pytest.fixture
+def refuse_destruction(setup, monkeypatch):
+    """Every destructive operation raises. A managed delete must reach none of them.
+
+    The store's own cleanup and `shutil.rmtree` are refused for the whole test; a
+    managed build calls neither. File removal is only refused inside `w.refusing()`,
+    because an ordinary capture does unlink its own staging spool below the data
+    directory -- so the window is exactly the delete under test.
+    """
+    w = setup
+    destroyed: list[str] = []
+    w.destroyed = destroyed
+    root = Path(w.ctx.config.data_dir).resolve()
+    armed: list[bool] = []
+
+    def boom(name):
+        def refuse(*args, **kwargs):
+            destroyed.append(name)
+            raise RuntimeError(f"a managed delete never calls {name}")
+
+        return refuse
+
+    for name in (
+        "delete_source",
+        "delete_passages_for_source",
+        "delete_code_nodes_for_source",
+        "remove_orphans",
+        "discard_generation",
+        "collect_generation",
+    ):
+        monkeypatch.setattr(w.store, name, boom(f"store.{name}"), raising=False)
+    monkeypatch.setattr(pipeline, "_clear_passages", boom("pipeline._clear_passages"))
+    monkeypatch.setattr(shutil, "rmtree", boom("shutil.rmtree"))
+
+    def guarded(name):
+        original = getattr(os, name)
+        refuse = boom(f"os.{name}")
+
+        def maybe(path, *args, **kwargs):
+            # Disarmed, this must not even look at the argument: a capture's own spool
+            # cleanup passes a bare name with a `dir_fd`, which does not resolve here.
+            if not armed:
+                return original(path, *args, **kwargs)
+            resolved = Path(path).resolve()
+            if resolved == root or root in resolved.parents:
+                return refuse(path, *args, **kwargs)
+            return original(path, *args, **kwargs)
+
+        return maybe
+
+    for name in ("unlink", "remove", "rmdir"):  # `Path.unlink`/`Path.rmdir` reach os too
+        monkeypatch.setattr(os, name, guarded(name))
+
+    @contextmanager
+    def refusing():
+        armed.append(True)
+        try:
+            yield destroyed
+        finally:
+            armed.clear()
+
+    w.refusing = refusing
+    return w
+
+
+def test_deleting_a_managed_source_suppresses_it_and_removes_nothing(refuse_destruction):
+    w = refuse_destruction
+    source = managed_source(w)
+    other = managed_source(w, SECOND_TEXT, "Other")
+    generation = row_of(w, source)["active_generation_id"]
+    before_other, before_files = row_of(w, other), data_inventory(w.ctx)
+
+    with w.refusing():
+        assert pipeline.delete_source(w.ctx, source, build_actor=w.actor) is None
+
+    deleted = row_of(w, source)
+    assert (deleted["status"], deleted["stage"]) == ("deleted", "tombstoned")
+    assert deleted["active_generation_id"] == generation  # retained for authorized history
+    assert w.store.validate_generation_seal(generation).ready
+    (barrier,) = [s.restoration_barrier for s in suppressions(w, source)]
+    assert OPERATION_ID.match(barrier)
+    assert w.destroyed == []
+    assert data_inventory(w.ctx) == before_files
+    assert row_of(w, other) == before_other
+    assert citations(w.ctx) == {SECOND_TEXT}  # the current view excludes it at once
+
+
+def test_a_managed_delete_takes_the_supplied_operation_identity_or_a_fresh_bounded_one(setup):
+    w = setup
+    first, second = managed_source(w), managed_source(w, SECOND_TEXT, "Other")
+    pipeline.delete_source(w.ctx, first, build_actor=w.actor, operation_id="delete.42")
+    pipeline.delete_source(w.ctx, second, build_actor=w.actor)
+    assert [s.restoration_barrier for s in suppressions(w, first)] == ["delete.42"]
+    (generated,) = [s.restoration_barrier for s in suppressions(w, second)]
+    assert OPERATION_ID.match(generated) and generated != "delete.42"
+
+
+def test_a_managed_delete_refuses_an_unbounded_operation_identity_before_any_mutation(refuse_destruction):
+    w = refuse_destruction
+    source = managed_source(w)
+    before, files = row_of(w, source), data_inventory(w.ctx)
+    with w.refusing(), pytest.raises(w.module.ManagedDispatchError):
+        pipeline.delete_source(w.ctx, source, build_actor=w.actor, operation_id="not a token!")
+    assert w.destroyed == [] and suppressions(w, source) == []
+    assert row_of(w, source) == before and data_inventory(w.ctx) == files
+
+
+def test_deleting_a_managed_source_without_an_actor_refuses_before_any_legacy_hook(refuse_destruction):
+    w = refuse_destruction
+    source = managed_source(w)
+    before, files = row_of(w, source), data_inventory(w.ctx)
+    with w.refusing(), pytest.raises(w.module.ManagedActorRequired):
+        pipeline.delete_source(w.ctx, source)
+    assert w.destroyed == [] and suppressions(w, source) == []
+    assert row_of(w, source) == before and data_inventory(w.ctx) == files
+    assert citations(w.ctx) == {FIRST_TEXT}
+
+
+@pytest.mark.parametrize("offered", [False, True])
+def test_deleting_an_unmanaged_source_keeps_the_legacy_physical_delete(setup, monkeypatch, offered):
+    """An actor never converts a delete: an unmanaged source is still forgotten outright."""
+    w = setup
+    source = legacy_source(w, monkeypatch)
+    folder = pipeline.source_dir(w.ctx, source)
+    assert folder.is_dir()
+    version = w.store.graph_version()
+
+    pipeline.delete_source(w.ctx, source, build_actor=w.actor if offered else None)
+
+    assert w.store.get_source(source) is None
+    assert w.store.passage_ids_for_source(source) == []
+    assert w.store.stats()["entities"] == 0  # orphans swept, exactly as before
+    assert not folder.exists() and w.store.graph_version() > version
+
+
+def test_deleting_a_tombstoned_source_answers_like_an_unavailable_source(refuse_destruction):
+    w = refuse_destruction
+    source = managed_source(w)
+    pipeline.delete_source(w.ctx, source, build_actor=w.actor, operation_id="delete.1")
+    before, files = row_of(w, source), data_inventory(w.ctx)
+    epochs = (w.store.suppression_epoch(), w.store.authorization_epoch())
+    trusted = BuildActor.trusted_local()
+
+    with w.refusing():
+        with pytest.raises(AuthorizationChanged):  # a reader retry reveals nothing
+            pipeline.delete_source(w.ctx, source, build_actor=w.actor, operation_id="delete.2")
+        # An internal caller replaying its own operation is idempotent, and adds no epoch.
+        assert pipeline.delete_source(w.ctx, source, build_actor=trusted, operation_id="delete.1") is None
+        with pytest.raises(AuthorizationChanged):
+            pipeline.delete_source(w.ctx, source, build_actor=trusted, operation_id="delete.9")
+
+    assert (w.store.suppression_epoch(), w.store.authorization_epoch()) == epochs
+    assert len(suppressions(w, source)) == 1
+    assert w.destroyed == [] and row_of(w, source) == before and data_inventory(w.ctx) == files
+
+
+def test_deleting_a_tombstoned_source_without_an_actor_refuses_like_any_managed_source(refuse_destruction):
+    w = refuse_destruction
+    source = managed_source(w)
+    pipeline.delete_source(w.ctx, source, build_actor=w.actor, operation_id="delete.1")
+    before, files = row_of(w, source), data_inventory(w.ctx)
+    with w.refusing(), pytest.raises(w.module.ManagedActorRequired):
+        pipeline.delete_source(w.ctx, source)
+    assert w.destroyed == [] and row_of(w, source) == before and data_inventory(w.ctx) == files
+    assert len(suppressions(w, source)) == 1
+
+
+# ------------------------------------------------------- mixed bulk reindex
+
+
+@pytest.fixture
+def mixed(setup, monkeypatch):
+    """One managed refresh, one eligible legacy conversion, one unsupported lane, one tombstone."""
+    w = setup
+    w.managed = managed_source(w, FIRST_TEXT, "Managed")
+    w.tombstoned = managed_source(w, THIRD_TEXT, "Tombstoned")
+    tombstone_managed_source(
+        w.ctx, source_id=w.tombstoned, actor=BuildActor.trusted_local(), operation_id="delete.1"
+    )
+    monkeypatch.setattr(w.ctx, "ollama", w.legacy_ollama)
+    try:
+        # The eligible source is this reader's own: a legacy source somebody else owns cannot
+        # be converted by them, which `test_a_failed_managed_preflight...` is about.
+        w.eligible = pipeline.add_text(w.ctx, "Eligible", "Zed Corp is located in Austin.", owner_id=w.user)
+        w.unsupported = pipeline.add_upload(w.ctx, "module.py", b"def f():\n    return 1\n")
+        wait(w.ctx)
+    finally:
+        monkeypatch.setattr(w.ctx, "ollama", w.managed_ollama)
+    assert w.store.passage_ids_for_source(w.unsupported)
+    return w
+
+
+def bulk_lanes(monkeypatch) -> tuple[list[dict], list[str]]:
+    """Record each lane, its operation identity, and everything cleared before it ran."""
+    seen: list[dict] = []
+    prepared: list[str] = []
+    module = api()
+    original = pipeline._prepare_reindex
+
+    def prepare(ctx, source_id):
+        prepared.append(source_id)
+        return original(ctx, source_id)
+
+    def legacy(ctx, source, *, should_stop):
+        seen.append({"mode": "legacy", "source": source["id"], "operation": None, "cleared": tuple(prepared)})
+
+    def managed(ctx, *, source_id, actor, operation_id, job_key):
+        assert type(actor) is BuildActor and job_key == f"index:{source_id}"
+        seen.append(
+            {"mode": "managed", "source": source_id, "operation": operation_id, "cleared": tuple(prepared)}
+        )
+        return receipt(source_id)
+
+    monkeypatch.setattr(pipeline, "_prepare_reindex", prepare)
+    monkeypatch.setattr(pipeline, "_read_chunk_index", legacy)
+    monkeypatch.setattr(module, "run_managed_build", managed)
+    return seen, prepared
+
+
+def deny_one(w) -> str:
+    """A saved eligible source this reader may not manage: its owner is somebody else."""
+    foreign = w.store.create_source("text", "Foreign", {"file": "text.md"}, owner_id="somebody-else")
+    directory = pipeline.source_dir(w.ctx, foreign)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "text.md").write_text(FIRST_TEXT)
+    return foreign
+
+
+def test_a_mixed_bulk_clears_only_legacy_lanes_and_submits_each_with_its_own_identity(mixed, monkeypatch):
+    w = mixed
+    before_tombstone = row_of(w, w.tombstoned)
+    seen, prepared = bulk_lanes(monkeypatch)
+
+    assert pipeline.reindex_all(w.ctx, build_actor=w.actor) == 3
+    wait(w.ctx)
+
+    assert prepared == [w.unsupported], "only the legacy lane may be cleared"
+    lanes_by_source = {entry["source"]: entry for entry in seen}
+    assert {source: entry["mode"] for source, entry in lanes_by_source.items()} == {
+        w.managed: "managed",
+        w.eligible: "managed",
+        w.unsupported: "legacy",
+    }
+    operations = {entry["operation"] for entry in seen if entry["operation"]}
+    assert len(operations) == 2 and all(OPERATION_ID.match(value) for value in operations)
+    # Every lane saw the complete legacy clear: no job started before the last one.
+    assert all(entry["cleared"] == (w.unsupported,) for entry in seen)
+    assert row_of(w, w.tombstoned) == before_tombstone
+
+
+def test_a_failed_managed_preflight_clears_nothing_and_starts_nothing(mixed, no_destruction, monkeypatch):
+    w = mixed
+    deny_one(w)
+    before_rows, before_files = rows_of(w), data_inventory(w.ctx)
+    seen, prepared = bulk_lanes(monkeypatch)
+
+    assert pipeline.reindex_all(w.ctx, build_actor=w.actor) == 0
+
+    wait(w.ctx)
+    assert seen == [] and prepared == []
+    assert rows_of(w) == before_rows and data_inventory(w.ctx) == before_files
+
+
+def test_a_bulk_without_an_actor_refuses_before_clearing_a_managed_inventory(
+    mixed, no_destruction, monkeypatch
+):
+    w = mixed
+    before_rows, before_files = rows_of(w), data_inventory(w.ctx)
+    seen, prepared = bulk_lanes(monkeypatch)
+
+    with pytest.raises(w.module.ManagedActorRequired):
+        pipeline.reindex_all(w.ctx)
+
+    assert seen == [] and prepared == []
+    assert rows_of(w) == before_rows and data_inventory(w.ctx) == before_files
+
+
+def test_a_mixed_bulk_refreshes_managed_evidence_and_converts_without_a_legacy_clear(mixed, monkeypatch):
+    w = mixed
+    w.inline_jobs()
+    monkeypatch.setattr(pipeline, "_read_chunk_index", lambda ctx, source, *, should_stop: None)
+    first = row_of(w, w.managed)["active_generation_id"]
+    (pipeline.source_dir(w.ctx, w.managed) / "text.md").write_text(SECOND_TEXT)
+
+    assert pipeline.reindex_all(w.ctx, build_actor=w.actor) == 3
+
+    assert row_of(w, w.managed)["active_generation_id"] not in (None, first)
+    converted = row_of(w, w.eligible)
+    assert converted["managed"] and converted["active_generation_id"]
+    assert w.store.passage_ids_for_source(w.unsupported) == []  # the legacy lane was cleared
+    assert row_of(w, w.tombstoned)["stage"] == "tombstoned"
+    # The tombstoned source's own citation is exactly this text, so its absence is real.
+    assert SECOND_TEXT in citations(w.ctx) and THIRD_TEXT not in citations(w.ctx)
+
+
+def test_one_lane_failing_asynchronously_leaves_every_other_source_intact(mixed, monkeypatch):
+    w = mixed
+    w.inline_jobs()
+    monkeypatch.setattr(pipeline, "_read_chunk_index", lambda ctx, source, *, should_stop: None)
+    (pipeline.source_dir(w.ctx, w.managed) / "text.md").write_text(SECOND_TEXT)
+    first = row_of(w, w.managed)["active_generation_id"]
+    before_raw = raw_inventory(w.ctx)
+
+    def hook(path, body):
+        if path == "/api/chat" and SECOND_TEXT in json.dumps(body):
+            return httpx.Response(500, json={"error": "private provider detail"})
+
+    w.runtime.hook = hook
+    assert pipeline.reindex_all(w.ctx, build_actor=w.actor) == 3
+
+    failed = row_of(w, w.managed)
+    assert (failed["status"], failed["stage"]) == ("ready", "refresh_failed")
+    assert failed["active_generation_id"] == first
+    converted = row_of(w, w.eligible)
+    assert converted["managed"] and converted["active_generation_id"]
+    assert row_of(w, w.tombstoned)["stage"] == "tombstoned"
+    assert FIRST_TEXT in citations(w.ctx)  # the failed lane's G1 still serves
+    after = raw_inventory(w.ctx)
+    assert before_raw and all(after.get(name) == data for name, data in before_raw.items())
+
+
+# ------------------------------------------------ Ladybug close and reopen
+
+
+def knowledge_rows(store, *kinds) -> dict[str, list]:
+    return {kind: sorted(store._knowledge_rows(kind), key=lambda r: r.id) for kind in kinds}
+
+
+def test_a_ladybug_reopen_preserves_pointers_manifests_raw_references_and_the_tombstone(setup):
+    if setup.store.knowledge_backend != "ladybug":
+        pytest.skip("real Ladybug close/reopen contract")
+    from hippo.store.ladybug import LadybugStore
+
+    w = setup
+    published = managed_source(w, FIRST_TEXT, "Published")
+    failed = managed_source(w, "Zed Corp is located in Austin.", "Failed")
+    tombstoned = managed_source(w, THIRD_TEXT, "Tombstoned")
+
+    # A refresh that fails at the model leaves G1 active and the source ready.
+    (pipeline.source_dir(w.ctx, failed) / "text.md").write_text(SECOND_TEXT)
+    fail_at(w, "/api/chat")
+    assert pipeline.reindex(w.ctx, failed, build_actor=w.actor) is True
+    wait(w.ctx)
+    w.runtime.hook = None
+    assert row_of(w, failed)["stage"] == "refresh_failed"
+    pipeline.delete_source(w.ctx, tombstoned, build_actor=w.actor, operation_id="delete.1")
+
+    before_rows = rows_of(w)
+    before_knowledge = knowledge_rows(w.store, "Artifact", "ArtifactRevision", "Suppression", "Generation")
+    before_raw, before_texts = raw_inventory(w.ctx), citations(w.ctx)
+    epochs = (w.store.authorization_epoch(), w.store.suppression_epoch())
+    seals = {source: row_of(w, source)["active_generation_id"] for source in (published, failed, tombstoned)}
+
+    path = w.store.path
+    w.store.close()
+    reopened = LadybugStore(path)
+    try:
+        w.ctx.store = w.store = reopened
+        assert rows_of(w) == before_rows
+        assert knowledge_rows(reopened, "Artifact", "ArtifactRevision", "Suppression", "Generation") == (
+            before_knowledge
+        )
+        assert (reopened.authorization_epoch(), reopened.suppression_epoch()) == epochs
+        assert all(reopened.source_is_managed(source) for source in seals)
+        assert all(reopened.validate_generation_seal(g).ready for g in seals.values())
+        # Every sealed manifest still names a raw object that is on disk, unchanged.
+        assert raw_inventory(w.ctx) == before_raw
+        assert all(
+            revision.raw_uri.rsplit(":", 1)[-1] in before_raw
+            for revision in before_knowledge["ArtifactRevision"]
+        )
+        assert citations(w.ctx) == before_texts
+        assert THIRD_TEXT not in before_texts  # the tombstone stays out of the current view
+    finally:
+        reopened.close()
