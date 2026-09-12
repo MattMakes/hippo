@@ -886,14 +886,17 @@ def test_an_incoherent_selection_reaches_an_mcp_code_tool_as_a_mapped_failure(ct
     validators. A bare `ValueError` from the selection therefore reached an MCP client as
     its own internals; a `ProjectionError` is mapped by the closed table instead.
     """
+    from mcp.server.mcpserver.exceptions import ToolError
+
     from hippo import mcp_server
 
     incoherent_selection(ctx, monkeypatch)
-    with pytest.raises(ProjectionError) as raised:
+    # Since the Task 4c follow-up the code tools map their own acquisition, so the
+    # ProjectionError never leaves the tool: the client sees the closed code only.
+    with pytest.raises(ToolError) as raised:
         mcp_server.blast_radius_tool(ctx, "anything")
-    assert str(mcp_server.tool_failure(raised.value)) == (
-        "operation_failed: Operation failed; inspect local logs by operation ID"
-    )
+    assert str(raised.value) == "operation_failed: Operation failed; inspect local logs by operation ID"
+    assert "one source twice" not in str(raised.value)
 
 
 # ----------------------------- 4e: one definition of the settings a query actually runs on
