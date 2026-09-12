@@ -205,11 +205,14 @@ def test_an_exception_whose_str_raises_is_still_mapped():
 # `ManagedFailure.code` from `src/hippo/ingest/managed_activation.py` (Task 3a).
 # The managed lane maps an exception once, at the point of failure, and stores the
 # code on the Source row; a route reading that row hours later has no exception to
-# re-derive from. These eleven are the stable set: the nine recorded in the Task 3a
-# review, plus the two Task 3b added -- `retrieval_rebuild_required`, when the managed
-# table learned to read a stale embedding profile ahead of the wider `OllamaError`, and
-# `build_interrupted`, which the store's restart sweep writes without any exception to
-# classify (see `test_a_code_the_store_writes_without_an_exception_still_has_an_answer`).
+# re-derive from. Eleven of the twelve rows below are that stable set: the nine recorded
+# in the Task 3a review, plus the two Task 3b added -- `retrieval_rebuild_required`, when
+# the managed table learned to read a stale embedding profile ahead of the wider
+# `OllamaError`, and `build_interrupted`, which the store's restart sweep writes without
+# any exception to classify (see
+# `test_a_code_the_store_writes_without_an_exception_still_has_an_answer`). The twelfth,
+# `retrieval_unavailable`, is `public_errors`' own code rather than a managed one and is
+# marked as such at its row; it is here because the table must be closed over its output.
 MANAGED_CODES = {
     "build_cancelled": FAILED,
     "build_interrupted": FAILED,

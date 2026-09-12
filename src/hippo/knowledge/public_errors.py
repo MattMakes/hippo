@@ -176,8 +176,10 @@ _ROWS: tuple[tuple[type[BaseException], PublicFailure], ...] = (
 # `ready` and retires only the stage. Nothing is stale and nothing is incompatible; an
 # operation simply did not finish. Its nearest row is `build_cancelled`, the same event
 # with a different trigger and the same "Reindex to run it again", and that is 500.
-# The last two rows are not build-lane codes at all: they are this module's *own* public
-# codes, here so that `public_failure_for_code` is closed over the whole public vocabulary
+# `retrieval_unavailable` and `operation_failed` are not build-lane codes at all -- they are
+# this module's *own* public codes, and they are named rather than placed because the table
+# is keyed by name and nothing keeps them last. They are here so that
+# `public_failure_for_code` is closed over the whole public vocabulary
 # and every `PublicFailure.code` round-trips to a failure carrying that same code. A caller
 # that has already rendered a failure once -- an eval replaying a stored result, a route
 # re-reading its own answer -- must not fall off the table and be told `operation_failed`

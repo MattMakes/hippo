@@ -296,6 +296,44 @@ def test_cli_index_never_prints_an_unclosed_stored_error(cli_ctx, tmp_path, monk
     assert_clean(captured.err + captured.out)
 
 
+class _Remote:
+    """Enough of `RemoteHippo` for `_index_remotely`: it accepts the upload and reports a row."""
+
+    def __init__(self, stored: str):
+        self.stored = stored
+
+    def add_upload(self, *args, **kwargs):
+        return "src-remote"
+
+    def wait_for_source(self, source_id, seconds):
+        return {"status": "failed", "stage": "failed", "passages": 0, "error": self.stored}
+
+
+@pytest.mark.parametrize("closed", [True, False], ids=["closed", "legacy"])
+def test_remote_index_applies_the_same_stored_error_rule_as_the_local_one(tmp_path, capsys, closed):
+    """4c re-review N2: `_index_remotely` prints through `_stored_error` too.
+
+    The server's Source row is the same row with the same two lanes in it, so the remote
+    branch of `hippo index` had exactly the same way to print a legacy lane's raw
+    exception. Both print sites call `_stored_error`; only the local one had a test.
+    """
+    import argparse
+
+    stored = "model_unavailable: The build could not be completed." if closed else f"OllamaError: {POISON}"
+    note = tmp_path / "zed.md"
+    note.write_text("Zed Labs is located in Lisbon.\n")
+
+    remote = _Remote(stored)
+    assert cli._index_remotely(remote, argparse.Namespace(target=str(note), name=None)) == 1
+
+    captured = capsys.readouterr()
+    if closed:
+        assert f"error: {stored}" in captured.err
+    else:
+        assert "error: indexing failed; inspect local logs for source src-remote" in captured.err
+        assert_clean(captured.err + captured.out)
+
+
 def _failing_index(cli_ctx, tmp_path, monkeypatch, stored: str):
     """An open-mode `hippo index` whose source row ends up carrying `stored`."""
     monkeypatch.delenv(mcp_server.TOKEN_ENV, raising=False)
@@ -312,25 +350,37 @@ def _failing_index(cli_ctx, tmp_path, monkeypatch, stored: str):
     return note
 
 
+@pytest.mark.parametrize("kind", ["file", "git-url"], ids=["file", "git_url"])
 def test_a_gated_local_index_is_owned_by_its_creator_and_kept_to_their_tier(
-    cli_ctx, tmp_path, monkeypatch, capsys
+    cli_ctx, tmp_path, monkeypatch, capsys, kind
 ):
     """F4: `hippo index` resolves an identity and then has to use it for visibility too.
 
     `hippo_remember` passes `owner_id` and `access_role_id`; `cmd_index` passed neither, so
     both defaulted to `None` and `min_rank` fell to `EVERYONE_RANK`. A low tier's own file
     was therefore published to every role, and its creator could not manage what they made.
+
+    4c re-review N3: `cmd_index` has two branches and only the upload one was covered. A
+    repository takes `pipeline.add_repo`, which has no `build_actor` at all because a repo
+    is not an accepted managed input -- so the git-URL branch stays legacy, and the
+    identity rule has to hold there on `owner_id` and `access_role_id` alone.
     """
     cli_ctx.store.ensure_roles()
     creator = cli_ctx.store.get_user(cli_ctx.store.create_user("assistant", "secret1", "local-assistant"))
     below = cli_ctx.store.get_user(cli_ctx.store.create_user("everyone-else", "secret1", "individual"))
     monkeypatch.setenv(mcp_server.TOKEN_ENV, creator["token"])
-    note = tmp_path / "zed.md"
-    note.write_text("Zed Labs is located in Lisbon.\n")
+    if kind == "file":
+        note = tmp_path / "zed.md"
+        note.write_text("Zed Labs is located in Lisbon.\n")
+        target = str(note)
+    else:
+        # Port 9 (discard) refuses at once, so the clone fails in the background job
+        # without touching the network. The row it leaves behind is what this is about.
+        target = "https://127.0.0.1:9/acme/robots.git"
     # 1, for the same reason as `test_a_gated_local_index_really_reaches_the_managed_lane`:
     # a reader actor over an eligible input dispatches the managed lane, which the shared
-    # fake cannot serve. The row it left behind is what this test is about.
-    assert cli.main(["index", str(note)]) == 1
+    # fake cannot serve. The repo branch returns 1 because the clone itself failed.
+    assert cli.main(["index", target]) == 1
     capsys.readouterr()
 
     row = cli_ctx.store.list_sources()[0]
@@ -783,6 +833,30 @@ def test_an_authorization_change_reads_the_same_on_all_three_surfaces(ctx, monke
     with pytest.raises(RemoteError) as remote_caught:
         remote_for(denied).ask(QUESTION)
     assert str(remote_caught.value) == DENIAL
+
+
+def test_the_three_copies_of_the_denial_code_are_the_same_string():
+    """The literal is spelled in three modules, and nothing but this test keeps them equal.
+
+    Consolidating it would mean `cli.py` importing the module that owns it, and every
+    candidate owner (`knowledge.public_errors`, `ingest.managed_activation`, `web.app`)
+    drags knowledge, ingest or fastapi into `hippo --help`
+    (`test_hippo_help_imports_no_serving_machinery`). The duplication is therefore
+    deliberate, and the wrap-up review's finding 12 asks for exactly this: pin the
+    constraint rather than remember it. The two registries that also spell the code are
+    included, because they are what the three constants have to agree *with* -- the
+    managed lane stores this string on a Source row and the public table maps it to the
+    permission answer.
+    """
+    from hippo.ingest.managed_activation import FAILURES
+    from hippo.knowledge.public_errors import _MANAGED_CODES
+    from hippo.web.app import AUTHORIZATION_CHANGED
+
+    assert mcp_server.DENIED_CODE == cli.DENIED_CODE == AUTHORIZATION_CHANGED
+    assert AUTHORIZATION_CHANGED in _MANAGED_CODES
+    assert AUTHORIZATION_CHANGED in {code for _kind, code, _message in FAILURES}
+    # The sentence they answer with is one string too, and it is the web app's own.
+    assert mcp_server.DENIED == cli.DENIED == "Permissions changed; repeat the query"
 
 
 def test_a_code_tool_denial_reads_the_same_on_both_surfaces(code_index, monkeypatch, capsys):
