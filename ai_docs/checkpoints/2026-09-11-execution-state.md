@@ -353,3 +353,12 @@ Next approved work: storage agent step2 opt-in structural loading/snapshot group
 Dense capability published de3a213. Each evaluated fixture question now holds one query session through retrieval, metrics and candidate DTO construction. Error and revocation paths close the same view. The harness still advertises its static legacy-only evaluation scope. Root2gatesMET59Fake/Ruff; independent SPEC/QUALITY PASS59Fake (/tmp/hippo-rag-eval-independent.log). No extra model calls or managed evaluation capability are claimed.
 
 Approved parallel work now implements opt-in structural loading, controlled accepted-manifest profile binding, and managed plain-prose preparation/staged writing. All are uncommitted pending independent reviews and root gates. Production ingestion remains legacy; Task5 remains OPEN.
+
+
+## Task 5 controlled generation embedding profiles verified
+
+Fixture evaluator published ad7ef86. The controlled binding operation now validates one canonical accepted-input manifest against the complete generation revision set and immutable embedding descriptor. It binds the verified mode under the live build fence, commits profile/config identity into new seals, and enforces descriptor dimensions. Existing unmarked/tag-compatible seals keep their serialization; mutable Artifact URI/policy metadata does not invalidate immutable identity. No filesystem/model call occurs inside binding or seal validation.
+
+Root independent SPEC/QUALITY PASS;4gatesMET33Fake/33Ladybug/84storage compatibility/Ruff. Additional122profile tests pass after the malformed-pointer correction. IsolatedNeo33passed (/tmp/hippo-profile-binding-neo4j.log),33869complete NeoFREE. The earlier122-case independent run captured the newly introduced pointer RED; final run resolved it (/tmp/hippo-profile-independent-final.log). GitHub CI remains queued for recent published commits.
+
+Structural loading now adds retention for code supported by an original span without a dense Passage; immutable code/original provenance and source scoping are under implementation. Plain-prose writer now requires the controlled verified binding; independent review found a guard-close/callback interleaving and loader is fixing it. Captured OpenIE runtime contract is drafted for review, not implemented or activated. Task5 remains OPEN, production ingestion remains legacy.

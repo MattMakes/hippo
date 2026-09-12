@@ -173,6 +173,45 @@ class GenerationQueries:
             finally:
                 self._generation_authority = previous
 
+    def bind_generation_embedding_profile(
+        self, generation_id, manifest_revision_id, *, job_id, lease_owner, fencing_token, fault_hook=None
+    ):
+        from ..knowledge.generation_profiles import (
+            PROFILE_POINTER,
+            embedding_mode,
+            validate_generation_profile,
+        )
+
+        credentials = dict(job_id=job_id, lease_owner=lease_owner, fencing_token=fencing_token)
+        with self.transaction():
+            self._check_build(generation_id, **credentials)
+            gen = self._generation(generation_id)
+            if any(m.generation_id == gen.id for m in self._knowledge_rows("IndexManifest")):
+                raise ValueError("A sealed profile cannot be rebound")
+            result = validate_generation_profile(self, gen, manifest_revision_id)
+            if embedding_mode(gen) == "verified_v1":
+                return result
+            if fault_hook:
+                fault_hook("before_binding")
+            self._check_build(generation_id, **credentials)
+            coverage = json.loads(gen.coverage_json)
+            self._write_knowledge(
+                gen.replace(
+                    coverage_json=canonical_json(
+                        {
+                            **coverage,
+                            "embedding_mode": "verified_v1",
+                            PROFILE_POINTER: manifest_revision_id,
+                        }
+                    )
+                )
+            )
+            if fault_hook:
+                fault_hook("after_binding")
+            self._check_build(generation_id, **credentials)
+            bump_epoch(self, "content_epoch")
+            return result
+
     def _assert_generation_writable(self, generation_id, *, legacy_fixture=False):
         gen = self._generation(generation_id)
         jobs = [
@@ -218,6 +257,12 @@ class GenerationQueries:
     def _check_knowledge_write(self, record, existing=None):
         from .authorization import RECORD_EPOCHS
 
+        if isinstance(record, k.Generation):
+            from ..knowledge.generation_profiles import PROFILE_POINTER, embedding_mode
+
+            mode = embedding_mode(record)
+            if mode == "verified_v1" or PROFILE_POINTER in json.loads(record.coverage_json):
+                raise ValueError("Verified profile binding requires a controlled lifecycle operation")
         if (
             isinstance(record, k.Generation)
             and isinstance(json.loads(record.coverage_json), dict)
@@ -443,7 +488,14 @@ class GenerationQueries:
         return sorted(result, key=canonical_json)
 
     def generation_checksums(self, generation_id):
+        from ..knowledge.generation_profiles import (
+            PROFILE_POINTER,
+            embedding_mode,
+            validate_generation_profile,
+        )
+
         gen = self._generation(generation_id)
+        profile = validate_generation_profile(self, gen) if embedding_mode(gen) == "verified_v1" else None
         members = [m for m in self._knowledge_rows("GenerationMember") if m.generation_id == generation_id]
         exact = [
             m for m in self._knowledge_rows("GenerationEvidenceMember") if m.generation_id == generation_id
@@ -470,6 +522,14 @@ class GenerationQueries:
         if derived_capability(gen):
             validate_generation_derivations(self, gen.id)
             evidence[("DerivedCapability", gen.id)] = {"derived_evidence_version": 1}
+        if profile is not None:
+            evidence[("EmbeddingCapability", gen.id)] = {
+                "embedding_binding_version": 1,
+                "embedding_mode": "verified_v1",
+                PROFILE_POINTER: json.loads(gen.coverage_json)[PROFILE_POINTER],
+                "profile_fingerprint": profile.profile.fingerprint,
+                "config_fingerprint": profile.config_fingerprint,
+            }
         dense = [r for r in self._native_rows("Passage") if r.get("generation_id") == generation_id]
         # Minimum capability coverage; a pipeline also verifies its declared chunk
         # inventory. Nested/support spans need not each have a separate vector.
@@ -551,6 +611,8 @@ class GenerationQueries:
                 dimensions.add(len(row["embedding"]))
         if len(dimensions) > 1:
             raise ValueError("Inconsistent vector dimensions")
+        if profile is not None and dimensions and dimensions != {profile.profile.profile.dimension}:
+            raise ValueError("Vector dimensions differ from the accepted embedding profile")
         ids = {r["id"] for r in dense} | {r["id"] for _, r in native}
         representations = {
             "evidence": sorted(evidence.values(), key=canonical_json),
@@ -568,6 +630,12 @@ class GenerationQueries:
         )
 
     def _verify_manifest(self, gen, manifest):
+        from ..knowledge.generation_profiles import embedding_mode, validate_generation_profile
+
+        if embedding_mode(gen) == "verified_v1":
+            profile = validate_generation_profile(self, gen)
+            if manifest.config_fingerprint != profile.config_fingerprint:
+                raise ValueError("Index manifest differs from accepted configuration")
         if (
             manifest.generation_id != gen.id
             or manifest.profile_fingerprint != gen.embedding_profile
