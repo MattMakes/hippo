@@ -145,6 +145,50 @@ def test_one_broken_question_does_not_kill_the_run(ctx, set_id, monkeypatch):
     assert run["summary"]["questions"] == len(questions)
 
 
+def test_a_failed_question_stores_its_closed_code_in_front_of_the_private_text(ctx, set_id, monkeypatch):
+    """The code is the half a reader may see, so it is stored where a reader can find it.
+
+    `store.add_result` writes a fixed property list, so the closed code rides in the first
+    segment of `error`, exactly as `managed_activation.record_build_failure` stores it on a
+    Source row. The rest of the string stays what it was: the operator's whole story.
+    """
+    poison = "sk-live-DEADBEEF"
+
+    def exploding_search(*args, **kwargs):
+        raise EmbeddingProfileMismatch(poison)
+
+    monkeypatch.setattr(runner, "search", exploding_search)
+    run_id = start_run(ctx, set_id)
+    ctx.jobs.wait_all()
+
+    results = ctx.store.list_results(run_id)
+    assert results and all(row["error"] for row in results)
+    assert all(row["error"].startswith("retrieval_rebuild_required: ") for row in results)
+    assert all(poison in row["error"] for row in results), "the private record is unchanged"
+    summary = ctx.store.get_run(run_id)["summary"]
+    assert summary["errors"] == len(results)
+    assert summary["error_codes"] == ["retrieval_rebuild_required"]
+
+
+def test_summarize_lists_each_closed_code_once():
+    results = [
+        {"error": "retrieval_unavailable: OllamaError: boom"},
+        {"error": "retrieval_rebuild_required: EmbeddingProfileMismatch: boom"},
+        {"error": "retrieval_unavailable: OllamaError: again"},
+        {"error": "EmbeddingProfileMismatch: a row written before the code existed"},
+        {"error": None},
+        # The shape `EvalAccess.get_run` summarizes: the private half is already gone.
+        {"error": None, "failure_code": "retrieval_unavailable"},
+    ]
+    summary = summarize(results)
+    assert summary["errors"] == 5
+    assert summary["error_codes"] == [
+        "operation_failed",
+        "retrieval_rebuild_required",
+        "retrieval_unavailable",
+    ]
+
+
 def test_a_failing_question_logs_its_id_and_code_but_neither_its_text_nor_the_exception(
     ctx, set_id, monkeypatch, caplog
 ):

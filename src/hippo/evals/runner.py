@@ -38,7 +38,7 @@ from ..ask import answer_from_trace, search
 from ..context import AppContext
 from ..knowledge import dense_session
 from ..knowledge.access import AuthorizationChanged
-from ..knowledge.eval_access import EvalAccess, EvalAccessDenied
+from ..knowledge.eval_access import EvalAccess, EvalAccessDenied, failure_code_of
 from ..knowledge.public_errors import OPERATION_FAILED, public_failure
 from ..knowledge.query_access import AuthorizedModel, QuerySession, current_access, query_session
 from ..knowledge.replay import view_fingerprint
@@ -116,7 +116,10 @@ def _run_all(
     except Exception as exc:
         # run_question catches per-question trouble; landing here means the store itself failed.
         log.exception("Eval run %s failed", run_id)
-        store.update_run(run_id, status="failed", finished_at=now_iso(), error=str(exc))
+        code = (public_failure(exc) or OPERATION_FAILED).code
+        store.update_run(
+            run_id, status="failed", finished_at=now_iso(), error=f"{code}: {type(exc).__name__}: {exc}"
+        )
         raise
 
 
@@ -230,7 +233,11 @@ def run_question(
         )
         if isinstance(exc, (AuthorizationChanged, EvalAccessDenied)):
             result = _empty_result()
-        result["error"] = f"{type(exc).__name__}: {exc}"
+        # The closed code first, then the operator's whole story. `store.add_result` writes a
+        # fixed property list, so this is where a closed field can live beside the private
+        # one without a schema change -- the same `"<code>: ..."` shape a failed managed build
+        # already stores on its Source row, and `EvalAccess` reads only the code back out.
+        result["error"] = f"{code}: {type(exc).__name__}: {exc}"
         if result["latency_ms"] is None:
             result["latency_ms"] = round((time.time() - started) * 1000, 1)
     return result
@@ -284,7 +291,10 @@ def summarize(results: list[Result]) -> dict[str, Any]:
     gold_ranks = [r["gold_rank"] for r in with_gold if r.get("gold_rank") is not None]
     summary: dict[str, Any] = {
         "questions": len(results),
-        "errors": sum(1 for r in results if r.get("error")),
+        "errors": sum(1 for r in results if _failure_code(r)),
+        # Which closed families failed, each named once: the count alone cannot tell a reader
+        # whether to rebuild a source or retry a model.
+        "error_codes": sorted({code for r in results if (code := _failure_code(r))}),
         "accuracy": _mean(scores),
         "correct": verdicts.count("correct"),
         "partial": verdicts.count("partially_correct"),
@@ -306,6 +316,17 @@ def summarize(results: list[Result]) -> dict[str, Any]:
     for key in ("code_seeded", "path_fidelity"):
         summary[key] = _mean([_recall(r)[key] for r in results if key in _recall(r)])
     return summary
+
+
+def _failure_code(result: Result) -> str | None:
+    """A result's closed failure code, whichever shape the caller is holding.
+
+    `summarize` runs twice over the same run: once here on the rows `run_question` returned,
+    which carry the whole `"<code>: <private text>"` string, and once inside
+    `EvalAccess.get_run`, over DTOs whose `error` is already nulled and whose code was passed
+    through separately. Both must count the same failures.
+    """
+    return result.get("failure_code") or failure_code_of(result.get("error"))
 
 
 def _recall(result: Result) -> dict[str, float]:
