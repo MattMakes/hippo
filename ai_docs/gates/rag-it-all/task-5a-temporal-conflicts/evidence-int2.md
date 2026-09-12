@@ -140,7 +140,11 @@ imports `fastapi.testclient`.
 7. **`superseded_version_ids` stays the flat union** and gains uniqueness; the per-series map is
    the new `superseded_by_series`, and `fully_superseded_version_ids` is the only set a caller
    should turn into closures. No existing assertion about `superseded_version_ids` changed.
-8. **Test-fixture note for the next worker.** `correction_world` in
+8. **T5A3/T5A4 keep one EVIDENCE line each.** Every other ledger in
+   `ai_docs/gates/rag-it-all/` has exactly one `EVIDENCE:` line per gate, so part 1's `partial`
+   line was replaced rather than stacked under a second one. Its numbers (23 passed on both
+   backends) are preserved verbatim in `evidence-int1.md` and cited in the new line.
+9. **Test-fixture note for the next worker.** `correction_world` in
    `tests/unit/test_temporal_evidence.py` is deliberately heavier than part 1's `history_world`:
    every corrected row is an exact `GenerationEvidenceMember`, which drags in support members,
    span members and one dense passage per generation, and both endpoints of an assertion need an
