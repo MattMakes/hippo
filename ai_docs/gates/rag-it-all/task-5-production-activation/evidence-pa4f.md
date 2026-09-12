@@ -24,7 +24,8 @@ Files modified: `src/hippo/knowledge/dense_session.py`, `src/hippo/ask.py`,
 `tests/unit/test_managed_route_activation.py`, `tests/unit/test_managed_eval_activation.py`,
 `tests/unit/test_evals_runner.py`, `tests/unit/test_eval_access.py`,
 `tests/unit/test_web_library_evals.py`, `tests/unit/test_answer_original_citations.py` (one line),
-`tests/unit/test_managed_web_surfaces.py` (one comment).
+`tests/unit/test_managed_web_surfaces.py` (one comment), `tests/unit/test_web_busy_pages.py` (one
+assertion, see run 3).
 
 Not touched: `src/hippo/knowledge/public_errors.py` and `tests/unit/test_public_errors.py`
 (orchestrator assigned them to opus-12 — see deviation 1), `src/hippo/web/routes/analyze.py`
@@ -205,16 +206,26 @@ not about a row it produced.
 RED log: `/tmp/hippo-pa4f-red-d4.log` — the new assertion fails on the old fact-free corpus with
 "the corpus must bear facts, or the multi-hop generator never runs".
 
-## Decision 5 — `rag_all.py` late binding
+## Decision 5 — `rag_all.py` late binding: HANDED OFF to opus-10
 
-**NOT DONE — blocked by design.** The spawn message ordered this last, after the orchestrator says
-"fixture loader merged" and one authorized `git merge rag-it-all-tibs`; another worker owns
-`rag_all.py` until then. The merge authorized mid-slice was for `public_errors.py`, and the
-orchestrator confirmed the `rag_all.py` item still waits. The change is now a one-liner and matches
-the convention the other three callers already follow: `from ..knowledge import dense_session` and
-`dense_session.retrieval_session(...)` at `rag_all.py:388`, after which `watch()`'s single patch
-point observes the static evaluator too, and the dispatch-mode test finding 5 asked for can be
-written against it.
+**NOT DONE, and not this slice's to do.** The spawn message ordered it last, after a "fixture loader
+merged" signal that never came: opus-10 still owns `rag_all.py` and has not merged. The orchestrator
+answered "hand decision 5 off … I am giving it that one-liner plus the dispatch-mode test as an
+addendum" and "do not merge again", so it is recorded here for that addendum rather than attempted.
+
+**The exact change, for whoever picks it up.** `src/hippo/evals/rag_all.py:24` currently does
+`from ..knowledge.dense_session import retrieval_session`, which binds the name at import. Replace it
+with `from ..knowledge import dense_session` and call `dense_session.retrieval_session(...)` at
+`~:388`. That is the convention `ask.py`, `analysis/simulate.py` and `evals/runner.py` now follow, and
+it is what makes the fourth model/dense owner observable: `watch()` in
+`tests/unit/test_managed_route_activation.py` patches
+`hippo.knowledge.dense_session.retrieval_session`, so after the one-liner the static evaluator's
+dispatch shows up in `record.dispatched` with no second patch point, and the dispatch-mode test the
+4d review's finding 5 said was missing can finally be written against it.
+
+`rag_all.py:388` already **owns** its session (it passes `access`, never a `session`), so it needs no
+other change: the promoted rule's borrow branches do not apply to it, and nothing about its behaviour
+moves. The one-liner is purely about observability.
 
 ---
 
@@ -227,8 +238,9 @@ every one, output captured to a log and never piped to `tail`.
 |---|---|---|---|
 | 0 | Fake baseline at `b2fa6f0`, clean tree, the 11 files this slice would touch | **4 failed, 272 passed** — the four are `test_query_session.py::test_model_failure_releases_graph_and_revocation_wins[{True,False}-mcp_{ask,search}]`, the post-4c MCP rows `task4-notes.md:15` assigns to 4b-i. Pre-existing by construction (clean tree at the base). The merge at `feed275` brought 4b-i's fix and they now pass. | `/tmp/hippo-pa4f-baseline-fake.log` |
 | 1 | Fake, 21 files: this slice's own plus the brief's `test_managed_web_surfaces.py test_analysis_simulate.py test_query_session.py`, plus `test_managed_transport_activation.py test_eval_snapshot_lifetime.py test_analysis_snapshot_lifetime.py test_dense_session.py test_import_order.py` (added by me: the first shares `watch()`, the next three call the promoted rule with both `access` and `session`, and the last is the gate for `eval_access` importing `public_errors`) | **EXIT 0 — 479 passed** | `/tmp/hippo-pa4f-green-fake.log` |
-| 2 | Ladybug, the brief's two files: `test_managed_eval_activation.py test_eval_access.py` | **EXIT 0 — 62 passed in 531.61s** | `/tmp/hippo-pa4f-green-ladybug.log` |
-| 3 | Ruff `check` + `format --check` on every file this slice changed | **EXIT 0** — all checks passed, all formatted | inline |
+| 2 | Ladybug, the brief's two files: `test_managed_eval_activation.py test_eval_access.py` | **EXIT 0 — 62 passed in 531.61s**, and re-run at the final HEAD after run 3's fix: **EXIT 0 — 62 passed in 588.64s** | `/tmp/hippo-pa4f-green-ladybug.log`, `/tmp/hippo-pa4f-green-ladybug2.log` |
+| 3 | Fake, added by me: **every** `tests/unit` file mentioning `retrieval_session`, `dense_session`, `hippo.ask`, `evals` or `simulate` — 47 files, because decision 2 changes two modules the whole suite reaches through | **EXIT 0 — 1195 passed, 2 skipped** (first attempt found one regression outside both of the brief's lists; see below) | `/tmp/hippo-pa4f-sweep-fake.log` |
+| 4 | Ruff `check` + `format --check` on every file this slice changed | **EXIT 0** — all checks passed, all formatted | inline |
 
 Command 1 verbatim:
 
@@ -268,6 +280,16 @@ level. No ini-wide filter was added, and no application warning was suppressed.
 The brief's `test_web_evals*.py` does not exist; the Evals page tests live in
 `tests/unit/test_web_library_evals.py`.
 
+**The sweep (run 3) earned its keep: it found a regression neither of the brief's lists reaches.**
+`tests/unit/test_web_busy_pages.py:72-76` stores `error="Ollama went away"` straight on the run row
+and asserted the raw string on three pages. Only the run page changed — decision 1 is precisely the
+change that stops it rendering there — so that one assertion now reads
+`"The run failed: Operation failed"` and additionally asserts the raw string is **absent**. The other
+two pages keep the old assertion, and the test says why: the set was created straight on the store,
+so it carries no owner metadata, `EvalAccess` leaves `error` alone for an open audience, and the
+string reaches the list pages through `partials/run_status.html`'s `title` attribute. One file
+edited, one assertion, reported to the orchestrator rather than assumed.
+
 ---
 
 ## Deviations from the brief
@@ -290,10 +312,22 @@ The brief's `test_web_evals*.py` does not exist; the Evals page tests live in
    `tests/unit/test_managed_web_surfaces.py`.
 6. **Four commits, not the brief's two or three**, because the authorized merge falls between the
    third and fourth.
-7. **Decision 5 not done** — ordering instruction, still waiting on "fixture loader merged".
+7. **Decision 5 not done — handed to opus-10** on the orchestrator's instruction, with the exact
+   change recorded above. No second merge was taken.
+8. **One assertion in `tests/unit/test_web_busy_pages.py`** (not on either list) updated for the run
+   page's new rendering, found by the sweep in run 3.
 
 ## Open findings
 
+* **Two more evaluation failure surfaces render the stored string, both outside this brief's
+  templates: `partials/run_status.html:5` and `partials/set_status.html:5`** put `r.error` /
+  `qs.error` in the failed pill's `title`. For an owned row `EvalAccess` has nulled that field, so
+  the title is empty — the same dead-surface bug decision 1 fixed on the two templates it was given.
+  For a metadata-less row read by an open or internal audience it is the raw string, which is the
+  pre-existing and deliberate internal-diagnostics path. Converting them is the same one-line change
+  (`public_reason(...)`), but it needs `evals_page` and `evals_tables_partial` to pass the resolver
+  and it changes two assertions in `test_web_busy_pages.py`. This is the surface a reader lands on
+  first, so it is worth doing next.
 * **`web/routes/analyze.py`, `graph.py` bind `retrieval_session` at import.** Now that the promoted
   rule is late-bound in the four model/dense owners, the two route modules are the remaining
   import-bound callers, which is why `test_managed_web_surfaces.watch` needs its own per-module patch

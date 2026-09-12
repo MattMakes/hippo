@@ -70,10 +70,21 @@ def test_pages_render_while_a_run_is_running_or_after_it_failed(client, ctx):
     assert client.get("/evals").text.count("–") >= 5  # every empty metric cell is a dash, not a crash
 
     ctx.store.update_run(run_id, status="failed", error="Ollama went away")
-    for path in ("/evals", f"/evals/sets/{set_id}", f"/evals/runs/{run_id}"):
+    # This set was created straight on the store, so it carries no owner metadata and
+    # `EvalAccess` leaves its `error` alone for an open audience -- which is why the raw string
+    # still reaches the two list pages through `partials/run_status.html`'s title attribute.
+    for path in ("/evals", f"/evals/sets/{set_id}"):
         response = client.get(path)
         assert response.status_code == 200, path
         assert "Ollama went away" in response.text, path
+    # The run page reports the failure from the closed code instead, so a row written by the
+    # runner (`"<code>: <private text>"`) says the same thing to every audience. A string with
+    # no code prefix is still presenting a failure, so it takes the `operation_failed` sentence
+    # rather than falling silent.
+    page = client.get(f"/evals/runs/{run_id}")
+    assert page.status_code == 200
+    assert "The run failed: Operation failed" in page.text
+    assert "Ollama went away" not in page.text
 
 
 def test_partials_tell_htmx_to_stop_polling_when_nothing_is_in_flight(client, ctx):
