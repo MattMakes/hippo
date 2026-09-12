@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from .base import by_ids
+
 
 class GenerationCountsUnavailable(ValueError):
     """The requested generation no longer has a coherent stored inventory."""
@@ -48,7 +50,7 @@ def generation_counts(store, generation_id: str) -> GenerationCounts:
             links = {(pid, fid) for pid, fid in store.statements if pid in passage_ids}
         else:
             links = store.run(
-                "MATCH (p:Passage)-[:STATES]->(f:Fact) WHERE p.id IN $ids "
+                f"{by_ids('Passage', 'p')}-[:STATES]->(f:Fact) "
                 "RETURN DISTINCT p.id AS passage_id, f.id AS fact_id",
                 ids=sorted(passage_ids),
             )

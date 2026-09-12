@@ -50,3 +50,17 @@ Result: `134 passed, 2 skipped in 528.85s` (log `/tmp/hippo-orch-neo4j-parity-cc
 (`generation_id IS NULL AND source_id = $source_id`) and the status lanes. Note: the same
 `test_managed_source_lifecycle.py` was red on Ladybug at `013317f` (five managed builds failing to
 publish), so that defect is Ladybug-specific; its fix is recorded in `evidence-lbfix.md`.
+
+## Run 4: CC8 staged code writer, code profile, rebaseline and the PA2 f5 pins (run on `d1910c8`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
+  tests/unit/test_staged_code_writer.py tests/unit/test_generation_profiles.py \
+  tests/unit/test_build_authority.py tests/unit/test_multi_generation_support.py \
+  -q -o addopts='' -W error
+```
+
+Result: `161 passed in 682.95s` (log `/tmp/hippo-orch-neo4j-parity-cc8.log`). Covers the fenced
+dependency-group writes, the resume probe's canonical-payload and absence checks, the seal under the
+`code` generation profile, `BuildAuthority.rebaseline` and the widened source-control admission, and
+the two-source proof-group refusals.
