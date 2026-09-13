@@ -125,6 +125,27 @@ def _text(value, label: str) -> str:
     return value
 
 
+# The four fields `ArtifactRevision` is written once for. `identity_fields` is
+# `(artifact_id, provider_revision, content_hash)`, so an unchanged file captured by a
+# second generation derives the *same* revision ID with a later `observed_at` -- and the
+# store refuses to rewrite an immutable record ("Immutable record already exists with
+# different contents"). `observed_at` therefore means *first* observed, exactly as the
+# reviewed prose lane's `prose_generation._pair` already treats it.
+_REVISION_IDENTITY = ("artifact_id", "content_hash", "provider_revision", "raw_uri")
+
+
+def _reuse(revision: k.ArtifactRevision, stored) -> k.ArtifactRevision:
+    """The stored revision for this content, when one exists; otherwise the fresh one."""
+    existing = stored.get(revision.id) if stored else None
+    if existing is None:
+        return revision
+    if type(existing) is not k.ArtifactRevision or any(
+        getattr(existing, name) != getattr(revision, name) for name in _REVISION_IDENTITY
+    ):
+        raise ValueError("A stored accepted revision conflicts with this capture")
+    return existing
+
+
 def _fields(value, names: tuple[str, ...], label: str):
     """Structural acceptance: this boundary reads these fields, so they must be present."""
     missing = [name for name in names if not hasattr(value, name)]
@@ -606,7 +627,7 @@ class _Settled:
         return (self.tree, self.manifest, *(item.pair for item in self.files))
 
 
-def _file_pairs(capture, *, workspace_id, source_id, policy_id, observed_at):
+def _file_pairs(capture, *, workspace_id, source_id, policy_id, observed_at, stored=None):
     """Local artifact/revision pairs for every captured file, in canonical order.
 
     Plan section 9: a file revision records the one capture instant and no
@@ -630,11 +651,11 @@ def _file_pairs(capture, *, workspace_id, source_id, policy_id, observed_at):
             observed_at=observed_at,
             lifecycle="active",
         )
-        out.append(AcceptedCodeBinding(raw, artifact, revision))
+        out.append(AcceptedCodeBinding(raw, artifact, _reuse(revision, stored)))
     return tuple(out)
 
 
-def _manifest_pair(capture, *, workspace_id, source_id, policy_id, observed_at):
+def _manifest_pair(capture, *, workspace_id, source_id, policy_id, observed_at, stored=None):
     artifact = k.Artifact(
         workspace_id=workspace_id,
         source_id=source_id,
@@ -651,7 +672,7 @@ def _manifest_pair(capture, *, workspace_id, source_id, policy_id, observed_at):
         lifecycle="active",
         metadata_json=canonical_json({"accepted_manifest_v1": json.loads(capture.accepted.manifest_bytes)}),
     )
-    return artifact, revision
+    return artifact, _reuse(revision, stored)
 
 
 def _repository_identity(capture, source_id: str) -> tuple[str, list]:
@@ -670,7 +691,7 @@ def _repository_identity(capture, source_id: str) -> tuple[str, list]:
     return external_id, repository_key(descriptor.provider_instance, descriptor.provider_repository_id)
 
 
-def _tree_records(capture, *, workspace_id, source_id, policy_id, observed_at):
+def _tree_records(capture, *, workspace_id, source_id, policy_id, observed_at, stored=None):
     external_id, canonical_key = _repository_identity(capture, source_id)
     artifact = k.Artifact(
         workspace_id=workspace_id,
@@ -691,6 +712,7 @@ def _tree_records(capture, *, workspace_id, source_id, policy_id, observed_at):
         observed_at=observed_at,
         lifecycle="active",
     )
+    revision = _reuse(revision, stored)
     object_ = k.KnowledgeObject(
         workspace_id=workspace_id, kind="repository", canonical_key=canonical_json(canonical_key)
     )
@@ -704,7 +726,9 @@ def _tree_records(capture, *, workspace_id, source_id, policy_id, observed_at):
     return (artifact, revision), object_, span
 
 
-def _settle(capture, *, workspace_id, source_id, identity, observed_at, chunk_rule_version) -> _Settled:
+def _settle(
+    capture, *, workspace_id, source_id, identity, observed_at, chunk_rule_version, stored=None
+) -> _Settled:
     _text(workspace_id, "workspace")
     _text(source_id, "source")
     if type(identity) is not CodeGenerationInputs:
@@ -721,11 +745,14 @@ def _settle(capture, *, workspace_id, source_id, identity, observed_at, chunk_ru
     )
     if (accepted.source_id, accepted.workspace_id) != (source_id, workspace_id):
         raise ValueError("The captured inventory belongs to another source or workspace")
+    if stored is not None and not isinstance(stored, Mapping):
+        raise ValueError("Stored revisions must be a mapping of revision id to record")
     shared = {
         "workspace_id": workspace_id,
         "source_id": source_id,
         "policy_id": identity.policy_id,
         "observed_at": observed_at,
+        "stored": stored,
     }
     files = _file_pairs(capture, **shared)
     manifest = _manifest_pair(capture, **shared)
@@ -753,6 +780,7 @@ def code_generation(
     source_id: str,
     generation_identity_inputs: CodeGenerationInputs,
     observed_at: datetime,
+    stored_revisions: Mapping[str, k.ArtifactRevision] | None = None,
 ) -> k.Generation:
     """The staging generation for a captured tree, settled before any extraction.
 
@@ -769,6 +797,7 @@ def code_generation(
         identity=generation_identity_inputs,
         observed_at=observed_at,
         chunk_rule_version=EXPECTED_CODE_CHUNK_RULE_VERSION,
+        stored=stored_revisions,
     ).generation
 
 
@@ -959,6 +988,7 @@ def materialize_code_evidence(
     source_id: str,
     generation_identity_inputs: CodeGenerationInputs,
     observed_at: datetime,
+    stored_revisions: Mapping[str, k.ArtifactRevision] | None = None,
 ) -> CodeEvidenceBundle:
     """Bind one captured tree and its mapped passages; the result is not a publication.
 
@@ -979,6 +1009,7 @@ def materialize_code_evidence(
         identity=generation_identity_inputs,
         observed_at=observed_at,
         chunk_rule_version=chunks.rule_version,
+        stored=stored_revisions,
     )
     generation = settled.generation
     inventory = _Inventory(settled, workspace_id=workspace_id, observed_at=observed_at, capture=capture)

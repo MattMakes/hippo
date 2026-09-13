@@ -16,7 +16,7 @@ import json
 import subprocess
 import sys
 from dataclasses import FrozenInstanceError, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from importlib import import_module
 from pathlib import Path
@@ -1042,3 +1042,60 @@ def test_every_graph_node_the_fixture_holds_gets_a_native_row(api, raw_store, tm
     rows = {row.native_id for row in bundle.native_rows}
     assert {symbol.id for symbol in facts.symbols} - rows == set()
     assert {item.id for item in facts.data_objects} - rows == set()
+
+
+# ------------------------------------------------- reusing an already stored revision
+
+
+def test_a_stored_revision_for_unchanged_content_is_reused_rather_than_reminted(api, raw_store, tmp_path):
+    """`observed_at` means *first* observed, exactly as `prose_generation._pair` treats it.
+
+    `ArtifactRevision.identity_fields` is `(artifact_id, provider_revision, content_hash)`,
+    so a second generation over an unchanged file derives the *same* revision ID with a
+    later instant -- and the store refuses to rewrite an immutable record. The coordinator
+    hands in what it already holds and this boundary binds that record instead.
+    """
+    bundle, captured, prepared, facts = bundle_of(api, raw_store, tmp_path)
+    stored = {item.revision.id: item.revision for item in bundle.accepted}
+    stored[bundle.manifest_revision.id] = bundle.manifest_revision
+    stored[bundle.repository_revision.id] = bundle.repository_revision
+    later = INSTANT + timedelta(days=2)
+
+    fresh = bind(api, captured, prepared, facts, observed_at=later)
+    reused = bind(api, captured, prepared, facts, observed_at=later, stored_revisions=stored)
+
+    assert {item.revision.observed_at for item in fresh.accepted} == {later}
+    assert {item.revision.observed_at for item in reused.accepted} == {INSTANT}
+    assert [item.revision.id for item in reused.accepted] == [item.revision.id for item in fresh.accepted]
+    assert reused.manifest_revision == bundle.manifest_revision
+    assert reused.repository_revision == bundle.repository_revision
+    # Identity never saw the instant, so reuse cannot move a generation.
+    assert reused.generation.id == fresh.generation.id == bundle.generation.id
+    assert reused.spans == fresh.spans and reused.evidence_members == fresh.evidence_members
+
+
+def test_a_stored_revision_that_contradicts_this_capture_refuses(api, raw_store, tmp_path):
+    bundle, captured, prepared, facts = bundle_of(api, raw_store, tmp_path)
+    revision = bundle.accepted[0].revision
+    # `raw_uri` is outside the identity tuple, so a contradicting record keeps the ID the
+    # reuse would match -- which is exactly the case a blind reuse would bind.
+    conflicting = revision.model_copy(update={"raw_uri": "hippo-raw:sha256:" + "f" * 64})
+
+    with pytest.raises(ValueError, match="conflicts with this capture"):
+        bind(api, captured, prepared, facts, stored_revisions={revision.id: conflicting})
+    with pytest.raises(ValueError, match="mapping of revision id"):
+        bind(api, captured, prepared, facts, stored_revisions=[revision])
+
+
+def test_stored_revisions_change_no_generation_identity(api, raw_store, tmp_path):
+    bundle, captured, prepared, facts = bundle_of(api, raw_store, tmp_path)
+    stored = {item.revision.id: item.revision for item in bundle.accepted}
+    settled = api.code_generation(
+        captured,
+        workspace_id=WORKSPACE,
+        source_id=SOURCE,
+        generation_identity_inputs=identity_inputs(api),
+        observed_at=INSTANT + timedelta(days=2),
+        stored_revisions=stored,
+    )
+    assert settled.id == bundle.generation.id

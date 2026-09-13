@@ -289,6 +289,18 @@ def read_history(
 # --------------------------------------------------------------- the log
 
 
+def shallow_boundary(checkout: Path) -> frozenset[str]:
+    """The shallow boundary `read_history` itself diffs against, for a caller to record.
+
+    `read_history` consumes `_shallow` internally and `History` never surfaces it, so a
+    managed coordinator writing `coverage_json` (plan section 9: "the shallow-clone
+    boundary is recorded in coverage") had nothing to record and would have had to
+    re-read `.git/shallow` itself. One public wrapper is cheaper than two readers that
+    can drift: what a caller records is exactly what the walk refused to diff.
+    """
+    return frozenset(_shallow(Path(checkout)))
+
+
 def _shallow(checkout: Path) -> set[str]:
     """
     The shas whose parents were never fetched, from `.git/shallow`.
