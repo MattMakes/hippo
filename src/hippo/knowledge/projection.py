@@ -1,7 +1,11 @@
 """Rebuild the managed HippoRAG compatibility view from authorized evidence.
 
 Native rows supply only verified, text-bound vectors. Their labels, bodies, facts,
-edges, boosts and aggregate statistics never become managed evidence. This module
+edges, boosts and aggregate statistics never become managed evidence, with one exception:
+ruling 1 of the managed code capture plan keeps code relations native rather than as
+assertions, so a selected generation's sealed `CODE_EDGE`/`DEFINED_IN`/`MODIFIES`/`PRECEDES`
+rows are read, by exact generation and only between endpoints the proof already projects
+through their bindings, and each arrow names the originals that support it. This module
 does not grant access: callers must validate their proof before and after building
 and attach its authorization callback to the resulting GraphIndex.
 """
@@ -36,7 +40,7 @@ from hippo.hipporag.graph_index import (
     canonical_fact_order,
 )
 from hippo.hipporag.text import split_identifier
-from hippo.store.code import SPECIFICITY_KINDS
+from hippo.store.code import SPECIFICITY_KINDS, _json_field
 
 from .access import AuthorizedEvidence
 from .citations import (
@@ -61,6 +65,7 @@ from .embedding_cache import _vectors
 from .identity import canonical_json, make_identity, normalize_relative_path
 from .lifecycle import generation_passage_id
 from .predicates import PREDICATES
+from .staged_code import RELATION_KINDS
 
 # `ProjectionError` is imported above rather than defined here: `canonical_selected_generations`
 # raises it and this module imports that one, so the exception has to live on the side of the
@@ -296,6 +301,57 @@ def _code_node(obj, kind, observations, source_id):
     return node
 
 
+def _native_code_relations(store, generations, entries, aliases, bindings, code_ids):
+    """Each selected generation's sealed code relations, between endpoints this proof projects.
+
+    One `_edges_touching(both=True)` read per generation, keyed by that generation's authorized
+    bound code nodes and projected passages, so an edge reaching any other row -- another
+    generation's node, an unbound or unauthorized one, a passage this proof does not project --
+    is never returned. A native node becomes the knowledge objects its bindings name (two
+    overloads can share one native ID), and a `DEFINED_IN` also needs the binding's span inside
+    the passage's exact original closure. Every arrow keeps the legacy loader's kind, weight,
+    provenance and extra (`GraphIndex.load`), and adds its generation and the binding spans
+    that support it.
+    """
+    supports = defaultdict(lambda: defaultdict(lambda: defaultdict(set)))
+    for object_id, rows in bindings.items():
+        if object_id in code_ids:
+            for binding in rows:
+                supports[binding.generation_id][binding.native_id][object_id].add(binding.span_id)
+    passages = defaultdict(dict)
+    for native_id, identity in aliases.items():
+        passages[entries[identity].evidence.generation_id][native_id] = identity
+    relations = []
+    for generation_id in sorted(generations):
+        bound, shown = supports[generation_id], passages[generation_id]
+        if not bound:
+            continue
+        for kind, a, b, payload in store._edges_touching(
+            sorted({*bound, *shown}), both=True, rels=RELATION_KINDS
+        ):
+            if kind == "DEFINED_IN":
+                identity = shown.get(b)
+                closure = set(entries[identity].evidence.original_span_ids) if identity else set()
+                for object_id, spans in sorted(bound.get(a, {}).items()):
+                    if held := sorted(spans & closure):
+                        evidence = {"generation_id": generation_id, "support_span_ids": held}
+                        relations.append((object_id, identity, kind, 1.0, "", evidence))
+                continue
+            if a not in bound or b not in bound:
+                continue
+            edge = kind == "CODE_EDGE"
+            name = payload["kind"] if edge else kind
+            provenance = (payload.get("provenance") or "") if edge else ""
+            extra = _json_field(payload.get("extra" if edge else "hunk"))
+            weight = float(payload.get("omega") or 0.0) if kind != "PRECEDES" else 1.0
+            for subject, subject_spans in sorted(bound[a].items()):
+                for target, target_spans in sorted(bound[b].items()):
+                    support = sorted(subject_spans | target_spans)
+                    evidence = {"generation_id": generation_id, "support_span_ids": support}
+                    relations.append((subject, target, name, weight, provenance, extra | evidence))
+    return relations
+
+
 def _selected_pairs(selected_generations, generations, members, revisions, artifacts):
     """The exact `(source, generation)` pairs this audience proved for the caller's selection.
 
@@ -517,8 +573,13 @@ def project_managed_graph(
         passages.append(Passage(identity, titles[entry.span_id], entry.text, source_id, "", ordinal))
     edges, arrows, relation_evidence = {}, [], []
 
-    def relation(subject, target, kind, weight, extra=None, mention=False):
+    def relation(subject, target, kind, weight, extra=None, mention=False, provenance="authorized_evidence"):
         if subject == target:
+            return
+        if kind == "PRECEDES":
+            # An arrow only, as `GraphIndex.load` serves it: in igraph a long history would
+            # chain every symbol its commits touched into one neighbourhood.
+            arrows.append((subject, target, kind, weight, provenance, extra or {}))
             return
         edge = edges.setdefault(tuple(sorted((subject, target))), Edge())
         if mention:
@@ -526,9 +587,16 @@ def project_managed_graph(
         else:
             edge.omega = max(edge.omega, weight)
             add_code_kind(edge, kind.lower())
-            arrows.append((subject, target, kind, weight, "authorized_evidence", extra or {}))
+            arrows.append((subject, target, kind, weight, provenance, extra or {}))
 
     code_ids = {node.id for node in nodes}
+    defined = set()
+    for subject, target, kind, weight, provenance, extra in _native_code_relations(
+        store, generations, entries, aliases, bindings, code_ids
+    ):
+        relation(subject, target, kind, weight, extra, provenance=provenance)
+        if kind == "DEFINED_IN":
+            defined.add((subject, target))
     for identity, observed in sorted(observations.items()):
         if identity not in objects:
             continue
@@ -536,7 +604,7 @@ def project_managed_graph(
             # DEFINED_IN is the inherited code-to-passage attachment (written down
             # here), not a newly inferred engineering assertion or path step.
             for passage_id, entry in entries.items():
-                if entry.span_id != span_id:
+                if entry.span_id != span_id or (identity, passage_id) in defined:
                     continue
                 if entry.evidence.retrieval_view_id and not any(
                     binding.id in entry.binding_ids for binding in bindings[identity]
