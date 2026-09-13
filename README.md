@@ -312,6 +312,7 @@ Everything is an environment variable (see `.env.example`; `docker compose` read
 | --- | --- | --- |
 | `HIPPO_STORE` | `ladybug` | Where the graph lives: `ladybug` is an embedded LadybugDB file, `neo4j` a Neo4j server. |
 | `HIPPO_DB_PATH` | *(empty)* | The LadybugDB file; empty means `<HIPPO_DATA_DIR>/hippo.lbug`. |
+| `HIPPO_LADYBUG_BUFFER_POOL_BYTES` | *(empty)* | Most memory LadybugDB may use to cache its file, in bytes. Empty means a quarter of physical memory, at most 4 GiB, worked out when the file opens. Only a whole positive number is accepted: LadybugDB's own default is about 80% of the machine's memory. |
 | `NEO4J_URI` | `bolt://localhost:7687` | (`HIPPO_STORE=neo4j`) Where Neo4j is (`bolt://neo4j:7687` inside compose). |
 | `NEO4J_USER` | `neo4j` | (`HIPPO_STORE=neo4j`) Neo4j user. |
 | `NEO4J_PASSWORD` | `hippo-password` | (`HIPPO_STORE=neo4j`) Neo4j password. `./hippo up` writes a random one to `.env` on the first run; Neo4j keeps the password it was created with. |
