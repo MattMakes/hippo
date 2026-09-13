@@ -15,7 +15,7 @@ from typing import Annotated, Literal, Union, get_args, get_origin
 from ..knowledge.identity import canonical_json, text_hash
 from ..knowledge.model import RECORD_TYPES, Workspace
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 # Published by 4246f5e: never derive v2 from the evolving models.
 V2_DESCRIPTOR = json.loads(
     """[2, {
@@ -193,6 +193,10 @@ V5_DESCRIPTOR = json.loads(
 {"Commit":{"generation_id":"STRING"},"DataObject":{"generation_id":"STRING"},"Symbol":{"generation_id":"STRING"}}]"""
 )
 V5_CHECKSUM = text_hash(canonical_json(V5_DESCRIPTOR))
+# Published by c461c9c. v6 added indexes and no column, so its descriptor is v5's under a new version
+# number; spelling it from the v5 literal keeps it off the evolving models.
+V6_DESCRIPTOR = [6, *V5_DESCRIPTOR[1:]]
+V6_CHECKSUM = text_hash(canonical_json(V6_DESCRIPTOR))
 MIGRATION_CHECKSUM = text_hash(
     canonical_json(
         [
@@ -211,7 +215,8 @@ SUPPORTED_CHECKSUMS = {
     3: V3_CHECKSUM,
     4: V4_CHECKSUM,
     5: V5_CHECKSUM,
-    6: MIGRATION_CHECKSUM,
+    6: V6_CHECKSUM,
+    7: MIGRATION_CHECKSUM,
 }
 
 
@@ -225,7 +230,9 @@ def _descriptor(version):
     if version == 5:
         return V5_DESCRIPTOR
     if version == 6:
-        return [6, KNOWLEDGE_COLUMNS, KNOWLEDGE_RELATIONS, SOURCE_COLUMNS, PASSAGE_COLUMNS, NATIVE_COLUMNS]
+        return V6_DESCRIPTOR
+    if version == 7:
+        return [7, KNOWLEDGE_COLUMNS, KNOWLEDGE_RELATIONS, SOURCE_COLUMNS, PASSAGE_COLUMNS, NATIVE_COLUMNS]
     raise SchemaCompatibilityError("Unsupported migration version")
 
 
@@ -426,10 +433,16 @@ def validate_physical_schema(store, *, version=CURRENT_SCHEMA_VERSION) -> None:
                 raise SchemaCompatibilityError(
                     "Evidence schema shape has an absent or incompatible lookup index"
                 )
-    if version >= 6:
-        # A completion row for v6 that is not backed by the actual indexes would leave every
-        # generation-scoped read a label scan while the journal claimed otherwise.
-        for name, label, field in NATIVE_INDEXES:
+    # A completion row that is not backed by the actual indexes would leave every scoped read a
+    # label scan while the journal claimed otherwise. Each version checks only what it declared, so
+    # a v6 store still validates before its v7 step runs.
+    for minimum, declared, refusal in (
+        (6, NATIVE_INDEXES, "Evidence schema shape has an absent generation index"),
+        (7, V7_INDEXES, "Evidence schema shape has an absent knowledge scope index"),
+    ):
+        if version < minimum:
+            continue
+        for name, label, field in declared:
             found = indexes.get(name)
             if (
                 found is None
@@ -437,7 +450,7 @@ def validate_physical_schema(store, *, version=CURRENT_SCHEMA_VERSION) -> None:
                 or found["properties"] != [field]
                 or found["type"] != "RANGE"
             ):
-                raise SchemaCompatibilityError("Evidence schema shape has an absent generation index")
+                raise SchemaCompatibilityError(refusal)
 
 
 def _version(store, state: str, step: int, *, version=CURRENT_SCHEMA_VERSION) -> None:
@@ -453,45 +466,58 @@ def _version(store, state: str, step: int, *, version=CURRENT_SCHEMA_VERSION) ->
     )
 
 
-# Generation-scoped reads of the native tables, and the two columns the legacy-serving
-# predicate filters on. A store that is already current never re-runs `base.CONSTRAINTS` --
-# `migrate_store` returns before `_ensure_legacy_schema` once the journal says v6 -- so these
-# have to arrive as their own journaled version rather than as a new entry in that list.
-def _v6_indexes():
-    """The v6 index set: four native tables, plus every kind-specific scoped field.
-
-    The second half is derived from `knowledge.KIND_SCOPED_FIELDS` rather than repeated, so a
-    field cannot be added to the allow-list without the index that makes it a bounded query.
-    """
-    from .knowledge import KIND_SCOPED_FIELDS
-
-    native = [
-        (f"{name}_generation", label, "generation_id")
-        for label, name in (
-            ("Symbol", "symbol"),
-            ("DataObject", "data_object"),
-            ("Commit", "commit"),
-            ("Passage", "passage"),
-        )
-    ]
-    return tuple(
-        native
-        + [
-            (f"knowledge_{label.lower()}_{field}", label, field)
-            for label, fields in sorted(KIND_SCOPED_FIELDS.items())
-            for field in sorted(fields)
-        ]
-    )
-
-
-NATIVE_INDEXES = _v6_indexes()
+# Generation-scoped reads of the native tables, and the columns the legacy-serving predicate and
+# build admission filter on. A store that is already current never re-runs `base.CONSTRAINTS` --
+# `migrate_store` returns before `_ensure_legacy_schema` once the journal says it is current -- so
+# indexes arrive as their own journaled versions rather than as new entries in that list.
+#
+# The v6 set exactly as c461c9c journaled it. It was derived from `knowledge.KIND_SCOPED_FIELDS`
+# while v6 was current; it is a literal now because a v6 journal row counts these steps, and a list
+# that grew with the allow-list would refuse every store that recorded eight.
+NATIVE_INDEXES = (
+    ("symbol_generation", "Symbol", "generation_id"),
+    ("data_object_generation", "DataObject", "generation_id"),
+    ("commit_generation", "Commit", "generation_id"),
+    ("passage_generation", "Passage", "generation_id"),
+    ("knowledge_indexevent_aggregate_id", "IndexEvent", "aggregate_id"),
+    ("knowledge_maintenancejob_input_fingerprint", "MaintenanceJob", "input_fingerprint"),
+    ("knowledge_suppression_target_id", "Suppression", "target_id"),
+    ("knowledge_suppression_target_kind", "Suppression", "target_kind"),
+)
 NATIVE_INDEX_STEPS = [
     f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON (n.{field})"
     for name, label, field in NATIVE_INDEXES
 ]
 
 
+def _v7_indexes():
+    """The v7 index set: every kind-specific scoped field that v6 does not already index.
+
+    Derived from `knowledge.KIND_SCOPED_FIELDS`, as v6's set was while it was current, so a field
+    cannot join the allow-list without the index that makes it a bounded query. The next field
+    added there is a v8 step, and this set is frozen as a literal first, the way v6's is above.
+    """
+    from .knowledge import KIND_SCOPED_FIELDS
+
+    journaled = {(label, field) for _, label, field in NATIVE_INDEXES}
+    return tuple(
+        (f"knowledge_{label.lower()}_{field}", label, field)
+        for label, fields in sorted(KIND_SCOPED_FIELDS.items())
+        for field in sorted(fields)
+        if (label, field) not in journaled
+    )
+
+
+V7_INDEXES = _v7_indexes()
+V7_INDEX_STEPS = [
+    f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON (n.{field})" for name, label, field in V7_INDEXES
+]
+
+
 def schema_steps(store, *, version=CURRENT_SCHEMA_VERSION) -> list[str]:
+    if version == 7:
+        # As for v6: LadybugDB has no secondary-index DDL, so its v7 bound is the predicate alone.
+        return [] if store.knowledge_backend == "ladybug" else list(V7_INDEX_STEPS)
     if version == 6:
         # LadybugDB 0.15.3 has no secondary-index DDL at all: `CREATE INDEX` is a parser error
         # and there is no `CREATE_INDEX` function. Scoped reads are bounded there by the query
@@ -555,7 +581,7 @@ def schema_steps(store, *, version=CURRENT_SCHEMA_VERSION) -> list[str]:
 
 
 def _data_transform(store, *, version=CURRENT_SCHEMA_VERSION):
-    if version in (5, 6):  # v6 declares indexes only; no row is read or rewritten
+    if version in (5, 6, 7):  # v6 and v7 declare indexes only; no row is read or rewritten
         return
     if version == 4:
         managed = {r.source_id for name in ("Artifact", "Generation") for r in store._knowledge_rows(name)}
