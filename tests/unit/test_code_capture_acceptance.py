@@ -617,9 +617,15 @@ def record_timings(w, generation_ids):
                 "write_batches": len(batches),
                 "batch_seconds": batches,
                 "native_reads_per_batch_max": max(per_batch(marks, 0), default=0),
-                "knowledge_reads_per_batch_max": max(per_batch(marks, 1), default=0),
+                "knowledge_reads_per_batch": per_batch(marks, 1),
             }
         )
+    # Every knowledge read a build made, by kind and scoping key. On LadybugDB each is one query
+    # and a keyed one is a predicate scan, so this is where a build's time goes there.
+    reads = Counter(
+        f"{kind}:{','.join(sorted(key for key, scoped in scope.items() if scoped)) or 'whole'}"
+        for kind, scope in w.knowledge_reads
+    )
     Path(target).write_text(
         json.dumps(
             {
@@ -630,6 +636,8 @@ def record_timings(w, generation_ids):
                 "passages": coverage["passages"],
                 "builds": builds,
                 "phases": w.phases,
+                "knowledge_reads_total": len(w.knowledge_reads),
+                "knowledge_reads_by_kind": dict(reads.most_common(25)),
             },
             indent=2,
         )
