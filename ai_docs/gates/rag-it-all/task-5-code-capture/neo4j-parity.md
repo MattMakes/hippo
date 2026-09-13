@@ -78,3 +78,35 @@ Result: `111 passed, 2 skipped in 573.98s` (log `/tmp/hippo-orch-neo4j-parity-lb
 `UNWIND $ids AS rid MATCH (n:Kind {id: rid})` form that replaced every `IN $list` node-property
 predicate in `store/*` and `knowledge/projection.py` (an index seek per id on Neo4j), the scoped
 reads and the managed lifecycle on the Neo4j backend.
+
+## Run 6: CC9b code coordinator and CC10 activation dispatch (run on `9a474e4`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
+  tests/unit/test_code_generation.py tests/unit/test_managed_code_activation.py \
+  tests/unit/test_managed_pipeline_activation.py -q -o addopts='' -W error
+```
+
+Result: `1 failed, 195 passed, 2 skipped in 5403.60s` (log `/tmp/hippo-orch-neo4j-parity-cc10.log`;
+managed code builds are slow on Neo4j, so the run took an hour and a half). The one failure,
+`test_code_generation.py::test_no_log_record_source_row_or_receipt_carries_a_path_url_or_source_text`,
+is not a hippo leak: the neo4j driver logs every Cypher parameter at DEBUG
+(`C: RUN 'MERGE (n:Artifact {id:$id}) ...' {values}`), so the captured log contained a `raw_uri`
+written by the driver, not by hippo. The test is scoped to hippo's own loggers by CC11, and the
+driver-logger cap is recorded as a finding (`code-capture-notes.md`). Every bootstrap, refresh, resume,
+dispatch and destructive-spy case passed on Neo4j.
+
+## Run 7: code projection, schema v7 and the scoped knowledge reads (run on `df05bac`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
+  tests/unit/test_code_projection.py tests/unit/test_derived_projection.py \
+  tests/unit/test_knowledge_scoped_reads.py tests/unit/test_generation_scoped_reads.py \
+  tests/unit/test_store_migrations.py tests/unit/test_policy_migration.py \
+  tests/unit/test_status_code_edges.py -q -o addopts='' -W error
+```
+
+Result: `122 passed, 6 skipped in 1956.60s` (log `/tmp/hippo-orch-neo4j-parity-run7.log`). Covers the
+`_edges_touching` read the projection makes per selected generation, the two v7 `CREATE INDEX`
+statements and `validate_physical_schema`'s v7 block (including migrating an existing v6 store), the
+`record_id` / `derived_record_id` scoped reads, and the generation-exact code edge counts in status.
