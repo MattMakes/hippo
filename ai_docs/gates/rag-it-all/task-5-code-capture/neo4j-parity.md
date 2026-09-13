@@ -110,3 +110,19 @@ Result: `122 passed, 6 skipped in 1956.60s` (log `/tmp/hippo-orch-neo4j-parity-r
 `_edges_touching` read the projection makes per selected generation, the two v7 `CREATE INDEX`
 statements and `validate_physical_schema`'s v7 block (including migrating an existing v6 store), the
 `record_id` / `derived_record_id` scoped reads, and the generation-exact code edge counts in status.
+
+## Run 8: query-time scoped reads (qscope, merged at `14d0a37`, run on `14d0a37`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
+  tests/unit/test_query_scoped_reads.py tests/unit/test_query_session.py \
+  tests/unit/test_dense_session.py tests/unit/test_structural_loading.py \
+  tests/unit/test_snapshot_store.py tests/unit/test_temporal_conflicts.py \
+  -q -o addopts='' -W error
+```
+
+Result: `166 passed in 1326.86s` (log `/tmp/hippo-orch-neo4j-parity-run8.log`). Covers the
+`UNWIND $ids AS wanted_id MATCH (n:<Kind> {id: wanted_id})` keyed read, the per-generation proof reads
+(`IndexManifest`, `GenerationMember`, `NativeBinding`, `GenerationEvidenceMember`), the scoped
+snapshot, collection and retention reads, and the whole query life (open, renewal, validate,
+retrieval, dense) on the Neo4j backend.
