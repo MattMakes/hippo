@@ -64,3 +64,17 @@ Result: `161 passed in 682.95s` (log `/tmp/hippo-orch-neo4j-parity-cc8.log`). Co
 dependency-group writes, the resume probe's canonical-payload and absence checks, the seal under the
 `code` generation profile, `BuildAuthority.rebaseline` and the widened source-control admission, and
 the two-source proof-group refusals.
+
+## Run 5: the primary-key read helper from the Ladybug fix (merged at `9770c00`, run on `9770c00`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
+  tests/unit/test_generation_scoped_reads.py tests/unit/test_generation_store.py \
+  tests/unit/test_derived_projection.py tests/unit/test_managed_source_lifecycle.py \
+  -q -o addopts='' -W error
+```
+
+Result: `111 passed, 2 skipped in 573.98s` (log `/tmp/hippo-orch-neo4j-parity-lbfix.log`). Covers the
+`UNWIND $ids AS rid MATCH (n:Kind {id: rid})` form that replaced every `IN $list` node-property
+predicate in `store/*` and `knowledge/projection.py` (an index seek per id on Neo4j), the scoped
+reads and the managed lifecycle on the Neo4j backend.
