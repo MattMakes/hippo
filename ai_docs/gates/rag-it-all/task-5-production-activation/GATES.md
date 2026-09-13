@@ -11,7 +11,7 @@
   EXPECT: passed
 
 - [x] PA2: Exact selected-generation metadata makes empty managed sources visible without leaking denied sources.
-  CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_source_inventory.py tests/unit/test_status_access.py tests/unit/test_structural_loading.py tests/unit/test_multi_generation_support.py -q -o addopts='' -W error
+  CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_source_inventory.py tests/unit/test_status_access.py tests/unit/test_structural_loading.py tests/unit/test_multi_generation_support.py tests/unit/test_status_code_edges.py -q -o addopts='' -W error
   EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=..................................                                       [100%] | 105 passed, 1 skipped in 2.35s
   CRITERIA: canonical selected `(source,generation)` pairs require an authorized exact manifest revision and survive scope/compose/dense replacement/fingerprint; empty active generations appear with Source control presentation and zero counts; denied/suppressed/staging/retired generations do not appear; empty selection performs no Ollama call; shared code/object/relation and Fact support counts use exact current provenance.
   EXPECT: passed
