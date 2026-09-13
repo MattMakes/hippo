@@ -217,13 +217,31 @@ def store(tmp_path):
     elif backend == "ladybug":
         from hippo.store.ladybug import LadybugStore
 
-        embedded = LadybugStore(tmp_path / "hippo.lbug")
+        embedded = LadybugStore(tmp_path / "hippo.lbug", buffer_pool_bytes=LADYBUG_TEST_BUFFER_POOL_BYTES)
         yield embedded
         embedded.close()
     elif backend == "fake":
         yield FakeStore()
     else:
         raise ValueError(f"HIPPO_TEST_STORE must be ladybug, fake or neo4j, not {backend!r}")
+
+
+LADYBUG_TEST_BUFFER_POOL_BYTES = 256 * 2**20
+
+
+@pytest.fixture(autouse=True)
+def ladybug_buffer_pool_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Every LadybugDB store a test opens without a size gets a 256 MiB buffer pool.
+
+    The production default is a quarter of physical memory, up to 4 GiB per open store, and a
+    long Ladybug test does not need a cache that large. Many tests reopen a file with a bare
+    `LadybugStore(path)`, so the default itself is swapped rather than each call. A test that
+    passes `buffer_pool_bytes=` or sets `Config.ladybug_buffer_pool_bytes` still gets its own size.
+    """
+    from hippo.store import ladybug
+
+    monkeypatch.setattr(ladybug, "default_buffer_pool_bytes", lambda: LADYBUG_TEST_BUFFER_POOL_BYTES)
 
 
 @pytest.fixture

@@ -40,6 +40,10 @@ class Config:
     # nothing to install or run. "neo4j" talks to a Neo4j server at neo4j_uri instead.
     store_backend: str = "ladybug"
     db_path: Path | None = None  # the .lbug file; None means <data_dir>/hippo.lbug
+    # Most memory LadybugDB may use to cache the file, in bytes. None means a quarter of physical
+    # memory, at most 4 GiB, worked out when the file opens. A limit is always passed, because
+    # LadybugDB's own default is about 80% of the machine's memory.
+    ladybug_buffer_pool_bytes: int | None = None
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "hippo-password"
@@ -95,12 +99,22 @@ def parse_store_backend(text: str) -> str:
     return value
 
 
+def parse_buffer_pool_bytes(text: str) -> int:
+    """HIPPO_LADYBUG_BUFFER_POOL_BYTES as a whole number of bytes. Zero is refused: LadybugDB reads it as ~80% of memory."""
+    value = text.strip()
+    if not (value.isascii() and value.isdigit()) or int(value) == 0:
+        raise ValueError(f"HIPPO_LADYBUG_BUFFER_POOL_BYTES must be a positive number of bytes, not {text!r}")
+    return int(value)
+
+
 def load_config() -> Config:
     """Build a Config from environment variables (falling back to the defaults above)."""
     db_path = _env("HIPPO_DB_PATH", "")
+    buffer_pool = _env("HIPPO_LADYBUG_BUFFER_POOL_BYTES", "")
     return Config(
         store_backend=parse_store_backend(_env("HIPPO_STORE", Config.store_backend)),
         db_path=Path(db_path) if db_path else None,
+        ladybug_buffer_pool_bytes=parse_buffer_pool_bytes(buffer_pool) if buffer_pool else None,
         neo4j_uri=_env("NEO4J_URI", Config.neo4j_uri),
         neo4j_user=_env("NEO4J_USER", Config.neo4j_user),
         neo4j_password=_env("NEO4J_PASSWORD", Config.neo4j_password),

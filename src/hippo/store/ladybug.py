@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -256,18 +257,57 @@ def _by_label_pairs(
     return grouped
 
 
+# The largest buffer pool a store takes when nothing sets a size (see `default_buffer_pool_bytes`).
+MAX_DEFAULT_BUFFER_POOL_BYTES = 4 * 2**30
+
+
+def physical_memory_bytes() -> int | None:
+    """This machine's physical memory, or None where the OS will not say (`os.sysconf` is POSIX only)."""
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, OSError, ValueError):
+        return None
+    return total if total > 0 else None
+
+
+def bounded_buffer_pool_bytes(physical_bytes: int | None) -> int:
+    """A quarter of `physical_bytes`, at most 4 GiB; the 4 GiB cap itself when memory is unknown."""
+    if physical_bytes is None:
+        return MAX_DEFAULT_BUFFER_POOL_BYTES
+    return min(physical_bytes // 4, MAX_DEFAULT_BUFFER_POOL_BYTES)
+
+
+def default_buffer_pool_bytes() -> int:
+    """
+    The buffer pool a store opened without a size gets, worked out as it opens.
+
+    The pool is the most memory LadybugDB may use to cache the file. real_ladybug's own default
+    (`buffer_pool_size=0`) is about 80% of physical memory, so hippo always passes a limit.
+    Under pytest, tests/conftest.py swaps this function for a small fixed cap.
+    """
+    return bounded_buffer_pool_bytes(physical_memory_bytes())
+
+
 class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
     knowledge_backend = "ladybug"
     """All of hippo's queries against an embedded LadybugDB file. Same interface as `Store`."""
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, buffer_pool_bytes: int | None = None):
         import real_ladybug as lb  # imported here so `hippo.store` loads without the package installed
 
+        if buffer_pool_bytes is None:
+            buffer_pool_bytes = default_buffer_pool_bytes()
+        elif buffer_pool_bytes <= 0:
+            raise ValueError(
+                f"the LadybugDB buffer pool must be a positive number of bytes, not {buffer_pool_bytes} "
+                "(LadybugDB reads 0 as about 80% of memory)"
+            )
         self.path = Path(path)
+        self.buffer_pool_bytes = buffer_pool_bytes
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock_file = self._take_lock()
         try:
-            self._db = lb.Database(str(self.path))
+            self._db = lb.Database(str(self.path), buffer_pool_size=self.buffer_pool_bytes)
         except Exception as exc:  # noqa: BLE001 - the driver raises a plain RuntimeError
             self._release_lock()
             if "lock" in str(exc).lower():
