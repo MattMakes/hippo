@@ -602,8 +602,8 @@ history.
   and an empty selection never falls through to the unfiltered legacy loader
   (`evidence-cc1fix.md`). Refresh differs from bootstrap in the three places §7 names.
 
-**§8.1, the scale defect that remains** (adds to §8.1). The scoped reads bounded the native tables,
-but the write path still reads whole knowledge tables per record:
+**§8.1, the knowledge-table half of the scale defect** (adds to §8.1). CC2's scoped reads bounded
+the native tables. At CC10, though, the write path still read whole knowledge tables per record:
 
 - `_check_knowledge_write` (`store/generations.py:641`, `:658`, `:663`, `:675`) reads every
   `GenerationMember` and `GenerationEvidenceMember` row for each membership or binding put.
@@ -611,9 +611,16 @@ but the write path still reads whole knowledge tables per record:
   `GenerationEvidenceMember`, `GenerationMember` and `DerivedDependency` tables. They are reached
   per rendered passage through `_validate_managed_native` (`generations.py:1477`).
 
-A code build is therefore quadratic in the corpus. On Fake it took 1.1 s, 8.4 s and 109.5 s at 10,
-40 and 160 files. One 10-file build takes 444.6 s on LadybugDB (`evidence-cc11.md`). A store fix
-slice is routed, and CD9's multi-hundred-file run waits for it.
+A code build was therefore quadratic in the corpus. On Fake it took 1.1 s, 8.4 s and 109.5 s at
+10, 40 and 160 files, and one 10-file build took 444.6 s on LadybugDB (`evidence-cc11.md`).
+KSCOPE, merged at `df05bac`, scoped every one of those reads (`evidence-kscope.md`). Each is now
+keyed by `generation_id`, by a primary key, or by one of the two schema v7 keys,
+`GenerationEvidenceMember.record_id` and `DerivedDependency.derived_record_id`. LadybugDB has no
+secondary-index DDL, so there the v7 keys are predicate scans inside the engine.
+
+A build still issues one keyed knowledge read per record it checks. The three builds of CD9's
+scenario at 20 files made about 183,000, almost all `where` lookups, so on LadybugDB a build's cost
+is set by that query count (`evidence-cc11.md`).
 
 **§8.2, reclaim** (supersedes the "Resume" paragraph's admission rule; review B5).
 `reclaim_generation_build` performs every step of `claim_generation_build` except collection, in
@@ -704,9 +711,15 @@ as a present property; review m6 and question 8). The redaction was work, and CC
 - checkout errors name no absolute path;
 - with an actor, `add_repo` refuses a credentialed URL before any Source row exists.
 
-Two limits remain. The legacy lane still stores a credentialed `meta.url` (Task 16). And
-`EvidenceSpan.text` stores the original code text in the database by design. "Source text never
-reaches logs" must not be read as "code text is not stored": the access boundary protects it.
+Three limits remain.
+
+- The legacy lane still stores a credentialed `meta.url` (Task 16).
+- `EvidenceSpan.text` stores the original code text in the database by design. "Source text never
+  reaches logs" must not be read as "code text is not stored": the access boundary protects it.
+- On Neo4j the driver logs every Cypher statement with its parameters at DEBUG, so raw URIs and
+  captured paths reach a DEBUG log that hippo's own loggers never write. Root's Neo4j parity run 6
+  found it through `test_code_generation.py`'s log-leak test, which now checks hippo's loggers only.
+  Hippo's logging setup must cap the `neo4j` logger at INFO (Task 16 follow-up).
 
 **§10, failure, crash and costs.**
 

@@ -21,6 +21,8 @@ No gate checkbox is set here, and no `EVIDENCE:` line is written.
 | How `wp/cc11` picks up the fixes | (b): once the orchestrator reports that both kscope and codeproj have merged, run `git merge rag-it-all-tibs` into `wp/cc11` (a merge commit, no rebase), add the post-fix assertions, and run CD9 on LadybugDB |
 | `status._with_code_edges`' docstring still says the projection serves no native `CODE_EDGE` arrow | Fix it in the first commit after that merge, with no separate branch. `status.py` is released to this slice for that change. |
 | The two parity differences CODEPROJ pinned | Recorded in the plan appendix's §4 projection paragraph |
+| Both fixes merged (`rag-it-all-tibs` at `df05bac`) | The merge ran as authorized: merge commit `4edce57`, docstring fix `cd358d4`, post-fix assertions `baf2d8c` |
+| Neo4j parity run 6 failed `test_code_generation.py::test_no_log_record_source_row_or_receipt_carries_a_path_url_or_source_text`: the driver logs Cypher parameters at DEBUG | The test now checks only records from hippo's own loggers (`f31090c`). Capping the `neo4j` logger at INFO is recorded as a finding for Task 16 or a follow-up |
 
 ## Gate runs
 
@@ -225,8 +227,8 @@ were checked against root `GATES.md`:
   prior-work addendum's clauses added.
 - Every other change is a correction against the evidence, named after its gate.
 
-**CD1** (CRITERIA amended: the knowledge-table half of the per-batch bound, which holds only once the
-store fix slice merges; finding 1).
+**CD1** (CRITERIA amended: the knowledge-table half of the per-batch bound, which KSCOPE made true at
+`df05bac`; finding 1).
 
 ```text
 CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_generation_scoped_reads.py tests/unit/test_generation_store.py tests/unit/test_generation_counts.py tests/unit/test_staged_prose_writer.py -q -o addopts='' -W error
@@ -343,7 +345,11 @@ closed.
    `ingest/code_generation.py:708-738`. See the measurement table: 109.5 s for 160 files on Fake and
    444.6 s for one 10-file build on LadybugDB. `native_whole_table()` is empty, so CD1's test as
    written holds while its CRITERIA's "bounded by the batch rather than by corpus size" does not.
-   Routed: store fix slice.
+   Closed by KSCOPE, merged at `df05bac` (`evidence-kscope.md`). Every one of those sites now reads
+   by `generation_id`, by a primary key or by a v7 key: `GenerationEvidenceMember.record_id` and
+   `DerivedDependency.derived_record_id`. On LadybugDB the v7 keys are predicate scans inside the
+   engine. After merging it, the CD9 scenario asserts that no generation-sized knowledge kind is
+   read whole during a managed build.
 2. **A published code generation projects no arrows.**
    - `knowledge/code_binding.py:459-463` refuses `input_binding_ids` on code derived records.
    - `knowledge/projection.py:541-544` therefore skips `DEFINED_IN` for every rendered code passage,
@@ -404,6 +410,34 @@ closed.
     then deep-copies the store through them and fails. The acceptance test instruments with plain
     functions for that reason. The existing tests are unaffected because none of them opens a
     transaction afterwards.
+21. **The Neo4j driver logs Cypher parameters at DEBUG.** Root's Neo4j parity run 6
+    (`/tmp/hippo-orch-neo4j-parity-cc10.log`) failed
+    `test_code_generation.py::test_no_log_record_source_row_or_receipt_carries_a_path_url_or_source_text`:
+    the driver's `[#…] C: RUN MERGE (n:Artifact …) {…}` records carried raw URIs and paths. The test
+    now checks hippo's own loggers only (`f31090c`). Hippo's logging setup must cap the `neo4j` logger
+    at INFO (Task 16 or a follow-up). The same limit is recorded in the plan appendix's §10
+    paragraph.
+22. **LadybugDB build cost is query count.** On the merged tree, the CD9 scenario at 2 files per
+    language (three builds) made 183,041 knowledge reads and no whole-table read of a
+    generation-sized kind. The top kinds:
+
+    | Read | Count |
+    | --- | --- |
+    | `EvidenceSpan` by key | 47,367 |
+    | `ArtifactRevision` by key | 32,596 |
+    | `Artifact` by key | 17,799 |
+    | `Generation` by key | 15,875 |
+    | `AccessPolicy` by key | 9,068 |
+    | `DerivedRecord` by key | 7,273 |
+    | `DerivedDependency` by key | 6,423 |
+    | `MaintenanceJob` by key | 5,735 |
+
+    Whole reads of the small authorization tables add about 4,600 each for `Suppression`,
+    `WorkspaceMembership` and `Workspace`, and about 3,100 each for `AccessPolicy` and
+    `GroupMembership` (`evidence-kscope.md` finding 1). A write batch made up to 21,404 knowledge
+    reads, against at most 20 native reads (`/tmp/hippo-cc11-timings-fake-2b.json`). Each is one
+    query on LadybugDB, so a per-build cache of the authorization reads and batched keyed
+    `_knowledge_get` reads are where a LadybugDB build's time can be recovered.
 
 ## Commits
 
