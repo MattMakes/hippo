@@ -17,28 +17,29 @@ log and read from the summary line. **No Neo4j was used.** CC10 (`backend-develo
 | # | Hash | Subject | Contents |
 |---|---|---|---|
 | 1 | `3b93f86` | Assign the PA8 residue to named owners and correct the closure evidence | Route (1): the activation plan's rollout section and the prose-coordinator plan's implementation notes; the two `evidence-pa8close.md` corrections |
-| 2 | this commit | Answer a fragment from a failing partial route and pin the simulate denial and the chunk ceiling | Route (2): W20's code and test, the PA4b2-7 and PA3a-8 tests, this file |
+| 2 | `14beda7` | Answer a fragment from a failing partial route and pin the simulate denial and the chunk ceiling | Route (2): W20's code and test, the PA4b2-7 and PA3a-8 tests, this file |
 
 ## The 14 rows
 
 **CLOSED: 4. ASSIGNED in a plan: 7. OPEN, routed to CC10: 3.**
 
 "Plan" is `ai_docs/plans/rag-it-all-task-5-production-activation.md` unless the row says otherwise.
-Line numbers are at `3b93f86`.
+Plan lines are at `3b93f86`, and code and test lines are at `14beda7`. Neither plan changed between
+the two commits.
 
 | ID | Status | Commit | Test or plan line |
 |---|---|---|---|
 | PA2-2 | **ASSIGNED → Task 16 (performance)** | `3b93f86` | plan `:278`. `knowledge/projection._selected_pairs` gets the review's `by_generation` index when Task 16 benchmarks structural reads |
 | PA2-4 | **ASSIGNED → CC10** | `3b93f86` | plan `:279` names CC10 and `rag-it-all-task-5-managed-code-capture.md`, and states the counter: `status.source_view` must attribute code edges by generation membership, gated on the exact selected pair as the relation counter is, before managed code is served |
 | PA3a-6 | **OPEN → CC10** | — | The review's one line lands in `managed_activation.ingress_file` (`:265`), a CC10 file. Routing accepted by the orchestrator |
-| PA3a-8 | **CLOSED** | `3b93f86` (decision), commit 2 (test) | Decision at plan `:274`: **keep 1,000**, the value the prose-coordinator plan states (§7 bootstrap limits). Test `test_a_managed_build_past_the_chunk_ceiling_fails_without_managed_state` (`tests/unit/test_managed_pipeline_activation.py:1783`, on PA1/PA3/PA5/PA7) |
+| PA3a-8 | **CLOSED** | `3b93f86` (decision), `14beda7` (test) | Decision at plan `:274`: **keep 1,000**, the value the prose-coordinator plan states (§7 bootstrap limits). Test `test_a_managed_build_past_the_chunk_ceiling_fails_without_managed_state` (`tests/unit/test_managed_pipeline_activation.py:1783`, on PA1/PA3/PA5/PA7) |
 | PA3a-9 | **OPEN → CC10** | — | The review's comment belongs at `managed_activation.managed_eligibility` (`:114`), a CC10 file. The broader guard it must name, `knowledge/build_authority._source_control` (`:77`), is on this brief's do-not-touch list. The fixer should also reconcile `web/routes/graph.py:167` ("`managed_eligibility` is the one definition of "managed""), a third statement of the same rule. Routing accepted |
 | PA3a-11 | **ASSIGNED → Task 14** | `3b93f86` | plan `:280`: a public helper beside `EMBED_PREFIXES` in `ollama.py`, with both callers moved onto it |
 | PA3b-6 | **ASSIGNED → Task 9A** | `3b93f86` | plan `:281`: parameterise the Ladybug restart-sweep prefix |
-| PA4b2-7 | **CLOSED (unreachable, pinned)** | commit 2 | `test_simulating_another_users_saved_result_is_a_404_not_a_mapped_500` (`tests/unit/test_web_analyze.py:108`, on PA6) |
+| PA4b2-7 | **CLOSED (unreachable, pinned)** | `14beda7` | `test_simulating_another_users_saved_result_is_a_404_not_a_mapped_500` (`tests/unit/test_web_analyze.py:108`, on PA6) |
 | PA4b2-9 | **ASSIGNED → Task 9** | `3b93f86` | plan `:282`: a public build/observe seam on `AppContext`, with both tests moved onto it |
 | W15 | **OPEN → CC10** | — | The review's `except Exception` lands in `pipeline._submit_lane` (`:634`), a CC10 file. Routing accepted |
-| W20 | **CLOSED** | commit 2 | `web/app.py` `public_failure_handler` (`:145`) renders the new `templates/partials/failure.html` for a `/partials/` path inside the same `render.wants_html` branch. Test `test_a_partial_route_answers_a_fragment_when_a_mapped_failure_escapes` (`tests/unit/test_managed_web_surfaces.py:1310`, 2 cases, on PA6 and PA7). RED then GREEN |
+| W20 | **CLOSED** | `14beda7` | `web/app.py` `public_failure_handler` (`:145`) renders the new `templates/partials/failure.html` for a `/partials/` path inside the same `render.wants_html` branch. Test `test_a_partial_route_answers_a_fragment_when_a_mapped_failure_escapes` (`tests/unit/test_managed_web_surfaces.py:1310`, 2 cases, on PA6 and PA7). RED then GREEN |
 | T2 | **CLOSED** | `3b93f86` | The scan half was already closed by `db7aa77`. The version half is the two sentences coordinator review minor 7 asked for, at `ai_docs/plans/rag-it-all-task-5-prose-coordinator.md:170` (versions are fixed constants; `workers` and `embedding_cache` were added). `task4-notes.md:119` corrected (see deviation 1) |
 | D4 | **ASSIGNED → Task 16** | `3b93f86` | plan `:271` (`answer_withheld`) |
 | D5 | **ASSIGNED → Task 16** | `3b93f86` | plan `:272` (gold means, `accuracy: None` beside `errors: N`) |
@@ -65,6 +66,7 @@ Plan `:266` now reads "owns all five" where it said three.
 7. **W20 selects the fragment by path prefix.** It checks `/partials/`, the same way `render.wants_html` treats `/api`: deterministic, and independent of whether htmx sent `HX-Request`. The page routes and the JSON twin are unchanged: the 12 existing F1 cases pass in the RED run, before the fix.
 8. **The brief's expected FILES did not match two findings.** It anticipated "one web module for W15" and "`context.py` or `status.py` comments for PA3a-9". W15's fix is in `pipeline.py`, and PA3a-9's named site is `managed_eligibility`; both are CC10's. No comment was added to `context.py` or `status.py`, because neither review named them.
 9. **Do-not-fix items untouched:** W12, 4b-i F2, 4b-i F6, PA3a-10.
+10. **Three commits, not two.** The third changes only this file: it names the second commit's hash and states which revision the line numbers cite. That is the same follow-up shape `evidence-pa8close.md` used (`779d8c7`).
 
 ## Runs
 
