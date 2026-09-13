@@ -491,9 +491,11 @@ closed.
     8.0 GB between 13:46 and 13:50. The earlier OS kill of the 40-file LadybugDB timing run fits the
     same cause. Production servers and every LadybugDB test inherit this default.
 
-    Recommended follow-up: pass a configured `buffer_pool_size`, and cap it in tests. For this run a
-    guard stops only this slice's LadybugDB pytest if system free memory drops below 4 GB
-    (`/tmp/hippo-cc11-ladybug-guard.log`).
+    The orchestrator ruled it a production defect and routed it to a separate follow-up slice
+    covering `store/ladybug.py`, the settings and a test cap in `tests/conftest.py`. This slice
+    touches none of those files. For this run a guard stops only this slice's LadybugDB pytest if
+    system free memory drops below 4 GB (`/tmp/hippo-cc11-ladybug-guard.log`). By 13:51 the process
+    held 10.7 GB, with 26 GB of system memory still free.
 
 ## Commits
 
