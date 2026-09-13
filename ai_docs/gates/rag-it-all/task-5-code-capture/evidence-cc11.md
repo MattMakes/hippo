@@ -482,6 +482,18 @@ closed.
 
     Not serialized: `store/snapshots.py:259` `_delete_knowledge_record` pops a Fake record. Its
     caller is generation collection, and the file was outside this grant.
+24. **An embedded LadybugDB store may take about 80% of system memory.** `store/ladybug.py:270` opens
+    `lb.Database(str(self.path))` without `buffer_pool_size`. real_ladybug 0.15.3's own signature is
+    `Database(..., buffer_pool_size: int = 0, ...)`, and its docstring says the default is "~80% of
+    system memory".
+
+    The full-size LadybugDB acceptance run grew by about 1 GB a minute: 1.3 GB, then 3.9 GB, then
+    8.0 GB between 13:46 and 13:50. The earlier OS kill of the 40-file LadybugDB timing run fits the
+    same cause. Production servers and every LadybugDB test inherit this default.
+
+    Recommended follow-up: pass a configured `buffer_pool_size`, and cap it in tests. For this run a
+    guard stops only this slice's LadybugDB pytest if system free memory drops below 4 GB
+    (`/tmp/hippo-cc11-ladybug-guard.log`).
 
 ## Commits
 
