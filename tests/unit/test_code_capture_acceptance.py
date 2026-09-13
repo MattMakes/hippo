@@ -207,9 +207,15 @@ def build(w, *, operation, tree=None, on_progress=None):
     def progress(update):
         if update.phase == "write":
             marks.append((len(w.native_reads), len(w.knowledge_reads), time.perf_counter()))
+            note(
+                w,
+                f"build {operation} write batch {len(marks) - 1} native_reads={len(w.native_reads)} "
+                f"knowledge_reads={len(w.knowledge_reads)}",
+            )
         if on_progress is not None:
             on_progress(update)
 
+    note(w, f"build {operation} started")
     w.building = True
     try:
         return w.module.build_code_source(
@@ -227,15 +233,26 @@ def build(w, *, operation, tree=None, on_progress=None):
     finally:
         w.building = False
         w.builds.append((operation, marks, time.perf_counter() - marks[0][2]))
+        note(w, f"build {operation} ended after {time.perf_counter() - marks[0][2]:.1f}s")
+
+
+def note(w, text):
+    """Append one progress line beside the timings file, so a run stopped midway shows how far it got."""
+    target = os.environ.get("HIPPO_CODE_ACCEPTANCE_TIMINGS")
+    if target:
+        with open(f"{target}.progress", "a") as handle:
+            handle.write(f"{time.strftime('%H:%M:%S')} {text}\n")
 
 
 @contextmanager
 def phase(w, name):
     start = time.perf_counter()
+    note(w, f"phase {name} started")
     try:
         yield
     finally:
         w.phases.append((name, round(time.perf_counter() - start, 1)))
+        note(w, f"phase {name} ended after {time.perf_counter() - start:.1f}s")
 
 
 def reopen(w):

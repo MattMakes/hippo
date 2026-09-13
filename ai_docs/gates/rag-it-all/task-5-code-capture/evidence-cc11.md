@@ -491,11 +491,29 @@ closed.
     8.0 GB between 13:46 and 13:50. The earlier OS kill of the 40-file LadybugDB timing run fits the
     same cause. Production servers and every LadybugDB test inherit this default.
 
-    The orchestrator ruled it a production defect and routed it to a separate follow-up slice
-    covering `store/ladybug.py`, the settings and a test cap in `tests/conftest.py`. This slice
+    The orchestrator ruled it a production defect and routed it to the follow-up slice `lbpool`,
+    which covers `store/ladybug.py`, the settings and a test cap in `tests/conftest.py`. The
+    full-size CD9 run waits for `lbpool` to merge. This slice
     touches none of those files. For this run a guard stops only this slice's LadybugDB pytest if
-    system free memory drops below 4 GB (`/tmp/hippo-cc11-ladybug-guard.log`). By 13:51 the process
-    held 10.7 GB, with 26 GB of system memory still free.
+    system free memory drops below 4 GB (`/tmp/hippo-cc11-ladybug-guard.log`).
+
+    The guard tripped on the full-size run (48 files per language) at 13:58:50, after about 13
+    minutes (EXIT 143, `/tmp/hippo-cc11-ladybug-acceptance.log`). The process RSS grew steadily
+    until then:
+
+    | Time | RSS | System free |
+    | --- | --- | --- |
+    | 13:46 | 1.3 GB | 31 GB |
+    | 13:48 | 3.9 GB | 32 GB |
+    | 13:50 | 8.0 GB | 28 GB |
+    | 13:51 | 10.7 GB | 26 GB |
+    | 13:54 | 20.2 GB | 15 GB |
+    | 13:56 | 26.4 GB | 9 GB |
+    | 13:58 | 33.1 GB | 3 GB (guard) |
+
+    Only the fixture determinism test had passed. The run had written no progress log, so the
+    scenario phase it reached is unknown. The same scenario on Fake held about 270 MB, so the
+    growth is the engine's under the uncapped default buffer pool, not the test's own bookkeeping.
 
 ## Commits
 
