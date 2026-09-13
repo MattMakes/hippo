@@ -438,18 +438,22 @@ class KnowledgeQueries:
             if field not in allowed or field not in columns:
                 raise ValueError(f"{name}.{field} is not a scoped field")
         if self.knowledge_backend == "fake":
-            rows = self._knowledge_data.get(name, {})
-            if "id" in selection:  # the primary key answers without walking the kind
-                record = rows.get(selection["id"])
-                rows = [record] if record is not None else []
-            elif len(selection) == 1:
+            # The double serializes its knowledge dicts under the store lock, as a database would:
+            # a held query renews its snapshot lease on a heartbeat thread while a build writes,
+            # and walking a live dict another thread is filling raises mid-iteration. The walk
+            # below is over a copy taken under the lock, so a write never lands inside it.
+            with self._lock:
+                rows = self._knowledge_data.get(name, {})
+                if "id" in selection:  # the primary key answers without walking the kind
+                    record = rows.get(selection["id"])
+                    return [record] if record is not None else []
+                rows = list(rows.values())
+            if len(selection) == 1:
                 # The common scoped read: one key, compared directly rather than through `all()`.
                 # Still a walk of the kind -- the Fake store has no secondary index -- but the
                 # per-row cost is the comparison alone.
                 ((field, value),) = selection.items()
-                return [record for record in rows.values() if getattr(record, field) == value]
-            else:
-                rows = list(rows.values())
+                return [record for record in rows if getattr(record, field) == value]
             return [
                 record
                 for record in rows
@@ -500,7 +504,8 @@ class KnowledgeQueries:
 
         name = type(record).__name__
         if self.knowledge_backend == "fake":
-            self._knowledge_data.setdefault(name, {})[record.id] = record
+            with self._lock:  # serialized with every Fake knowledge read; see `_knowledge_rows`
+                self._knowledge_data.setdefault(name, {})[record.id] = record
             return
         values = record.model_dump(mode="json")
         for field, value in list(values.items()):
