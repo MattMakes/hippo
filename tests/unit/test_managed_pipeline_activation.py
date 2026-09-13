@@ -198,12 +198,13 @@ def row(**fields) -> dict:
         (row(kind="file", meta={"file": "notes.text"}), "eligible_legacy"),
         (row(kind="file", meta={"file": "NOTES.MD"}), "eligible_legacy"),
         (row(kind="file", meta={"file": "paper.pdf"}), "unsupported"),
-        (row(kind="file", meta={"file": "module.py"}), "unsupported"),
-        (row(kind="file", meta={"file": "settings.yaml"}), "unsupported"),
+        # CC10 (gate CD8): a code file, an archive and a repository joined the managed lane.
+        (row(kind="file", meta={"file": "module.py"}), "eligible_legacy"),
+        (row(kind="file", meta={"file": "settings.yaml"}), "eligible_legacy"),
         (row(kind="file", meta={"file": "LICENSE"}), "unsupported"),
         (row(kind="file", meta={"file": "notes.md.zip"}), "unsupported"),
-        (row(kind="archive", meta={"file": "bundle.zip"}), "unsupported"),
-        (row(kind="repo", meta={"url": "https://host/o/r"}), "unsupported"),
+        (row(kind="archive", meta={"file": "bundle.zip"}), "eligible_legacy"),
+        (row(kind="repo", meta={"url": "https://host/o/r"}), "eligible_legacy"),
         (row(kind="sample", meta={"file": "acme_robotics.md"}), "unsupported"),
         (row(kind="archive", meta={"file": "bundle.zip"}, managed=True), "managed"),
         (row(kind="file", meta={"file": "paper.pdf"}, managed=True), "managed"),
@@ -297,9 +298,9 @@ def test_eligible_plain_upload_with_an_actor_goes_to_managed_bootstrap(setup, mo
     "filename,data",
     [
         ("paper.pdf", b"%PDF-1.4 not really a pdf"),
-        ("module.py", b"def f():\n    return 1\n"),
-        ("settings.yaml", b"key: value\n"),
-        ("bundle.zip", b"PK\x03\x04 not really a zip"),
+        # CC10 (gate CD8): `module.py`, `settings.yaml` and `bundle.zip` left this list, because a
+        # code file and an archive now take the managed lane with an actor. LICENSE is neither.
+        ("LICENSE", b"Permission is hereby granted, free of charge, to Zed Corp.\n"),
     ],
 )
 def test_unsupported_upload_stays_legacy_even_with_an_actor(setup, monkeypatch, filename, data):
@@ -310,8 +311,8 @@ def test_unsupported_upload_stays_legacy_even_with_an_actor(setup, monkeypatch, 
     assert seen == [("legacy", source)]
 
 
-def test_repo_and_sample_stay_legacy_even_with_an_actor(setup, monkeypatch):
-    """`add_repo`/`add_sample` take no actor; one offered later still cannot convert them."""
+def test_a_sample_stays_legacy_and_a_repo_converts_when_an_actor_is_offered_later(setup, monkeypatch):
+    """`add_sample` takes no actor and one offered later cannot convert it; a repo it converts (CC10)."""
     w = setup
     w.quiet_jobs()
     repo = pipeline.add_repo(w.ctx, "https://github.com/acme/robots")
@@ -319,7 +320,7 @@ def test_repo_and_sample_stay_legacy_even_with_an_actor(setup, monkeypatch):
     seen = lanes(monkeypatch)
     pipeline.run_indexing(w.ctx, repo, build_actor=w.actor)
     pipeline.run_indexing(w.ctx, sample, build_actor=w.actor)
-    assert seen == [("legacy", repo), ("legacy", sample)]
+    assert seen == [("managed", repo), ("legacy", sample)]
 
 
 def test_an_existing_managed_source_without_an_actor_refuses_before_any_legacy_hook(setup, monkeypatch):
@@ -1405,7 +1406,10 @@ def mixed(setup, monkeypatch):
         # The eligible source is this reader's own: a legacy source somebody else owns cannot
         # be converted by them, which `test_a_failed_managed_preflight...` is about.
         w.eligible = pipeline.add_text(w.ctx, "Eligible", "Zed Corp is located in Austin.", owner_id=w.user)
-        w.unsupported = pipeline.add_upload(w.ctx, "module.py", b"def f():\n    return 1\n")
+        # CC10: was `module.py`, which a code file's actor now converts; LICENSE is neither code nor prose.
+        w.unsupported = pipeline.add_upload(
+            w.ctx, "LICENSE", b"Permission is hereby granted, free of charge, to Zed Corp.\n"
+        )
         wait(w.ctx)
     finally:
         monkeypatch.setattr(w.ctx, "ollama", w.managed_ollama)
@@ -1474,7 +1478,8 @@ def test_a_mixed_bulk_clears_only_legacy_lanes_and_submits_each_with_its_own_ide
 def test_a_single_reindex_of_an_unsupported_source_with_an_actor_stays_legacy(mixed, monkeypatch):
     """PA3a finding 3: the entry point the bulk test proves this classification through.
 
-    A `.py` upload is not an accepted managed input, so an actor does not make it one --
+    A `LICENSE` upload (a `.py` one until CC10 made code files managed inputs) is not an
+    accepted managed input, so an actor does not make it one --
     `plan_dispatch` must still answer `legacy`, and the legacy clear must still run. The
     mixed-bulk test above asserts exactly that (`w.unsupported: "legacy"`, `prepared ==
     [w.unsupported]`), but only through `reindex_all`. Every actor-bearing

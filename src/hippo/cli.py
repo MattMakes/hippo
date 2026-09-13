@@ -329,8 +329,10 @@ def cmd_index(args: argparse.Namespace) -> int:
     role_id = None if principal.is_open else principal.role_id
     target: str = args.target
     if repos.is_git_url(target):
-        # A repository is not an accepted managed input, so it has no actor to take.
-        source_id = pipeline.add_repo(ctx, target, owner_id=owner_id, access_role_id=role_id)
+        # The same actor the upload branch passes: a repository is a managed code source too.
+        source_id = pipeline.add_repo(
+            ctx, target, owner_id=owner_id, access_role_id=role_id, build_actor=actor
+        )
     else:
         path = Path(target)
         if not path.exists():

@@ -57,6 +57,7 @@ from . import managed_activation, readers, repos
 from .accepted_inputs import CaptureTooLarge, InputCaptureError
 from .chunker import chunk_documents
 from .readers import Document, ReadError, TextBudget, TooLarge
+from .repo_capture import repository_descriptor
 
 log = logging.getLogger(__name__)
 
@@ -87,10 +88,11 @@ class Busy(ValueError):
 # lowest role that may see it. Both default to None (no owner, visible to everyone), which is what
 # the CLI and open mode want; the web routes and MCP pass the caller's.
 #
-# `build_actor` (see hippo/knowledge/build_authority.py) is the opt-in to the managed plain-prose
-# build: an authenticated reader (or an explicit internal caller) adding pasted text or a plain file
-# gets the reviewed coordinator, everything else gets the legacy pipeline below. An omitted actor is
-# always legacy; an actor never converts a source family the managed build cannot read.
+# `build_actor` (see hippo/knowledge/build_authority.py) is the opt-in to a managed build: an
+# authenticated reader (or an explicit internal caller) adding pasted text or a plain file gets the
+# reviewed plain-prose coordinator, and one adding a repository, a .zip archive or a code file gets
+# the code coordinator; everything else gets the legacy pipeline below. An omitted actor is always
+# legacy; an actor never converts a source family no managed build can read.
 
 
 def add_text(
@@ -156,20 +158,36 @@ def add_upload(
 
 
 def add_repo(
-    ctx: AppContext, url: str, *, owner_id: str | None = None, access_role_id: str | None = None
+    ctx: AppContext,
+    url: str,
+    *,
+    owner_id: str | None = None,
+    access_role_id: str | None = None,
+    build_actor: BuildActor | None = None,
+    operation_id: str | None = None,
 ) -> str:
-    """Remember a public git repository. Cloning happens inside the background job."""
+    """Remember a public git repository. Cloning happens inside the background job.
+
+    With a build actor the repository becomes a managed code source. Its clone URL must
+    then name a repository without credentials: `repository_descriptor` refuses one here,
+    before a Source row exists, so a token never reaches a row or a clone the managed lane
+    owns. The managed build checks the saved URL again before it clones.
+    """
+    managed_activation.check_actor(build_actor)  # before a Source row or a checkout folder exists
+    managed_activation.check_operation_id(operation_id)
     url = url.strip()
     if not repos.is_git_url(url):
         raise repos.RepoError(
             f"'{url}' does not look like a git URL. Use https://host/owner/repo, "
             "ssh://git@host/owner/repo or git@host:owner/repo."
         )
+    if build_actor is not None:
+        repository_descriptor(url)
     source_id = ctx.store.create_source(
         "repo", repos.repo_name(url), {"url": url}, owner_id=owner_id, access_role_id=access_role_id
     )
     source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
-    start_indexing(ctx, source_id)
+    start_indexing(ctx, source_id, build_actor=build_actor, operation_id=operation_id)
     return source_id
 
 
@@ -632,19 +650,21 @@ def reindex_all(ctx: AppContext, *, build_actor: BuildActor | None = None) -> in
 
 
 def _submit_lane(ctx: AppContext, source_id: str, plan) -> bool:
-    """Submit one lane of a bulk; a lane that changed lane since the plan is skipped, not fatal.
+    """Submit one lane of a bulk; a lane that cannot start is skipped, not fatal.
 
     `start_indexing` re-plans, and `plan_dispatch` raises for a source that has become
-    managed since the inventory was classified. Raising out of the submission loop would
-    leave every legacy lane ordered after it cleared, `queued` and with no job to refill
-    it -- one source's failure making another's evidence unavailable, which is exactly what
-    the plan forbids of an asynchronous lane failure. The log line names the source and
-    nothing about why; the public answer is still the whole bulk's.
+    managed since the inventory was classified; a `Busy` or a store failure can raise from
+    it as well. Raising out of the submission loop would leave every legacy lane ordered
+    after it cleared, `queued` and with no job to refill it -- one source's failure making
+    another's evidence unavailable, which is exactly what the plan forbids of an
+    asynchronous lane failure. So every cause is contained, not only the lane change (Task 4
+    wrap-up review finding 15). The log line names the source and nothing about why; the
+    public answer is still the whole bulk's.
     """
     try:
         return start_indexing(ctx, source_id, build_actor=plan.actor, operation_id=plan.operation_id)
-    except managed_activation.ManagedDispatchError:
-        log.warning("Bulk reindex skipped source %s: it changed lane after the plan", source_id)
+    except Exception:  # noqa: BLE001 - one lane that cannot start must not strand the lanes after it
+        log.warning("Bulk reindex skipped source %s: its lane could not be started after the plan", source_id)
         return False
 
 
