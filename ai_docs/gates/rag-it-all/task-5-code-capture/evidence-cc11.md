@@ -512,7 +512,61 @@ closed.
     | 13:58 | 33.1 GB | 3 GB (guard) |
 
     Only the fixture determinism test had passed. The run had written no progress log, so the
-    scenario phase it reached is unknown. The same scenario on Fake held about 270 MB, so the
+    scenario phase it reached is unknown.
+25. **Query-time reads still read generation-sized tables whole (routed as a fix slice).**
+    KSCOPE scoped the write path only.
+
+    The probe `/tmp/hippo-cc11-probes/test_zz_cc11_query_reads_probe.py` (log
+    `/tmp/hippo-cc11-query-reads-probe.log`) builds `test_code_generation.py`'s 7-file world on
+    Fake, then opens each session and validates it once:
+
+    | Session | Whole-table generation-sized reads at open | Per `validate()` | Total with `source_view` |
+    | --- | --- | --- | --- |
+    | `query_session(structural=True)` | 233 | 27 | 395 |
+    | `retrieval_session` | 638 | 27 | 773 |
+    | `dense_session` | 638 | 27 | 773 |
+
+    The call sites, for the fix worker:
+
+    - **`knowledge/access.py:319`, the `rows()` helper.** Almost all the reads go through it:
+      - `_exact_generations` (`:93`) reads `IndexManifest`, reached from `_interpretation_inventory`
+        (`:119`);
+      - `_interpretation_inventory` reads `GenerationEvidenceMember` (`:127`), `GenerationMember`
+        (`:134`), and `DerivedDependency`, `DerivedRecord`, `EvidenceSpan`, `ObjectObservation` and
+        `RetrievalView` (`:155`);
+      - `build` (`:481`) reads `NativeBinding`.
+    - **How those are reached.** Every call goes through `validate_current` (`access.py:567`):
+      - every snapshot validation and lease renewal: `knowledge/snapshots.py:76`
+        `_validate_authorization`, from `validate` at `:53` and `:69` and from
+        `acquire_query_snapshots` at `:200`;
+      - graph authorization: `context.py:452` `validate`, from `hipporag/graph_index.py:401`
+        `validate_authorization`, `context.py:456` and `context.py:483`;
+      - reader proofs: `store/knowledge.py:880` `_reader_proof`, from `context.py:411`
+        `_build_structural_graph` and `knowledge/snapshots.py:166` `acquire_query_snapshots`.
+    - **`knowledge/projection.py:417`, the `allowed()` helper.** It reads `EvidenceSpan` (`:431`),
+      `NativeBinding` (`:451`, `:474`) and `ObjectObservation` (`:456`, `:461`) whole.
+    - **Direct whole reads.** `projection.py:426` reads `GenerationMember`, `context.py:402` reads
+      `IndexManifest`, and `store/snapshots.py:47` (`_check_snapshot_inputs`) reads `IndexEvent`.
+    - **Static-only.** The probe did not reach these: `context.py:282` (`IndexManifest`),
+      `knowledge/temporal.py:495` (`GenerationMember`), `store/snapshots.py:248` (`GenerationMember`)
+      and `:297` (`IndexEvent`), and `store/generations.py:1765` (`IndexManifest`).
+
+    **Cost on LadybugDB.** The CD9 scenario at 8 files per language (about 50 files) ran alone
+    under the memory guard. The progress log is `/tmp/hippo-cc11-timings-ladybug-8.json.progress`
+    and the RSS log `/tmp/hippo-cc11-ladybug8-rss.log`:
+
+    | Phase | Time | RSS at end |
+    | --- | --- | --- |
+    | bootstrap that crashes after three batches | 113.3 s | 4.7 GB |
+    | reopen during staging | 2.4 s | 5.9 GB |
+    | resumed bootstrap to publication (about 300,000 knowledge reads) | 304.6 s | 11.4 GB |
+    | reopen after publication | 5.6 s | 11.4 GB |
+    | seal validation and checksums | 27.5 s | 11.3 GB |
+    | projection, arrows and source row (one `query_session` plus this test's checks) | 426.6 s | 11.3 GB |
+    | verified dense dispatch (`retrieval_session`, then `dense_session`) | PENDING, over 7 min | 11.5 GB |
+
+    RSS grows only while a build writes and stays flat through the query phases. A structural
+    session over a 50-file managed code generation takes minutes on LadybugDB. The same scenario on Fake held about 270 MB, so the
     growth is the engine's under the uncapped default buffer pool, not the test's own bookkeeping.
 
 ## Commits
