@@ -43,7 +43,7 @@ line needed the AnyIO filter (form (b)). CD5 already names `tests/unit/test_mana
 | CD8 | Fake | `GATES.md:53` verbatim | `306 passed, 3 skipped in 53.58s` | 0 | `/tmp/hippo-cc11-cd8.log` |
 | CD9 | LadybugDB | `GATES.md:58` plus `tests/unit/test_code_capture_acceptance.py` | PENDING: waits for the store fix slice (finding 1) | — | `/tmp/hippo-cc11-cd9.log` |
 | CD10 | — | `GATES.md:63` verbatim | `All checks passed!` / `10 files already formatted` | 0 | `/tmp/hippo-cc11-cd10.log` |
-| Full Fake suite | Fake | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests -q -o addopts='' -W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"` | PENDING | — | `/tmp/hippo-cc11-full-fake.log` |
+| Full Fake suite | Fake | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests -q -o addopts='' -W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"` | On the merged tree with the Fake lock fix (`b16b5c2`): `1 failed, 4451 passed, 29 skipped in 1817.54s`. The failure is this slice's own full-size scenario: its CD1 recorder counted a held query's lease-renewal reads, made on the heartbeat thread during the refresh build, as build reads. The recorder now counts the build's own thread only; the rerun is PENDING | 1 | `/tmp/hippo-cc11-full-fake.log` |
 
 CD10 counts ten files: the eight Python modules (`build_run.py` among them) plus the plan and the
 ledger. So `EXPECT: 10 files already formatted` is right, not 11. It stays right after this slice's

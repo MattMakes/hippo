@@ -133,7 +133,9 @@ def instrument(w, store):
         return native_rows(kind, **scope)
 
     def scoped_knowledge_rows(kind, **scope):
-        if w.building:
+        # The build's own thread only: a held query's lease heartbeat renews on another thread
+        # during a long build, and its reads are query-time reads, not the build's per-record ones.
+        if getattr(w.building, "active", False):
             w.knowledge_reads.append((kind, {key: value is not None for key, value in scope.items()}))
         return knowledge_rows(kind, **scope)
 
@@ -153,7 +155,7 @@ def instrument(w, store):
 def make_world(ctx, tmp_path):
     store = ctx.store
     w = SimpleNamespace(ctx=ctx, tmp_path=tmp_path, transaction_state=local(), reopened=[])
-    w.recording, w.building = False, False
+    w.recording, w.building = False, local()
     w.native_reads, w.knowledge_reads, w.relationship_reads = [], [], []
     w.builds, w.phases = [], []
     instrument(w, store)
@@ -216,7 +218,7 @@ def build(w, *, operation, tree=None, on_progress=None):
             on_progress(update)
 
     note(w, f"build {operation} started")
-    w.building = True
+    w.building.active = True
     try:
         return w.module.build_code_source(
             w.ctx,
@@ -231,7 +233,7 @@ def build(w, *, operation, tree=None, on_progress=None):
             on_progress=progress,
         )
     finally:
-        w.building = False
+        w.building.active = False
         w.builds.append((operation, marks, time.perf_counter() - marks[0][2]))
         note(w, f"build {operation} ended after {time.perf_counter() - marks[0][2]:.1f}s")
 
