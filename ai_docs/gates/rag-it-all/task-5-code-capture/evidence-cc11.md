@@ -563,7 +563,7 @@ closed.
     | reopen after publication | 5.6 s | 11.4 GB |
     | seal validation and checksums | 27.5 s | 11.3 GB |
     | projection, arrows and source row (one `query_session` plus this test's checks) | 426.6 s | 11.3 GB |
-    | verified dense dispatch (`retrieval_session`, then `dense_session`) | PENDING, over 7 min | 11.5 GB |
+    | verified dense dispatch (`retrieval_session`, then `dense_session`) | not finished after 18 min; stopped at 14:34 once lbpool merged | 15.2 GB |
 
     RSS grows only while a build writes and stays flat through the query phases. A structural
     session over a 50-file managed code generation takes minutes on LadybugDB. The same scenario on Fake held about 270 MB, so the

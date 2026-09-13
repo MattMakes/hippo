@@ -63,6 +63,7 @@ from hippo.knowledge.query_access import query_session
 from hippo.knowledge.raw_artifacts import RawArtifact, RawArtifactStore
 from hippo.ollama import Ollama
 from hippo.status import source_view
+from hippo.store.ladybug import MAX_DEFAULT_BUFFER_POOL_BYTES
 from tests.unit.test_code_generation import Runtime
 from tests.unit.test_knowledge_scoped_reads import GENERATION_SIZED
 from tests.unit.test_managed_source_inventory import row_of
@@ -71,6 +72,13 @@ CLONE_URL = "https://git.example.com/acme/fleet.git"
 
 # The size the ledger's CD9 line runs. The override exists for sizing a scratch run only.
 FILES_PER_LANGUAGE = int(os.environ.get("HIPPO_CODE_ACCEPTANCE_FILES_PER_LANGUAGE", "48"))
+
+# LadybugDB's buffer pool for this scenario: the production cap (4 GiB), not the suite's 256 MiB
+# test cap, because the question CD9 answers is whether a production-sized store builds this tree.
+# The override exists to find the size it actually needs.
+BUFFER_POOL_BYTES = int(
+    os.environ.get("HIPPO_CODE_ACCEPTANCE_BUFFER_POOL_BYTES", str(MAX_DEFAULT_BUFFER_POOL_BYTES))
+)
 
 NATIVE_KINDS = ("Symbol", "DataObject", "Commit")
 
@@ -153,8 +161,17 @@ def instrument(w, store):
 
 
 def make_world(ctx, tmp_path):
-    store = ctx.store
     w = SimpleNamespace(ctx=ctx, tmp_path=tmp_path, transaction_state=local(), reopened=[])
+    if ctx.store.knowledge_backend == "ladybug":
+        # The `store` fixture opened this file with the suite's 256 MiB cap. Reopen it with this
+        # scenario's own pool before anything is written; the fixture closes its handle again.
+        from hippo.store.ladybug import LadybugStore
+
+        path = ctx.store.path
+        ctx.store.close()
+        ctx.store = LadybugStore(path, buffer_pool_bytes=BUFFER_POOL_BYTES)
+        w.reopened.append(ctx.store)
+    store = ctx.store
     w.recording, w.building = False, local()
     w.native_reads, w.knowledge_reads, w.relationship_reads = [], [], []
     w.builds, w.phases = [], []
@@ -266,7 +283,7 @@ def reopen(w):
     if store.knowledge_backend == "ladybug":
         from hippo.store.ladybug import LadybugStore
 
-        fresh = LadybugStore(store.path)
+        fresh = LadybugStore(store.path, buffer_pool_bytes=BUFFER_POOL_BYTES)
     else:
         from hippo.store import Store
 
@@ -649,6 +666,7 @@ def record_timings(w, generation_ids):
         json.dumps(
             {
                 "backend": w.ctx.store.knowledge_backend,
+                "buffer_pool_bytes": getattr(w.ctx.store, "buffer_pool_bytes", None),
                 "files_per_language": FILES_PER_LANGUAGE,
                 "accepted_files": len(w.repo.accepted),
                 "symbols": coverage["symbols"],
