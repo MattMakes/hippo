@@ -524,9 +524,7 @@ def _prepare(run, tree, options, captured, identity, gen, units, reasons):
         evidence = code_binding.materialize_code_evidence(
             captured, chunks, facts, stored_revisions=stored, **bind
         )
-        bound = code_history.bind_history(
-            walked, code_bundle=evidence, stored_revisions=stored, **history
-        )
+        bound = code_history.bind_history(walked, code_bundle=evidence, stored_revisions=stored, **history)
     merged = code_history.merge_code_bundles(evidence, bound)
     # CC7 finding 8: the merged coverage is the history bundle's, so this lane's own
     # coverage is unioned into it rather than written over it.

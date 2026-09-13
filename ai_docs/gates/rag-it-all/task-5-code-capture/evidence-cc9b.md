@@ -297,10 +297,12 @@ shape: `HIPPO_TEST_STORE=<backend> .venv/bin/pytest <files> -q -o addopts='' -W 
 | --- | --- | --- | --- |
 | Baseline before any edit | `test_prose_generation.py test_staged_code_writer.py test_generation_resume.py test_build_run.py test_converting_source_serving.py` | 169 passed, 2 skipped | `/tmp/hippo-cc9b-baseline.log` |
 | RED | `test_code_generation.py` with `code_generation.py` moved aside | 32 errors, `ModuleNotFoundError` | `/tmp/hippo-cc9b-red.log` |
-| GREEN, per file | `test_code_generation.py` | **33 passed** | `/tmp/hippo-cc9b-run4.log` (32) and the final run (33) |
+| GREEN, per file | `test_code_generation.py` | **33 passed** (20.7s) | `/tmp/hippo-cc9b-green-code.log` |
 | GREEN, **the CD8 line** | `test_code_generation.py test_ingest_pipeline.py test_ingest_concurrency.py test_managed_pipeline_activation.py test_prose_generation.py` | **251 passed, 3 skipped** | `/tmp/hippo-cc9b-cd8.log` |
 | GREEN, wide Fake regression | the baseline set plus `test_code_binding.py test_code_history.py test_git_history.py test_layering.py test_import_order.py test_generation_profiles.py test_build_authority.py` | **452 passed, 2 skipped** | `/tmp/hippo-cc9b-green-fake.log` |
 | GREEN, the amended suites | `test_code_binding.py` 55, `test_code_history.py` 57 | 112 passed | in the regression above |
+| **GREEN, Ladybug** | `test_code_generation.py test_converting_source_serving.py` | **50 passed** (1,920.65s) | `/tmp/hippo-cc9b-ladybug.log` |
+| Ladybug, one build alone | `test_code_generation.py -k reaches_no_destructive` | 1 passed (54.86s) | `/tmp/hippo-cc9b-lb-one.log` |
 
 The CD8 CHECK line as the ledger spells it also names `tests/unit/test_managed_code_activation.py`,
 which **does not exist**: it is CC10's file. The command above is the ledger's line minus that one
@@ -342,12 +344,19 @@ Ruff, over every file changed and over this document:
 written, no schema step added, no index declared, so the Neo4j parity run for CD8 is a re-run of the
 same files rather than a shape review.
 
-The Ladybug lines are **not run in this evidence**: `staged_code._immutable_native` reaches
-`_native_rows(kind, ids=[...])`, which is the exact shape the recorded real_ladybug 0.15.3 engine
-defect answers from the wrong row, and `wp/lbfix` had not merged when this slice finished. The
-orchestrator holds the order to merge `rag-it-all-tibs` and run
-`HIPPO_TEST_STORE=ladybug … test_code_generation.py test_converting_source_serving.py`; this file is
-amended with the result rather than claiming it.
+The Ladybug lines ran **after** `wp/lbfix` merged (`rag-it-all-tibs` at `9770c00`, merged into
+`wp/cc9b` at `3ca02d5`), because `staged_code._immutable_native` reaches
+`_native_rows(kind, ids=[...])`, the exact shape the recorded real_ladybug 0.15.3 engine defect
+answered from the wrong row. **50 passed**, so CC1's converting-source suite and this coordinator's
+suite are both green on the acceptance backend and close/reopen behaviour is exercised by the
+per-test database.
+
+**One managed code build costs about 45 seconds on LadybugDB against 0.6 on the fake**, measured
+alone (`/tmp/hippo-cc9b-lb-one.log`) on a five-file tree with three commits: roughly 68 dependency
+groups, nine batch transactions, the resume probe, `generation_checksums` at the seal and
+`generation_counts` at publication. Nothing here is a scale measurement — CD9 owns that — but it is
+the number a reviewer should have before reading the plan's multi-hundred-file expectation, and it is
+why this suite takes 32 minutes on Ladybug and 21 seconds on Fake.
 
 ## How each CD8 criterion is covered
 
@@ -400,6 +409,12 @@ superseding rather than resuming — are covered by the three resume tests plus
    named here because this coordinator is the first caller that could hit it.
 6. **`walk_tree` is not cancellable** (CC4 finding 11), so a `should_stop` raised during enumeration
    is only observed once `capture_raw_inputs` starts.
+7. **A structural graph over a published generation must be released.** `context.graph_for` returns a
+   graph holding a leased `SnapshotReference` and releases it only on its own failure path, so a
+   caller that keeps it pins the generation — on LadybugDB the next build's publication then waits on
+   it and never returns. The suite's `served()` helper closes it in a `finally`; production callers go
+   through `query_session`, which already does. Found by this slice's first Ladybug run, which made
+   no progress past the serving test until the release was added.
 
 ## Findings for CC10, CC11 and the reviewer
 
