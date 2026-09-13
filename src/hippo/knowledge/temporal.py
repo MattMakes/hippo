@@ -490,12 +490,20 @@ def _link_generations(store, workspace_id: str, versions: set[str]):
 
 
 def _retention_gaps(store, revisions: set[str]):
-    """Selected revisions whose retained generation membership was collected away."""
+    """Selected revisions whose retained generation membership was collected away.
+
+    Membership is read per retained generation, never as the member table: a generation that is
+    not retained contributes no revision, so its members need not be read at all.
+    """
+    if not revisions:
+        return []
     retained = set()
-    for member in store._knowledge_rows("GenerationMember"):
-        generation = store._knowledge_get("Generation", member.generation_id)
-        if generation is not None and generation.status in _RETAINED_GENERATIONS:
-            retained.add(member.artifact_revision_id)
+    for generation in store._knowledge_rows("Generation"):
+        if generation.status in _RETAINED_GENERATIONS:
+            retained.update(
+                member.artifact_revision_id
+                for member in store._knowledge_rows("GenerationMember", generation_id=generation.id)
+            )
     return sorted(revisions - retained)
 
 

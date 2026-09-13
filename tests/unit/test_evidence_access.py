@@ -36,8 +36,17 @@ class EvidenceStore:
         self.epoch += 1
         return record
 
-    def _knowledge_rows(self, kind):
-        return list(self.records[kind].values())
+    def _knowledge_rows(self, kind, *, generation_id=None, where=None, ids=None):
+        # The store's scoped read contract, answered by filtering like the Fake store does.
+        rows = self.records[kind]
+        if ids is not None:
+            return [rows[identity] for identity in dict.fromkeys(ids) if identity in rows]
+        selection = {**(where or {}), **({} if generation_id is None else {"generation_id": generation_id})}
+        return [
+            record
+            for record in rows.values()
+            if all(getattr(record, field) == value for field, value in selection.items())
+        ]
 
     def _knowledge_get(self, kind, identity):
         return (

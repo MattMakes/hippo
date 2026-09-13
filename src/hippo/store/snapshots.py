@@ -44,8 +44,8 @@ class SnapshotQueries:
             gen = self._generation(selected.generation_id)
             receipts = [
                 event
-                for event in self._knowledge_rows("IndexEvent")
-                if event.generation_id == gen.id and event.kind == "published"
+                for event in self._knowledge_rows("IndexEvent", generation_id=gen.id)
+                if event.kind == "published"
             ]
             if gen.status not in ("active", "retired") or gen.published_at is None or len(receipts) != 1:
                 raise SnapshotUnavailable("Snapshot requires a previously published generation")
@@ -245,8 +245,7 @@ class SnapshotQueries:
             if members is None:
                 members = {
                     r.artifact_revision_id
-                    for r in self._knowledge_rows("GenerationMember")
-                    if r.generation_id == generation_id
+                    for r in self._knowledge_rows("GenerationMember", generation_id=generation_id)
                 }
             if snapshot.workspace_id not in purged:
                 purged[snapshot.workspace_id] = self._purged_revisions(snapshot.workspace_id)
@@ -293,8 +292,7 @@ class SnapshotQueries:
         count = 0
         gen = self._generation(generation_id)
         published = gen.published_at is not None or any(
-            event.generation_id == gen.id and event.kind == "published"
-            for event in self._knowledge_rows("IndexEvent")
+            event.kind == "published" for event in self._knowledge_rows("IndexEvent", generation_id=gen.id)
         )
         # Keep ever-published exact-membership provenance as an immutability
         # tombstone. It conveys no serving reachability without a sealed manifest.
@@ -302,10 +300,10 @@ class SnapshotQueries:
         if not published:
             kinds.append("GenerationEvidenceMember")
         for kind in kinds:
-            for row in self._knowledge_rows(kind):
-                if row.generation_id == generation_id:
-                    self._delete_knowledge_record(kind, row.id)
-                    count += 1
+            # This generation's rows only, read into a list before the first delete.
+            for row in self._knowledge_rows(kind, generation_id=generation_id):
+                self._delete_knowledge_record(kind, row.id)
+                count += 1
         # Preserve Generation identity/parent ancestry and shared evidence/raw blobs.
         # The failed status is a durable unavailable tombstone for stale snapshots.
         self._write_knowledge(self._generation(generation_id).replace(status="failed"))
