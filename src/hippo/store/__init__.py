@@ -92,7 +92,7 @@ def open_store(config: Config) -> AnyStore:
     """The store HIPPO_STORE asks for. Neo4j is connected lazily; LadybugDB opens (and locks) its file now."""
     if config.store_backend == "neo4j":
         return Store(config.neo4j_uri, config.neo4j_user, config.neo4j_password)
-    return LadybugStore(config.database_path)
+    return LadybugStore(config.database_path, buffer_pool_bytes=config.ladybug_buffer_pool_bytes)
 
 
 __all__ = ["AnyStore", "LadybugStore", "Store", "StoreLockedError", "open_store"]
