@@ -23,6 +23,10 @@ No gate checkbox is set here, and no `EVIDENCE:` line is written.
 | The two parity differences CODEPROJ pinned | Recorded in the plan appendix's §4 projection paragraph |
 | Both fixes merged (`rag-it-all-tibs` at `df05bac`) | The merge ran as authorized: merge commit `4edce57`, docstring fix `cd358d4`, post-fix assertions `baf2d8c` |
 | Neo4j parity run 6 failed `test_code_generation.py::test_no_log_record_source_row_or_receipt_carries_a_path_url_or_source_text`: the driver logs Cypher parameters at DEBUG | The test now checks only records from hippo's own loggers (`f31090c`). Capping the `neo4j` logger at INFO is recorded as a finding for Task 16 or a follow-up |
+| The CD9 scenario's heartbeat thread raced the Fake store (finding 23) | (a)+(b): serialize Fake knowledge reads and writes under `_lock`, with a list snapshot in the read (`b16b5c2`); real backends untouched |
+| LadybugDB's default buffer pool takes about 80% of RAM (finding 24) | A production defect, routed to lbpool (`store/ladybug.py`, settings, the conftest cap). lbpool merged at `c4ba26e`; the second authorized merge is `98b560a`, and the scenario opens its store with an explicit `buffer_pool_bytes`, 4 GiB by default (`5956f58`) |
+| Query-time whole-table reads (finding 25) | A fix slice, qscope, not a caveat. The full-size CD9 run waits for it |
+| Who finishes CD9 | This slice validates LadybugDB at 2 files per language (`20bcd31`). A fresh worker, cc11b, takes the full-size CD9 run after qscope merges, reruns every CHECK line and the full Fake suite on the final tree, and finalizes the ledger lines |
 
 ## Gate runs
 
@@ -41,9 +45,9 @@ line needed the AnyIO filter (form (b)). CD5 already names `tests/unit/test_mana
 | CD6 | Fake | `GATES.md:43` verbatim | `91 passed in 8.30s` | 0 | `/tmp/hippo-cc11-cd6.log` |
 | CD7 | Fake | `GATES.md:48` verbatim | `83 passed in 10.79s` | 0 | `/tmp/hippo-cc11-cd7.log` |
 | CD8 | Fake | `GATES.md:53` verbatim | `306 passed, 3 skipped in 53.58s` | 0 | `/tmp/hippo-cc11-cd8.log` |
-| CD9 | LadybugDB | `GATES.md:58` plus `tests/unit/test_code_capture_acceptance.py` | PENDING: waits for the store fix slice (finding 1) | — | `/tmp/hippo-cc11-cd9.log` |
+| CD9 | LadybugDB | `GATES.md:58` plus `tests/unit/test_code_capture_acceptance.py` | PENDING: cc11b runs it after qscope (finding 25) merges, with the 4 GiB pool and the RSS guard | — | — |
 | CD10 | — | `GATES.md:63` verbatim | `All checks passed!` / `10 files already formatted` | 0 | `/tmp/hippo-cc11-cd10.log` |
-| Full Fake suite | Fake | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests -q -o addopts='' -W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"` | On the merged tree with the Fake lock fix (`b16b5c2`): `1 failed, 4451 passed, 29 skipped in 1817.54s`. The failure is this slice's own full-size scenario: its CD1 recorder counted a held query's lease-renewal reads, made on the heartbeat thread during the refresh build, as build reads. The recorder now counts the build's own thread only; the rerun is PENDING | 1 | `/tmp/hippo-cc11-full-fake.log` |
+| Full Fake suite | Fake | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests -q -o addopts='' -W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"` | On the merged tree with the Fake lock fix (`b16b5c2`): `1 failed, 4451 passed, 29 skipped in 1817.54s`. The failure is this slice's own full-size scenario: its CD1 recorder counted a held query's lease-renewal reads, made on the heartbeat thread during the refresh build, as build reads. The recorder now counts the build's own thread only (`69976b4`). The rerun was stopped at 9% for the lbpool merge (`/tmp/hippo-cc11-full-fake-2.log`, `EXIT 143`) and has not been run on the final tree; it is cc11b's | 1 | `/tmp/hippo-cc11-full-fake.log` |
 
 **These gate runs are from base `9a474e4`**, before this branch's two merges: `df05bac` brought
 codeproj, pa2f4 and kscope, and `c4ba26e` brought lbpool. They have not been rerun on the final tree.
@@ -157,7 +161,7 @@ inside a store transaction and on any chat request.
 | RED, Fake, 2 files per language | `2 failed`: `The multi-hundred-file code capture fixture builder is missing` | `/tmp/hippo-cc11-red.log` |
 | GREEN, Fake, 2 files per language (before the per-batch bound was added) | `2 passed in 14.82s` | `/tmp/hippo-cc11-green-small.log` |
 | GREEN, Fake, 2 files per language (final file at `ae24a54`) | `2 passed in 12.44s` | `/tmp/hippo-cc11-green.log` |
-| Fake, default size | PENDING (inside the full Fake suite) | `/tmp/hippo-cc11-full-fake.log` |
+| Fake, default size | Failed inside the full Fake suite on the CD1 recorder (fixed in `69976b4`); not rerun on the final tree, cc11b's | `/tmp/hippo-cc11-full-fake.log` |
 | LadybugDB validation after both merges, 2 files per language, 4 GiB pool (`5956f58`), every phase end to end | `2 passed in 455.06s`. Crash bootstrap 53.3 s, reopen 1.1 s, resume 41.6 s, reopen 0.7 s, seal and checksums 4.5 s, projection with arrows and source row 39.6 s, verified dense dispatch 163.8 s, refresh under the held snapshot 76.8 s, reopen 5.0 s. At most 20 native reads per batch; 183,041 knowledge reads; peak RSS 10.2 GiB | `/tmp/hippo-cc11-ladybug-2.log`, `/tmp/hippo-cc11-timings-ladybug-2.json` (with `.progress`), `/tmp/hippo-cc11-ladybug2-rss.log` |
 | LadybugDB, CD9 line at the default size | PENDING: cc11b runs it after qscope merges | — |
 
@@ -214,8 +218,8 @@ The brief's three additions (`test_generation_resume.py`, `test_staged_code_writ
 Two things to know before running the new file on Neo4j:
 
 - The scenario reopens by constructing a second `Store` from `NEO4J_URI`/`NEO4J_USER`/`NEO4J_PASSWORD`
-  on the same database, with no reset. Run it only after the store fix merges: at 270 files the
-  quadratic knowledge reads make it impractical on any backend.
+  on the same database, with no reset. kscope has closed the quadratic build reads (finding 1); run
+  it after qscope merges, because until then the query-time whole-table reads (finding 25) dominate.
 - The pre-fix 10-file LadybugDB build took 444.6 s, and CC9b's LadybugDB run of
   `test_code_generation.py` took 1,920 s. Size the gate checker's `--timeout` for CD9 in hours, not
   minutes.
@@ -370,8 +374,9 @@ closed.
    stay unbound (`evidence-codeproj.md`, recorded in the plan appendix). Since pa2f4 (`63aae1e`),
    `status.source_view` counts the generation's native `CODE_EDGE` rows. CD9's acceptance test
    asserts both after the merge into `wp/cc11`.
-3. **CD9 has not run at the multi-hundred-file size on LadybugDB.** It is blocked by finding 1 and
-   PENDING above.
+3. **CD9 has not run at the multi-hundred-file size on LadybugDB.** Finding 1 is closed. The run now
+   waits for qscope (finding 25), because before that fix the query phases dominate. cc11b runs it
+   after the qscope merge, with the 4 GiB pool and the RSS guard.
 4. **The heartbeat can latch before a between-batch rebaseline.** `evidence-cc9b.md:405-411`; the
    `build_run.py` hook was not taken (`evidence-cc10.md:272`).
 5. **A crash between the seal and the publication is not resumable by an immediate retry.**
@@ -528,8 +533,8 @@ closed.
 
     Only the fixture determinism test had passed. The run had written no progress log, so the
     scenario phase it reached is unknown.
-25. **Query-time reads still read generation-sized tables whole (routed as a fix slice).**
-    KSCOPE scoped the write path only.
+25. **Query-time reads still read generation-sized tables whole (routed as the fix slice qscope).**
+    KSCOPE scoped the write path only. The full-size CD9 run waits for qscope to merge.
 
     The probe `/tmp/hippo-cc11-probes/test_zz_cc11_query_reads_probe.py` (log
     `/tmp/hippo-cc11-query-reads-probe.log`) builds `test_code_generation.py`'s 7-file world on
@@ -609,4 +614,5 @@ All on `wp/cc11`, first-parent order from base `9a474e4`:
 | `4afd6c7` | Name the query-time whole-table reads and the LadybugDB phase costs for the fix slice |
 | `98b560a` | Merge rag-it-all-tibs (lbpool) into wp/cc11 for the full-size CD9 run |
 | `5956f58` | Open the CD9 scenario's LadybugDB store with an explicit buffer pool |
-| (the commit carrying the final rows below) | Record the 2-file LadybugDB validation run |
+| `20bcd31` | Record the 2-file LadybugDB validation run |
+| (the commit carrying this row) | Bring the CC11 evidence's pending rows, rulings and qscope hand-off up to the final tree |
