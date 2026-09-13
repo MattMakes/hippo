@@ -279,7 +279,12 @@ def test_an_edge_crossing_into_another_generation_is_never_read_and_fails_the_vi
     inject_code_edge(w.store, active, retired)
     inject_code_edge(w.store, retired, active)
 
-    assert read(*args) == relations
+    def canonical(rows):
+        return Counter((*row[:5], json.dumps(row[5], sort_keys=True)) for row in rows)
+
+    # A store promises no row order, and on LadybugDB the injection itself reorders the node's stored
+    # relationships, so the two reads compare as multisets; `_assemble` imposes the served order.
+    assert canonical(read(*args)) == canonical(relations)
     with pytest.raises(SnapshotUnavailable):
         served_arrows(w.ctx)
 
