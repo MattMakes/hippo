@@ -27,6 +27,10 @@ log = logging.getLogger(__name__)
 # git@github.com:owner/repo.git  (scp-like syntax; no scheme)
 SCP_LIKE_RE = re.compile(r"^git@[A-Za-z0-9.\-]+:[A-Za-z0-9._\-/~]+$")
 URL_SCHEMES = {"https", "http", "ssh"}
+# A full SHA-1 or SHA-256 object ID, as `git rev-parse --verify` prints it.
+OBJECT_ID_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+# Environment that would point git at a repository other than the one named.
+GIT_LOCATION_VARIABLES = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"})
 
 
 class RepoError(ValueError):
@@ -74,7 +78,7 @@ def clone_repo(url: str, dest: Path, timeout: int = 300, depth: int = 1) -> Path
             "ssh://git@host/owner/repo or git@host:owner/repo."
         )
     if dest.exists() and any(dest.iterdir()):
-        raise RepoError(f"the folder {dest} already exists and is not empty")
+        raise RepoError("the clone destination already exists and is not empty")
     dest.parent.mkdir(parents=True, exist_ok=True)
     command = ["git", "clone", "--depth", str(depth), "--single-branch", "--", url, str(dest)]
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")  # never wait for a username/password prompt
@@ -82,22 +86,49 @@ def clone_repo(url: str, dest: Path, timeout: int = 300, depth: int = 1) -> Path
         result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=env)
     except FileNotFoundError as err:
         raise RepoError("git is not installed on this machine, so repositories cannot be cloned") from err
-    except subprocess.TimeoutExpired as err:
-        raise RepoError(f"cloning {url} took longer than {timeout} seconds and was stopped") from err
+    except subprocess.TimeoutExpired:
+        # `from None`: `TimeoutExpired` quotes the whole command line, URL and any
+        # credential in it, and `log.exception` would print it as the chained cause.
+        raise RepoError(
+            f"cloning the repository took longer than {timeout} seconds and was stopped"
+        ) from None
     if result.returncode != 0:
         raise RepoError(_explain_git_failure(url, result.stderr))
     return dest
 
 
+def head_revision(checkout: Path, timeout: int = 20) -> str:
+    """The commit a checkout's HEAD names, as the hex object ID git reports.
+
+    The repository is named explicitly (`--git-dir`) rather than discovered: a folder
+    that is not a repository must not borrow the HEAD of whatever working tree contains
+    it, and a data directory can live inside one. Every failure is one closed sentence.
+    """
+    git_dir = Path(checkout) / ".git"
+    command = ["git", f"--git-dir={git_dir}", "rev-parse", "--verify", "--quiet", "HEAD^{commit}"]
+    env = {key: value for key, value in os.environ.items() if key not in GIT_LOCATION_VARIABLES}
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=env)
+    except FileNotFoundError as err:
+        raise RepoError("git is not installed on this machine, so repositories cannot be cloned") from err
+    except subprocess.TimeoutExpired:
+        raise RepoError("reading the checkout's head commit took too long and was stopped") from None
+    revision = result.stdout.strip()
+    if result.returncode != 0 or OBJECT_ID_RE.fullmatch(revision) is None:
+        raise RepoError("the checkout has no readable head commit")
+    return revision
+
+
 def _explain_git_failure(url: str, stderr: str) -> str:
-    """Translate git's stderr into one friendly sentence. Git's own words stay in the log.
+    """Translate git's stderr into one closed sentence, and log only that and the host.
 
     The returned string becomes a `RepoError` message, and `RepoError` is a `ValueError`
     the web layer answers a 400 with (`web/routes/sources.py::add_repo`) and the legacy
-    lane stores on the Source row. Git's stderr is not bounded: it can name the server's
-    checkout path, a proxy, a credential helper or a remote's own banner. The four
-    `reason` clauses below are the actionable half and are this module's own words, so
-    only they survive; the full stderr is logged for the operator who can read it.
+    lane logs with its traceback. Git's stderr is not bounded: it can name the server's
+    checkout path, a proxy, a credential helper, a remote's own banner and the URL it
+    was handed -- userinfo included, which `is_git_url` accepts. So the four `reason`
+    clauses below are the whole message, the URL is not in it, and the log line carries
+    the same reason beside the bare host (review m6).
     """
     lower = stderr.lower()
     if "could not resolve host" in lower or "could not read from remote" in lower:
@@ -112,9 +143,20 @@ def _explain_git_failure(url: str, stderr: str) -> str:
         reason = "no repository was found at that address"
     else:
         reason = "git reported an error"
-    if stderr.strip():
-        log.warning("git clone of %s failed: %s", url, stderr.strip())
-    return f"could not clone {url}: {reason}."
+    log.warning("git clone from host %s failed: %s", _host_of(url), reason)
+    return f"could not clone the repository: {reason}."
+
+
+def _host_of(url: str) -> str:
+    """The host a clone URL names, with userinfo and port stripped: all a log line may say."""
+    url = url.strip()
+    if SCP_LIKE_RE.match(url):
+        return url.split("@", 1)[1].split(":", 1)[0]
+    try:
+        host = urlparse(url).hostname
+    except ValueError:
+        host = None
+    return host or "unknown"
 
 
 def walk_repo(root: Path, budget: readers.TextBudget | None = None) -> list[Document]:
@@ -124,16 +166,19 @@ def walk_repo(root: Path, budget: readers.TextBudget | None = None) -> list[Docu
     """
     root = root.resolve()
     if not root.is_dir():
-        raise RepoError(f"{root} is not a folder")
+        raise RepoError("the checkout is not a folder")
     budget = budget or readers.TextBudget()
     docs: list[Document] = []
     for path in _walk_files(root):
+        title = path.relative_to(root).as_posix()
         try:
-            docs.extend(readers.read_path(path, path.relative_to(root).as_posix(), budget))
+            docs.extend(readers.read_path(path, title, budget))
         except readers.TooLarge:
             raise  # the whole repo is over budget; do not treat it as one bad file
         except Exception as err:  # noqa: BLE001 - one unreadable file must not sink the repo
-            log.warning("Skipping %s: %s", path, err)
+            # The file as the Library names it, and the error's class: a reader's own
+            # message quotes the absolute path it was reading (review m6).
+            log.warning("Skipping %s: %s", title, type(err).__name__)
     return docs
 
 
