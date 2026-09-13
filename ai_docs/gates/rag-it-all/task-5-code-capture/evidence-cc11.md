@@ -438,6 +438,50 @@ closed.
     reads, against at most 20 native reads (`/tmp/hippo-cc11-timings-fake-2b.json`). Each is one
     query on LadybugDB, so a per-build cache of the authorization reads and batched keyed
     `_knowledge_get` reads are where a LadybugDB build's time can be recovered.
+23. **The Fake store races a query's lease heartbeat against a long build.** The CD9 scenario on
+    Fake at the default size failed after 20 min 24 s in `refresh_under_a_live_snapshot`
+    (`/tmp/hippo-cc11-fake-48.log`). The failure was `RuntimeError: dictionary changed size during
+    iteration` at `src/hippo/store/knowledge.py:450`, which surfaced as
+    `AuthorizationChanged("Snapshot lease renewal failed; repeat the query")`
+    (`knowledge/lease_heartbeat.py:54`).
+
+    The sequence:
+
+    1. The held `query_session` renews its snapshot every lease/3 (100 s) on a heartbeat thread
+       (`query_access.py:152`, `context.py:377`).
+    2. The renewal revalidates the reader proof, which reads `GenerationEvidenceMember` by
+       `generation_id` through KSCOPE's Fake single-key path. That path is a comprehension over the
+       live per-kind dict.
+    3. Meanwhile the refresh build writes knowledge records. A Fake knowledge write puts straight
+       into `_knowledge_data` (`knowledge.py:503`), and `FakeStore` holds `_lock` only inside
+       `transaction()` (`tests/fakes/fake_store.py:136`), so that read and write are not serialized.
+
+    At 2 files per language the refresh finishes before the first renewal.
+
+    This is a race in the test double, not a LadybugDB or Neo4j result. KSCOPE's single-key fast
+    path (`knowledge.py:450`, a comprehension over the live dict) widened its window. The
+    pre-KSCOPE path, `list(rows.values())`, only narrowed it; nothing serialized a read against
+    another thread's write.
+
+    Fixed in this slice under the orchestrator's ruling (a) plus (b), with the Fake branches only
+    and real backends untouched:
+
+    - `KnowledgeQueries._knowledge_rows` takes the store lock while it copies the kind's rows and
+      walks the copy.
+    - `_write_knowledge` takes the same lock for its put.
+    - The live-snapshot renewal on Fake is unchanged.
+
+    New `tests/unit/test_fake_store_threads.py` makes the interleaving deterministic. A row-like
+    object inside the kind hands control to a writer thread in the middle of the read.
+
+    | Run | Result | Log |
+    | --- | --- | --- |
+    | RED | `1 failed`: `RuntimeError: dictionary changed size during iteration` | `/tmp/hippo-cc11-fakelock-red.log` |
+    | GREEN | `1 passed` | `/tmp/hippo-cc11-fakelock-green.log` |
+    | Thread and heartbeat regression, Fake: `test_fake_store_threads`, `test_knowledge_scoped_reads`, `test_generation_scoped_reads`, `test_generation_store`, `test_staged_code_writer`, `test_generation_resume`, `test_prose_generation`, `test_ingest_concurrency`, `test_dense_session`, `test_code_generation`, `test_code_projection`, `test_build_run` | `319 passed, 1 skipped in 90.46s` | `/tmp/hippo-cc11-fakelock-regress.log` |
+
+    Not serialized: `store/snapshots.py:259` `_delete_knowledge_record` pops a Fake record. Its
+    caller is generation collection, and the file was outside this grant.
 
 ## Commits
 
