@@ -966,6 +966,9 @@ def test_a_readme_inside_the_tree_is_evidence_but_never_reaches_a_chat_model(wor
     )
     spans = [s for s in w.store._knowledge_rows("EvidenceSpan") if s.revision_id == revision.id]
     assert spans and any("ACME builds robots" in s.text for s in spans)
+    # Bound as an ordinary passage, which is a fact about the wire and not only about a
+    # span: its text went to the embedder, and to nothing else.
+    assert any("ACME builds robots" in text for text in w.runtime.embedded)
     assert not w.store._knowledge_rows("ProseExtraction")
     assert [path for path, _ in w.runtime.calls if path == "/api/chat"] == []
     assert coverage_of(w, result.generation_id)["openie_reasons"]["README.md"] == (

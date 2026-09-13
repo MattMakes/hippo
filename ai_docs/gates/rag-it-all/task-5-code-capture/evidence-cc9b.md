@@ -15,6 +15,11 @@ gate checkbox is set here.
 | `3ac801c` | Surface the shallow boundary a managed build has to record |
 | `0b01dc1` | Reuse an accepted revision the store already holds |
 | `5f45611` | Build one code source through capture, staging and publication |
+| `bb9b3df` | Record the CC9b evidence for the code coordinator |
+| `3ca02d5` | Merge `rag-it-all-tibs` (`9770c00`, `wp/lbfix`) into `wp/cc9b` before the Ladybug lines |
+| `be06b87` | Sample the served graph rather than reloading it per batch |
+| `1f02e74` | Release the query snapshot the serving assertion acquires |
+| `de286db`, `e22de45` | Record the Ladybug result, the per-build cost and the exact regression command |
 
 ## Files
 
@@ -29,7 +34,8 @@ gate checkbox is set here.
 | `tests/unit/test_code_history.py` | 2 added tests; the 55 existing cases are untouched |
 | NEW `ai_docs/gates/rag-it-all/task-5-code-capture/evidence-cc9b.md` | this file |
 
-`git show --stat` for the three commits names exactly these seven files. `prose_generation.py`,
+`git show --stat` over the branch's non-merge commits names exactly these eight files (the
+seven above plus this evidence). `prose_generation.py`,
 `build_run.py`, `managed_activation.py`, `pipeline.py`, `readers.py`, `repos.py`, `store/*`,
 `context.py`, `status.py`, `docs/`, the checkpoint and `GATES.md` are untouched.
 
