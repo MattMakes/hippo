@@ -88,6 +88,20 @@ def legacy_lane(store, sources, managed_records) -> tuple[frozenset[str], frozen
     return frozenset(legacy), frozenset(converting)
 
 
+def _strict_generations(store, generation_ids) -> frozenset[str]:
+    """Which of `generation_ids` carry a ready manifest requiring every representation.
+
+    One manifest read per generation asked about, never the manifest table: a session only asks
+    about the generations its sources select, while the table holds one row per sealed generation.
+    """
+    return frozenset(
+        manifest.generation_id
+        for generation_id in sorted(set(generation_ids))
+        for manifest in store._knowledge_rows("IndexManifest", generation_id=generation_id)
+        if manifest.ready and {"evidence", "dense", "native"} <= set(manifest.required_representations)
+    )
+
+
 @dataclass
 class AppContext:
     config: Config
@@ -277,11 +291,7 @@ class AppContext:
         selected = {
             row["id"]: row["active_generation_id"] for row in sources if row.get("active_generation_id")
         }
-        strict = {
-            manifest.generation_id
-            for manifest in self.store._knowledge_rows("IndexManifest")
-            if manifest.ready and {"evidence", "dense", "native"} <= set(manifest.required_representations)
-        }
+        strict = _strict_generations(self.store, selected.values())
         bundle = None
         if any(identity in strict for identity in selected.values()):
             from .knowledge.identity import canonical_json, text_hash
@@ -397,11 +407,9 @@ class AppContext:
         # The same split as `_build_managed_graph`: `managed_sources` chose this loader,
         # `legacy_lane` chooses the lane, and the active pointer chooses evidence.
         legacy_ids, _ = legacy_lane(self.store, sources, managed_sources)
-        strict = {
-            row.generation_id
-            for row in self.store._knowledge_rows("IndexManifest")
-            if row.ready and {"evidence", "dense", "native"} <= set(row.required_representations)
-        }
+        strict = _strict_generations(
+            self.store, (row["active_generation_id"] for row in sources if row.get("active_generation_id"))
+        )
         selected, proofs, by_workspace = {}, [], {}
         for source in sorted(sources, key=lambda row: row["id"]):
             if source.get("active_generation_id"):

@@ -60,7 +60,7 @@ from .dense import (
     fingerprint_vectors,
     structural_code_payload,
 )
-from .derivations import validate_prose, validate_view
+from .derivations import GenerationViews, validate_prose
 from .embedding_cache import _vectors
 from .identity import canonical_json, make_identity, normalize_relative_path
 from .lifecycle import generation_passage_id
@@ -163,7 +163,24 @@ def _safe_vectors(
     """Reuse only vectors with an exact persisted and cached input binding."""
     positions = {} if structural else {passage.id: index for index, passage in enumerate(full.passages)}
     entries, aliases = {}, {}
-    for row in sorted(_passage_bindings(store, generations), key=lambda item: item["id"]):
+    bound = sorted(_passage_bindings(store, generations), key=lambda item: item["id"])
+    # Every authorized rendered view in one read by ID, and one inventory per generation for all of
+    # them: fetching and validating per passage re-read each view and its generation's membership.
+    rendered = {
+        view.id: view
+        for view in store._knowledge_rows(
+            "RetrievalView",
+            ids=sorted(
+                {
+                    row["retrieval_view_id"]
+                    for row in bound
+                    if row.get("retrieval_view_id") in authorized.retrieval_view_ids
+                }
+            ),
+        )
+    }
+    inventories = {}
+    for row in bound:
         view_id = row.get("retrieval_view_id")
         if view_id and view_id not in authorized.retrieval_view_ids:
             continue
@@ -178,9 +195,11 @@ def _safe_vectors(
         original_ids, binding_ids = (span.id,), frozenset()
         identity, expected_text = span.id, span.text
         if view_id:
-            view = store._knowledge_get("RetrievalView", view_id)
+            view = rendered.get(view_id)
             try:
-                closure = validate_view(store, generation.id, view)
+                if generation.id not in inventories:
+                    inventories[generation.id] = GenerationViews(store, generation.id)
+                closure = inventories[generation.id].validate(view)
                 expected_id = generation_passage_id(
                     generation.id, span.revision_id, span.id, row.get("ordinal"), retrieval_view_id=view_id
                 )
@@ -413,8 +432,14 @@ def project_managed_graph(
         raise ProjectionError("Nonstructural projection requires a cached full graph")
     generations = _current_generations(store, authorized, embedding_profile, snapshot_bundle, source_profiles)
 
+    fetched = {}
+
     def allowed(kind, identities):
-        return {row.id: row for row in store._knowledge_rows(kind) if row.id in identities}
+        """The proof's own records of `kind`, fetched once by ID rather than by walking the kind."""
+        key = (kind, frozenset(identities))
+        if key not in fetched:
+            fetched[key] = {row.id: row for row in store._knowledge_rows(kind, ids=sorted(identities))}
+        return fetched[key]
 
     artifacts = allowed("Artifact", authorized.artifact_ids)
     revisions = {
@@ -422,8 +447,11 @@ def project_managed_graph(
         for key, value in allowed("ArtifactRevision", authorized.revision_ids).items()
         if value.artifact_id in artifacts
     }
+    # The selected generations' membership only: every question below names a selected generation.
     members = {
-        (row.generation_id, row.artifact_revision_id) for row in store._knowledge_rows("GenerationMember")
+        (row.generation_id, row.artifact_revision_id)
+        for generation_id in sorted(generations)
+        for row in store._knowledge_rows("GenerationMember", generation_id=generation_id)
     }
     selected_revisions = {revision for generation, revision in members if generation in generations}
     spans = {
@@ -772,11 +800,7 @@ def _project_prose(
         destination[identity] = current
 
     extractions = sorted(
-        (
-            row
-            for row in store._knowledge_rows("ProseExtraction")
-            if row.id in authorized.prose_extraction_ids
-        ),
+        store._knowledge_rows("ProseExtraction", ids=sorted(authorized.prose_extraction_ids)),
         key=lambda row: row.id,
     )
     for extraction in extractions:

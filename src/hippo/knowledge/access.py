@@ -17,7 +17,7 @@ from typing import Literal
 
 from hippo.access import Access
 
-from .derivations import derived_capability, validate_prose, validate_view
+from .derivations import GenerationViews, derived_capability, validate_prose
 from .identity import canonical_json
 
 _DERIVED_KINDS = ("DerivedRecord", "DerivedDependency", "RetrievalView", "ProseExtraction")
@@ -86,94 +86,167 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _exact_generations(rows, selection):
+class _ProofReads:
+    """The knowledge rows one proof reads, each fetched once and only as widely as the proof needs.
+
+    A proof over explicit generations (`bounded`) reads a generation-sized kind by generation, by
+    revision or by record ID, so its cost follows the evidence it serves rather than the corpus.
+    Every caller still applies the filters it applied to a whole-table read, and each narrowed read
+    returns a superset of the rows those filters keep, so the proof is the same.
+
+    A proof with no generation selection -- a legacy reader, or the history lane proving every
+    retained row before time narrows it -- answers over the whole inventory and reads it whole,
+    exactly as before. The authorization tables (`AccessPolicy`, `Connector`, `Workspace`,
+    `GroupMembership`) are read whole either way: they grow with principals and policies, not with
+    evidence.
+    """
+
+    def __init__(self, store, *, bounded: bool):
+        self.store = store
+        self.bounded = bounded
+        self._whole = {}
+        self._keyed = defaultdict(dict)
+        self._scoped = {}
+
+    def whole(self, kind):
+        if kind not in self._whole:
+            self._whole[kind] = {record.id: record for record in self.store._knowledge_rows(kind)}
+        return self._whole[kind]
+
+    def by_id(self, kind, identities):
+        """The named records that exist, as `{id: record}`: one read for the IDs not fetched yet."""
+        wanted = frozenset(identities)
+        if not wanted:  # nothing to look up reads nothing, as a lookup per row never ran for no rows
+            return {}
+        if not self.bounded:
+            return {identity: record for identity, record in self.whole(kind).items() if identity in wanted}
+        known = self._keyed[kind]
+        missing = sorted(wanted - known.keys())
+        if missing:
+            found = {record.id: record for record in self.store._knowledge_rows(kind, ids=missing)}
+            known.update((identity, found.get(identity)) for identity in missing)
+        return {identity: known[identity] for identity in sorted(wanted) if known[identity] is not None}
+
+    def scoped(self, kind, field, values):
+        """`kind`'s records whose `field` is one of `values`: one scoped read per value."""
+        values = frozenset(values)
+        if not self.bounded:
+            return {
+                identity: record
+                for identity, record in self.whole(kind).items()
+                if getattr(record, field) in values
+            }
+        rows = {}
+        for value in sorted(values):
+            key = (kind, field, value)
+            if key not in self._scoped:
+                self._scoped[key] = {
+                    record.id: record for record in self.store._knowledge_rows(kind, where={field: value})
+                }
+            rows.update(self._scoped[key])
+        return rows
+
+
+def _exact_generations(reads, selection):
     required = {"evidence", "dense", "native"}
+    if selection.generation_ids is None:
+        return set()
     return {
         manifest.generation_id
-        for manifest in rows("IndexManifest").values()
-        if selection.generation_ids is not None
-        and manifest.generation_id in selection.generation_ids
-        and manifest.ready
+        for manifest in reads.scoped("IndexManifest", "generation_id", selection.generation_ids).values()
+        if manifest.ready
         and required <= set(manifest.required_representations)
         and required <= {item.kind for item in manifest.checksums if item.ready}
     }
 
 
-def _derived_generations(rows, exact):
+def _derived_generations(reads, exact):
+    generations = reads.by_id("Generation", exact)
     return {
         identity
         for identity in exact
-        if (generation := rows("Generation").get(identity)) is not None and derived_capability(generation)
+        if (generation := generations.get(identity)) is not None and derived_capability(generation)
     }
 
 
-def _interpretation_inventory(rows, selection):
+def _interpretation_inventory(reads, selection, selected_revisions):
     """Select sealed interpretation membership before evaluating any ACL.
 
     Older trusted generations have only revision manifests and retain that read
     contract until rebuilt. Durable snapshot callers explicitly reject them.
     Crucially, an empty exact manifest means no interpretation, not a fallback.
+
+    With explicit generations only what they can serve is read: exact members by ID, and spans
+    and observations of the selected revisions, the only revisions `build` keeps a span of.
     """
     if selection.generation_ids is None:
-        return lambda kind: {} if kind in _DERIVED_KINDS else rows(kind)
-    exact = _exact_generations(rows, selection)
+        return lambda kind: {} if kind in _DERIVED_KINDS else reads.whole(kind)
+    exact = _exact_generations(reads, selection)
     compatibility = selection.generation_ids - exact
     if selection.require_exact_membership and compatibility:
         raise ValueError("Selected generation needs a sealed exact manifest; rebuild required")
+
+    def retained(kind):
+        if kind in {"EvidenceSpan", "ObjectObservation"}:
+            return reads.scoped(kind, "revision_id", selected_revisions)
+        return reads.whole(kind)
+
     if not exact:
-        return lambda kind: {} if kind in _DERIVED_KINDS else rows(kind)
-    derived_exact = _derived_generations(rows, exact)
+        return lambda kind: {} if kind in _DERIVED_KINDS else retained(kind)
+    derived_exact = _derived_generations(reads, exact)
     selected = defaultdict(set)
-    for member in rows("GenerationEvidenceMember").values():
-        if member.generation_id in exact and (
-            member.record_kind not in _DERIVED_KINDS or member.generation_id in derived_exact
-        ):
+    for member in reads.scoped("GenerationEvidenceMember", "generation_id", exact).values():
+        if member.record_kind not in _DERIVED_KINDS or member.generation_id in derived_exact:
             selected[member.record_kind].add(member.record_id)
     compatibility_revisions = {
         member.artifact_revision_id
-        for member in rows("GenerationMember").values()
-        if member.generation_id in compatibility
+        for member in reads.scoped("GenerationMember", "generation_id", compatibility).values()
     }
     # Compatibility supports retain their full AND groups, including spans from
     # outside the selected revision set; ordinary revision checks will deny them.
-    compatibility_versions = {
-        support.assertion_version_id
-        for support in rows("AssertionSupport").values()
-        if (span := rows("EvidenceSpan").get(support.span_id)) is not None
-        and span.revision_id in compatibility_revisions
-    }
-    inventories = {}
-    for kind in (
-        "EvidenceSpan",
-        "ObjectObservation",
-        "AssertionVersion",
-        "AssertionSupport",
-        *_DERIVED_KINDS,
-    ):
-        inventories[kind] = {
-            identity: record
-            for identity, record in rows(kind).items()
-            if identity in selected[kind]
-            or (
-                kind in {"EvidenceSpan", "ObjectObservation"}
-                and record.revision_id in compatibility_revisions
-            )
-            or (kind == "AssertionVersion" and identity in compatibility_versions)
-            or (kind == "AssertionSupport" and record.assertion_version_id in compatibility_versions)
+    compatibility_versions = set()
+    if compatibility_revisions:
+        supports = reads.whole("AssertionSupport")
+        support_spans = reads.by_id("EvidenceSpan", {support.span_id for support in supports.values()})
+        compatibility_versions = {
+            support.assertion_version_id
+            for support in supports.values()
+            if (span := support_spans.get(support.span_id)) is not None
+            and span.revision_id in compatibility_revisions
         }
-    return lambda kind: inventories.get(kind, rows(kind))
+    inventories = {kind: reads.by_id(kind, selected[kind]) for kind in _DERIVED_KINDS}
+    for kind in ("EvidenceSpan", "ObjectObservation"):
+        inventories[kind] = {
+            **reads.by_id(kind, selected[kind]),
+            **reads.scoped(kind, "revision_id", compatibility_revisions),
+        }
+    inventories["AssertionVersion"] = reads.by_id(
+        "AssertionVersion", selected["AssertionVersion"] | compatibility_versions
+    )
+    inventories["AssertionSupport"] = reads.by_id("AssertionSupport", selected["AssertionSupport"])
+    if compatibility_versions:
+        inventories["AssertionSupport"].update(
+            (identity, support)
+            for identity, support in reads.whole("AssertionSupport").items()
+            if support.assertion_version_id in compatibility_versions
+        )
+    return lambda kind: inventories[kind] if kind in inventories else retained(kind)
 
 
-def _authorized_derivations(store, rows, interpretation, selection, spans, revisions, bindings, suppressed):
-    """Validate full trusted closures before applying all-input audience grants."""
-    exact = _derived_generations(rows, _exact_generations(rows, selection))
+def _authorized_derivations(store, reads, interpretation, selection, spans, revisions, bindings, suppressed):
+    """Validate full trusted closures before applying all-input audience grants.
+
+    Every selected view of one generation validates against that generation's one inventory, so
+    a proof reads each generation's membership once rather than twice per view.
+    """
+    exact = _derived_generations(reads, _exact_generations(reads, selection))
     views = interpretation("RetrievalView")
     prose = interpretation("ProseExtraction")
     derived = interpretation("DerivedRecord")
     dependencies = interpretation("DerivedDependency")
     selected_outputs = defaultdict(set)
-    for member in rows("GenerationEvidenceMember").values():
-        if member.generation_id in exact and member.record_kind in {"RetrievalView", "ProseExtraction"}:
+    for member in reads.scoped("GenerationEvidenceMember", "generation_id", exact).values():
+        if member.record_kind in {"RetrievalView", "ProseExtraction"}:
             selected_outputs[member.record_kind].add((member.generation_id, member.record_id))
     visible_derived, visible_dependencies, visible_views, visible_prose = set(), set(), set(), set()
 
@@ -193,11 +266,14 @@ def _authorized_derivations(store, rows, interpretation, selection, spans, revis
         visible_views.update(closure.view_ids)
         return True
 
+    inventories = {}
     for generation_id, identity in sorted(selected_outputs["RetrievalView"]):
         view = views.get(identity)
         if view is None:
             raise ValueError("Selected derived retrieval view is missing")
-        include(validate_view(store, generation_id, view))
+        if generation_id not in inventories:
+            inventories[generation_id] = GenerationViews(store, generation_id)
+        include(inventories[generation_id].validate(view))
     for generation_id, identity in sorted(selected_outputs["ProseExtraction"]):
         extraction = prose.get(identity)
         if extraction is None:
@@ -312,17 +388,17 @@ class EvidenceAccess:
         epoch, now = self.epoch_reader(), self._now()
         identity = self._identity()
         internal = self.access.audience_kind == "internal"
-        records = {}
-
-        def rows(kind):
-            if kind not in records:
-                records[kind] = {record.id: record for record in self.store._knowledge_rows(kind)}
-            return records[kind]
-
-        interpretation = _interpretation_inventory(rows, selection)
+        # A proof over explicit generations reads only what they can serve (`_ProofReads`); the
+        # authorization tables below stay whole reads through `rows`.
+        reads = _ProofReads(self.store, bounded=selection.generation_ids is not None)
+        rows = reads.whole
+        member_rows = (
+            rows("GenerationMember")
+            if selection.generation_ids is None
+            else reads.scoped("GenerationMember", "generation_id", selection.generation_ids)
+        )
         generation_members = {
-            (member.generation_id, member.artifact_revision_id)
-            for member in rows("GenerationMember").values()
+            (member.generation_id, member.artifact_revision_id) for member in member_rows.values()
         }
         selected_revisions = selection.revision_ids
         if selection.generation_ids is not None:
@@ -336,22 +412,23 @@ class EvidenceAccess:
                 if selected_revisions is None
                 else generation_revisions.intersection(selected_revisions)
             )
+        interpretation = _interpretation_inventory(reads, selection, selected_revisions)
+        selected_revision_rows = (
+            None if selected_revisions is None else reads.by_id("ArtifactRevision", selected_revisions)
+        )
         selected_artifacts = (
             None
-            if selected_revisions is None
-            else {
-                revision.artifact_id
-                for revision in rows("ArtifactRevision").values()
-                if revision.id in selected_revisions
-            }
+            if selected_revision_rows is None
+            else {revision.artifact_id for revision in selected_revision_rows.values()}
         )
 
         suppressed = self._suppressed(selection.query_mode)
+        memberships = [member for member in rows("GroupMembership").values() if self._membership(member)]
+        group_objects = reads.by_id("KnowledgeObject", {member.group_id for member in memberships})
         groups = {
             member.group_id
-            for member in rows("GroupMembership").values()
-            if self._membership(member)
-            and (group := rows("KnowledgeObject").get(member.group_id)) is not None
+            for member in memberships
+            if (group := group_objects.get(member.group_id)) is not None
             and group.workspace_id == self.workspace_id
             and group.kind in {"group", "team"}
         }
@@ -406,7 +483,12 @@ class EvidenceAccess:
 
         artifacts = {}
         if identity is not None and self.workspace_id in rows("Workspace"):
-            for artifact in rows("Artifact").values():
+            candidates = (
+                rows("Artifact")
+                if selected_artifacts is None
+                else reads.by_id("Artifact", selected_artifacts)
+            )
+            for artifact in candidates.values():
                 if (
                     artifact.workspace_id != self.workspace_id
                     or (selected_artifacts is not None and artifact.id not in selected_artifacts)
@@ -419,9 +501,10 @@ class EvidenceAccess:
                 if proof := grant(artifact.policy_id, artifact):
                     artifacts[artifact.id] = artifact
                     remember(proof)
+        revision_rows = rows("ArtifactRevision") if selected_revision_rows is None else selected_revision_rows
         revisions = {
             record.id: record
-            for record in rows("ArtifactRevision").values()
+            for record in revision_rows.values()
             if record.artifact_id in artifacts
             and ("revision", record.id) not in suppressed
             and (selected_revisions is None or record.id in selected_revisions)
@@ -433,21 +516,34 @@ class EvidenceAccess:
             if proof := grant(span.policy_id, artifacts[revisions[span.revision_id].artifact_id]):
                 spans[span.id] = span
                 remember(proof)
+        observed = [
+            record
+            for record in interpretation("ObjectObservation").values()
+            if record.span_id in spans and record.revision_id == spans[record.span_id].revision_id
+        ]
+        observed_objects = reads.by_id("KnowledgeObject", {record.object_id for record in observed})
         observations = {
             record.id: record
-            for record in interpretation("ObjectObservation").values()
-            if record.span_id in spans
-            and record.revision_id == spans[record.span_id].revision_id
-            and (obj := rows("KnowledgeObject").get(record.object_id)) is not None
+            for record in observed
+            if (obj := observed_objects.get(record.object_id)) is not None
             and obj.workspace_id == self.workspace_id
         }
         objects = frozenset(record.object_id for record in observations.values())
         all_groups = defaultdict(list)
         for support in interpretation("AssertionSupport").values():
             all_groups[(support.assertion_version_id, support.derivation_group)].append(support)
+        assertion_versions = interpretation("AssertionVersion")
+        assertion_rows = reads.by_id(
+            "Assertion",
+            {
+                version.assertion_id
+                for version_id, _ in all_groups
+                if (version := assertion_versions.get(version_id)) is not None
+            },
+        )
         versions, assertions, supports, complete_groups = set(), set(), set(), []
         for (version_id, group_name), members in sorted(all_groups.items()):
-            version = interpretation("AssertionVersion").get(version_id)
+            version = assertion_versions.get(version_id)
             if (
                 version is None
                 or ("assertion_version", version_id) in suppressed
@@ -457,7 +553,7 @@ class EvidenceAccess:
                 )
             ):
                 continue
-            assertion = rows("Assertion").get(version.assertion_id)
+            assertion = assertion_rows.get(version.assertion_id)
             if (
                 assertion is None
                 or assertion.workspace_id != self.workspace_id
@@ -478,7 +574,15 @@ class EvidenceAccess:
                 )
             )
         bindings = set()
-        for binding in rows("NativeBinding").values():
+        binding_rows = (
+            rows("NativeBinding")
+            if selection.generation_ids is None
+            else reads.scoped("NativeBinding", "generation_id", selection.generation_ids)
+        )
+        binding_generations = reads.by_id(
+            "Generation", {binding.generation_id for binding in binding_rows.values()}
+        )
+        for binding in binding_rows.values():
             if (
                 binding.span_id not in spans
                 or binding.object_id not in objects
@@ -488,7 +592,7 @@ class EvidenceAccess:
                 )
             ):
                 continue
-            generation = rows("Generation").get(binding.generation_id)
+            generation = binding_generations.get(binding.generation_id)
             artifact = artifacts[revisions[spans[binding.span_id].revision_id].artifact_id]
             native = self.store._knowledge_get(binding.native_kind, binding.native_id)
             if (
@@ -500,7 +604,7 @@ class EvidenceAccess:
             ):
                 bindings.add(binding.id)
         derived_visible = _authorized_derivations(
-            self.store, rows, interpretation, selection, spans, revisions, bindings, suppressed
+            self.store, reads, interpretation, selection, spans, revisions, bindings, suppressed
         )
         visible = dict(
             artifact_ids=frozenset(artifacts),
