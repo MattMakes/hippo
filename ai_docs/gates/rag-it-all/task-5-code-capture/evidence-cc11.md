@@ -146,7 +146,7 @@ inside a store transaction and on any chat request.
 | --- | --- | --- |
 | RED, Fake, 2 files per language | `2 failed`: `The multi-hundred-file code capture fixture builder is missing` | `/tmp/hippo-cc11-red.log` |
 | GREEN, Fake, 2 files per language (before the per-batch bound was added) | `2 passed in 14.82s` | `/tmp/hippo-cc11-green-small.log` |
-| GREEN, Fake, 2 files per language (final file) | PENDING | `/tmp/hippo-cc11-green.log` |
+| GREEN, Fake, 2 files per language (final file at `ae24a54`) | `2 passed in 12.44s` | `/tmp/hippo-cc11-green.log` |
 | Fake, default size | PENDING (inside the full Fake suite) | `/tmp/hippo-cc11-full-fake.log` |
 | LadybugDB, CD9 line | PENDING: after the store fix slice | `/tmp/hippo-cc11-cd9.log` |
 
@@ -168,7 +168,12 @@ exact line. They live in `/tmp/hippo-cc11-probes/`. To run one, copy it into a w
 | 40 | Fake | 8.4 s | 2,040 | 6,009 / 3,339 / 2,808 |
 | 160 | Fake | 109.5 s | 7,800 | 22,809 / 12,699 / 10,608 |
 | 10 | LadybugDB | 444.6 s | 600 | 1,809 / 999 / 858 |
-| 40 | LadybugDB | PENDING | | |
+| 40 | LadybugDB | not measured: the OS killed the run for low system memory | | |
+
+The same memory kill stopped the first full Fake suite run at about 10%, while the LadybugDB timing
+run was still going. `LadybugStore` opens `lb.Database(str(self.path))` and passes no buffer-pool
+limit (`src/hippo/store/ladybug.py:270`). CD9's LadybugDB line should therefore run with no other
+heavy process on the machine.
 
 At 2 files per language the native representation holds `DEFINED_IN` 49, `MODIFIES` 42,
 `CODE_EDGE` 40 (`CONTAINS` 31, `INVOKES` 8, `IMPORTS` 1) and `PRECEDES` 3. The structural graph
@@ -228,7 +233,8 @@ EXPECT: passed
 
 **CD2** (CHECK amended: the CRITERIA cite CC10's pipeline-level spies, which live in
 `test_managed_code_activation.py`, a file this CHECK did not run; CRITERIA unchanged). The amended
-line's Fake run is PENDING: `/tmp/hippo-cc11-cd2-amended.log`.
+line on Fake, plain `-W error`: `169 passed, 2 skipped in 15.92s`, EXIT 0,
+`/tmp/hippo-cc11-cd2-amended.log`.
 
 ```text
 CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_converting_source_serving.py tests/unit/test_managed_source_inventory.py tests/unit/test_status_access.py tests/unit/test_structural_loading.py tests/unit/test_managed_code_activation.py -q -o addopts='' -W error
