@@ -367,8 +367,8 @@ def new_source_access(request: Request, visibility: str | None) -> dict[str, Any
 
 def new_managed_source(request: Request, visibility: str | None) -> dict[str, Any]:
     """
-    `new_source_access` plus the caller's own build actor, for the two ingress families
-    whose pipeline entry point accepts one.
+    `new_source_access` plus the caller's own build actor, for the ingress families whose
+    pipeline entry point accepts one: pasted text, uploads and (since CC10) repositories.
 
     The actor is the opt-in to the reviewed managed build. It is always the identity this
     request already proved: an open or preview caller brings None and keeps the legacy lane,
@@ -420,7 +420,7 @@ def text_form(request: Request, name: str = Form(""), text: str = Form(""), visi
 @router.post("/sources/repo")
 def repo_form(request: Request, url: str = Form(""), visibility: str = Form(None)):
     try:
-        access = new_source_access(request, visibility)
+        access = new_managed_source(request, visibility)
         pipeline.add_repo(ctx_of(request), url.strip(), **access)
     except HTTPException as exc:
         return RedirectResponse(f"/?error={quote(str(exc.detail))}", status_code=303)
@@ -509,7 +509,7 @@ async def add_upload(request: Request, file: UploadFile = File(...), visibility:
 
 @api.post("/repo")
 def add_repo(request: Request, body: RepoBody):
-    access = new_source_access(request, body.visibility)
+    access = new_managed_source(request, body.visibility)
     try:
         return {"source_id": pipeline.add_repo(ctx_of(request), body.url, **access)}
     except RepoError as exc:
@@ -520,7 +520,9 @@ def add_repo(request: Request, body: RepoBody):
         # protects. Cloning happens inside the background job, so `repos.clone_repo`'s
         # errors reach the Source row through `_legacy_failure` and never this 400. A
         # future subclass would carry something this route has not read, so it goes to the
-        # closed table instead of being printed.
+        # closed table instead of being printed. With the reader's actor, a clone URL that
+        # carries credentials is refused as `CaptureRefused`, which is not a `RepoError`
+        # and reaches that closed table too.
         if type(exc) is not RepoError:
             return public_failure_response(retrieval_failure(exc))
         return coded_response(str(exc), INVALID_SOURCE, 400)

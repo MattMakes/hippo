@@ -26,9 +26,7 @@ carries the command-line AnyIO ignore (form (b) in the rulebook).
 
 from __future__ import annotations
 
-import io
 import logging
-import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -130,13 +128,6 @@ def raises(error: BaseException):
     return fail
 
 
-def zip_bytes() -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("notes.md", FIRST_TEXT)
-    return buffer.getvalue()
-
-
 def managed_source(web) -> str:
     """One real managed source, published through the coordinator over HTTP."""
     response = web.client.post(
@@ -220,16 +211,17 @@ def test_web_code_never_manufactures_a_trusted_local_actor(web, monkeypatch):
     "filename,data",
     [
         ("paper.pdf", b"%PDF-1.4 not really a pdf"),
-        ("module.py", b"print('hello')\n"),
-        ("bundle.zip", None),
+        # CC10 (gate CD8): `module.py` and `bundle.zip` left this list, because a code file and
+        # an archive now take the managed lane with a reader's actor. LICENSE is neither code
+        # nor prose, so it is the unsupported example that remains.
+        ("LICENSE", b"Permission is hereby granted, free of charge, to Zed Corp.\n"),
     ],
 )
 def test_an_unsupported_upload_stays_legacy_for_a_signed_in_reader(web, monkeypatch, filename, data):
     seen = lanes(monkeypatch)
-    payload = zip_bytes() if data is None else data
     response = web.client.post(
         "/api/sources/upload",
-        files={"file": (filename, payload, "text/markdown")},  # a claimed type never decides
+        files={"file": (filename, data, "text/markdown")},  # a claimed type never decides
         headers=web.reader_headers,
     )
     assert response.status_code == 200, response.text
@@ -237,15 +229,23 @@ def test_an_unsupported_upload_stays_legacy_for_a_signed_in_reader(web, monkeypa
     assert seen == [("legacy", response.json()["source_id"])]
 
 
-def test_repo_and_sample_stay_legacy_for_a_signed_in_reader(web, monkeypatch):
+def test_a_repo_takes_the_managed_lane_and_a_sample_stays_legacy_for_a_signed_in_reader(web, monkeypatch):
+    """CC10: both repo routes pass the reader's actor, exactly as the upload routes do."""
     seen = lanes(monkeypatch)
     repo = web.client.post(
         "/api/sources/repo", json={"url": "https://example.com/owner/repo"}, headers=web.reader_headers
     )
+    page = web.client.post(
+        "/sources/repo",
+        data={"url": "https://example.com/owner/page"},
+        headers=web.reader_headers,
+        follow_redirects=False,
+    )
     sample = web.client.post("/api/sources/sample", headers=web.reader_headers)
-    assert (repo.status_code, sample.status_code) == (200, 200), (repo.text, sample.text)
+    assert (repo.status_code, page.status_code, sample.status_code) == (200, 303, 200), (repo.text, page.text)
     wait(web.ctx)
-    assert seen == [("legacy", repo.json()["source_id"]), ("legacy", sample.json()["source_id"])]
+    by_kind = {web.store.get_source(source)["name"]: lane for lane, source in seen}
+    assert by_kind == {"owner/repo": "managed", "owner/page": "managed", "Acme Robotics (sample)": "legacy"}
 
 
 def test_a_role_without_add_sources_is_refused_before_any_actor_exists(web, monkeypatch):

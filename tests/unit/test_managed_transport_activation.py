@@ -361,9 +361,10 @@ def test_a_gated_local_index_is_owned_by_its_creator_and_kept_to_their_tier(
     was therefore published to every role, and its creator could not manage what they made.
 
     4c re-review N3: `cmd_index` has two branches and only the upload one was covered. A
-    repository takes `pipeline.add_repo`, which has no `build_actor` at all because a repo
-    is not an accepted managed input -- so the git-URL branch stays legacy, and the
-    identity rule has to hold there on `owner_id` and `access_role_id` alone.
+    repository takes `pipeline.add_repo`, which since CC10 receives the same `build_actor`
+    the upload branch does, so a gated git URL dispatches the managed code lane -- and the
+    identity rule has to hold there on `owner_id` and `access_role_id` exactly as it does
+    for a file.
     """
     cli_ctx.store.ensure_roles()
     creator = cli_ctx.store.get_user(cli_ctx.store.create_user("assistant", "secret1", "local-assistant"))
