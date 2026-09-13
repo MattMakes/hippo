@@ -91,6 +91,14 @@ class ReadLog:
             call for call in self.whole_table if call[0] == "native" and (kind is None or call[1] == kind)
         ]
 
+    def knowledge_whole_table(self, kinds=None):
+        """Whole-table knowledge reads, optionally only of `kinds` (see `test_knowledge_scoped_reads`)."""
+        return [
+            call
+            for call in self.whole_table
+            if call[0] == "knowledge" and (kinds is None or call[1] in kinds)
+        ]
+
 
 def reference_relationships(store, ids):
     """The reviewed whole-database enumeration, kept verbatim as the parity oracle.
@@ -435,10 +443,10 @@ def test_a_kind_specific_scoped_field_is_refused_on_another_kind(store):
         store._knowledge_rows("SyncRun", where={"input_fingerprint": "g"})
 
 
-def test_every_kind_scoped_field_has_an_index_in_the_v6_step(store):
+def test_every_kind_scoped_field_has_an_index_in_a_journaled_step(store):
     from hippo.store.knowledge import KIND_SCOPED_FIELDS
 
-    indexed = {(label, field) for _, label, field in migrations.NATIVE_INDEXES}
+    indexed = {(label, field) for _, label, field in (*migrations.NATIVE_INDEXES, *migrations.V7_INDEXES)}
     assert {(label, field) for label, fields in KIND_SCOPED_FIELDS.items() for field in fields} <= indexed
 
 
@@ -745,7 +753,6 @@ def test_native_tables_declare_a_generation_id_index(store):
 
 def test_schema_version_six_journals_the_native_generation_indexes(store):
     """`migrate_store` returns early on a current store, so fresh-only declarations never land."""
-    assert migrations.CURRENT_SCHEMA_VERSION == 6
     assert 5 in migrations.SUPPORTED_CHECKSUMS and 6 in migrations.SUPPORTED_CHECKSUMS
     assert migrations.SUPPORTED_CHECKSUMS[5] != migrations.SUPPORTED_CHECKSUMS[6]
     if store.knowledge_backend == "fake":
@@ -764,14 +771,14 @@ def test_the_frozen_v5_descriptor_is_preserved(store):
     """A v5 store must still validate against the checksum it recorded."""
     assert migrations._descriptor(5)[0] == 5
     assert migrations.SUPPORTED_CHECKSUMS[5] == migrations.V5_CHECKSUM
-    assert [*migrations.SUPPORTED_CHECKSUMS] == [1, 2, 3, 4, 5, 6]
+    assert [*migrations.SUPPORTED_CHECKSUMS] == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_a_migrated_store_reports_the_current_version(store):
     store.ensure_schema()
     assert store.schema_version()["version"] == migrations.CURRENT_SCHEMA_VERSION
     assert store.schema_version()["state"] == "complete"
-    assert [item["version"] for item in store.schema_history()] == list(range(1, 7))
+    assert [item["version"] for item in store.schema_history()] == list(range(1, 8))
 
 
 def test_sealed_generations_still_verify_their_manifest(store):

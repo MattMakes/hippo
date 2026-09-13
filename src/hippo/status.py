@@ -78,8 +78,9 @@ def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None
     # empty generation visible, and omitting a policy-denied or tombstoned one needs no extra rule:
     # neither proves a pair, so neither reaches this set.
     represented.update(source for source, _generation in graph.selected_managed_generations)
+    selected = dict(graph.selected_managed_generations)
     rows = [
-        _managed_source(source, graph)
+        _with_code_edges(_managed_source(source, graph), ctx.store, selected.get(source["id"]))
         if source["id"] in managed
         else _legacy_source(source, graph)
         if source["id"] in converting
@@ -111,7 +112,9 @@ def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
 
     Every count comes from this view's exact provenance, never from the Store's Source
     counters: those span legacy, staged, active and retired generations at once, so a
-    refreshed source would report both generations' passages as current.
+    refreshed source would report both generations' passages as current. The one count the
+    held graph cannot answer, the selected generation's native code relations, is added by
+    `_with_code_edges`.
 
     A shared code object stays one global vertex while being attributed to each selected
     source that contributed evidence for it, which is why the node's own `source_id` (the
@@ -127,16 +130,10 @@ def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
     contributed = {row.node_id for row in graph.structural_code_evidence if row.source_id == identity}
     contributed.update(row.node_id for row in graph.structural_object_evidence if row.source_id == identity)
     nodes = [node for node in graph.code_nodes if node.id in contributed or node.source_id == identity]
-    node_ids = {node.id for node in nodes}
+    # Relations are counted by the exact selected pair, never from this source's vertices: a vertex
+    # carries every arrow that reaches it, whichever generation or contributor wrote it. The native
+    # code relations are the selected generation's own rows, which `_with_code_edges` adds.
     edge_counts = Counter(
-        edge.kind
-        for edges in graph.code_out.values()
-        for edge in edges
-        if edge.kind in CODE_EDGE_KINDS and graph.node_ids[edge.src] in node_ids
-    )
-    # Relation-only support contributes no node of its own, so it is counted from the relation's
-    # exact selected pair rather than from this source's vertices.
-    edge_counts.update(
         row.predicate
         for row in graph.structural_relations
         if pair is not None and pair in row.source_generations
@@ -177,6 +174,35 @@ def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
         if nodes or edge_counts
         else {},
     }
+
+
+def _with_code_edges(row: dict[str, Any], store, generation_id: str | None) -> dict[str, Any]:
+    """Add one managed row's native code relations, read by exact generation membership.
+
+    The count is one scoped `_native_relationships(generation_id=...)` read of the row's proven
+    selected pair. It is never taken from the held graph: an arrow on a vertex does not say which
+    generation wrote it, and the structural projection serves no native `CODE_EDGE` row as an arrow
+    at all. A staged, failed, retired or tombstoned generation is never a selected pair, so it is
+    never read, and a publication replaces the pair and its count together. The read refuses an
+    edge that crosses generations rather than dropping it, so a count is never taken over one.
+    """
+    if generation_id is None:
+        return row
+    counts = Counter(
+        relation[3]["kind"]
+        for relation in store._native_relationships(generation_id=generation_id)
+        if relation[0] == "CODE_EDGE" and relation[3].get("kind") in CODE_EDGE_KINDS
+    )
+    if not counts:
+        return row
+    code = row["meta"].setdefault(
+        "code",
+        {"symbols": 0, "data_objects": 0, "commits": 0, "edges": 0, "edges_by_kind": {}, "languages": []},
+    )
+    counts.update(code["edges_by_kind"])
+    code["edges_by_kind"] = dict(counts)
+    code["edges"] = sum(counts.values())
+    return row
 
 
 def _public_error(source: dict) -> str:

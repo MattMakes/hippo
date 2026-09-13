@@ -110,15 +110,15 @@ class _Inventory:
         self.source = store.get_source(self.gen.source_id)
         if self.gen.status == "failed" or self.source is None:
             raise ValueError("Derived generation is unavailable")
+        # Scoped by generation. Unscoped, these walked every generation's members, and a batch
+        # of rendered passages built one inventory per passage (see `GenerationViews`).
         self.exact = {
             (m.record_kind, m.record_id)
-            for m in store._knowledge_rows("GenerationEvidenceMember")
-            if m.generation_id == generation_id
+            for m in store._knowledge_rows("GenerationEvidenceMember", generation_id=generation_id)
         }
         self.revisions = {
             m.artifact_revision_id
-            for m in store._knowledge_rows("GenerationMember")
-            if m.generation_id == generation_id
+            for m in store._knowledge_rows("GenerationMember", generation_id=generation_id)
         }
         self.visiting = set()
 
@@ -144,9 +144,9 @@ class _Inventory:
         derived = self.record("DerivedRecord", identity)
         if derived.state != "ready" or derived.workspace_id != self.source["workspace_id"]:
             raise ValueError("Derived input requires ready workspace provenance")
-        dependencies = [
-            d for d in self.store._knowledge_rows("DerivedDependency") if d.derived_record_id == identity
-        ]
+        # Every dependency naming this record, members or not: one outside the exact membership must
+        # still reach `record` below and refuse, so the key is the record and not the generation.
+        dependencies = self.store._knowledge_rows("DerivedDependency", where={"derived_record_id": identity})
         closure = DerivationClosure(derived_record_ids=frozenset({identity}))
         tuples = []
         declared_revisions = set()
@@ -234,11 +234,40 @@ class _Inventory:
             or row.get("source_id") != self.gen.source_id
         ):
             raise ValueError("Prose support passage crosses generation/source")
-        self.store._validate_managed_native("Passage", row, self.gen)
+        # This inventory already holds the generation's membership; validating the support
+        # passage's own view against a fresh one would re-read it per passage.
+        self.store._validate_managed_native(
+            "Passage",
+            row,
+            self.gen,
+            selected=self.revisions,
+            views=GenerationViews(self.store, self.gen.id, inventory=self),
+        )
         closure = self.span(row["span_id"])
         if row.get("retrieval_view_id"):
             closure = closure.union(self.view(self.record("RetrievalView", row["retrieval_view_id"])))
         return closure.union(DerivationClosure(support_passage_ids=frozenset({identity})))
+
+
+class GenerationViews:
+    """`validate_view` for many views of one generation, reading its exact membership once.
+
+    `validate_view` builds a fresh inventory per call, which is right for one view and quadratic
+    for a batch of rendered passages. The inventory is built at the first view, exactly where
+    `validate_view` would have built it, so a refusal raised while building it surfaces at the same
+    row. It is a snapshot: reuse it only while no member of the generation is written, which holds
+    for one `native_write` call and for one checksum pass.
+    """
+
+    def __init__(self, store, generation_id, *, inventory=None):
+        self.store = store
+        self.generation_id = generation_id
+        self._inventory = inventory
+
+    def validate(self, view) -> DerivationClosure:
+        if self._inventory is None:
+            self._inventory = _Inventory(self.store, self.generation_id)
+        return self._inventory.view(view)
 
 
 def validate_view(store, generation_id, view) -> DerivationClosure:

@@ -46,6 +46,10 @@ class EvidenceStore:
             else self.records[kind].get(identity)
         )
 
+    def _edges_touching(self, ids, *, both=False, rels=None):
+        # This fixture binds native code rows but holds no native relation between them.
+        return []
+
     def get_user(self, identity):
         return self.users.get(identity)
 
