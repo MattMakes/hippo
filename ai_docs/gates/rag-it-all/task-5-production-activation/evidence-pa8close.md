@@ -27,7 +27,9 @@ and a reviewer of one should not have to read the other.
 
 ## Findings, one row each
 
-**CLOSED: 15. OPEN: 1.**
+**CLOSED: 18. OPEN: 1.** (17 finding rows plus the deferral row. Corrected 2026-09-13 by
+`wp/pa8close2`; this line said 15, and the deferral row covered three of the five DEFERRED items,
+see `evidence-pa8close2.md`.)
 
 | Finding | Status | Commit | Test / artifact |
 |---|---|---|---|
@@ -45,7 +47,7 @@ and a reviewer of one should not have to read the other.
 | PA2 6 (`compose_graphs`' `populated` shortcut version unasserted) | **CLOSED** | `4be9920` | `test_a_lane_holding_only_an_empty_generation_still_owns_the_composed_version` |
 | PA3a 3 (single-source `reindex` of an unsupported source with an actor) | **CLOSED** | `4be9920` | `test_a_single_reindex_of_an_unsupported_source_with_an_actor_stays_legacy` |
 | PA3a 5 (`on_first_connection` / `status.source_view` not in the raw-root test) | **CLOSED** | `4be9920` | `test_the_raw_root_and_embedding_cache_appear_only_for_a_managed_build`, extended with both. See the backend note below |
-| PA3b 8 (the restart-sweep tests lack the "nothing else moved" half) | **CLOSED** | `4be9920` | `test_an_interrupted_refresh_is_retired_and_the_published_generation_keeps_serving`, extended with a `before = row_of(...)` comparison over every field except `stage`, `error`, `updated_at`, plus an explicit `progress_done`/`progress_total` assertion. **No defect exposed**: the sweep leaves them stale, which is what the review expected |
+| PA3b 8 (the restart-sweep tests lack the "nothing else moved" half) | **CLOSED** | `4be9920` | `test_a_refresh_interrupted_by_a_restart_is_retired_without_losing_g1`, extended with a `before = row_of(...)` comparison over every field except `stage`, `error`, `updated_at`, plus an explicit `progress_done`/`progress_total` assertion. **No defect exposed**: the sweep leaves them stale, which is what the review expected |
 | T3 (verified dense over HTTP; revocation on the verified lane) | **CLOSED** | `4be9920` | `test_a_reader_reaches_verified_dense_over_http`, `test_revoking_during_a_verified_dispatch_is_the_generic_permission_answer` |
 | S1 (`session-audit.md` one row behind HEAD) | **CLOSED** | `4e235bb` | The audit's three sweep commands re-run at `c893a95`; 58 rows, 0 unclassified, `cli.py:567 _sources_locally` classified |
 | The five DEFERRED items (plan assignment) | **CLOSED** | `4e235bb` | Three lines in the plan's "Rollout and rollback boundary" assign the `model_unavailable` behaviour change, the CLI ownership question and `add_repo`'s legacy status to Task 16 |
