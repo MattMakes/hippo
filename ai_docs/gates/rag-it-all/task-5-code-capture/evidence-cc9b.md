@@ -299,7 +299,7 @@ shape: `HIPPO_TEST_STORE=<backend> .venv/bin/pytest <files> -q -o addopts='' -W 
 | RED | `test_code_generation.py` with `code_generation.py` moved aside | 32 errors, `ModuleNotFoundError` | `/tmp/hippo-cc9b-red.log` |
 | GREEN, per file | `test_code_generation.py` | **33 passed** (20.7s) | `/tmp/hippo-cc9b-green-code.log` |
 | GREEN, **the CD8 line** | `test_code_generation.py test_ingest_pipeline.py test_ingest_concurrency.py test_managed_pipeline_activation.py test_prose_generation.py` | **251 passed, 3 skipped** | `/tmp/hippo-cc9b-cd8.log` |
-| GREEN, wide Fake regression | the baseline set plus `test_code_binding.py test_code_history.py test_git_history.py test_layering.py test_import_order.py test_generation_profiles.py test_build_authority.py` | **452 passed, 2 skipped** | `/tmp/hippo-cc9b-green-fake.log` |
+| GREEN, wide Fake regression | `test_staged_code_writer.py test_generation_resume.py test_build_run.py test_converting_source_serving.py test_code_binding.py test_code_history.py test_git_history.py test_layering.py test_import_order.py test_generation_profiles.py test_build_authority.py test_generation_scoped_reads.py` | **416 passed, 1 skipped** | `/tmp/hippo-cc9b-green-fake.log` |
 | GREEN, the amended suites | `test_code_binding.py` 55, `test_code_history.py` 57 | 112 passed | in the regression above |
 | **GREEN, Ladybug** | `test_code_generation.py test_converting_source_serving.py` | **50 passed** (1,920.65s) | `/tmp/hippo-cc9b-ladybug.log` |
 | Ladybug, one build alone | `test_code_generation.py -k reaches_no_destructive` | 1 passed (54.86s) | `/tmp/hippo-cc9b-lb-one.log` |
