@@ -510,18 +510,41 @@ Writing communities for managed code needs its own `store/code.py` slice, which 
   in canonical order is kept. This is a recorded defect, not repaired (`evidence-cc6.md`). Fixing it
   needs a `codegraph` change and a native-ID migration.
 
-**§4, the projection** (qualifies "this lane populates `StructuralCodeEvidence`"). A published code
-generation currently projects its code nodes with no arrows at all.
+**§4, the projection** (qualifies "this lane populates `StructuralCodeEvidence`"). As of CC10, a
+published code generation projected its code nodes with no arrows. Code derived records carry no
+`input_binding_ids` (`knowledge/code_binding.py:459-463`), so the projection drew no `DEFINED_IN`
+for a rendered code passage, and it read no native `CODE_EDGE` (`evidence-cc11.md` finding 2).
+CODEPROJ, merged at `955cc11`, closed this without changing any evidence writer or generation
+identity (`evidence-codeproj.md`):
 
-- Code derived records carry no `input_binding_ids` (`knowledge/code_binding.py:459-463`), so
-  `projection.py:538-545` never draws `DEFINED_IN` for a rendered code passage.
-- The projection reads no native `CODE_EDGE`.
-- Every node is served through a `StructuralCodeEvidence` sidecar that carries its exact original
-  spans. The sealed native representation still holds `CODE_EDGE`, `DEFINED_IN`, `MODIFIES` and
-  `PRECEDES`.
+- `projection._native_code_relations` reads each selected generation's sealed `CODE_EDGE`,
+  `DEFINED_IN`, `MODIFIES` and `PRECEDES` rows. It uses one scoped `_edges_touching(...,
+  both=True)` read over that generation's bound native ids and projected passages.
+- The rows are served as arrows with the legacy loader's kind, weight, provenance and extra, plus
+  `generation_id` and `support_span_ids`.
+- A `DEFINED_IN` arrow is served only when the node's binding span lies inside the passage's exact
+  original closure, so a bound node needs no `StructuralCodeEvidence` row.
+- Relations stay native, as ruling 1 says. The projection is the one reader that turns them into
+  arrows.
 
-This is a serving-parity defect against the legacy lane. A projection slice is routed to project
-`DEFINED_IN` and `CODE_EDGE` from the selected generation's native rows (`evidence-cc11.md`).
+Two parity differences against the legacy lane remain.
+`test_code_projection.py::test_one_repository_serves_the_same_code_arrows_through_the_legacy_and_the_managed_lane`
+pins both exactly:
+
+1. **No `REFERS_TO`.** `staged_code.RELATION_KINDS` is `CODE_EDGE`, `DEFINED_IN`, `MODIFIES` and
+   `PRECEDES`. The managed lane therefore writes none of the prose-to-code `REFERS_TO` relations the
+   legacy indexer draws.
+2. **Declaration-only modules stay unbound.** A module whose file holds only declarations, such as
+   `web/index.ts` in that test, has no passage of its own. It appears only in its first
+   declaration's `defines`, while `materialize_code_evidence` binds a chunk's own `symbol_id`
+   (`code_binding.py:1077-1085`). So the module gets no native row, `code_relations` drops every
+   relation touching it, and coverage counts it in `unbound_nodes`. The legacy lane serves that
+   node with its `CONTAINS`, `MODIFIES` and `DEFINED_IN`. The fix belongs to the owner of
+   `code_binding.py` and `ingest/code_generation.py`.
+
+Two overloads sharing one native ID project as the cross product of their knowledge objects. A
+status card that counts arrows can then exceed the source row's native count
+(`evidence-codeproj.md` finding 3).
 
 **§4, §6 and §10, prose inside a tree** (supersedes §4's "Plain-prose files inside a captured tree
 … do receive extraction", §6 step 1's OpenIE profile, §10's "prose OpenIE for captured prose files"
