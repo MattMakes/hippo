@@ -105,6 +105,35 @@ def test_simulate_rejects_bad_input(client):
     assert client.post("/api/simulate", json={"trace_key": "expired", "overrides": {}}).status_code == 404
 
 
+def test_simulating_another_users_saved_result_is_a_404_not_a_mapped_500(ctx):
+    """A denied `result_id` keeps the route's own 404 (PA4b2 review finding 7).
+
+    `_simulate` builds its `EvalAccess` inside the `except (ValueError, ...)` that feeds
+    `retrieval_failure`, and `EvalAccessDenied` is a `ValueError` with no `public_errors`
+    row. If a read on this path raised it instead of answering `None`, the denial would
+    become a 500 `operation_failed`. Every read there answers `None` today; this keeps it so.
+    """
+    from hippo.access import Access
+    from hippo.knowledge.eval_access import EvalAccess
+
+    ctx.store.ensure_roles()
+    owner = ctx.store.create_user("owner", "secret1", "local-admin")
+    ctx.store.create_user("outsider", "secret2", "local-admin")
+    evaluation = EvalAccess(ctx, Access(rank=20, user_id=owner))
+    set_id = evaluation.create_question_set("SECRET SET")
+    questions = [{"text": "SECRET QUESTION", "expected_answer": "SECRET"}]
+    question_id = evaluation.add_questions(set_id, questions)[0]
+    run_id = evaluation.create_run(set_id, "SECRET RUN", ctx.store.get_settings())
+    result_id = ctx.store.add_result(run_id, question_id, {"answer": "SECRET ANSWER", "trace": {}})
+    app = create_app(ctx)
+    with TestClient(app, base_url="http://localhost", raise_server_exceptions=False) as client:
+        client.post("/login", data={"username": "outsider", "password": "secret2"})
+        response = client.post("/api/simulate", json={"result_id": result_id, "overrides": {}})
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": "no such result"}
+    assert "operation_failed" not in response.text and "SECRET" not in response.text
+
+
 def test_saving_and_applying_a_changeset_changes_the_graph(client, ctx, result_id):
     trace = ctx.store.get_result(result_id)["trace"]
     seed = trace["seed_entities"][0]

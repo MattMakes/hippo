@@ -131,8 +131,9 @@ async def public_failure_handler(request: Request, exc: Exception):
     It negotiates on `Accept` exactly as `forbidden_page` below does, because the page
     routes reach this handler too: a page whose own session fails inside its `with` block
     has nobody else to render it, and answering `application/json` to a browser puts a JSON
-    blob where the page was. `/partials/sources` is the sharpest case -- htmx polls it, so
-    an unnegotiated failure swaps a body fragment into the library table.
+    blob where the page was. `/partials/sources` is the sharpest case -- htmx polls it and
+    swaps whatever it answers into the library table, so a partial route gets
+    `partials/failure.html`, a fragment, rather than a JSON blob or a second whole document.
 
     Named `..._handler` rather than `..._page`: `render.public_failure_page` is a page
     renderer with a different signature, and one shared name across two adjacent modules is
@@ -141,7 +142,9 @@ async def public_failure_handler(request: Request, exc: Exception):
     """
     failure = retrieval_failure(exc)
     if wants_html(request):
-        return public_failure_page(request, failure, "failure.html")
+        partial = request.url.path.startswith("/partials/")
+        template = "partials/failure.html" if partial else "failure.html"
+        return public_failure_page(request, failure, template)
     return public_failure_response(failure)
 
 
