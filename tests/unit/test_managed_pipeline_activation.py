@@ -1778,3 +1778,31 @@ def test_a_lane_that_changes_lane_after_the_plan_does_not_strand_the_lanes_behin
     assert set(submitted) == {w.managed, w.unsupported}
     # Every lane the bulk cleared was also submitted: none was left emptied and jobless.
     assert prepared == [w.unsupported] and set(prepared) <= set(submitted)
+
+
+def test_a_managed_build_past_the_chunk_ceiling_fails_without_managed_state(setup, monkeypatch):
+    """The managed ceiling is a refusal with no fallback (PA3a review finding 8).
+
+    `test_prose_generation.py`'s bound test is the coordinator's half; this is the lane's:
+    the Source row reaches `failed` with a closed code, nothing managed is installed, and
+    no source text reaches the model. The ceiling stays 1,000 rather than the legacy
+    `pipeline.MAX_CHUNKS`, as the activation plan's rollout section records.
+    """
+    w = setup
+    module = w.module
+    assert module.build_options(w.ctx).max_chunks == 1000
+    assert pipeline.MAX_CHUNKS == 20_000
+    reviewed = module.build_options
+    monkeypatch.setattr(module, "build_options", lambda ctx: replace(reviewed(ctx), max_chunks=1))
+    w.quiet_jobs()
+    source = w.stage_text(LONG_TEXT)
+    w.build(source)
+
+    row_ = source_row(w)
+    assert row_["status"] == "failed" and row_["stage"] == "failed"
+    assert not row_["managed"] and row_["active_generation_id"] is None
+    closed = {(code, message) for _, code, message in module.FAILURES}
+    closed.add((module.UNKNOWN_CODE, module.UNKNOWN_MESSAGE))
+    assert tuple(row_["error"].split(": ", 1)) in closed, row_["error"]
+    assert not w.store._knowledge_rows("Generation")
+    assert not any("ACME" in json.dumps(body) for _, body in w.runtime.calls)

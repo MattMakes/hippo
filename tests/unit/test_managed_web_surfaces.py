@@ -1303,6 +1303,28 @@ def test_a_json_client_still_gets_the_closed_body_from_the_same_routes(ctx, monk
     }
 
 
+PARTIAL_ROUTES = ("/partials/sources", "/partials/sources/s1/status")
+
+
+@pytest.mark.parametrize("url", PARTIAL_ROUTES)
+def test_a_partial_route_answers_a_fragment_when_a_mapped_failure_escapes(ctx, monkeypatch, url):
+    """htmx swaps a partial's body into the page that polls it, so a whole document is the
+    wrong shape there (wrap-up review finding 20). The negotiation, the status, the bounded
+    sentence and the code are the page routes' own; only the frame differs.
+    """
+    unloadable(ctx, monkeypatch, ProjectionError)
+    with web(ctx) as client:
+        response = client.get(url, headers=BROWSER)
+        page = client.get("/", headers=BROWSER)
+    assert response.status_code == 500, response.text
+    assert response.headers["content-type"].startswith("text/html"), response.text
+    assert "Operation failed; inspect local logs by operation ID" in response.text
+    assert "operation_failed" in response.text
+    assert PRIVATE not in response.text
+    assert "<html" not in response.text.lower(), response.text
+    assert page.status_code == 500 and "<html" in page.text.lower(), page.text
+
+
 def test_the_api_routes_answer_json_even_to_a_browsers_accept_header(ctx, monkeypatch):
     """A browser's `Accept` must not turn an `/api` body into a page; the JS reads JSON."""
     unloadable(ctx, monkeypatch, ProjectionError)
