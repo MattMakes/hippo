@@ -414,7 +414,7 @@ class KnowledgeQueries:
 
         return schema_history(self)
 
-    def _knowledge_rows(self, name: str, *, generation_id=None, where=None) -> list[k.Record]:
+    def _knowledge_rows(self, name: str, *, generation_id=None, where=None, ids=None) -> list[k.Record]:
         """Knowledge records of one kind, optionally narrowed to an exact-match selection.
 
         `where` is a field -> value map drawn from `SCOPED_FIELDS`, a closed list of the columns
@@ -423,12 +423,22 @@ class KnowledgeQueries:
         read's clothes and would make a query-count bound read as passing while the database work
         stayed linear in the corpus. `generation_id=` is the common case spelled directly.
 
-        Passing neither key still reads the kind whole, which the legacy lane and collection rely
+        `ids=` names the records by primary key instead: one read for the whole list, each record
+        once, in the order asked, an unknown ID skipped. It is a selection of its own and is never
+        combined with `where` or `generation_id`. A proof or a projection that already knows which
+        records it serves fetches exactly those, rather than one query per record or a walk of the
+        kind.
+
+        Passing no key at all still reads the kind whole, which the legacy lane and collection rely
         on and this slice does not change.
         """
         model = k.RECORD_TYPES.get(name)
         if model is None:
             raise ValueError("Unknown knowledge record type")
+        if ids is not None:
+            if generation_id is not None or where:
+                raise ValueError(f"{name} is scoped by ids alone")
+            return self._knowledge_by_ids(name, model, ids)
         columns = model.model_fields
         selection = dict(where or {})
         if generation_id is not None:
@@ -464,6 +474,34 @@ class KnowledgeQueries:
             f"MATCH (n:{name}){clause} RETURN " + ", ".join(f"n.{field} AS {field}" for field in columns),
             **selection,
         )
+        return self._knowledge_records(model, rows)
+
+    def _knowledge_by_ids(self, name: str, model, ids) -> list[k.Record]:
+        """`_knowledge_rows(name, ids=...)`: one read keyed by the primary key, in the order asked."""
+        from .base import by_ids, unique_ids
+
+        if isinstance(ids, (str, bytes)):
+            raise TypeError("Knowledge ids must be a collection of record ids, not one string")
+        wanted = unique_ids(ids)
+        if not wanted:
+            return []
+        if self.knowledge_backend == "fake":
+            # One dict lookup per key and never a walk of the kind, so no write on another thread
+            # can land inside the read.
+            stored = self._knowledge_data.get(name, {})
+            return [record for identity in wanted if (record := stored.get(identity)) is not None]
+        # Driven by the key, never `WHERE n.id IN $ids`: LadybugDB answers that predicate from
+        # another row once the table holds a deleted row (`store.base.by_ids`).
+        rows = self.run(
+            f"{by_ids(name)} RETURN " + ", ".join(f"n.{field} AS {field}" for field in model.model_fields),
+            ids=wanted,
+        )
+        found = {record.id: record for record in self._knowledge_records(model, rows)}
+        return [found[identity] for identity in wanted if identity in found]
+
+    @staticmethod
+    def _knowledge_records(model, rows) -> list[k.Record]:
+        """Backend rows of one kind as records: instants as ISO text and JSON columns decoded."""
         records = []
         for row in rows:
             for field, value in row.items():
