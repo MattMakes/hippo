@@ -45,6 +45,11 @@ line needed the AnyIO filter (form (b)). CD5 already names `tests/unit/test_mana
 | CD10 | — | `GATES.md:63` verbatim | `All checks passed!` / `10 files already formatted` | 0 | `/tmp/hippo-cc11-cd10.log` |
 | Full Fake suite | Fake | `HIPPO_TEST_STORE=fake .venv/bin/pytest tests -q -o addopts='' -W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"` | On the merged tree with the Fake lock fix (`b16b5c2`): `1 failed, 4451 passed, 29 skipped in 1817.54s`. The failure is this slice's own full-size scenario: its CD1 recorder counted a held query's lease-renewal reads, made on the heartbeat thread during the refresh build, as build reads. The recorder now counts the build's own thread only; the rerun is PENDING | 1 | `/tmp/hippo-cc11-full-fake.log` |
 
+**These gate runs are from base `9a474e4`**, before this branch's two merges: `df05bac` brought
+codeproj, pa2f4 and kscope, and `c4ba26e` brought lbpool. They have not been rerun on the final tree.
+cc11b, the worker that takes the full-size CD9 run after qscope, reruns every CHECK line and the full
+Fake suite on that tree.
+
 CD10 counts ten files: the eight Python modules (`build_run.py` among them) plus the plan and the
 ledger. So `EXPECT: 10 files already formatted` is right, not 11. It stays right after this slice's
 plan appendix: `ruff format --check` on the plan prints `1 file already formatted`.
@@ -153,7 +158,8 @@ inside a store transaction and on any chat request.
 | GREEN, Fake, 2 files per language (before the per-batch bound was added) | `2 passed in 14.82s` | `/tmp/hippo-cc11-green-small.log` |
 | GREEN, Fake, 2 files per language (final file at `ae24a54`) | `2 passed in 12.44s` | `/tmp/hippo-cc11-green.log` |
 | Fake, default size | PENDING (inside the full Fake suite) | `/tmp/hippo-cc11-full-fake.log` |
-| LadybugDB, CD9 line | PENDING: after the store fix slice | `/tmp/hippo-cc11-cd9.log` |
+| LadybugDB validation after both merges, 2 files per language, 4 GiB pool (`5956f58`), every phase end to end | `2 passed in 455.06s`. Crash bootstrap 53.3 s, reopen 1.1 s, resume 41.6 s, reopen 0.7 s, seal and checksums 4.5 s, projection with arrows and source row 39.6 s, verified dense dispatch 163.8 s, refresh under the held snapshot 76.8 s, reopen 5.0 s. At most 20 native reads per batch; 183,041 knowledge reads; peak RSS 10.2 GiB | `/tmp/hippo-cc11-ladybug-2.log`, `/tmp/hippo-cc11-timings-ladybug-2.json` (with `.progress`), `/tmp/hippo-cc11-ladybug2-rss.log` |
+| LadybugDB, CD9 line at the default size | PENDING: cc11b runs it after qscope merges | — |
 
 ## Measurements behind findings 1 and 2
 
@@ -305,7 +311,7 @@ slices merge and CC11's LadybugDB rerun records GREEN.)
 
 ```text
 CHECK: HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_code_generation.py tests/unit/test_staged_code_writer.py tests/unit/test_generation_resume.py tests/unit/test_generation_scoped_reads.py tests/unit/test_converting_source_serving.py tests/unit/test_managed_code_activation.py tests/unit/test_code_history.py tests/unit/test_structural_loading.py tests/unit/test_dense_session.py tests/unit/test_code_capture_acceptance.py -q -o addopts='' -W error
-CRITERIA: close and reopen preserves generation pointers, fences, exact membership, native code rows and relations, bindings, manifests, raw references, resumable staging state and coverage; a published code generation projects `StructuralCodeEvidence` with exact original spans and original citations with real line locators, its sealed native `DEFINED_IN` rows each join a bound node to a passage of the same generation whose original spans include the node's binding span, the structural graph's projected `DEFINED_IN`, `CODE_EDGE`, `MODIFIES` and `PRECEDES` arrows equal the selected generation's sealed native rows and `status.source_view`'s `edges_by_kind` equals its native `CODE_EDGE` rows (the managed lane writes no `REFERS_TO` and a declaration-only module stays unbound, as `evidence-codeproj.md` pins), and it routes through verified dense dispatch; a retired generation stays reconstructable under a live snapshot; a refresh over an unchanged file or commit reuses its immutable revision, and the shared record survives reopen unchanged; a representative multi-hundred-file fixture (`tests/fakes/code_capture_repo.py`, 270 accepted files at its default size) completes within the ceilings of the plan's §8.3 with the CD1 query bound holding for native and knowledge reads alike. (Amended 2026-09-13 by CC11: the CD1 linearity bound at the 50,000-symbol ceiling is proven on Fake by CC2's synthetic fixture, and the index-backed half of the bound is proven on Neo4j (parity run 2), not on LadybugDB, which creates no secondary index; the multi-hundred-file fixture does not exercise the symbol ceiling and is not presented as doing so; the LadybugDB `IN <list>` engine defect on node string columns is guarded by `store.base.by_ids` and the static tripwire `test_no_query_builder_selects_node_rows_with_a_list_predicate`, `evidence-lbfix.md`.) Root records disposable-Neo4j parity for the same files here as an evidence note, run serially against the reserved container, never as a second concurrent pytest process.
+CRITERIA: close and reopen preserves generation pointers, fences, exact membership, native code rows and relations, bindings, manifests, raw references, resumable staging state and coverage; a published code generation projects `StructuralCodeEvidence` with exact original spans and original citations with real line locators, its sealed native `DEFINED_IN` rows each join a bound node to a passage of the same generation whose original spans include the node's binding span, the structural graph's projected `DEFINED_IN`, `CODE_EDGE`, `MODIFIES` and `PRECEDES` arrows equal the selected generation's sealed native rows and `status.source_view`'s `edges_by_kind` equals its native `CODE_EDGE` rows (the managed lane writes no `REFERS_TO` and a declaration-only module stays unbound, as `evidence-codeproj.md` pins), and it routes through verified dense dispatch; a retired generation stays reconstructable under a live snapshot; a refresh over an unchanged file or commit reuses its immutable revision, and the shared record survives reopen unchanged; a representative multi-hundred-file fixture (`tests/fakes/code_capture_repo.py`, 270 accepted files at its default size) completes within the ceilings of the plan's §8.3 on a LadybugDB store opened with the production buffer pool (4 GiB, `MAX_DEFAULT_BUFFER_POOL_BYTES`), with the CD1 query bound holding for native reads and for the build's own knowledge reads. (Amended 2026-09-13 by CC11: the CD1 linearity bound at the 50,000-symbol ceiling is proven on Fake by CC2's synthetic fixture, and the index-backed half of the bound is proven on Neo4j (parity run 2), not on LadybugDB, which creates no secondary index; the multi-hundred-file fixture does not exercise the symbol ceiling and is not presented as doing so; the LadybugDB `IN <list>` engine defect on node string columns is guarded by `store.base.by_ids` and the static tripwire `test_no_query_builder_selects_node_rows_with_a_list_predicate`, `evidence-lbfix.md`.) Root records disposable-Neo4j parity for the same files here as an evidence note, run serially against the reserved container, never as a second concurrent pytest process.
 EXPECT: passed
 ```
 
@@ -493,7 +499,16 @@ closed.
 
     The orchestrator ruled it a production defect and routed it to the follow-up slice `lbpool`,
     which covers `store/ladybug.py`, the settings and a test cap in `tests/conftest.py`. The
-    full-size CD9 run waits for `lbpool` to merge. This slice
+    full-size CD9 run waited for `lbpool` to merge.
+
+    `lbpool` merged at `c4ba26e`. The CD9 scenario now opens its store with an explicit
+    `buffer_pool_bytes`: 4 GiB by default, overridable through
+    `HIPPO_CODE_ACCEPTANCE_BUFFER_POOL_BYTES`.
+
+    With that pool, the 2-file-per-language validation passed with a peak RSS of 10.2 GiB, reached
+    after the refresh build. The pool caps LadybugDB's page cache, not the whole process's memory.
+    Whether the 4 GiB production default is enough at the default size is not yet evidenced. It is
+    the question cc11b's full-size run answers, under the same guard. This slice
     touches none of those files. For this run a guard stops only this slice's LadybugDB pytest if
     system free memory drops below 4 GB (`/tmp/hippo-cc11-ladybug-guard.log`).
 
@@ -571,4 +586,27 @@ closed.
 
 ## Commits
 
-PENDING.
+All on `wp/cc11`, first-parent order from base `9a474e4`:
+
+| Hash | Subject |
+| --- | --- |
+| `ae24a54` | Add the multi-hundred-file code capture fixture and the CD9 acceptance scenario |
+| `880aeff` | Record the CC11 plan amendments, gate runs and ledger replacement lines |
+| `3f71b44` | Record the amended CD2 run and the memory-kill context in the CC11 evidence |
+| `f6123e6` | Record CODEPROJ's closure and its two parity differences in the CC11 plan appendix and evidence |
+| `4edce57` | Merge rag-it-all-tibs (codeproj, pa2f4, kscope) into wp/cc11 for the CD9 rerun |
+| `cd358d4` | Correct status._with_code_edges' docstring now that the projection serves native code arrows |
+| `f31090c` | Scope the code coordinator's log-leak test to hippo's own loggers |
+| `baf2d8c` | Assert the merged fixes in the CD9 scenario: served arrows, source-row edges and scoped knowledge reads |
+| `3b1889d` | Break the CD9 scenario's optional timings down by knowledge read kind and per batch |
+| `d619a15` | Record KSCOPE's closure, the Neo4j driver logging limit and LadybugDB read counts in the CC11 appendix and evidence |
+| `b16b5c2` | Serialize the Fake store's knowledge reads and writes under its lock |
+| `7c7a7cc` | Record the Fake store heartbeat race and its fix in the CC11 evidence |
+| `caae8ba` | Record LadybugDB's default buffer pool as a CC11 finding |
+| `c851c2a` | Name the buffer pool follow-up slice in the CC11 evidence |
+| `92fe512` | Log the CD9 scenario's progress as it runs and record the LadybugDB guard trip |
+| `69976b4` | Count only the build thread's knowledge reads in the CD9 scenario's CD1 bound |
+| `4afd6c7` | Name the query-time whole-table reads and the LadybugDB phase costs for the fix slice |
+| `98b560a` | Merge rag-it-all-tibs (lbpool) into wp/cc11 for the full-size CD9 run |
+| `5956f58` | Open the CD9 scenario's LadybugDB store with an explicit buffer pool |
+| (the commit carrying the final rows below) | Record the 2-file LadybugDB validation run |
