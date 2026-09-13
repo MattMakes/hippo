@@ -150,7 +150,20 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 "_bootstrapped",
             }
             snapshot = (
-                deepcopy({name: value for name, value in vars(self).items() if name not in transient})
+                {
+                    **deepcopy(
+                        {
+                            name: value
+                            for name, value in vars(self).items()
+                            if name not in transient and name != "_knowledge_data"
+                        }
+                    ),
+                    # Knowledge records are frozen models that a write replaces and never mutates,
+                    # so the snapshot shares them and copies only the per-kind dicts holding them.
+                    # Deep-copying the records was most of a large build's CPU on this double, once
+                    # per outer transaction (`test_knowledge_scoped_reads` proves the premise).
+                    "_knowledge_data": {kind: dict(rows) for kind, rows in self._knowledge_data.items()},
+                }
                 if outer
                 else None
             )

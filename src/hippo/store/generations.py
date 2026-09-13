@@ -193,8 +193,8 @@ class GenerationQueries:
                 and gen.published_at is None
                 and source.get("active_generation_id") != gen.id
                 and not any(
-                    event.generation_id == gen.id and event.kind == "published"
-                    for event in self._knowledge_rows("IndexEvent")
+                    event.kind == "published"
+                    for event in self._knowledge_rows("IndexEvent", generation_id=gen.id)
                 )
             ):
                 # Only this exact unpublished attempt ends; the published active
@@ -450,8 +450,8 @@ class GenerationQueries:
                 gen.published_at is not None
                 or self.get_source(gen.source_id).get("active_generation_id") == gen.id
                 or any(
-                    event.generation_id == gen.id and event.kind == "published"
-                    for event in self._knowledge_rows("IndexEvent")
+                    event.kind == "published"
+                    for event in self._knowledge_rows("IndexEvent", generation_id=gen.id)
                 )
             ):
                 raise ValueError("Published generations cannot fail as builds")
@@ -490,7 +490,7 @@ class GenerationQueries:
         with self.transaction():
             self._check_build(generation_id, **credentials)
             gen = self._generation(generation_id)
-            if any(m.generation_id == gen.id for m in self._knowledge_rows("IndexManifest")):
+            if self._knowledge_rows("IndexManifest", generation_id=gen.id):
                 raise ValueError("A sealed profile cannot be rebound")
             result = validate_generation_profile(self, gen, manifest_revision_id)
             if embedding_mode(gen) == "verified_v1":
@@ -556,6 +556,36 @@ class GenerationQueries:
                 if target is not None:
                     result |= self._record_revisions(target, seen)
         return result
+
+    def _revision_member(self, generation_id, revision_id):
+        """True when the generation selected this revision.
+
+        A `GenerationMember`'s identity is exactly the pair, so this is one primary-key lookup
+        rather than a read of every member revision per record written.
+        """
+        member = k.GenerationMember(generation_id=generation_id, artifact_revision_id=revision_id)
+        return self._knowledge_get("GenerationMember", member.id) is not None
+
+    def _evidence_member(self, generation_id, record_kind, record_id):
+        """True when the generation's exact interpretation holds this record; one primary-key lookup."""
+        member = k.GenerationEvidenceMember(
+            generation_id=generation_id, record_kind=record_kind, record_id=record_id
+        )
+        return self._knowledge_get("GenerationEvidenceMember", member.id) is not None
+
+    def _sealed_member(self, record_kind, record_id):
+        """True when a generation that is no longer staging holds this exact record.
+
+        Read by the record's own id (a v7 index on Neo4j), so the cost is the few generations that
+        selected it rather than every member of every generation. A kind that can never be an
+        exact member answers without a read.
+        """
+        if record_kind not in k.GenerationEvidenceMember.model_fields["record_kind"].annotation.__args__:
+            return False
+        return any(
+            member.record_kind == record_kind and self._generation(member.generation_id).status != "staging"
+            for member in self._knowledge_rows("GenerationEvidenceMember", where={"record_id": record_id})
+        )
 
     def _check_knowledge_write(self, record, existing=None):
         from .authorization import RECORD_EPOCHS
@@ -635,58 +665,39 @@ class GenerationQueries:
             from ..knowledge.derivations import validate_prose
 
             validate_prose(self, record.generation_id, record, require_member=False)
+        # The member tests below run once per record a build writes, so each asks about the rows
+        # it names -- by primary key or by the record's id -- and never reads a member table whole.
         if isinstance(record, k.GenerationEvidenceMember):
-            selected = {
-                r.artifact_revision_id
-                for r in self._knowledge_rows("GenerationMember")
-                if r.generation_id == record.generation_id
-            }
             target = self._knowledge_get(record.record_kind, record.record_id)
             if isinstance(target, k.ProseExtraction) and target.generation_id != record.generation_id:
                 raise ValueError("Prose extraction belongs to another generation")
-            if not self._record_revisions(target) <= selected:
+            if not all(
+                self._revision_member(record.generation_id, revision_id)
+                for revision_id in self._record_revisions(target)
+            ):
                 raise ValueError("Evidence member is outside generation revisions")
         if isinstance(record, k.NativeBinding):
             gen = self._generation(record.generation_id)
             native = self._knowledge_get(record.native_kind, record.native_id)
             if native.get("generation_id") is not None or any(
-                j.input_fingerprint == gen.id and j.kind == "rebuild"
-                for j in self._knowledge_rows("MaintenanceJob")
+                j.kind == "rebuild"
+                for j in self._knowledge_rows("MaintenanceJob", where={"input_fingerprint": gen.id})
             ):
-                revisions = {
-                    m.artifact_revision_id
-                    for m in self._knowledge_rows("GenerationMember")
-                    if m.generation_id == gen.id
-                }
-                selected = {
-                    (m.record_kind, m.record_id)
-                    for m in self._knowledge_rows("GenerationEvidenceMember")
-                    if m.generation_id == gen.id
-                }
                 span = self._knowledge_get("EvidenceSpan", record.span_id)
                 if (
                     native.get("generation_id") != gen.id
-                    or span.revision_id not in revisions
-                    or ("EvidenceSpan", span.id) not in selected
+                    or not self._revision_member(gen.id, span.revision_id)
+                    or not self._evidence_member(gen.id, "EvidenceSpan", span.id)
                 ):
                     raise ValueError("Binding native or evidence is outside generation closure")
-        frozen = [
-            m
-            for m in self._knowledge_rows("GenerationEvidenceMember")
-            if self._generation(m.generation_id).status != "staging"
-        ]
-        if (
-            existing is not None
-            and not closure
-            and any(m.record_kind == type(record).__name__ and m.record_id == record.id for m in frozen)
-        ):
+        if existing is not None and not closure and self._sealed_member(type(record).__name__, record.id):
             raise ValueError("Published interpretation is immutable")
-        if isinstance(record, k.DerivedDependency) and any(
-            m.record_kind == "DerivedRecord" and m.record_id == record.derived_record_id for m in frozen
+        if isinstance(record, k.DerivedDependency) and self._sealed_member(
+            "DerivedRecord", record.derived_record_id
         ):
             raise ValueError("Sealed derivation cannot gain dependencies")
-        if isinstance(record, k.AssertionSupport) and any(
-            m.record_kind == "AssertionVersion" and m.record_id == record.assertion_version_id for m in frozen
+        if isinstance(record, k.AssertionSupport) and self._sealed_member(
+            "AssertionVersion", record.assertion_version_id
         ):
             raise ValueError("Sealed assertion proof group cannot gain support")
 
@@ -965,7 +976,11 @@ class GenerationQueries:
 
         for record in [*members, *exact, *bindings]:
             visit(record)
-        from ..knowledge.derivations import derived_capability, validate_generation_derivations
+        from ..knowledge.derivations import (
+            GenerationViews,
+            derived_capability,
+            validate_generation_derivations,
+        )
 
         if derived_capability(gen):
             validate_generation_derivations(self, gen.id)
@@ -1047,8 +1062,10 @@ class GenerationQueries:
             dimensions.update(
                 len(row.embedding) for row in (*extraction.payload.entities, *extraction.payload.triples)
             )
+        # One inventory for every rendered passage, read at the first one that carries a view.
+        views = GenerationViews(self, gen.id)
         for row in dense:
-            self._validate_managed_native("Passage", row, gen, selected=revisions)
+            self._validate_managed_native("Passage", row, gen, selected=revisions, views=views)
             if ("EvidenceSpan", row["span_id"]) not in exact_ids:
                 raise ValueError("Passage span missing from exact manifest")
             dimensions.add(len(row["embedding"]))
@@ -1108,7 +1125,7 @@ class GenerationQueries:
             )
             gen = self._generation(generation_id)
             self._verify_manifest(gen, index_manifest)
-            manifests = [m for m in self._knowledge_rows("IndexManifest") if m.generation_id == gen.id]
+            manifests = self._knowledge_rows("IndexManifest", generation_id=gen.id)
             if any(m != index_manifest for m in manifests):
                 raise ValueError("Conflicting generation manifest")
             self._write_knowledge(index_manifest)
@@ -1120,7 +1137,7 @@ class GenerationQueries:
 
     def validate_generation_seal(self, generation_id):
         gen = self._generation(generation_id)
-        manifests = [m for m in self._knowledge_rows("IndexManifest") if m.generation_id == generation_id]
+        manifests = self._knowledge_rows("IndexManifest", generation_id=generation_id)
         if gen.status not in ("ready", "active", "retired") or len(manifests) != 1:
             raise ValueError("Generation requires a strict rebuild")
         self._verify_manifest(gen, manifests[0])
@@ -1183,8 +1200,7 @@ class GenerationQueries:
         workspace = self.get_source(gen.source_id)["workspace_id"]
         staged = {
             (m.record_kind, m.record_id)
-            for m in self._knowledge_rows("GenerationEvidenceMember")
-            if m.generation_id == gen.id
+            for m in self._knowledge_rows("GenerationEvidenceMember", generation_id=gen.id)
         }
         series = set()
         for segment in plan.closures:
@@ -1205,11 +1221,7 @@ class GenerationQueries:
                 # the row was not active for any of it.
                 raise ValueError("Correction plan target belongs to the generation being published")
             series.add(self._plan_series(segment.record_kind, row))
-        revisions = {
-            m.artifact_revision_id
-            for m in self._knowledge_rows("GenerationMember")
-            if m.generation_id == gen.id
-        }
+        revisions = self._selected_revisions(gen.id)
         for segment in plan.appends:
             if (segment.record_kind, segment.record_id) not in staged:
                 raise ValueError("Corrected segment is not an exact member of the staged generation")
@@ -1259,8 +1271,8 @@ class GenerationQueries:
                 raise ValueError("Correction plan disagrees with the publication clock")
             receipt = [
                 e
-                for e in self._knowledge_rows("IndexEvent")
-                if e.generation_id == generation_id and e.kind == "published"
+                for e in self._knowledge_rows("IndexEvent", generation_id=generation_id)
+                if e.kind == "published"
             ]
             origin = dict(job_id=job_id, fencing_token=fencing_token, lease_owner=lease_owner)
             if plan is not None:
@@ -1288,26 +1300,24 @@ class GenerationQueries:
                 raise ValueError("Suppression changed during build")
             suppressed = {(s.target_kind, s.target_id) for s in self._knowledge_rows("Suppression")}
             reachable = {("source", gen.source_id)}
-            for member in self._knowledge_rows("GenerationMember"):
-                if member.generation_id == gen.id:
-                    revision = self._knowledge_get("ArtifactRevision", member.artifact_revision_id)
-                    artifact = self._knowledge_get("Artifact", revision.artifact_id)
-                    if artifact.deleted_at is not None:
-                        raise ValueError("Generation includes tombstoned artifact")
-                    reachable |= {
-                        ("revision", revision.id),
-                        ("artifact", artifact.id),
-                        ("policy", artifact.policy_id),
-                    }
-            for member in self._knowledge_rows("GenerationEvidenceMember"):
-                if member.generation_id == gen.id:
-                    kind = {
-                        "EvidenceSpan": "span",
-                        "AssertionVersion": "assertion_version",
-                        "DerivedRecord": "derived_record",
-                    }.get(member.record_kind)
-                    if kind:
-                        reachable.add((kind, member.record_id))
+            for member in self._knowledge_rows("GenerationMember", generation_id=gen.id):
+                revision = self._knowledge_get("ArtifactRevision", member.artifact_revision_id)
+                artifact = self._knowledge_get("Artifact", revision.artifact_id)
+                if artifact.deleted_at is not None:
+                    raise ValueError("Generation includes tombstoned artifact")
+                reachable |= {
+                    ("revision", revision.id),
+                    ("artifact", artifact.id),
+                    ("policy", artifact.policy_id),
+                }
+            for member in self._knowledge_rows("GenerationEvidenceMember", generation_id=gen.id):
+                kind = {
+                    "EvidenceSpan": "span",
+                    "AssertionVersion": "assertion_version",
+                    "DerivedRecord": "derived_record",
+                }.get(member.record_kind)
+                if kind:
+                    reachable.add((kind, member.record_id))
             if reachable & suppressed:
                 raise ValueError("Suppressed generation cannot activate")
             self.validate_generation_seal(gen.id)
@@ -1368,16 +1378,14 @@ class GenerationQueries:
         active = source.get("active_generation_id")
         if active == gen.id:
             events = [
-                e
-                for e in self._knowledge_rows("IndexEvent")
-                if e.generation_id == gen.id and e.kind == "published"
+                e for e in self._knowledge_rows("IndexEvent", generation_id=gen.id) if e.kind == "published"
             ]
             if len(events) != 1:
                 raise ValueError("Active generation lacks a unique publication event")
             return events[0].id
         if active != expected_parent_id:
             raise ValueError("Generation publication compare-and-swap failed")
-        manifests = [m for m in self._knowledge_rows("IndexManifest") if m.generation_id == gen.id]
+        manifests = self._knowledge_rows("IndexManifest", generation_id=gen.id)
         if gen.status != "ready" or len(manifests) != 1 or not manifests[0].ready:
             raise ValueError("Generation requires a complete ready index manifest")
         self._write_knowledge(gen.replace(status="active", published_at=published_at))
@@ -1453,12 +1461,17 @@ class GenerationQueries:
             for m in self._knowledge_rows("GenerationMember", generation_id=generation_id)
         }
 
-    def _validate_managed_native(self, kind, row, gen, *, selected=None):
+    def _validate_managed_native(self, kind, row, gen, *, selected=None, views=None):
         """Validate one managed native row.
 
         `selected` is the generation's member revisions. A caller in a loop passes it once --
         reading it here per row is the same whole-table read repeated N times, which is what made
         writing a 50,000-symbol generation quadratic rather than linear.
+
+        `views` is the same hoist for a rendered passage: a `derivations.GenerationViews` for
+        `gen`, whose inventory of the generation's exact membership is read at the first view and
+        reused for the rest of the caller's batch. Without it each view is validated from a fresh
+        read, exactly as `validate_view` does.
         """
         if row.get("source_id") != gen.source_id or row.get("generation_id") != gen.id:
             raise ValueError("Native row source or generation differs")
@@ -1469,12 +1482,12 @@ class GenerationQueries:
                 selected = self._selected_revisions(gen.id)
             view = None
             if row.get("retrieval_view_id") is not None:
-                from ..knowledge.derivations import validate_view
+                from ..knowledge.derivations import GenerationViews
 
                 view = self._knowledge_get("RetrievalView", row["retrieval_view_id"])
                 if view is None:
                     raise ValueError("Missing rendered retrieval view")
-                validate_view(self, gen.id, view)
+                (GenerationViews(self, gen.id) if views is None else views).validate(view)
                 if (
                     view.span_id != row.get("span_id")
                     or view.source_revision_id != row.get("artifact_revision_id")
@@ -1563,8 +1576,11 @@ def native_write(kind):
                 existing = {
                     row["id"]: row for row in store._native_rows(kind, ids=[row["id"] for row in rows])
                 }
+                from ..knowledge.derivations import GenerationViews
+
                 selected = {}  # generation id -> member revisions, read once per generation
                 generations = {}  # the same, for the Generation row itself
+                views = {}  # the same, for the inventory a rendered passage is validated against
                 checked = set()  # generations already proven writable in this call
 
                 def writable(generation_id):
@@ -1591,8 +1607,13 @@ def native_write(kind):
                         selected[generation_id] = (
                             store._selected_revisions(generation_id) if kind == "Passage" else None
                         )
+                        # Reads nothing until a row carries a view, so a generation with no derived
+                        # capability never builds an inventory and never meets its refusal.
+                        views[generation_id] = GenerationViews(store, generation_id)
                     gen = generations[generation_id]
-                    store._validate_managed_native(kind, row, gen, selected=selected[generation_id])
+                    store._validate_managed_native(
+                        kind, row, gen, selected=selected[generation_id], views=views[generation_id]
+                    )
                     if gen.status == "staging":
                         writable(generation_id)
                     shaped = store._canonical_native(kind, row)

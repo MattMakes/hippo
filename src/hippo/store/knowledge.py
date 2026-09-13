@@ -220,8 +220,8 @@ def _selected_principals(principal_ids):
 #
 # `SCOPED_FIELDS` are indexed on every kind that declares them -- `id` by the uniqueness
 # constraint, the rest by `migrations.schema_steps`' index list, which emits one index per kind
-# per field. `KIND_SCOPED_FIELDS` are indexed on one kind only, by the v6 step, so allowing them
-# anywhere else would promise a bounded query the database cannot deliver.
+# per field. `KIND_SCOPED_FIELDS` are indexed on one kind only, by the v6 or v7 step, so allowing
+# them anywhere else would promise a bounded query the database cannot deliver.
 SCOPED_FIELDS = frozenset(
     {
         "id",
@@ -240,6 +240,10 @@ KIND_SCOPED_FIELDS = {
     "IndexEvent": frozenset({"aggregate_id"}),
     "Suppression": frozenset({"target_kind", "target_id"}),
     "MaintenanceJob": frozenset({"input_fingerprint"}),
+    # v7. The sealed-interpretation guard asks which generations hold one record, and a derivation
+    # is validated against the dependencies of the record it derives; both used to walk the table.
+    "GenerationEvidenceMember": frozenset({"record_id"}),
+    "DerivedDependency": frozenset({"derived_record_id"}),
 }
 
 
@@ -438,6 +442,12 @@ class KnowledgeQueries:
             if "id" in selection:  # the primary key answers without walking the kind
                 record = rows.get(selection["id"])
                 rows = [record] if record is not None else []
+            elif len(selection) == 1:
+                # The common scoped read: one key, compared directly rather than through `all()`.
+                # Still a walk of the kind -- the Fake store has no secondary index -- but the
+                # per-row cost is the comparison alone.
+                ((field, value),) = selection.items()
+                return [record for record in rows.values() if getattr(record, field) == value]
             else:
                 rows = list(rows.values())
             return [
