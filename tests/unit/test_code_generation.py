@@ -983,7 +983,10 @@ def test_no_log_record_source_row_or_receipt_carries_a_path_url_or_source_text(w
     with caplog.at_level(logging.DEBUG):
         result = build(w)
     forbidden = (str(w.checkout), CLONE_URL, "git.example.com", secret, "ACME builds robots")
-    for record in caplog.records:
+    # Hippo's own loggers only. The Neo4j driver logs every Cypher statement with its parameters
+    # at DEBUG, so under Neo4j caplog also sees raw URIs and paths that hippo never logged. Capping
+    # that driver logger is the application's logging setup, recorded as a follow-up.
+    for record in (record for record in caplog.records if record.name.startswith("hippo")):
         message = record.getMessage()
         assert not any(item in message for item in forbidden), message
     # The Source row carried its own clone URL before this build started -- that is the

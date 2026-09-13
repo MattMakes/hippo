@@ -457,3 +457,310 @@ Neo4j parity, CD10 lint and independent review. Fake is the first backend for ev
 is the acceptance backend, and Neo4j parity is recorded as root-owned evidence under CD9 rather
 than as a separately runnable line, following the `task-5-prose-coordinator` PC-N4 convention: the
 disposable container admits one pytest process at a time. No gate is satisfied by this document.
+
+## Post-implementation amendments (CC11, 2026-09-13)
+
+What CC1–CC10 shipped (merged at `9a474e4`) where it differs from the sections above, or makes
+them precise. Each paragraph names the text it supersedes and its evidence. The sections above are
+left as reviewed. Evidence files live in `ai_docs/gates/rag-it-all/task-5-code-capture/`.
+
+**§2 and §3, `read_plain_provenance`** (supersedes the §2 row "`prepare_prose_chunks` and
+`read_plain_provenance` both reject code" and §3's "prose rejects code by contract at three
+reviewed seams"). `read_plain_provenance` does not reject code. `provenance.py:349` decodes
+`CODE_EXTENSIONS`, `:377` marks `is_code`, and only rich names and `.zip` refuse.
+`code_provenance.read_code_provenance` delegates its decode to it, refuses plain-prose names, and
+accepts extensionless known-text names such as `go.mod` (ruling 7; `evidence-cc4.md` item 1). The
+claim about `prepare_prose_chunks` was not re-examined. The separate code seam stands on §3's
+other reasons.
+
+**§2, `build_authority._source_control`** (adds the seam §2 omitted; review B3). This function held
+a third copy of the Artifact/Generation presence test and refused every kind except `text` and
+`file`. CC8 changed four things:
+
+- it admits `repo` and `archive`;
+- it computes `managed` from the row's `managed` flag or `active_generation_id`;
+- `_inventory` admits `repository` and `history_event` members;
+- the planned-policy scope key accepts `source:<id>:managed-code-v1` beside `plain-prose-v1`
+  (`evidence-cc8.md`).
+
+**§3, `CodeTreeInput` and `CodeBuildOptions`** (supersedes §3's "the ordered tuple of normalized
+relative paths to capture" and the clone depth in §5's operational list). The coordinator is
+handed a checkout. `paths` is an exclusion complement over the walk: every walked path not named
+is excluded, and a named path the walk did not find refuses. Capture has no only-these-paths mode
+(`evidence-cc9b.md` deviation 1). `CodeBuildOptions` has no clone-depth field. The activation
+adapter derives the depth as `code_history_depth + 1`, or 1 with history off (`evidence-cc10.md`).
+
+**§4, the community label** (supersedes "community label" in the observation attributes and "The
+community label is computed during preparation … and written in the `Symbol` row before the
+seal"). This lane cannot write it: `store/code.py::symbol_write_row` builds a closed dict with no
+`community` key, and `add_symbols` has no `SET n.community` (`evidence-cc8.md` finding 3,
+`evidence-cc6.md` finding 4, `evidence-cc9b.md` finding 5). The claim is withdrawn for this task.
+Writing communities for managed code needs its own `store/code.py` slice, which is not scheduled.
+
+**§4, data objects, mentions and overloads.**
+
+- `knowledge.model.ObjectKind` has `table` and `column` but not the codegraph's `collection`,
+  `label` or `rel_type`. `code_binding.DATA_OBJECT_KINDS` maps those three to `resource` and keeps
+  the dialect and data kind in `canonical_key` and `attributes_json` (`evidence-cc6.md`). Growing
+  `ObjectKind` instead is a `model.py` change left to the CD10 review.
+- The committed chunker synthesizes no data-object mention text, so §4's "data-object mention
+  passages" have no instance (`evidence-cc5.md` finding 1).
+- `codegraph.model.symbol_id` carries no signature, so two C# overloads in one file share one
+  native ID. They become two knowledge objects and two bindings over one native row, and the first
+  in canonical order is kept. This is a recorded defect, not repaired (`evidence-cc6.md`). Fixing it
+  needs a `codegraph` change and a native-ID migration.
+
+**§4, the projection** (qualifies "this lane populates `StructuralCodeEvidence`"). As of CC10, a
+published code generation projected its code nodes with no arrows. Code derived records carry no
+`input_binding_ids` (`knowledge/code_binding.py:459-463`), so the projection drew no `DEFINED_IN`
+for a rendered code passage, and it read no native `CODE_EDGE` (`evidence-cc11.md` finding 2).
+CODEPROJ, merged at `955cc11`, closed this without changing any evidence writer or generation
+identity (`evidence-codeproj.md`):
+
+- `projection._native_code_relations` reads each selected generation's sealed `CODE_EDGE`,
+  `DEFINED_IN`, `MODIFIES` and `PRECEDES` rows. It uses one scoped `_edges_touching(...,
+  both=True)` read over that generation's bound native ids and projected passages.
+- The rows are served as arrows with the legacy loader's kind, weight, provenance and extra, plus
+  `generation_id` and `support_span_ids`.
+- A `DEFINED_IN` arrow is served only when the node's binding span lies inside the passage's exact
+  original closure, so a bound node needs no `StructuralCodeEvidence` row.
+- Relations stay native, as ruling 1 says. The projection is the one reader that turns them into
+  arrows.
+
+Two parity differences against the legacy lane remain.
+`test_code_projection.py::test_one_repository_serves_the_same_code_arrows_through_the_legacy_and_the_managed_lane`
+pins both exactly:
+
+1. **No `REFERS_TO`.** `staged_code.RELATION_KINDS` is `CODE_EDGE`, `DEFINED_IN`, `MODIFIES` and
+   `PRECEDES`. The managed lane therefore writes none of the prose-to-code `REFERS_TO` relations the
+   legacy indexer draws.
+2. **Declaration-only modules stay unbound.** A module whose file holds only declarations, such as
+   `web/index.ts` in that test, has no passage of its own. It appears only in its first
+   declaration's `defines`, while `materialize_code_evidence` binds a chunk's own `symbol_id`
+   (`code_binding.py:1077-1085`). So the module gets no native row, `code_relations` drops every
+   relation touching it, and coverage counts it in `unbound_nodes`. The legacy lane serves that
+   node with its `CONTAINS`, `MODIFIES` and `DEFINED_IN`. The fix belongs to the owner of
+   `code_binding.py` and `ingest/code_generation.py`.
+
+Two overloads sharing one native ID project as the cross product of their knowledge objects. A
+status card that counts arrows can then exceed the source row's native count
+(`evidence-codeproj.md` finding 3).
+
+**§4, §6 and §10, prose inside a tree** (supersedes §4's "Plain-prose files inside a captured tree
+… do receive extraction", §6 step 1's OpenIE profile, §10's "prose OpenIE for captured prose files"
+and ruling 5). Ruling 5 is deferred, by name, to a follow-up slice. The code bundles and
+`staged_code` carry no `ProseExtraction`, and the writer refuses one. A `readers.PROSE_EXTENSIONS`
+file inside a tree is therefore captured as ordinary passages through `prepare_code_chunks`' prose
+branch. Coverage records `openie: "skipped"` for it, with the reason `prose_extraction_deferred`
+per file (`code_generation.OPENIE_PROSE_DEFERRED`, `evidence-cc9b.md`). The follow-up widens CC6,
+CC7 and CC8 together. Until it lands, a converted source loses the README facts that the legacy
+lane extracts, which is the regression §11 item 5 named. Ruling 11 shipped as written: an
+extensionless `README`, `LICENSE`, `NOTES` or `go.mod` becomes `window` passages with the reason
+`unparsed`.
+
+**§5, repository identity** (supersedes "its normalized `owner/name` path as the repository ID";
+review M8).
+
+- The repository ID is the whole normalized path, not `repos.repo_name`'s last two segments. A
+  trailing `.git` and empty segments are dropped, and `.` or `..` refuse.
+- Host and path fold to lowercase, and transport folds to `https`. The `http://`, `ssh://git@host/`
+  and `git@host:` spellings of a path are one repository.
+- An `ssh` port and a scheme's default port are dropped. A non-default `http(s)` port is kept.
+- An `http(s)` URL carrying userinfo refuses (`evidence-cc4.md` M8).
+
+The cost falls on a forge with genuinely case-sensitive paths. Task 10's provider IDs resolve it.
+
+**§5, walker drift** (review m7). Two generations at one commit with different walker or grammar
+versions cannot collide, because the versions are hashed into the generation ID and native IDs are
+re-derived from its namespace. They drift instead. `symbol_key` is deliberately not
+generation-scoped, so a walker that changes a qualified name or a signature mints a new symbol
+object, and the old object keeps its observations. A walker upgrade silently forks that symbol's
+history.
+
+**§5, identity inputs that do not match the text.**
+
+- `chunk_overlap_chars` is hashed but changes no code passage. `chunker.code_windows` takes no
+  overlap, so two generations that differ only in overlap have byte-identical code passages
+  (`evidence-cc6.md` finding 11).
+- Contrary to ruling 10's list, no writer rule version is hashed. Batch grouping changes no record
+  identity, and the resume probe's absence assertion closes M2 (`evidence-cc8.md` finding 5).
+
+**§7, the legacy lane** (supersedes the whole section; rulings 9 and 14).
+
+- **The flag.** The `managed` flag still flips at staging start, so every destructive-operation
+  guard treats a converting source as managed.
+- **The serving predicate.** `GenerationQueries.source_serves_legacy(source_row)` decides the
+  serving lane apart from the loader-selection set, independent of the flag, with three terms: no
+  `active_generation_id`, no published `IndexEvent`, and no all-principals `Suppression` targeting
+  the source (`evidence-cc1.md`).
+- **Untagged rows only.** `context.legacy_lane(store, sources, managed_records)` (`context.py:54`,
+  shared by `status.py:72`) applies ruling 14: only untagged rows serve the legacy lane. A source
+  with no `Generation` row is legacy iff it is in no managed record set. A source with one is legacy
+  iff `source_serves_legacy` holds and it still owns an untagged `Passage`, `Symbol`, `DataObject` or
+  `Commit`.
+- **Consequences.** A bootstrap-only managed source is absent from every surface until publication,
+  and an empty selection never falls through to the unfiltered legacy loader
+  (`evidence-cc1fix.md`). Refresh differs from bootstrap in the three places §7 names.
+
+**§8.1, the knowledge-table half of the scale defect** (adds to §8.1). CC2's scoped reads bounded
+the native tables. At CC10, though, the write path still read whole knowledge tables per record:
+
+- `_check_knowledge_write` (`store/generations.py:641`, `:658`, `:663`, `:675`) reads every
+  `GenerationMember` and `GenerationEvidenceMember` row for each membership or binding put.
+- `knowledge/derivations.py`'s `_Inventory` and `validate_view` read whole
+  `GenerationEvidenceMember`, `GenerationMember` and `DerivedDependency` tables. They are reached
+  per rendered passage through `_validate_managed_native` (`generations.py:1477`).
+
+A code build was therefore quadratic in the corpus. On Fake it took 1.1 s, 8.4 s and 109.5 s at
+10, 40 and 160 files, and one 10-file build took 444.6 s on LadybugDB (`evidence-cc11.md`).
+KSCOPE, merged at `df05bac`, scoped every one of those reads (`evidence-kscope.md`). Each is now
+keyed by `generation_id`, by a primary key, or by one of the two schema v7 keys,
+`GenerationEvidenceMember.record_id` and `DerivedDependency.derived_record_id`. LadybugDB has no
+secondary-index DDL, so there the v7 keys are predicate scans inside the engine.
+
+A build still issues one keyed knowledge read per record it checks. The three builds of CD9's
+scenario at 20 files made about 183,000, almost all `where` lookups, so on LadybugDB a build's cost
+is set by that query count (`evidence-cc11.md`).
+
+**§8.2, reclaim** (supersedes the "Resume" paragraph's admission rule; review B5).
+`reclaim_generation_build` performs every step of `claim_generation_build` except collection, in
+this order:
+
+1. read and lock the source;
+2. the tombstone barrier;
+3. `staging` or `failed` status with a future lease;
+4. the never-published triple: `published_at`, `active_generation_id == gen.id`, and any published
+   `IndexEvent`. `claim_generation_build` now checks the same triple.
+5. `expected_manifest_hash`;
+6. live-holder exclusion, where the same holder is idempotent;
+7. advance the fence and install a fresh holder.
+
+A refusal advances no fence and installs no holder. Manifest equality is an assertion, not the
+safety property (M1, `evidence-cc3.md`).
+
+**§8.2 and §9, the capture instant** (review B4). The instant is persisted as
+`Generation.created_at`, which is outside generation identity.
+
+- The coordinator computes the manifest and generation ID first. It then adopts the stored
+  `created_at` on a reclaim, or takes one `store._now()` for a generation it creates.
+- The instant is threaded through binding and history. `bind_history` refuses any other instant,
+  so a resumed build reproduces every `ObjectObservation` ID.
+- `ArtifactRevision.observed_at` means first observed. A refresh over an unchanged file or commit
+  reuses the stored revision. Minting the same ID with a new instant would make `put_knowledge`
+  refuse (`evidence-cc9b.md`).
+
+**§8.2, resume probe and receipt** (supersedes "skips a group whose inventory already matches").
+
+- The probe compares every row of a group against its canonical payload. It also asserts that the
+  generation holds no row the current derivation would not produce (ruling 10).
+- `BuildReceipt.resumed_from_batches` counts skipped dependency groups, minus the revision-member
+  groups the install writes before every attempt. It does not count batch transactions
+  (`evidence-cc8.md`, `evidence-cc9b.md`).
+- A `ResumePlan` is not bound to the prepared index it was probed against (`evidence-cc8.md` finding
+  8).
+
+**§8.2, rebaseline** (supersedes the "Long-build authority" paragraph; review M6 and M7). As CC8
+built it, `BuildAuthority.rebaseline()`:
+
+- refuses inside a transaction and after a sticky failure;
+- under the authorization and source locks, refuses any suppression-epoch change (frozen at
+  capture; publication would refuse such a change anyway, which subsumes M7);
+- refuses any change to `SourceControl`'s `access_role_id`, `min_rank` or `owner_id`;
+- then builds a child `BuildAuthority` from the current authorization epoch and the original actor,
+  inputs and source control, and adopts that epoch only if `child.check_local()` passes. The
+  parent's own `check_local()` is never called.
+
+Receipts count rebaselines (`evidence-cc8.md`).
+
+**Still open: the heartbeat race.** `LeaseHeartbeat` renews on its own timer through `check_local()`.
+That call can latch an epoch mismatch before the between-batch comparison rebaselines it. A build
+that loses the race fails with its inventory retained and resumes on the next attempt. Closing the
+race needs a hook in `build_run.py`, which CC10 did not take (`evidence-cc9b.md` item 4,
+`evidence-cc10.md` deviation 4).
+
+**§8.3, ceilings** (qualifies "Exceeding a ceiling refuses the build before capture").
+
+- The passage ceiling is checked after chunking (`evidence-cc5.md` finding 8). Every ceiling still
+  refuses before a generation is installed
+  (`test_code_generation.py::test_every_ceiling_refuses_before_it_installs_anything`).
+- `CodeBuildOptions.max_file_bytes` (2,000,000, the value of `readers.MAX_FILE_BYTES`) is the
+  capture cap that excludes a file as `too_large`. `CODE_MAX_FILE_BYTES` (512 KiB) only decides
+  whether a captured file is parsed or kept as line windows.
+- `max_inputs` is `3 * CODE_MAX_FILES`, because excluded entries count against the capture limits.
+
+**§9, `evidence_class` and history coverage** (adds rows to the §9 table; review m4 and m5).
+
+| Observation | `evidence_class` and span |
+| --- | --- |
+| symbol and data object | `syntax_observed` |
+| file object | `catalog_observed`, one observation per span |
+| repository object | `declared`, one observation over a `field` locator on the normalized clone path |
+| commit | `declared`, a `field` locator `commit.message` on the `history_event` revision |
+
+Coverage records `history_walk: "first_parent"` beside `skipped`, `truncated` and the shallow
+boundary. `codegraph.git_history.shallow_boundary` was added by CC9b. Coverage also records
+`history_renames: "not_reported"`, because `History` reports no renames. The history rule version
+enters identity under the top-level `code_history_derivation` key (ruling 10, option 3).
+
+**§10, privacy** (supersedes "Absolute paths, repository URLs with credentials … never reach logs"
+as a present property; review m6 and question 8). The redaction was work, and CC10 did it
+(`evidence-cc10.md`):
+
+- a clone failure logs a closed reason and the bare host, never the URL or git's stderr;
+- a timeout names no URL and drops its chained cause;
+- checkout errors name no absolute path;
+- with an actor, `add_repo` refuses a credentialed URL before any Source row exists.
+
+Three limits remain.
+
+- The legacy lane still stores a credentialed `meta.url` (Task 16).
+- `EvidenceSpan.text` stores the original code text in the database by design. "Source text never
+  reaches logs" must not be read as "code text is not stored": the access boundary protects it.
+- On Neo4j the driver logs every Cypher statement with its parameters at DEBUG, so raw URIs and
+  captured paths reach a DEBUG log that hippo's own loggers never write. Root's Neo4j parity run 6
+  found it through `test_code_generation.py`'s log-leak test, which now checks hippo's loggers only.
+  Hippo's logging setup must cap the `neo4j` logger at INFO (Task 16 follow-up).
+
+**§10, failure, crash and costs.**
+
+- **Seal-to-publication crash.** Such a crash leaves the generation `ready`. An immediate retry
+  cannot reclaim it, because reclaim admits only `staging` and `failed` (`evidence-cc9b.md` item 5).
+  Once lease-expiry recovery marks it `failed`, reclaim returns it to `staging`, and the
+  byte-identical seal publishes (`evidence-cc3.md`).
+- **Crashed repository build.** It leaves `checkouts/<operation-id>/` behind until the same
+  operation retries (`evidence-cc10.md` finding 3).
+- **`content_kind`.** It is unset on code passages (`evidence-cc8.md` finding 4).
+- **Query-time profile check.** `validate_generation_profile` does a bounded `_knowledge_get` pair
+  per member on every query that touches a code generation (`evidence-cc8.md` finding 6).
+
+**§11, rulings 12 and 13** (ruling 14 is under §7 above).
+
+- **Ruling 12.** `knowledge/code_binding.py` and `knowledge/code_history.py` import nothing from
+  `hippo.ingest`. They validate the capture and chunk dataclasses structurally and pin
+  `EXPECTED_CODE_CHUNK_RULE_VERSION`. Moving the shared dataclasses into `knowledge/inputs.py` is
+  deferred.
+- **Ruling 13.** `generation_profiles` has a `code` profile, selected by the accepted configuration:
+  one manifest, one repository, one file per accepted input and zero or more `history_event`
+  members, with the `history_event` pairs excluded from the identity re-derivation. It is validated
+  at seal, checksum and query time, and the plain-prose profile is byte-identical.
+
+**LadybugDB engine defect** (applies to every store query builder). real_ladybug 0.15.3 can answer
+an `IN <list>` predicate on a string column of a node table from the wrong row. It does so when the
+table holds a deleted row and the wanted row was written in the open transaction.
+
+- Every list-membership read in `store/*` and `knowledge/*` goes through `store.base.by_ids`, which
+  emits `UNWIND $ids AS wanted_id MATCH (n:Label {id: wanted_id})`.
+- `tests/unit/test_generation_scoped_reads.py::test_no_query_builder_selects_node_rows_with_a_list_predicate`
+  is the static tripwire.
+- The relationship-property `r.kind IN $kinds` at `store/code.py:596` and `store/ladybug.py:1280`
+  stays allowlisted and unprobed (`evidence-lbfix.md`).
+
+Future LadybugDB query builders use the `UNWIND` form.
+
+**§13, acceptance** (qualifies CD9).
+
+- The index-backed half of the CD1 bound is proven on Neo4j (root parity run 2), not on LadybugDB,
+  which has no secondary-index DDL (`evidence-cc2.md`, `neo4j-parity.md`).
+- The linearity proof at the 50,000-symbol ceiling is CC2's synthetic Fake test.
+- CD9's fixture, `tests/fakes/code_capture_repo.py`, does not reach that ceiling and is not presented
+  as doing so.

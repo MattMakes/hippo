@@ -180,9 +180,10 @@ def _with_code_edges(row: dict[str, Any], store, generation_id: str | None) -> d
     """Add one managed row's native code relations, read by exact generation membership.
 
     The count is one scoped `_native_relationships(generation_id=...)` read of the row's proven
-    selected pair. It is never taken from the held graph: an arrow on a vertex does not say which
-    generation wrote it, and the structural projection serves no native `CODE_EDGE` row as an arrow
-    at all. A staged, failed, retired or tombstoned generation is never a selected pair, so it is
+    selected pair. It is never taken from the held graph. The structural projection does serve each
+    selected generation's sealed `CODE_EDGE` rows as arrows, but a shared vertex carries every
+    contributor's arrows, so walking a row's vertices would count other generations' relations too.
+    A staged, failed, retired or tombstoned generation is never a selected pair, so it is
     never read, and a publication replaces the pair and its count together. The read refuses an
     edge that crosses generations rather than dropping it, so a count is never taken over one.
     """
