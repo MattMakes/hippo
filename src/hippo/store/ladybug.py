@@ -1555,7 +1555,9 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
         ids: list[str] = []
         vectors: list[list[float]] = []
         for label in ("Symbol", "DataObject"):
-            for row in self.run(f"MATCH (n:{label}) RETURN n.id AS id, n.embedding AS embedding"):
+            for row in self.run(
+                f"MATCH (n:{label}) WHERE n.generation_id IS NULL RETURN n.id AS id, n.embedding AS embedding"
+            ):
                 if row["embedding"]:
                     ids.append(row["id"])
                     vectors.append(list(row["embedding"]))
