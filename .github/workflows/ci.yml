@@ -2,6 +2,11 @@
 # the same tests on the in-memory fake, and once more against a real Neo4j (the
 # `store` fixture switches on HIPPO_TEST_STORE / NEO4J_URI). Ollama is always
 # faked: CI has no GPU and no time to pull models.
+#
+# tests/unit/test_code_capture_acceptance.py runs at its default size in every job
+# here: 8 files per language (50 accepted files), the size gate CD9's CHECK line pins.
+# The multi-hundred-file ledger run is opt-in and never runs in CI:
+# HIPPO_CODE_ACCEPTANCE_FILES_PER_LANGUAGE=48.
 
 name: ci
 
