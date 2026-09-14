@@ -83,6 +83,22 @@ namespace Acme
 }
 """
 
+
+def _long_move(parameter):
+    body = "\n".join(
+        f"            total += {n}; // long enough that the method splits into windows" for n in range(60)
+    )
+    return f"        public int Move({parameter} steps)\n        {{\n            var total = 0;\n{body}\n            return total;\n        }}"
+
+
+# The same two overloads, each longer than one 1500-character window, so each is split into windows
+# that all name the one native ID the overloads share.
+LONG_OVERLOADS = (
+    "namespace Acme\n{\n    public class Robot\n    {\n"
+    + "\n\n".join(_long_move(parameter) for parameter in ("int", "string"))
+    + "\n    }\n}\n"
+)
+
 TREE = {"src/orders.py": ORDERS.encode(), "db/schema.sql": SCHEMA.encode()}
 
 
@@ -276,7 +292,7 @@ def test_the_module_imports_no_ingest_module():
 
 
 def test_the_rule_versions_are_frozen_and_travel_with_the_bundle(api, raw_store, tmp_path):
-    assert api.CODE_BINDING_RULE_VERSION == "code-binding-v1"
+    assert api.CODE_BINDING_RULE_VERSION == "code-binding-v2"
     assert api.EXPECTED_CODE_CHUNK_RULE_VERSION == "code-chunks-v1"
     bundle, _, prepared, _ = bundle_of(api, raw_store, tmp_path / "repo")
     assert bundle.rule_version == api.CODE_BINDING_RULE_VERSION
@@ -398,7 +414,7 @@ def test_a_changed_binding_rule_version_is_a_different_generation(api, raw_store
         generation_identity_inputs=identity_inputs(api),
         observed_at=INSTANT,
     )
-    monkeypatch.setattr(api, "CODE_BINDING_RULE_VERSION", "code-binding-v2")
+    monkeypatch.setattr(api, "CODE_BINDING_RULE_VERSION", "code-binding-v3")
     other = api.code_generation(
         captured,
         workspace_id=WORKSPACE,
@@ -510,7 +526,7 @@ def test_a_passage_that_is_exactly_its_source_lines_needs_no_view(api, raw_store
 
 def test_changing_the_binding_rule_version_changes_every_view_identity(api, raw_store, tmp_path, monkeypatch):
     bundle, _, _, _ = bundle_of(api, raw_store, tmp_path / "one")
-    monkeypatch.setattr(api, "CODE_BINDING_RULE_VERSION", "code-binding-v2")
+    monkeypatch.setattr(api, "CODE_BINDING_RULE_VERSION", "code-binding-v3")
     other, _, _, _ = bundle_of(api, raw_store, tmp_path / "two")
     assert bundle.views and other.views
     assert {view.id for view in bundle.views}.isdisjoint({view.id for view in other.views})
@@ -695,6 +711,101 @@ def test_two_overloads_do_not_merge_into_one_knowledge_object(api, raw_store, tm
     assert len(rows) == 1, "one native id keeps one native row"
     bindings = [item for item in bundle.bindings if item.native_id == natives[0].id]
     assert {item.object_id for item in bindings} == {object_.id for object_ in objects}
+
+
+def symbol_objects(bundle, symbols):
+    """Each symbol by the knowledge object ID `materialize_code_evidence` gives it."""
+    return {
+        make_identity(
+            "object",
+            [
+                WORKSPACE,
+                "symbol",
+                symbol_key(
+                    bundle.repository_object.id,
+                    symbol.lang,
+                    symbol.path,
+                    symbol.qualname,
+                    symbol.signature or None,
+                    kind=symbol.kind,
+                ),
+            ],
+        ): symbol
+        for symbol in symbols
+    }
+
+
+def line_range(bundle, span_id):
+    locator = json.loads(spans_by_id(bundle)[span_id].locator_json)
+    return locator["start"], locator["end"]
+
+
+def test_each_overload_is_bound_and_observed_only_from_the_passage_holding_its_lines(
+    api, raw_store, tmp_path
+):
+    """R21-M12: a passage naming a shared overload ID used to observe every overload behind it.
+
+    `Move(string)` was observed and bound on `Move(int)`'s span and the reverse: six bindings and
+    fourteen observations over three native rows, where four and twelve are exact.
+    """
+    bundle, _, _, facts = bundle_of(api, raw_store, tmp_path / "repo", files={"Robot.cs": OVERLOADS.encode()})
+    overloads = symbol_objects(bundle, [symbol for symbol in facts.symbols if symbol.name == "Move"])
+    expected = [("public int Move(int steps)", (5, 5)), ("public int Move(string steps)", (7, 7))]
+    for rows in (bundle.bindings, bundle.observations):
+        held = [
+            (overloads[row.object_id].signature, line_range(bundle, row.span_id))
+            for row in rows
+            if row.object_id in overloads
+        ]
+        assert sorted(held) == expected
+    assert (len(bundle.native_rows), len(bundle.bindings), len(bundle.observations)) == (3, 4, 12)
+
+
+def test_a_split_overload_binds_each_window_only_to_the_overload_whose_lines_it_holds(
+    api, raw_store, tmp_path
+):
+    bundle, _, prepared, facts = bundle_of(
+        api, raw_store, tmp_path / "repo", files={"Robot.cs": LONG_OVERLOADS.encode()}
+    )
+    moves = [symbol for symbol in facts.symbols if symbol.name == "Move"]
+    overloads = symbol_objects(bundle, moves)
+    windows = [chunk for chunk in prepared.chunks if chunk.symbol_id == moves[0].id]
+    assert len(moves) == 2 and len({symbol.id for symbol in moves}) == 1 and len(windows) > 2
+    syntax = [row for row in bundle.observations if row.evidence_class == "syntax_observed"]
+    for rows in (bundle.bindings, syntax):
+        held = [
+            (overloads[row.object_id], line_range(bundle, row.span_id))
+            for row in rows
+            if row.object_id in overloads
+        ]
+        assert len(held) == len(windows)
+        for symbol, (start, end) in held:
+            overlapping = [
+                other.signature for other in moves if start <= other.line_end and other.line_start <= end
+            ]
+            assert overlapping == [symbol.signature]
+
+
+def test_a_passage_naming_a_shared_id_that_holds_none_of_its_nodes_lines_refuses(api, raw_store, tmp_path):
+    """Fail closed: such a passage cannot say which overload it observed."""
+    captured = capture(raw_store, tree(tmp_path / "repo", {"Robot.cs": OVERLOADS.encode()}))
+    prepared, facts = prepared_of(api, raw_store, captured)
+    for symbol in facts.symbols:
+        if symbol.name == "Move":
+            symbol.line_start, symbol.line_end = symbol.line_start + 100, symbol.line_end + 100
+    with pytest.raises(ValueError, match="holds none of the lines"):
+        bind(api, captured, prepared, facts)
+
+
+def test_a_symbol_alone_behind_its_native_id_binds_as_before_whatever_its_lines(api, raw_store, tmp_path):
+    """Only a shared ID is narrowed, so every tree that could seal before binds the same records."""
+    bundle, captured, prepared, facts = bundle_of(api, raw_store, tmp_path / "repo")
+    for symbol in facts.symbols:
+        symbol.line_start, symbol.line_end = symbol.line_start + 100, symbol.line_end + 100
+    shifted = bind(api, captured, prepared, facts)
+    assert {(row.object_id, row.span_id, row.native_id) for row in shifted.bindings} == {
+        (row.object_id, row.span_id, row.native_id) for row in bundle.bindings
+    }
 
 
 def test_a_shared_canonical_symbol_from_two_sources_keeps_distinct_observations(api, raw_store, tmp_path):
@@ -953,6 +1064,64 @@ def test_a_bundle_whose_native_row_lost_its_binding_refuses(api, raw_store, tmp_
         replace(bundle, bindings=bundle.bindings[:-1])
 
 
+def without(bundle, field, record):
+    """`bundle` without one of its records and without that record's exact evidence member."""
+    return replace(
+        bundle,
+        **{field: tuple(item for item in getattr(bundle, field) if item.id != record.id)},
+        evidence_members=tuple(member for member in bundle.evidence_members if member.record_id != record.id),
+    )
+
+
+def test_a_bundle_whose_references_leave_the_bundle_refuses(api, raw_store, tmp_path):
+    """R21-m24: the closure refusals no test reached. Each case keeps membership exact, so the
+    reference check -- not the membership check -- is the one that refuses."""
+    bundle, _, _, _ = bundle_of(api, raw_store, tmp_path / "repo")
+    binding = bundle.bindings[0]
+    observation = next(
+        row
+        for row in bundle.observations
+        if (row.object_id, row.span_id) == (binding.object_id, binding.span_id)
+    )
+    with pytest.raises(ValueError, match="lacks a selected observation"):
+        without(bundle, "observations", observation)
+    with pytest.raises(ValueError, match="cites an object or span outside the bundle"):
+        replace(bundle, objects=tuple(item for item in bundle.objects if item.id != observation.object_id))
+    view = bundle.views[0]
+    derived = next(record for record in bundle.derived_records if record.id == view.derived_record_id)
+    with pytest.raises(ValueError, match="view cites a span or derivation outside the bundle"):
+        without(bundle, "derived_records", derived)
+    dependency, *rest = bundle.derived_dependencies
+    stale = dependency.replace(input_version="other")
+    with pytest.raises(ValueError, match="differs from its exact original"):
+        replace(
+            bundle,
+            derived_dependencies=(stale, *rest),
+            evidence_members=tuple(
+                member.replace(record_id=stale.id) if member.record_id == dependency.id else member
+                for member in bundle.evidence_members
+            ),
+        )
+    outside = k.GenerationEvidenceMember(
+        generation_id=bundle.generation.id, record_kind="EvidenceSpan", record_id="span-outside"
+    )
+    with pytest.raises(ValueError, match="membership differs"):
+        replace(bundle, evidence_members=(*bundle.evidence_members, outside))
+
+
+@pytest.mark.parametrize("native_kind", ["symbols", "data_objects"])
+def test_a_native_id_outside_the_generation_namespace_refuses(api, raw_store, tmp_path, native_kind):
+    captured = capture(raw_store, tree(tmp_path / "repo", TREE))
+    prepared, facts = prepared_of(api, raw_store, captured)
+    named = {chunk.symbol_id for chunk in prepared.chunks} | {
+        identity for chunk in prepared.chunks for identity in chunk.data_object_ids
+    }
+    node = next(item for item in getattr(facts, native_kind) if item.id in named)
+    node.qualname += "_moved"
+    with pytest.raises(ValueError, match="does not match the generation namespace"):
+        bind(api, captured, prepared, facts)
+
+
 def test_a_tree_with_no_code_graph_at_all_still_binds_its_windows_and_prose(api, raw_store, tmp_path):
     files = {"conf/app.yaml": b"a: b\nc: d\n", "README": READ_ME.encode()}
     captured = capture(raw_store, tree(tmp_path / "repo", files))
@@ -1085,6 +1254,21 @@ def test_a_stored_revision_that_contradicts_this_capture_refuses(api, raw_store,
         bind(api, captured, prepared, facts, stored_revisions={revision.id: conflicting})
     with pytest.raises(ValueError, match="mapping of revision id"):
         bind(api, captured, prepared, facts, stored_revisions=[revision])
+
+
+@pytest.mark.parametrize("change", [{"metadata_json": '{"rule":"older"}'}, {"source_timezone": "UTC"}])
+def test_a_stored_revision_differing_in_any_field_but_its_first_observation_refuses(
+    api, raw_store, tmp_path, change
+):
+    """R21-m26: `_reuse` compared four fields, so a stored revision that differed in any other --
+    metadata or a source time a changed rule spells differently -- was bound as if it were this one.
+    (A stored revision in another lifecycle is refused before reuse is asked.)"""
+    bundle, captured, prepared, facts = bundle_of(api, raw_store, tmp_path)
+    revision = bundle.accepted[0].revision
+    with pytest.raises(ValueError, match="conflicts with this capture"):
+        bind(
+            api, captured, prepared, facts, stored_revisions={revision.id: revision.model_copy(update=change)}
+        )
 
 
 def test_stored_revisions_change_no_generation_identity(api, raw_store, tmp_path):

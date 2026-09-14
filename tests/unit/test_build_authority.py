@@ -422,6 +422,120 @@ def test_binding_checks_hold_source_lock_and_do_not_reset_authority(store, monke
     value.bind_inputs(w.inputs)
 
 
+def join_group(w, name="builders"):
+    """An enabled group membership for the builder, written before capture: it bumps the epoch."""
+    group = k.KnowledgeObject(workspace_id=w.workspace, kind="group", canonical_key=f'["{name}"]')
+    w.store.put_knowledge(group)
+    w.store.put_knowledge(
+        k.GroupMembership(
+            workspace_id=w.workspace,
+            group_id=group.id,
+            principal_id=w.user,
+            enabled=True,
+            mapping_authority="local",
+            policy_epoch=1,
+        )
+    )
+    return group
+
+
+def test_a_group_member_builder_looks_its_groups_up_by_id_on_every_check(store):
+    """R21-M2: every `check_local` of a group member read the whole `KnowledgeObject` table.
+
+    Capture proves the accepted inputs, which is where the groups are resolved; the checks after it
+    must not read the table whole either.
+    """
+    w = world(store, existing=True)
+    group = join_group(w)
+    store.put_knowledge(k.KnowledgeObject(workspace_id=w.workspace, kind="symbol", canonical_key='["a","f"]'))
+    reads = []
+    original = store._knowledge_rows
+
+    def rows(kind, **scope):
+        reads.append((kind, {key: item for key, item in scope.items() if item is not None}))
+        return original(kind, **scope)
+
+    store._knowledge_rows = rows
+    try:
+        value = guard(w)
+        value.check_local()
+        value.check()
+    finally:
+        del store._knowledge_rows
+    objects = [scope for kind, scope in reads if kind == "KnowledgeObject"]
+    assert objects and all(scope == {"ids": [group.id]} for scope in objects), objects
+
+
+def test_the_overlay_answers_the_scoped_read_contract(store):
+    """A live kind forwards its key to the store; an accepted-input kind is filtered in place."""
+    w = world(store, existing=True)
+    group = join_group(w)
+    overlay = w.module._Overlay(store, w.inputs)
+    assert overlay._knowledge_rows("KnowledgeObject", ids=[group.id, "absent", group.id]) == [group]
+    assert overlay._knowledge_get("KnowledgeObject", group.id) == group
+    assert overlay._knowledge_rows("EvidenceSpan", ids=["absent", w.span.id, w.span.id]) == [w.span]
+    assert overlay._knowledge_rows("EvidenceSpan", where={"revision_id": w.revision.id}) == [w.span]
+    assert overlay._knowledge_rows("EvidenceSpan", where={"revision_id": "other"}) == []
+    assert overlay._knowledge_get("Artifact", w.artifact.id) == w.artifact
+    assert overlay._knowledge_rows("GenerationMember", generation_id="any") == []
+    with pytest.raises(ValueError, match="scoped by ids alone"):
+        overlay._knowledge_rows("EvidenceSpan", ids=[w.span.id], where={"revision_id": w.revision.id})
+
+
+def test_the_accepted_inputs_are_proven_once_per_authority_and_afresh_after_a_rebaseline(store):
+    """R21-M1: every `check_local` re-read and re-proved every accepted pair and span."""
+    w = world(store, existing=True)
+    value = guard(w)
+    reads = []
+    original = store._knowledge_rows
+
+    def rows(kind, **scope):
+        reads.append(kind)
+        return original(kind, **scope)
+
+    accepted = {"Artifact", "ArtifactRevision", "EvidenceSpan"}
+    store._knowledge_rows = rows
+    try:
+        value.check_local()
+        value.check()
+        assert accepted.isdisjoint(reads), reads
+        bump(store, "authorization_epoch")
+        child = value.rebaseline()
+        assert accepted <= set(reads), "the child proves every accepted input again"
+        reads.clear()
+        child.check_local()
+        assert accepted.isdisjoint(reads), reads
+    finally:
+        del store._knowledge_rows
+
+
+def test_a_builders_groups_change_only_with_a_membership_which_moves_the_epoch(store):
+    """The premise of proving once: a knowledge object write moves only the content epoch, so a
+    reader's groups must not be able to change through one. A membership cannot name a group object
+    that does not exist yet, and a membership write moves the authorization epoch."""
+    w = world(store, existing=True)
+    value = guard(w)
+    absent = k.KnowledgeObject(workspace_id=w.workspace, kind="group", canonical_key='["later"]')
+    membership = k.GroupMembership(
+        workspace_id=w.workspace,
+        group_id=absent.id,
+        principal_id=w.user,
+        enabled=True,
+        mapping_authority="local",
+        policy_epoch=1,
+    )
+    with pytest.raises(ValueError, match="Missing KnowledgeObject reference"):
+        store.put_knowledge(membership)
+    epoch = store.authorization_epoch()
+    store.put_knowledge(absent)
+    assert store.authorization_epoch() == epoch
+    value.check_local()
+    store.put_knowledge(membership)
+    assert store.authorization_epoch() != epoch
+    with pytest.raises(AuthorizationChanged, match="authorization or suppression changed"):
+        value.check_local()
+
+
 def test_captured_epochs_are_readonly_and_do_not_follow_store_changes(store):
     w = world(store)
     value = guard(w)
@@ -572,13 +686,22 @@ def test_a_rebaseline_must_precede_the_failing_check_not_follow_it(store):
 
 
 def test_rebaseline_refuses_after_a_capability_loss_and_latches(store):
+    """Ruling 2 (R21-M4): the child's capability proof refuses, not the `SourceControl` comparison.
+
+    The builder is not the owner and manages the source only through its role, so losing that one
+    capability leaves the Source row, and with it `SourceControl`, exactly as captured. Only
+    `child.check_local()` inside `rebaseline` can see the loss.
+    """
     w = world(store, existing=True)
+    store.update_role("individual", capabilities=["add_sources", "manage_sources"])
+    store.set_source_access(w.source, None, owner_id=None)
     value = guard(w)
-    store.update_role("individual", capabilities=[])
-    store._source_fields(w.source, owner_id=None)
-    with pytest.raises(AuthorizationChanged):
+    store.update_role("individual", capabilities=["add_sources"])
+    assert w.module._source_control(store, w.source) == value.source_control
+    assert store.suppression_epoch() == value.expected_suppression_epoch
+    with pytest.raises(AuthorizationChanged, match="cannot manage source"):
         value.rebaseline()
-    with pytest.raises(AuthorizationChanged):
+    with pytest.raises(AuthorizationChanged, match="cannot manage source"):
         value.rebaseline()
 
 

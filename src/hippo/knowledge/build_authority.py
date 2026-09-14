@@ -139,7 +139,12 @@ _EMPTY_INPUTS = AcceptedBuildInputs()
 
 
 class _Overlay:
-    """No persistence methods and no unselected interpretation inventory."""
+    """No persistence methods and no unselected interpretation inventory.
+
+    It answers the store's scoped read contract. A live kind forwards the key it was asked with, so a
+    proof that looks a group up by ID reads that group rather than the table (R21-M2); an
+    accepted-input kind is filtered here, as the Fake store filters.
+    """
 
     _LIVE = frozenset(
         {"Workspace", "WorkspaceMembership", "GroupMembership", "KnowledgeObject", "Suppression", "Connector"}
@@ -157,11 +162,27 @@ class _Overlay:
             policies.setdefault(policy.id, policy)
         self.rows["AccessPolicy"] = list(policies.values())
 
-    def _knowledge_rows(self, kind):
-        return self.store._knowledge_rows(kind) if kind in self._LIVE else self.rows.get(kind, [])
+    def _knowledge_rows(self, kind, *, generation_id=None, where=None, ids=None):
+        if kind in self._LIVE:
+            scope = {"generation_id": generation_id, "where": where, "ids": ids}
+            return self.store._knowledge_rows(
+                kind, **{key: value for key, value in scope.items() if value is not None}
+            )
+        rows = self.rows.get(kind, [])
+        if ids is not None:
+            if generation_id is not None or where:
+                raise ValueError(f"{kind} is scoped by ids alone")
+            if isinstance(ids, (str, bytes)):
+                raise TypeError("Knowledge ids must be a collection of record ids, not one string")
+            by_id = {row.id: row for row in rows}
+            return [by_id[identity] for identity in dict.fromkeys(ids) if identity in by_id]
+        selection = dict(where or {}) | ({} if generation_id is None else {"generation_id": generation_id})
+        return [
+            row for row in rows if all(getattr(row, field) == value for field, value in selection.items())
+        ]
 
     def _knowledge_get(self, kind, identity):
-        return next((r for r in self._knowledge_rows(kind) if r.id == identity), None)
+        return next(iter(self._knowledge_rows(kind, ids=[identity])), None)
 
     def get_source(self, identity):
         return self.store.get_source(identity)
@@ -181,6 +202,8 @@ class BuildAuthority:
         self._store, self._actor, self._accepted = store, actor, accepted
         self._source_control, self._epochs, self._clock = source_control, epochs, clock
         self._lock, self._failure, self._closed = Lock(), None, False
+        # `(audience, valid_until)` once the accepted inputs are proven; see `check_local`.
+        self._proven = None
 
     @property
     def source_control(self):
@@ -270,7 +293,26 @@ class BuildAuthority:
                 raise AuthorizationChanged("Accepted local policy is unavailable or expired")
 
     def check_local(self):
-        """Only local/store reads; caller owns any enclosing transaction/lock."""
+        """Only local/store reads; caller owns any enclosing transaction/lock.
+
+        The live checks run on every call: both captured epochs, the Source row, the actor's
+        standing, the reviewed mappings and the source requirement. The accepted inputs are proven
+        once per authority -- their stored identities and every artifact, revision and span grant
+        -- and again only if the audience differs or the earliest policy deadline has passed
+        (R21-M1); before, every call re-read and re-proved all of them, so a build's authority
+        work grew with members x batches. A child authority proves afresh, so no proof crosses a
+        rebaseline or `bind_inputs`.
+
+        Keeping the proof is sound because everything else it read is fenced by an epoch this
+        authority never adopts. A policy, membership, connector, mapping or permission write moves
+        the authorization epoch, and so does an accepted `Artifact`'s `policy_id` or `deleted_at`; a
+        suppression moves the suppression epoch; `ArtifactRevision` and `EvidenceSpan` rows are
+        immutable; and a reader's groups change only through a membership, because a membership
+        cannot name a missing group object and none is ever deleted. Not re-read: an accepted
+        `Artifact`'s `canonical_uri`, the one mutable field that moves no epoch and grants nothing,
+        and a record another writer first stores with different contents after the proof, which the
+        store refuses when this build writes its own.
+        """
         self._latched()
         try:
             store = self._store
@@ -291,15 +333,21 @@ class BuildAuthority:
                 clock=self._clock,
             )
             core.require_source(self.source_control.source_id)
-            self._inventory(core._now())
-            proof = core.build(
-                EvidenceSelection(revision_ids=frozenset(r.id for _, r in self._accepted.pairs))
-            )
-            if proof.revision_ids != frozenset(
-                r.id for _, r in self._accepted.pairs
-            ) or proof.span_ids != frozenset(s.id for s in self._accepted.spans):
-                raise AuthorizationChanged("Not every accepted original is authorized")
-            core.validate_current(proof)
+            audience = (access, frozenset(mappings))
+            proven = self._proven
+            if proven is not None and proven[0] == audience:
+                core._check_current_boundary(self._epochs[0], proven[1])
+            else:
+                self._inventory(core._now())
+                proof = core.build(
+                    EvidenceSelection(revision_ids=frozenset(r.id for _, r in self._accepted.pairs))
+                )
+                if proof.revision_ids != frozenset(
+                    r.id for _, r in self._accepted.pairs
+                ) or proof.span_ids != frozenset(s.id for s in self._accepted.spans):
+                    raise AuthorizationChanged("Not every accepted original is authorized")
+                core.validate_current(proof)
+                self._proven = (audience, proof.valid_until)
             if (store.authorization_epoch(), store.suppression_epoch()) != self._epochs or _source_control(
                 store, self.source_control.source_id
             ) != self.source_control:
@@ -362,9 +410,10 @@ class BuildAuthority:
           the same epoch against the generation's whole reachable closure and would
           refuse at the end anyway, so continuing is wasted work -- which is why this
           needs no closure computation of its own.
-        * `source_control`. It carries `access_role_id`, `min_rank` and `owner_id`, so
-          adopting a changed one would let an operator re-target the finished
-          generation's audience mid-build even though the actor kept every capability.
+        * `source_control`, compared whole: kind, workspace, `owner_id`, `access_role_id`,
+          `min_rank`, the managed flag, the active generation and the input configuration.
+          Adopting a changed one would let an operator re-target the finished generation's
+          audience or inputs mid-build even though the actor kept every capability.
         * the actor and the accepted inputs, which are the child's by construction.
 
         Refused inside an ambient transaction, after any sticky failure, and once

@@ -19,13 +19,15 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from hippo.access import EVERYTHING
+from hippo.access import EVERYTHING, Access
 from hippo.codegraph.model import CODE_EDGE_KINDS
 from hippo.hipporag.graph_index import canonical_arrows
 from hippo.ingest import pipeline
+from hippo.knowledge import model as k
 from hippo.knowledge import projection
 from hippo.knowledge.query_access import query_session
 from hippo.knowledge.replay import view_fingerprint
@@ -299,6 +301,140 @@ def test_a_tombstoned_code_source_projects_no_code_arrow(world):  # noqa: F811
     assert served_arrows(w.ctx) == []
     # Retained and unselected: the arrows went with the pair, not with a physical delete.
     assert sealed_relations(w.store, result.generation_id)
+
+
+# ------------------------------------------------------------------ the access boundary
+
+
+def symbol_binding(store, generation_id, path, name):
+    """The one `NativeBinding` of the symbol `name` defined in `path`, in one generation."""
+    (native,) = [
+        row["id"]
+        for row in store.load_symbols()
+        if row.get("generation_id") == generation_id and row.get("path") == path and row.get("name") == name
+    ]
+    (binding,) = [
+        row
+        for row in store._knowledge_rows("NativeBinding", generation_id=generation_id)
+        if row.native_id == native
+    ]
+    return binding
+
+
+def code_arrows_as(ctx, access):
+    """Every served arrow as `(source, target, kind, support span IDs)`, from one fresh session."""
+    with query_session(ctx, access, structural=True) as session:
+        graph = session.graph
+        return [
+            (
+                graph.node_ids[arrow.src],
+                graph.node_ids[arrow.dst],
+                arrow.kind,
+                frozenset(arrow.extra.get("support_span_ids", ())),
+            )
+            for arrow in arrows(graph)
+        ]
+
+
+def relations_read(monkeypatch):
+    """What `_native_code_relations` returns on each call, in the served arrows' shape.
+
+    Read before `_assemble`, which drops an arrow whose endpoint is not a projected node on its own:
+    a relation read that let an unauthorized binding in would otherwise be hidden by that filter.
+    """
+    read, calls = projection._native_code_relations, []
+
+    def spy(*args):
+        rows = read(*args)
+        calls.append(
+            [(a, b, kind, frozenset(extra.get("support_span_ids", ()))) for a, b, kind, *_, extra in rows]
+        )
+        return rows
+
+    monkeypatch.setattr(projection, "_native_code_relations", spy)
+    return calls
+
+
+def touching(rows, objects, spans):
+    """The arrows with an endpoint in `objects` or a support span in `spans`."""
+    return [row for row in rows if row[0] in objects or row[1] in objects or row[3] & spans]
+
+
+def test_a_suppressed_binding_span_takes_its_symbols_arrows_and_support_with_it(world, monkeypatch):  # noqa: F811
+    """R21-M6: the native relation read follows the proof's bindings, never the generation's.
+
+    `total` in `src/billing.py` is invoked by `bill`, invokes `helper` and is contained by its module.
+    A suppression of its binding span takes it out of the proof, so no arrow may reach it or cite that
+    span, in what the projection reads or in what it serves.
+    """
+    w = world
+    result = build(w, tree=billed_tree(w))
+    total = symbol_binding(w.store, result.generation_id, "src/billing.py", "total")
+    objects, spans = {total.object_id}, {total.span_id}
+    before = touching(code_arrows_as(w.ctx, EVERYTHING), objects, spans)
+    assert {"INVOKES", "CONTAINS"} <= {row[2] for row in before}, before
+
+    w.store.put_knowledge(
+        k.Suppression(
+            workspace_id=w.workspace,
+            target_kind="span",
+            target_id=total.span_id,
+            scope_key="r21a",
+            view_applicability="all_history",
+            reason="access_loss",
+            epoch=1,
+            created_at=datetime.now(UTC),
+            restoration_barrier="restore",
+        )
+    )
+    calls = relations_read(monkeypatch)
+    served = code_arrows_as(w.ctx, EVERYTHING)
+
+    assert served and calls, "the rest of the generation still serves"
+    assert touching(served, objects, spans) == []
+    assert [touching(rows, objects, spans) for rows in calls] == [[] for _ in calls]
+
+
+def test_a_policy_denied_file_takes_its_symbols_arrows_and_support_with_it(world, monkeypatch):  # noqa: F811
+    """R21-M6 for a reader: a file whose policy denies them contributes no arrow and no support.
+
+    The code lane grants a whole source through one planned policy, so the denial is made the way an
+    operator re-scopes one file: its `Artifact` moves to a restricted policy, which moves the
+    authorization epoch. `helper` in `src/orders.py` stays readable, so the `INVOKES` arrow from the
+    denied `total` is one that must go.
+    """
+    w = world
+    result = build(w, tree=billed_tree(w))
+    reader = Access(rank=0, user_id=w.user)
+    total = symbol_binding(w.store, result.generation_id, "src/billing.py", "total")
+    revision = w.store._knowledge_get(
+        "ArtifactRevision", w.store._knowledge_get("EvidenceSpan", total.span_id).revision_id
+    )
+    spans = {span.id for span in w.store._knowledge_rows("EvidenceSpan", where={"revision_id": revision.id})}
+    objects = {
+        binding.object_id
+        for binding in w.store._knowledge_rows("NativeBinding", generation_id=result.generation_id)
+        if binding.span_id in spans
+    }
+    before = touching(code_arrows_as(w.ctx, reader), objects, spans)
+    assert "INVOKES" in {row[2] for row in before}, before
+
+    denied = k.AccessPolicy(
+        workspace_id=w.workspace,
+        origin="local_curated",
+        scope_key=f"source:{w.source}:r21a-denied",
+        mode="restricted",
+        verified_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+    w.store.put_knowledge(denied)
+    artifact = w.store._knowledge_get("Artifact", revision.artifact_id)
+    w.store.update_knowledge(artifact.replace(policy_id=denied.id))
+    calls = relations_read(monkeypatch)
+    served = code_arrows_as(w.ctx, reader)
+
+    assert served and calls, "the other files still serve"
+    assert touching(served, objects, spans) == []
+    assert [touching(rows, objects, spans) for rows in calls] == [[] for _ in calls]
 
 
 def test_the_status_card_and_inventory_count_the_code_edges_the_source_row_counts(world):  # noqa: F811

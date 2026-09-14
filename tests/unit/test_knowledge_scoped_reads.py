@@ -21,10 +21,11 @@ form, no whole-table read of a generation-sized kind, and CPU linear in the gene
 
 from __future__ import annotations
 
-import time
-from collections import Counter
+import threading
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import timedelta
+from pprint import pformat
 from types import SimpleNamespace
 
 import pytest
@@ -34,7 +35,8 @@ from hippo.access import Principal
 from hippo.context import AppContext
 from hippo.ingest import repo_capture
 from hippo.knowledge import model as k
-from hippo.knowledge.build_authority import BuildActor
+from hippo.knowledge import staged_code
+from hippo.knowledge.build_authority import BuildActor, BuildAuthority
 from hippo.knowledge.embedding_profile import EmbeddingSpec
 from hippo.knowledge.identity import canonical_json, text_hash
 from hippo.knowledge.lifecycle import generation_passage_id
@@ -42,6 +44,7 @@ from hippo.knowledge.raw_artifacts import RawArtifactStore
 from hippo.store import migrations
 from tests.fakes.fake_store import FakeStore
 from tests.unit import test_code_generation as code_generation
+from tests.unit.test_build_authority import join_group
 from tests.unit.test_code_generation import TREE, head_of, make_checkout
 from tests.unit.test_derived_generation_store import rendered, setup_view
 from tests.unit.test_generation_scoped_reads import ReadLog
@@ -62,6 +65,9 @@ from tests.unit.test_generation_store import (
 # reads whole (`AccessPolicy`, `WorkspaceMembership`, `GroupMembership`, `Workspace`,
 # `Suppression`, via `build_authority` and `knowledge.access`) grow with principals and policies,
 # not with evidence, and are recorded as a finding in `evidence-kscope.md` rather than asserted.
+# `KnowledgeObject`, `Artifact` and `ArtifactRevision` grow with every symbol, file and commit
+# (R21-M2): a proof looks a group or an observed object up in `KnowledgeObject`, and reads the
+# accepted originals from the other two.
 GENERATION_SIZED = frozenset(
     {
         "GenerationEvidenceMember",
@@ -74,6 +80,9 @@ GENERATION_SIZED = frozenset(
         "ObjectObservation",
         "IndexManifest",
         "IndexEvent",
+        "KnowledgeObject",
+        "Artifact",
+        "ArtifactRevision",
     }
 )
 
@@ -283,7 +292,7 @@ def helper_{i}(value):
 '''
 
 
-def build_synthetic(w, tmp_path, count):
+def build_synthetic(w, tmp_path, count, *, batch_size=128):
     """Build a new repository source of `count` generated modules plus the fixture tree.
 
     `w` is `world` or a `fresh_builder`: anything carrying a store, its context, an authorized
@@ -307,7 +316,7 @@ def build_synthetic(w, tmp_path, count):
         actor=w.actor,
         tree=tree,
         options=CodeBuildOptions(
-            batch_size=128, renewal_interval_seconds=120.0, lease_duration_seconds=3600.0
+            batch_size=batch_size, renewal_interval_seconds=120.0, lease_duration_seconds=3600.0
         ),
         raw_store=w.raw,
         embedding_spec=EmbeddingSpec(dimensions=2),
@@ -324,29 +333,73 @@ def test_a_code_build_reads_no_generation_sized_table_whole(world, tmp_path):
     assert log.knowledge_whole_table(GENERATION_SIZED) == []
 
 
+def test_a_group_member_code_build_reads_no_generation_sized_table_whole(world, tmp_path):
+    """R21-M2: a builder in any group read `KnowledgeObject` whole on every `check_local`.
+
+    An unrelated generation is published first, so the table that read walked already holds another
+    source's symbols, files and commits; the build's own proofs must look the group up by ID.
+    """
+    w = world
+    build_synthetic(w, tmp_path, 3)
+    group = join_group(w)
+    with ReadLog(w.store) as log:
+        result = build_synthetic(w, tmp_path, 10)
+    assert result.outcome == "published"
+    assert log.knowledge_whole_table(GENERATION_SIZED) == []
+    assert ("knowledge", "KnowledgeObject", {"ids": [group.id]}) in log.calls
+
+
 @contextmanager
-def whole_table_reads(store):
-    """A cheaper `ReadLog` for the timed builds: counts whole-table reads, records nothing else."""
-    reads = Counter()
-    original = store._knowledge_rows
+def rows_by_batch(store):
+    """Rows every store read returns during a build, by write batch and by reader, and each batch's size.
 
-    def knowledge_rows(name, **scope):
-        if name in GENERATION_SIZED and not any(value is not None for value in scope.values()):
-            reads[name] += 1
-        return original(name, **scope)
+    Yields `(rows, written)`. A read made inside `BuildAuthority.check_local` is the authority's; any
+    other is the writer's, the coordinator's own reads included. Batch `n` runs from the start of
+    the `n`th `staged_code._write_batch` call to the start of the next, so it holds that batch's
+    write and the rebaseline test and checks around it; `-1` is everything before the first.
+    `written[n]` is the number of records batch `n` writes. `_knowledge_get` reads through
+    `_knowledge_rows`, so counting that and `get_source` counts every knowledge and Source row a
+    check or a write returns. Plain functions as instance attributes, removed on exit, for the
+    reason `test_query_scoped_reads.knowledge_reads` gives.
+    """
+    local, batch, rows, written = threading.local(), [-1], defaultdict(Counter), {}
+    knowledge_rows, get_source = store._knowledge_rows, store.get_source
+    check_local, write_batch = BuildAuthority.check_local, staged_code._write_batch
 
-    store._knowledge_rows = knowledge_rows
+    def reader():
+        return "authority" if getattr(local, "depth", 0) else "writer"
+
+    def counted_rows(name, **scope):
+        result = knowledge_rows(name, **scope)
+        key = ",".join(sorted(field for field, value in scope.items() if value is not None)) or "whole"
+        rows[batch[0]][(reader(), name, key)] += len(result)
+        return result
+
+    def counted_source(identity):
+        result = get_source(identity)
+        rows[batch[0]][(reader(), "Source", "id")] += result is not None
+        return result
+
+    def counted_check(authority):
+        local.depth = getattr(local, "depth", 0) + 1
+        try:
+            return check_local(authority)
+        finally:
+            local.depth -= 1
+
+    def counted_batch(store, prepared, records, **authority):
+        batch[0] += 1
+        written[batch[0]] = len(records)
+        return write_batch(store, prepared, records, **authority)
+
+    store._knowledge_rows, store.get_source = counted_rows, counted_source
     try:
-        yield reads
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(BuildAuthority, "check_local", counted_check)
+            patch.setattr(staged_code, "_write_batch", counted_batch)
+            yield rows, written
     finally:
-        store._knowledge_rows = original
-
-
-# Per evidence member, the 160-file build may cost at most this multiple of the 10-file build.
-# Measured after this slice at 1.9x: the frozen per-check authorization reads still grow with the
-# batches (`evidence-kscope.md`, finding 1). CC11's pre-fix wall-clock ratio at the same sizes was
-# 7.7x and grows with every doubling.
-LINEAR_FACTOR = 3.0
+        del store._knowledge_rows, store.get_source
 
 
 def fresh_builder(w, tmp_path, count):
@@ -379,26 +432,70 @@ def fresh_builder(w, tmp_path, count):
     )
 
 
-def test_a_code_build_is_linear_in_its_evidence_members(world, tmp_path):
-    """CC11's probe shape: 10, 40 and 160 files, each on an empty store, in process CPU."""
+# The reads a write batch still makes that return the generation's whole membership. `native_write`
+# builds one `GenerationViews` per call (`store/generations.py`), and its inventory reads both member
+# tables by `generation_id` (`knowledge/derivations.py`) whenever the batch writes a rendered view.
+# Carrying one inventory across a build's batches is the writer's (R21-M1, CD1 states it); when it
+# lands the pin below fails and this set is emptied.
+GENERATION_MEMBERSHIP_READS = frozenset(
+    {("writer", "GenerationEvidenceMember", "generation_id"), ("writer", "GenerationMember", "generation_id")}
+)
+
+# A write batch's own reads are point reads per record it writes, and a batch of dependency groups
+# holds as many records as its groups do: a commit touching every file is one group. So the writer is
+# compared per record written, and the two corpora may differ by at most this factor.
+BATCH_FACTOR = 1.25
+
+
+def test_a_write_batch_proves_its_authority_in_rows_the_corpus_does_not_change(world, tmp_path):
+    """R21-M1: every write batch at two corpus sizes, counted in rows returned rather than CPU time.
+
+    Every `check_local` re-proved every accepted pair and span -- a stored-identity read per record
+    and a Source read per artifact, twice -- and a batch makes six of them, so the authority's rows
+    per batch grew with the corpus and a build's with members x batches: at most 762 rows in a batch
+    at 10 files and 1,482 at 40 before. The CPU test this replaces admitted that with a 3.0 factor
+    over a measured 1.9x. The peak over the write batches is compared, so no batch is chosen by hand.
+    """
     if world.store.knowledge_backend != "fake":
-        pytest.skip("the timed scale builds run on the Fake store; CD9 owns the Ladybug fixture")
-    per_member, measured, reads = {}, {}, Counter()
-    for count in (10, 40, 160):
+        pytest.skip("the scale builds run on fresh Fake stores; CD9 owns the Ladybug fixture")
+    measured = {}
+    for count in (10, 40):
         builder = fresh_builder(world, tmp_path, count)
-        with whole_table_reads(builder.store) as counted:
-            start = time.process_time()
-            result = build_synthetic(builder, tmp_path, count)
-            seconds = time.process_time() - start
-        reads.update(counted)
-        members = len(
-            builder.store._knowledge_rows("GenerationEvidenceMember", generation_id=result.generation_id)
+        with rows_by_batch(builder.store) as (rows, written):
+            build_synthetic(builder, tmp_path, count, batch_size=16)
+        # Every write batch but the last, which runs on through the seal and the publication.
+        measured[count] = [(rows[index], written[index]) for index in range(max(rows))]
+
+    def peak(count, keep, *, per_record=False):
+        return max(
+            sum(value for key, value in batch.items() if keep(key)) / (records if per_record else 1)
+            for batch, records in measured[count]
         )
-        per_member[count] = seconds / members
-        measured[count] = (round(seconds, 2), members)
-    report = f"(cpu seconds, members) by files: {measured}; whole-table reads: {dict(reads)}"
-    assert per_member[160] < per_member[10] * LINEAR_FACTOR, report
-    assert not reads, report
+
+    def authority(key):
+        return key[0] == "authority"
+
+    def batch_own(key):
+        return key[0] == "writer" and key not in GENERATION_MEMBERSHIP_READS
+
+    def membership(key):
+        return key in GENERATION_MEMBERSHIP_READS
+
+    report = pformat(
+        {
+            count: {
+                "authority rows": peak(count, authority),
+                "writer rows per record": round(peak(count, batch_own, per_record=True), 2),
+                "membership rows": peak(count, membership),
+                "write batches": len(measured[count]),
+            }
+            for count in measured
+        }
+    )
+    assert peak(40, authority) == peak(10, authority), report
+    assert peak(40, batch_own, per_record=True) <= peak(10, batch_own, per_record=True) * BATCH_FACTOR, report
+    # Pinned, not endorsed: the generation-sized read R21-M1 leaves to the writer.
+    assert peak(40, membership) >= 3 * peak(10, membership), report
 
 
 def test_the_fake_snapshot_shares_only_records_no_write_can_change(store):
