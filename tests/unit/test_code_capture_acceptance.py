@@ -70,8 +70,10 @@ from tests.unit.test_managed_source_inventory import row_of
 
 CLONE_URL = "https://git.example.com/acme/fleet.git"
 
-# The size the ledger's CD9 line runs. The override exists for sizing a scratch run only.
-FILES_PER_LANGUAGE = int(os.environ.get("HIPPO_CODE_ACCEPTANCE_FILES_PER_LANGUAGE", "48"))
+# The size a plain `pytest tests/unit` runs, CI's included: 8 per language (50 accepted files), the
+# size CD9's CHECK line pins. The ledger's multi-hundred-file run is opt-in, never the default:
+# `HIPPO_CODE_ACCEPTANCE_FILES_PER_LANGUAGE=48`.
+FILES_PER_LANGUAGE = int(os.environ.get("HIPPO_CODE_ACCEPTANCE_FILES_PER_LANGUAGE", "8"))
 
 # LadybugDB's buffer pool for this scenario: the production cap (4 GiB), not the suite's 256 MiB
 # test cap, because the question CD9 answers is whether a production-sized store builds this tree.

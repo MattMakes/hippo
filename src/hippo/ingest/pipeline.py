@@ -177,10 +177,7 @@ def add_repo(
     managed_activation.check_operation_id(operation_id)
     url = url.strip()
     if not repos.is_git_url(url):
-        raise repos.RepoError(
-            f"'{url}' does not look like a git URL. Use https://host/owner/repo, "
-            "ssh://git@host/owner/repo or git@host:owner/repo."
-        )
+        raise repos.RepoError(repos.NOT_A_GIT_URL)
     if build_actor is not None:
         repository_descriptor(url)
     source_id = ctx.store.create_source(
@@ -501,7 +498,9 @@ def _read_history(ctx: AppContext, source: dict[str, Any], code, settings, *, sh
             should_stop=should_stop,
         )
     except Exception as err:  # noqa: BLE001 - a history that cannot be read is a warning, never a failed job
-        log.warning("No git history for source %s: %s", source["id"], err)
+        # The class only: `HistoryError` quotes the checkout path and git's own stderr, which
+        # can echo a remote's credentials (R21-m20; the m6 rule `repos.walk_repo` follows).
+        log.warning("No git history for source %s: %s", source["id"], type(err).__name__)
         return
     code.commits = history.commits
     code.modifies = history.modifies

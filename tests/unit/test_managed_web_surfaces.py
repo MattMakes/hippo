@@ -31,6 +31,7 @@ import httpx
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from markupsafe import escape
 
 from hippo.access import EVERYTHING
 from hippo.hipporag.indexer import Chunk, index_source
@@ -46,7 +47,8 @@ from hippo.web.app import create_app
 from hippo.web.routes import analyze as analyze_routes
 from hippo.web.routes import code as code_routes
 from hippo.web.routes import graph as graph_routes
-from tests.fakes.fake_ollama import DIM
+from tests.fakes.fake_ollama import DIM, embed_text
+from tests.unit.test_converting_source_serving import MANAGED_TEXT, stage
 from tests.unit.test_dense_session import verified
 from tests.unit.test_managed_source_inventory import empty_published
 from tests.unit.test_structural_loading import published, shared_pair, unembedded_code
@@ -678,6 +680,29 @@ def test_a_legacy_row_keeps_its_own_error_text(ctx, prose):
 # ------------------------------------------ revocation between the DTO and the response
 
 
+def test_a_converting_sources_page_keeps_its_legacy_facts_and_shows_no_staged_row(ctx, client, prose):
+    """R21-M7 and CD2: until it publishes, a converting source's page is its legacy page.
+
+    The first staged row sets the `managed` flag, so a page that branched on that flag drew
+    the legacy passages with no facts and no entities. The source is in the legacy lane
+    (ruling 14), and that lane serves untagged rows only, so the staged passage must not
+    appear either: reading every passage of the source would show it.
+    """
+    legacy = ctx.store.passages_for_source(prose)
+    assert len(legacy) == 1 and legacy[0]["triples"] and legacy[0]["entities"]
+    staged = stage(ctx.store, prose, profile=ctx.ollama.embed_model, vector=embed_text(MANAGED_TEXT))
+    assert ctx.store.get_source(prose)["managed"]
+
+    page = client.get(f"/sources/{prose}")
+
+    assert page.status_code == 200, page.text
+    facts = legacy[0]["triples"]
+    assert f"{len(facts)} facts" in page.text
+    assert all(str(escape(subject)) in page.text for subject, _predicate, _object in facts)
+    assert all(str(escape(entity)) in page.text for entity in legacy[0]["entities"])
+    assert MANAGED_TEXT not in page.text and staged.passage_id not in page.text
+
+
 def test_revocation_between_the_simulate_dto_and_its_response_discards_the_payload(
     ctx, client, monkeypatch, prose
 ):
@@ -1102,6 +1127,10 @@ STR_EXC_SITES = {
     # input validators raise is printed. `add_repo`'s fourth copy is guarded by its own
     # exact-`RepoError` test instead (`test_only_the_exact_repo_error_is_printed...`).
     ("routes/sources.py", "return coded_response(str(exc), INVALID_SOURCE, 400)"): 4,
+    # unguarded, as it was when it printed `{exc}` unquoted: the repo form's redirect. What
+    # `pipeline.add_repo` raises synchronously today is its closed git-URL sentence or one of
+    # `CaptureRefused`'s closed sentences; R21-M10 closed the first and percent-encodes both.
+    ("routes/sources.py", 'return RedirectResponse(f"/?error={quote(str(exc))}", status_code=303)'): 1,
     ("routes/api.py", "raise HTTPException(400, str(exc)) from exc"): 1,
     ("routes/code.py", "raise HTTPException(400, str(exc)) from exc"): 1,
     # guarded by this cleanup batch: the last two isinstance 4xx catches in the web layer.

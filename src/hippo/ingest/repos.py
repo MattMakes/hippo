@@ -31,6 +31,14 @@ URL_SCHEMES = {"https", "http", "ssh"}
 OBJECT_ID_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 # Environment that would point git at a repository other than the one named.
 GIT_LOCATION_VARIABLES = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"})
+# The whole message for a URL `is_git_url` refuses. It quotes nothing the caller typed: a
+# refused URL can still carry a token (a host with no dot, `git+https://`), and this sentence
+# becomes a 400 body and a redirect's `Location`, which the next request's access log prints
+# (review R21-M10).
+NOT_A_GIT_URL = (
+    "The address does not look like a git URL. Use https://host/owner/repo, "
+    "ssh://git@host/owner/repo or git@host:owner/repo."
+)
 
 
 class RepoError(ValueError):
@@ -73,10 +81,7 @@ def clone_repo(url: str, dest: Path, timeout: int = 300, depth: int = 1) -> Path
     url = url.strip()
     depth = max(1, depth)
     if not is_git_url(url):
-        raise RepoError(
-            f"'{url}' does not look like a git URL. Use https://host/owner/repo, "
-            "ssh://git@host/owner/repo or git@host:owner/repo."
-        )
+        raise RepoError(NOT_A_GIT_URL)
     if dest.exists() and any(dest.iterdir()):
         raise RepoError("the clone destination already exists and is not empty")
     dest.parent.mkdir(parents=True, exist_ok=True)
