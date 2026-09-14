@@ -17,8 +17,16 @@ What the tree holds, for `files_per_language` = N:
 * one of each exclusion: `.git` and an untracked `web/node_modules/` (ignored paths), an untracked
   `data/huge.json` above `readers.MAX_FILE_BYTES` (too large), `data/blob.json` with NUL bytes
   (binary), `assets/logo.png` (no reader), and `fleet_link.py`, a committed symlink;
+* one of each shape the CD10 review found the staged code writer refusing or dropping:
+  `services/python/shapes/report.py` (a function longer than one chunk),
+  `services/python/shapes/orders_cli.py` (a function that selects and updates the `orders` table
+  `db/schema.sql` defines, and a module-level `main()` call under the main guard) and
+  `csharp/Orders/Robot.cs` (two overloads of one method);
 * four commits: the services, a Python edit, the later web clients, a Go edit. `refresh()` adds a
   fifth that edits one Python helper.
+
+That is 5N + 2 * max(2, N // 4) + 10 accepted files: 274 at the default N = 48, 54 at N = 8 and
+24 at N = 2.
 
 The returned `CodeCaptureRepository` is the expectation a test asserts against, computed here
 beside the bytes rather than hard-coded in the test.
@@ -124,6 +132,43 @@ fn scale_{i}(total: u64) -> u64 {
 SQL = "CREATE TABLE orders_{i} (\n  id INT,\n  total INT\n);\n\nSELECT id, total FROM orders_{i};\n"
 YAML = "name: service-{i}\nreplicas: {i}\n"
 
+# The ordinary shapes the CD10 review found the staged code writer refusing or dropping (R21-B1,
+# R21-B3). The unit suites build each one as a small tree; the repository below carries them all.
+
+# A function longer than one chunk (`chunk_size_chars=1500`), so several passages observe it.
+LONG_FUNCTION = (
+    "def build_report():\n"
+    + "".join(f"    value_{i} = {i} * 2 + 1  # padding text\n" for i in range(400))
+    + "    return 1\n"
+)
+
+# Two C# overloads, which share one native symbol ID.
+CSHARP_OVERLOADS = """\
+namespace Acme
+{
+    public class Robot
+    {
+        public int Move(int steps) { return steps; }
+
+        public int Move(string steps) { return 1; }
+    }
+}
+"""
+
+# A table defined in one file...
+ORDERS_SCHEMA = "CREATE TABLE orders (id INT, total INT);\n"
+
+# ...and a function in another directory that selects and updates it: READS and WRITES on one pair.
+READ_WRITE = (
+    "def touch(cursor):\n"
+    '    cursor.execute("SELECT id FROM orders")\n'
+    '    cursor.execute("UPDATE orders SET total = 1")\n'
+    "    return cursor\n"
+)
+
+# A module-level call under the main guard: CONTAINS and INVOKES between the module and `main`.
+MAIN_GUARD = 'def main():\n    return 1\n\n\nif __name__ == "__main__":\n    main()\n'
+
 PROSE = {
     "README.md": "# Fleet\n\nThe fleet repository holds the order services in five languages.\n",
     "docs/architecture.md": "# Architecture\n\nEvery shard places orders and scales their totals.\n",
@@ -223,6 +268,14 @@ def build_code_capture_repository(parent: Path, *, files_per_language: int = 48)
     config = {f"config/service{i:02d}.yaml": _render(YAML, i) for i in range(max(2, n // 4))}
     prose = {path: text.encode() for path, text in PROSE.items()}
     unparsed = {path: text.encode() for path, text in UNPARSED.items()}
+    # The review shapes, once each. The Python ones sort after every `services/python/pkg*` module,
+    # so `refresh()` and the edited-shard commit below still pick the files they always picked.
+    shapes = {
+        "services/python/shapes/report.py": LONG_FUNCTION.encode(),
+        "services/python/shapes/orders_cli.py": f"{READ_WRITE}\n\n{MAIN_GUARD}".encode(),
+    }
+    overloads = {"csharp/Orders/Robot.cs": CSHARP_OVERLOADS.encode()}
+    schema = {"db/schema.sql": ORDERS_SCHEMA.encode()}
     declined = {
         BINARY: b"\x00\x01\x02\x00binary\x00",
         NO_READER: b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR",
@@ -242,6 +295,9 @@ def build_code_capture_repository(parent: Path, *, files_per_language: int = 48)
         **prose,
         **unparsed,
         **declined,
+        **shapes,
+        **overloads,
+        **schema,
     }
     _write(root, first)
     os.symlink("services/python/pkg0/mod000.py", root / SYMLINK)
@@ -264,12 +320,12 @@ def build_code_capture_repository(parent: Path, *, files_per_language: int = 48)
 
     files = {**first, **later_clients, **edited, **tuned}
     languages = {
-        "python": tuple(sorted(python)),
+        "python": tuple(sorted({**python, **shapes})),
         "typescript": tuple(sorted(typescript)),
         "go": tuple(sorted(go)),
-        "csharp": tuple(sorted(csharp)),
+        "csharp": tuple(sorted({**csharp, **overloads})),
         "rust": tuple(sorted(rust)),
-        "sql": tuple(sorted(sql)),
+        "sql": tuple(sorted({**sql, **schema})),
     }
     accepted = frozenset(files) - {BINARY, NO_READER, OVERSIZED, f"{NODE_MODULES}/left-pad/index.js"}
     return CodeCaptureRepository(

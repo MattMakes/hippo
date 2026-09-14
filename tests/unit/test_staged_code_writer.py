@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from collections import Counter
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,7 +25,7 @@ import pytest
 
 from hippo.codegraph.extract import extract_code
 from hippo.codegraph.git_history import History
-from hippo.codegraph.model import commit_id
+from hippo.codegraph.model import CODE_EDGE_KINDS, commit_id
 from hippo.ingest.code_provenance import read_code_provenance
 from hippo.ingest.prepared_code_chunks import CapturedCode, CodeChunkSettings, prepare_code_chunks
 from hippo.ingest.repo_capture import capture_repository_inputs, repository_descriptor
@@ -35,6 +36,13 @@ from hippo.knowledge.identity import canonical_json, text_hash
 from hippo.knowledge.inputs import CaptureLimits
 from hippo.knowledge.lifecycle import generation_namespace
 from hippo.knowledge.raw_artifacts import RawArtifactStore
+from tests.fakes.code_capture_repo import (
+    CSHARP_OVERLOADS,
+    LONG_FUNCTION,
+    MAIN_GUARD,
+    ORDERS_SCHEMA,
+    READ_WRITE,
+)
 
 INSTANT = datetime(2030, 1, 1, tzinfo=UTC)
 LEASE = timedelta(minutes=5)
@@ -532,7 +540,7 @@ def test_the_sealed_generation_holds_every_native_row_binding_and_relation(built
     bindings = store._knowledge_rows("NativeBinding", generation_id=gen_id)
     assert {b.id for b in bindings} == {b.id for b in prepared.bundle.bindings}
     relations = {
-        (entry[0], entry[1], entry[2])
+        writer()._relation_key(*entry)
         for entry in store._native_relationships(generation_id=gen_id)
         if entry[0] != "shared"
     }
@@ -934,6 +942,171 @@ def test_the_probe_reads_only_generation_scoped_and_identified_rows(built, monke
     monkeypatch.setattr(store, "_native_rows", native)
     writer().probe_staged_rows(store, built.prepared)
     assert unscoped == []
+
+
+# ------------------------------------------------------------------ ordinary tree shapes (CD10 review)
+
+TOTAL = "def total():\n    return 1\n"
+
+# Trees whose bundle binds one native row from more than one `(object, span)` (R21-B1).
+SEAL_SHAPES = {
+    "big_function": {"app/big.py": LONG_FUNCTION, "src/orders.py": TOTAL},
+    "cs_overloads": {"src/Robot.cs": CSHARP_OVERLOADS, "src/orders.py": TOTAL},
+    "sql_rw": {"app/touch.py": READ_WRITE, "db/schema.sql": ORDERS_SCHEMA, "src/orders.py": TOTAL},
+}
+
+# Trees holding two `CODE_EDGE` kinds between one endpoint pair (R21-B3), with the two kinds.
+TWO_KIND_SHAPES = {
+    "main_guard": ({"app/main.py": MAIN_GUARD, "src/orders.py": TOTAL}, {"CONTAINS", "INVOKES"}),
+    "sql_rw_no_schema": ({"app/touch.py": READ_WRITE, "src/orders.py": TOTAL}, {"READS", "WRITES"}),
+}
+
+
+def shaped(store, tmp_path, files):
+    """A captured and installed generation over one small tree of text files."""
+    state = capture(store, tmp_path.resolve(), files={path: text.encode() for path, text in files.items()})
+    built = SimpleNamespace(store=store, state=state, prepared=prepare(state))
+    built.job, built.credentials = install(store, state)
+    return built
+
+
+def planned_code_edges(prepared):
+    return {(*edge.endpoints, edge.row["kind"]) for edge in prepared.edges}
+
+
+def stored_code_edges(store, generation_id):
+    return {
+        (entry[1], entry[2], entry[3]["kind"])
+        for entry in store._native_relationships(generation_id=generation_id)
+        if entry[0] == "CODE_EDGE"
+    }
+
+
+def multi_kind_pairs(prepared):
+    kinds = {}
+    for edge in prepared.edges:
+        kinds.setdefault(edge.endpoints, set()).add(edge.row["kind"])
+    return {pair: found for pair, found in kinds.items() if len(found) > 1}
+
+
+def binding_counts(bundle):
+    return Counter((binding.native_kind, binding.native_id) for binding in bundle.bindings)
+
+
+@pytest.mark.parametrize("shape", sorted(SEAL_SHAPES))
+def test_a_native_row_bound_from_several_spans_writes_every_binding_and_seals(store, tmp_path, shape):
+    """R21-B1: the bundle carries one `NativeBinding` per observing `(object, span)`.
+
+    A function longer than one chunk is observed from each of its passages, two C# overloads share
+    one native ID, and a table is observed where it is defined and where it is read. Writing one
+    binding per native row left the rest unwritten, and the seal refused the whole tree.
+    """
+    built = shaped(store, tmp_path, SEAL_SHAPES[shape])
+    bundle, gen_id = built.prepared.bundle, built.prepared.generation.id
+    assert max(binding_counts(bundle).values()) > 1, "the shape binds one native row more than once"
+
+    manifest = write(built, batch_size=4)
+
+    assert manifest == store.validate_generation_seal(gen_id)
+    stored = store._knowledge_rows("NativeBinding", generation_id=gen_id)
+    assert {row.id for row in stored} == {row.id for row in bundle.bindings}
+
+
+def test_a_native_row_missing_one_of_its_bindings_fails_the_resume(store, tmp_path):
+    """R21-B1: every binding of a native row is probed, so a row missing its first is incomplete."""
+    built = shaped(store, tmp_path, SEAL_SHAPES["sql_rw"])
+    module, prepared = writer(), built.prepared
+    counts = binding_counts(prepared.bundle)
+    key = min((key for key, count in counts.items() if count > 1), key=counts.get)
+    for group in groups_of(prepared):
+        native = next((r for r in group.records if type(r) is module.PreparedNativeRow), None)
+        if native is not None and (native.native_kind, native.native_id) == key:
+            break
+        module._write_batch(store, prepared, group.records, **built.credentials)
+    bindings = [b for b in prepared.bundle.bindings if (b.native_kind, b.native_id) == key]
+    module._write_batch(store, prepared, (native, *bindings[1:]), **built.credentials)
+    reclaim(built)
+    with pytest.raises(ValueError, match="incomplete; explicit failed-generation cleanup"):
+        module.probe_staged_rows(store, prepared)
+
+
+@pytest.mark.parametrize("shape", sorted(TWO_KIND_SHAPES))
+def test_a_crash_between_two_kinds_of_one_pair_resumes_both(store, tmp_path, shape):
+    """R21-B3: a `CODE_EDGE` is one relationship per `(a, b, kind)`, never one per endpoint pair.
+
+    A module-level `main()` call is both CONTAINS and INVOKES, and a function that selects and
+    updates one table both READS and WRITES it. Keyed by its endpoints, the first kind's staged row
+    made the probe skip the second kind's group, and the generation sealed without it.
+    """
+    files, kinds = TWO_KIND_SHAPES[shape]
+    built = shaped(store, tmp_path, files)
+    module, prepared = writer(), built.prepared
+    pairs = multi_kind_pairs(prepared)
+    assert kinds in pairs.values()
+    started = set()
+    for group in groups_of(prepared):
+        edge = next((r for r in group.records if type(r) is module._CodeEdge), None)
+        if edge is not None and edge.endpoints in pairs:
+            if edge.endpoints in started:
+                break  # The crash: one kind of the pair is staged and the other is not.
+            started.add(edge.endpoints)
+        module._write_batch(store, prepared, group.records, **built.credentials)
+    else:
+        pytest.fail("the plan never reached the second kind of a pair")
+    reclaim(built)
+
+    manifest = write(built, resume=module.probe_staged_rows(store, prepared))
+
+    gen_id = prepared.generation.id
+    assert manifest == store.validate_generation_seal(gen_id)
+    assert stored_code_edges(store, gen_id) == planned_code_edges(prepared)
+
+
+@pytest.mark.parametrize("rel", ["CODE_EDGE", "MODIFIES"])
+def test_a_staged_relation_whose_payload_differs_fails_the_resume(built, rel):
+    """Ruling 10 for relations: a present row is compared by its canonical payload, not its key.
+
+    Re-adding a relation raises its omega and never lowers it, so a row a different derivation
+    staged with a higher omega or another hunk keeps its own payload: exactly the difference a
+    resume must refuse rather than skip over.
+    """
+    store, prepared = built.store, built.prepared
+    write_only(built, batch_size=4)
+    with store.generation_write(prepared.generation.id, **_authority(built)):
+        if rel == "CODE_EDGE":
+            row = prepared.edges[0].row
+            store.add_code_edges([{**row, "omega": row["omega"] + 1.0}])
+        else:
+            row = prepared.bundle.modifies[0].row
+            store.add_modifies([{**row, "omega": row["omega"] + 1.0, "hunk": {**row["hunk"], "churn": 99}}])
+    reclaim(built)
+    with pytest.raises(ValueError, match=f"staged {rel} relation differs from this build; explicit failed"):
+        writer().probe_staged_rows(store, prepared)
+
+
+def test_an_extra_code_edge_kind_on_a_planned_pair_fails_the_resume(built):
+    """The absence half for relations: a kind this build would not write is an extra row."""
+    store, prepared = built.store, built.prepared
+    write_only(built, batch_size=4)
+    edge = prepared.edges[0]
+    planned = {kind for a, b, kind in planned_code_edges(prepared) if (a, b) == edge.endpoints}
+    extra = next(kind for kind in CODE_EDGE_KINDS if kind not in planned)
+    with store.generation_write(prepared.generation.id, **_authority(built)):
+        store.add_code_edges([{**edge.row, "kind": extra}])
+    reclaim(built)
+    with pytest.raises(ValueError, match="relation rows this build would not produce; explicit failed"):
+        writer().probe_staged_rows(store, prepared)
+
+
+def test_the_seal_compares_every_relation_payload(built):
+    store, prepared = built.store, built.prepared
+    write_only(built, batch_size=4)
+    row = prepared.edges[0].row
+    with store.generation_write(prepared.generation.id, **_authority(built)):
+        store.add_code_edges([{**row, "omega": row["omega"] + 1.0}])
+    with pytest.raises(ValueError, match="Native relationship inventory differs from prepared coverage"):
+        writer()._seal(store, prepared, **built.credentials)
+    assert store._generation(prepared.generation.id).status == "staging"
 
 
 # ------------------------------------------------------------------ other source kinds
