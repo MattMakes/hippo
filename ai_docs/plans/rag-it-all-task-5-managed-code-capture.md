@@ -764,3 +764,24 @@ Future LadybugDB query builders use the `UNWIND` form.
 - The linearity proof at the 50,000-symbol ceiling is CC2's synthetic Fake test.
 - CD9's fixture, `tests/fakes/code_capture_repo.py`, does not reach that ceiling and is not presented
   as doing so.
+
+**§4, data objects, mentions and overloads** (supersedes the third bullet of the amendment above,
+"They become two knowledge objects and two bindings over one native row, and the first in
+canonical order is kept. This is a recorded defect, not repaired"; R21-M12, `evidence-r21a.md`).
+
+- `codegraph.model.symbol_id` carries no signature, so two C# overloads in one file share one
+  native ID. They become two knowledge objects over one native row, the first in canonical order
+  kept, and each overload is observed and bound only from the passages whose original lines overlap
+  its own (`code_binding._held`, `evidence-r21a.md`): two one-line overloads give two bindings, and
+  an overload split into windows gives one binding per window. A passage naming a shared ID that
+  overlaps none of its nodes refuses. The rule moved `CODE_BINDING_RULE_VERSION` to
+  `code-binding-v2`. The shared native row is a recorded defect, not repaired; fixing it needs a
+  `codegraph` change and a native-ID migration.
+
+**§4, the projection** (supersedes the amendment above's last paragraph, "Two overloads sharing one
+native ID project as the cross product of their knowledge objects"; R21-M12, `evidence-r21a.md`).
+
+Two overloads sharing one native ID share its native relations: a `CODE_EDGE` touching that row
+projects to both overloads' knowledge objects, the cross product, so a status card that counts
+arrows can exceed the source row's native count (`evidence-codeproj.md` finding 3). Their
+`DEFINED_IN` arrows are exact, because each overload's binding span is its own.
