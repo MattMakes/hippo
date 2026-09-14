@@ -153,3 +153,16 @@ Result: `71 passed in 167.81s` (log `/tmp/hippo-orch-neo4j-parity-run10.log`). C
 `load_code_embeddings` read (`WHERE n.embedding IS NOT NULL AND n.generation_id IS NULL` on both
 UNION ALL branches), the legacy synonym pass beside a published and a staging code generation, and
 the unchanged indexer and store-code suites.
+
+## Run 11: the converting source page and the ingress changes (r21c, merged at `4004fbd`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
+  tests/unit/test_managed_web_surfaces.py tests/unit/test_managed_web_ingress.py \
+  tests/unit/test_ingest_pipeline.py -q -o addopts='' -W error \
+  -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"
+```
+
+Result: `204 passed in 1249.40s` (log `/tmp/hippo-orch-neo4j-parity-run11.log`). Covers the
+converting source page cut from the held graph with `get_passages`, the archive member classification
+and budget, the closed git-URL sentence in the repo form redirect, and the ingress lanes on Neo4j.
