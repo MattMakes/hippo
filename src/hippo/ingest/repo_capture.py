@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -196,6 +197,13 @@ def _split_clone_url(candidate: str) -> tuple[str, str, int | None, str]:
     cannot become two forges.
     """
     if match := _SCP_LIKE.match(candidate):
+        # `user:secret@host:path` matches too, with `user` as the host, because `:` is outside
+        # the user class and so the secret lands in the path. A path with an `@` in it is
+        # refused rather than guessed at (R21-m15).
+        if "@" in match["path"]:
+            raise CaptureRefused(
+                "A clone URL must not carry credentials", reason="unsupported_repository_url"
+            )
         return "https", match["host"].lower(), None, match["path"]
     parsed = urlsplit(candidate)
     scheme = parsed.scheme.lower()
@@ -504,14 +512,9 @@ def _walk_archive(
     excluded: list[ExcludedFile] = []
     try:
         with ZipFile(archive_path) as package:
-            members = sorted(package.infolist(), key=lambda member: member.filename)
-            readable = [item for item in members if _wanted_member(item, max_file_bytes)]
-            try:
-                readers.check_zip_budgets(readable, archive_path.name)
-            except readers.TooLarge as error:
-                raise CaptureRefused(str(error), reason="archive_budget") from error
+            readable: list[tuple[str, ZipInfo]] = []
             seen: set[str] = set()
-            for member in members:
+            for member in sorted(package.infolist(), key=lambda member: member.filename):
                 if member.is_dir():
                     continue
                 logical = _normalized(member.filename)
@@ -525,7 +528,20 @@ def _walk_archive(
                 reason = _member_reason(member, logical, policy, max_file_bytes)
                 if reason is not None:
                     excluded.append(ExcludedFile(logical, reason))
-                    continue
+                else:
+                    readable.append((logical, member))
+            # The budget is taken over exactly the members read below, and before any of them
+            # is: an extensionless name is left to the content sniff, so it is read like a named
+            # one and counts like one (R21-M8). The refusal is this module's own sentence;
+            # `TooLarge` quotes the archive's name (R21-m21).
+            try:
+                readers.check_zip_budgets([member for _logical, member in readable], archive_path.name)
+            except readers.TooLarge as error:
+                raise CaptureRefused(
+                    "The archive holds more readable files or unpacked bytes than its budget allows",
+                    reason="archive_budget",
+                ) from error
+            for logical, member in readable:
                 data = package.read(member)
                 if readers.is_probably_binary(data):
                     excluded.append(ExcludedFile(logical, "binary"))
@@ -537,20 +553,22 @@ def _walk_archive(
     return inputs, lengths, excluded
 
 
-def _wanted_member(member: ZipInfo, max_file_bytes: int) -> bool:
-    """`readers._wanted_zip_member`, which `check_zip_budgets` is defined over."""
-    if member.is_dir() or member.file_size > max_file_bytes:
-        return False
-    parts = PurePosixPath(member.filename).parts
-    if any(part in readers.IGNORED_DIRS or part.startswith(".") for part in parts[:-1]):
-        return False
-    return readers.is_supported_name(parts[-1])
-
-
 def _member_reason(member: ZipInfo, logical: str, policy: Sequence[str], max_file_bytes: int) -> str | None:
+    """The exclusion reason for one archive member, or None to read it and sniff its content.
+
+    After the one refusal an archive adds, the order is `_directory_entry_reason`'s: link and
+    type, then the ignore rules, then size, then the name. A member's type is the Unix mode a
+    zip keeps in the high bits of `external_attr`. A zip written on Windows, or by
+    `ZipFile.writestr` from a bare name, records no type at all, and that is a plain file.
+    """
     parts = PurePosixPath(logical).parts
     if logical.lower().endswith(ARCHIVE_SUFFIXES):
         raise CaptureRefused("An archive inside an archive has no capture contract", reason="nested_archive")
+    kind = stat.S_IFMT(member.external_attr >> 16)
+    if kind == stat.S_IFLNK:
+        return "symlink"
+    if kind not in (0, stat.S_IFREG):
+        return "not_regular"
     if _is_excluded(logical, policy):
         return "configured_exclusion"
     if any(part in readers.IGNORED_DIRS or part.startswith(".") for part in parts[:-1]):

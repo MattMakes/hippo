@@ -2,14 +2,16 @@
 
 import json
 import os
+import stat
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import ZipFile, ZipInfo
 
 import pytest
 
+from hippo.ingest import readers
 from hippo.knowledge.raw_artifacts import RawArtifactStore
 
 INSTANT = datetime(2026, 9, 12, 8, 30, tzinfo=UTC)
@@ -360,6 +362,72 @@ def test_an_archive_goes_through_the_same_function(api, raw_store, tmp_path):
     assert json.loads(result.accepted.configuration_json)["capture"]["kind"] == "archive"
 
 
+@pytest.mark.parametrize("rail", ["MAX_ZIP_MEMBERS", "MAX_ZIP_TOTAL_BYTES"])
+def test_extensionless_archive_members_count_against_the_archive_budget_before_any_read(
+    api, tmp_path, monkeypatch, rail
+):
+    """R21-M8: the budget covers every member the walk reads, not only the named ones.
+
+    An extensionless name is left to the content sniff, so it is read; a budget taken over
+    supported names alone let an archive of many such members be read whole first.
+    """
+    archive = tmp_path / "bundle.zip"
+    with ZipFile(archive, "w") as package:
+        for name in ("notes_a", "notes_b", "notes_c"):
+            package.writestr(f"docs/{name}", "a plain text note\n" * 4)
+    monkeypatch.setattr(readers, rail, 2 if rail == "MAX_ZIP_MEMBERS" else 100)
+
+    def unread(self, *args, **kwargs):
+        raise AssertionError("an archive member was read before the archive budget was checked")
+
+    monkeypatch.setattr(ZipFile, "read", unread)
+    with pytest.raises(api.CaptureRefused) as error:
+        api.walk_tree(archive)
+    assert error.value.reason == "archive_budget"
+
+
+def test_the_archive_budget_refusal_is_a_closed_sentence_naming_no_archive(api, tmp_path, monkeypatch):
+    """R21-m21: the refusal is this module's sentence, not `TooLarge`'s, which quotes the name."""
+    archive = tmp_path / "client-private-bundle.zip"
+    with ZipFile(archive, "w") as package:
+        for index in range(3):
+            package.writestr(f"pkg/mod{index}.py", "x = 1\n")
+    monkeypatch.setattr(readers, "MAX_ZIP_MEMBERS", 2)
+    with pytest.raises(api.CaptureRefused) as error:
+        api.walk_tree(archive)
+    assert error.value.reason == "archive_budget"
+    assert "client-private-bundle" not in str(error.value) and ".zip" not in str(error.value)
+
+
+def zip_member(name: str, mode: int) -> ZipInfo:
+    """A member whose Unix mode, file type included, sits in the high bits of `external_attr`."""
+    member = ZipInfo(name)
+    member.external_attr = mode << 16
+    return member
+
+
+def test_archive_symlink_and_non_regular_members_carry_their_own_reasons(api, raw_store, tmp_path):
+    """R21-M9 and ruling 7: an archive's links and special files are classified, not captured.
+
+    `ZipFile.writestr` from a bare name records `0o600` with no file type, and so does a zip
+    written on Windows; that is a plain file, exactly like one whose type says regular.
+    """
+    archive = tmp_path / "bundle.zip"
+    with ZipFile(archive, "w") as package:
+        package.writestr("pkg/mod.py", "x = 1\n")
+        package.writestr(zip_member("pkg/typed.py", stat.S_IFREG | 0o644), "y = 2\n")
+        package.writestr(zip_member("pkg/link.py", stat.S_IFLNK | 0o777), "../../outside/secret.py")
+        package.writestr(zip_member("pkg/pipe.py", stat.S_IFIFO | 0o644), "")
+        package.writestr(zip_member("pkg/tty.py", stat.S_IFCHR | 0o644), "")
+    result = capture(api, raw_store, archive)
+    assert accepted_paths(result) == ["pkg/mod.py", "pkg/typed.py"]
+    assert reasons(result) == {
+        "pkg/link.py": "symlink",
+        "pkg/pipe.py": "not_regular",
+        "pkg/tty.py": "not_regular",
+    }
+
+
 def test_an_archive_member_that_escapes_the_root_refuses(api, tmp_path):
     archive = tmp_path / "bundle.zip"
     with ZipFile(archive, "w") as package:
@@ -469,9 +537,20 @@ def test_a_url_with_no_honest_repository_path_refuses(api, url):
     assert error.value.reason == "unsupported_repository_url"
 
 
-def test_an_embedded_credential_refuses_and_never_reaches_the_message(api):
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://someone:s3cr3t-token@github.com/acme/robots.git",
+        "http://someone:s3cr3t-token@github.com/acme/robots.git",
+        "https://s3cr3t-token@github.com/acme/robots.git",
+        "ssh://someone:s3cr3t-token@github.com/acme/robots.git",
+        # R21-m15: the scp-like form, which used to read `someone` as the host.
+        "someone:s3cr3t-token@github.com:acme/robots.git",
+    ],
+)
+def test_an_embedded_credential_refuses_and_never_reaches_the_message(api, url):
     with pytest.raises(api.CaptureRefused) as error:
-        api.repository_descriptor("https://someone:s3cr3t-token@github.com/acme/robots.git")
+        api.repository_descriptor(url)
     assert error.value.reason == "unsupported_repository_url"
     assert "s3cr3t-token" not in str(error.value) and "someone" not in str(error.value)
 

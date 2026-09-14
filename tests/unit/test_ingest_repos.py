@@ -83,6 +83,36 @@ def test_clone_rejects_bad_urls_before_running_git(tmp_path: Path, monkeypatch: 
         clone_repo("file:///local/path", tmp_path / "dest")
 
 
+# The whole message a URL `is_git_url` refuses gets, pinned byte for byte.
+NOT_A_GIT_URL = (
+    "The address does not look like a git URL. Use https://host/owner/repo, "
+    "ssh://git@host/owner/repo or git@host:owner/repo."
+)
+# Two URLs `is_git_url` refuses that still carry a token: a host with no dot, and a transport
+# prefix git itself understands (review R21-M10).
+REFUSED_CREDENTIALED_URLS = (
+    "https://robot:ghp_s3cr3tT0ken@gitserver/owner/private.git",
+    "git+https://robot:ghp_s3cr3tT0ken@git.example.com/owner/private.git",
+)
+
+
+@pytest.mark.parametrize("url", REFUSED_CREDENTIALED_URLS)
+def test_a_refused_url_is_answered_with_a_closed_sentence_that_quotes_none_of_it(
+    url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def boom(*args, **kwargs):
+        raise AssertionError("git must not run for a bad URL")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert not is_git_url(url)
+    with caplog.at_level(logging.DEBUG, logger="hippo"):
+        with pytest.raises(RepoError) as info:
+            clone_repo(url, tmp_path / "dest")
+    assert str(info.value) == NOT_A_GIT_URL
+    for part in CREDENTIAL_PARTS:
+        assert part not in rendered(info.value) and part not in caplog.text
+
+
 def test_clone_passes_the_url_as_one_argument_after_a_double_dash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -770,7 +770,8 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
         vectors: list[list[float]] = []
         for table in (self.symbols, self.data_objects):
             for node in table.values():
-                if node.get("embedding"):
+                # Untagged rows only, as every real backend reads them: `WHERE n.generation_id IS NULL`.
+                if node.get("embedding") and node.get("generation_id") is None:
                     ids.append(node["id"])
                     vectors.append(list(node["embedding"]))
         return ids, vectors
