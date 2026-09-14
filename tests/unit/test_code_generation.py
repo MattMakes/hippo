@@ -41,7 +41,7 @@ from hippo.ingest import repo_capture
 from hippo.knowledge import code_binding, code_history, staged_code
 from hippo.knowledge import model as k
 from hippo.knowledge.access import AuthorizationChanged
-from hippo.knowledge.build_authority import BuildActor
+from hippo.knowledge.build_authority import BuildActor, BuildAuthority
 from hippo.knowledge.embedding_profile import EmbeddingSpec
 from hippo.knowledge.raw_artifacts import RawArtifactStore
 from hippo.ollama import Ollama
@@ -953,7 +953,21 @@ def test_a_long_build_rebaselines_across_an_unrelated_authorization_change(world
 def test_a_capability_loss_mid_build_aborts_and_never_rebaselines(world, monkeypatch):
     w = world
     legacy_row(w)
+    # A non-owner who manages the source through its role, set before the build captures its
+    # authority, so losing the capability leaves the Source row and `SourceControl` as captured
+    # and only the rebaseline child's own proof can refuse (R21-M4).
+    w.store.update_role("individual", capabilities=["add_sources", "manage_sources"])
+    w.store.set_source_access(w.source, None, owner_id=None)
     calls = spies(w, monkeypatch)
+    adopted = []
+    rebaseline = BuildAuthority.rebaseline
+
+    def counted(authority):
+        child = rebaseline(authority)
+        adopted.append(child)
+        return child
+
+    monkeypatch.setattr(BuildAuthority, "rebaseline", counted)
     original = staged_code._write_batch
     state = {"written": 0}
 
@@ -961,17 +975,16 @@ def test_a_capability_loss_mid_build_aborts_and_never_rebaselines(world, monkeyp
         result = original(store, prepared, batch, **authority)
         state["written"] += 1
         if state["written"] == 1:
-            # The same two mutations `test_build_authority` uses for a capability loss,
-            # plus the epoch change that takes the coordinator into `rebaseline()` at
-            # all. `check_local()` must refuse there rather than adopt.
-            store.update_role("individual", capabilities=[])
-            store._source_fields(w.source, owner_id=None)
+            # The role change alone: it moves the authorization epoch, which takes the
+            # coordinator into `rebaseline()`, and it touches no Source field.
+            store.update_role("individual", capabilities=["add_sources"])
         return result
 
     monkeypatch.setattr(staged_code, "_write_batch", revoke_after_the_first_batch)
-    with pytest.raises(AuthorizationChanged):
+    with pytest.raises(AuthorizationChanged, match="cannot manage source"):
         build(w, options=options(w, batch_size=1))
 
+    assert adopted == [], "no rebaseline was adopted"
     staged = next(g for g in w.store._knowledge_rows("Generation"))
     assert staged.status == "failed" and w.store.get_source(w.source)["active_generation_id"] is None
     assert calls == []

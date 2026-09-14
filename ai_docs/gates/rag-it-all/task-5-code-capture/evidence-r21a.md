@@ -11,7 +11,7 @@ Slice `r21a` on `wp/r21a`, based on `rag-it-all-tibs` at `e026640` and merged wi
 | --- | --- | --- |
 | R21-M2 | Fixed | `knowledge/access.py` (`_KEYED_KINDS`, `EvidenceAccess._groups`), `knowledge/build_authority.py` (`_Overlay._knowledge_rows` takes the scoped read contract) |
 | R21-M1 | Authority half fixed and measured; CD1 wording corrected below | `BuildAuthority.check_local` proves the accepted inputs once per authority; the counter test counts rows returned per write batch at 10 and 40 files |
-| R21-M4 | Fixed in `test_build_authority.py`; the `test_code_generation.py` twin is proposed to r21w below, verified in a scratch copy | mutation proof below |
+| R21-M4 | Fixed in `test_build_authority.py` and, on the orchestrator's grant after r21w merged, in `test_code_generation.py` (the twin replaces the coordinator test) | mutation proofs below |
 | R21-M6 | Fixed, tests only | two tests in `test_code_projection.py`; `projection.py` unchanged; mutation proof below |
 | R21-M12 | Fixed | `code_binding._held` (overlap rule), counts pinned in `test_code_binding.py`; `CODE_BINDING_RULE_VERSION` bumped to `code-binding-v2` on the orchestrator's ruling, with `code_history.EXPECTED_CODE_BINDING_RULE_VERSION` (one line, granted) |
 | R21-M3 | CD9 wording and assertion shape proposed | "Ledger lines for the orchestrator" |
@@ -30,7 +30,9 @@ Slice `r21a` on `wp/r21a`, based on `rag-it-all-tibs` at `e026640` and merged wi
 - `fdb740b` Bump the code binding rule version to code-binding-v2 for the overload binding change
 - `66400d4` Merge rag-it-all-tibs into wp/r21a before the final green run
 - `f0f4f39` Serve a DEFINED_IN arrow in the acceptance oracle only where the object's binding span is in the passage
-- this evidence file is committed on its own after the final runs, in the commit that adds it
+- `aee46db` Record the r21a evidence for R21-M1 to M6 and M12, the ledger lines and the plan sentences
+- a follow-up commit replaces the coordinator capability-loss test (granted) and adds these notes
+- a last commit records the LadybugDB acceptance result
 
 ## Runs
 
@@ -64,7 +66,10 @@ Every run sets `HIPPO_TEST_STORE` and `-o addopts=''` and writes to the log name
 | Proposed CD8 CHECK, verbatim, merged tree | 390 passed, 3 skipped | `/tmp/hippo-r21a-final-cd8.log` |
 | CD1 and CD5 CHECK lines, verbatim, merged tree | CD1: 123 passed; CD5: 98 passed | `/tmp/hippo-r21a-final-cd1-cd5.log` |
 | GREEN LadybugDB, the brief's four files, merged tree | 110 passed, 2 skipped in 645.38s | `/tmp/hippo-r21a-final-ladybug.log` |
-| LadybugDB, `test_code_capture_acceptance.py` at 8 files per language, merged tree, after the oracle fix | running when this file was first committed; result in the follow-up commit | `/tmp/hippo-r21a-ladybug-acceptance.log` |
+| LadybugDB, `test_code_capture_acceptance.py` at 8 files per language, merged tree, after the oracle fix | running at the follow-up commit; result in the last commit | `/tmp/hippo-r21a-ladybug-acceptance.log` |
+| GREEN Fake, the granted coordinator twin and `test_build_authority.py`'s M4 test | 2 passed | `/tmp/hippo-r21a-m4-coordinator.log` |
+| Mutation, the same two tests with `child.check_local()` deleted from `rebaseline` in memory (the scratch plugin `/tmp/hippo-r21a-probe/mutate_rebaseline.py`; `build_authority.py` untouched, `shasum` unchanged) | 2 failed: the coordinator test on `no rebaseline was adopted`, `test_build_authority.py`'s on `DID NOT RAISE` | `/tmp/hippo-r21a-m4-coordinator-mutation.log` |
+| Proposed CD8 CHECK, verbatim, with the coordinator twin | 390 passed, 3 skipped in 43.11s | `/tmp/hippo-r21a-cd8-twin.log` |
 | M1 with and without the change | see R21-M1 | `/tmp/hippo-r21a-m1-without.log`, `/tmp/hippo-r21a-m1-with.log`, `/tmp/hippo-r21a-cpu-without.log`, `/tmp/hippo-r21a-cpu-with.log` |
 | M12 identity, before and after | see R21-M12 | `/tmp/hippo-r21a-m12-identity-base.log`, `/tmp/hippo-r21a-m12-identity-head.log` |
 | Ruff check and format check: the ten changed Python files and this file | All checks passed; 10 files already formatted; this file already formatted | `/tmp/hippo-r21a-ruff-final.log` |
@@ -236,10 +241,12 @@ Under it, the new test failed and the `e026640` version of the test (copied to a
 which is the review's finding reproduced. `build_authority.py` was restored with `git checkout`; its
 `shasum` matched the pre-mutation value and `git status` showed it clean.
 
-Proposed for r21w's `tests/unit/test_code_generation.py` (verified in an untracked scratch module against
-the merged tree `66400d4`: it passes unmutated, and with `child.check_local()` deleted from `rebaseline` it
-fails while the current `test_a_capability_loss_mid_build_aborts_and_never_rebaselines` still passes,
-`/tmp/hippo-r21a-twin-mutation.log`):
+First proposed for r21w's `tests/unit/test_code_generation.py` and verified in an untracked scratch module
+against the merged tree `66400d4`: it passes unmutated, and with `child.check_local()` deleted from
+`rebaseline` it fails while r21w's `test_a_capability_loss_mid_build_aborts_and_never_rebaselines` still
+passes (`/tmp/hippo-r21a-twin-mutation.log`). r21w did not take it (`evidence-r21w.md`). After r21w merged,
+the orchestrator granted r21a the replacement, and the follow-up commit replaces that test with this text,
+whose comment also cites R21-M4. The test also imports `BuildAuthority` beside `BuildActor`:
 
 ```text
 def test_a_capability_loss_mid_build_aborts_and_never_rebaselines(world, monkeypatch):
@@ -282,8 +289,13 @@ def test_a_capability_loss_mid_build_aborts_and_never_rebaselines(world, monkeyp
     assert calls == []
 ```
 
-It needs `from hippo.knowledge.build_authority import BuildAuthority`. The build raises, so there is no
-receipt; "`rebaselines == 0`" is asserted as no adopted rebaseline.
+The build raises, so there is no receipt; "`rebaselines == 0`" is asserted as no adopted rebaseline.
+
+Committed, it passes, and under the same mutation, applied in memory so the concurrent LadybugDB run kept
+reading the real module, it fails on `no rebaseline was adopted` beside `test_build_authority.py`'s test
+(`/tmp/hippo-r21a-m4-coordinator.log`, `/tmp/hippo-r21a-m4-coordinator-mutation.log`). Under the mutation
+the build still raises "cannot manage source" at a later check, so only the adopted-rebaseline assertion
+discriminates; it stays. CD8's CHECK runs both tests.
 
 ## R21-M6: the native relation read under suppression and denial
 
@@ -435,6 +447,10 @@ CD8 is below.
    CHECK below adds it.
 3. R21-m4 fix shape as ruled: `Artifact.source_id` on the scoped allow-list plus a v8 index step, V7
    frozen first; cleanup slice.
+5. Neo4j parity (root-owned): `_KEYED_KINDS` puts `store._knowledge_rows("KnowledgeObject", ids=...)`
+   on the unbounded proof path (legacy readers, the history lane and the build authority's overlay),
+   through the same `store.base.by_ids` builder parity run 8 covered for bounded proofs. The next parity
+   run should include `test_build_authority.py` and `test_query_scoped_reads.py`.
 4. After the merge, the acceptance scenario's arrow oracle disagreed with M12. r21w's fixture now holds a
    C# overload pair; with each overload bound only on its own span, the projection serves `DEFINED_IN`
    from each overload to the passages holding its own lines, while
@@ -453,6 +469,11 @@ CD8 is below.
 ## Ledger lines for the orchestrator
 
 ### CD1 CRITERIA (R21-M1, R21-M2; replace the whole line)
+
+Deliberately not append-only: besides the new r21a amendment, it rewords the base clause "a recorded query
+counter proves per-batch work is bounded by the batch rather than by corpus size", drops "and a managed
+code build is linear in its corpus" and "built once per generation for" from cc11b's amendment, and adds
+the `context.py:243` exception to the QSCOPE clause, because R21-M1 and R21-m4 make those words false.
 
 ```text
   CRITERIA: parameterised `_native_rows`, `_native_relationships` and `_knowledge_rows` return exactly what the unscoped forms returned for the same selection; `native_write`, `native_mutation` and `generation_checksums` use them; a recorded counter of rows returned proves, at two corpus sizes, which per-batch work is bounded by the batch and names the per-batch read that is not; every existing representation checksum, seal and publication result is unchanged; the reviewed prose writer and counts suites stay green. (Amended 2026-09-12 by the design review: native_write and native_mutation scope by ids and native_mutation still raises 'Native relationship crosses generations' for an edge across two generations and still admits an edge to an untagged legacy row; the scoped read is index-backed on the backends that support one, evidenced by the schema statement and not only by the query counter; sealing a generation at the symbol ceiling is linear in the generation in CPU as well as in queries; the scoped edge enumeration still returns every edge with exactly one endpoint in the selection so the 'Native relationship crosses generations' and 'Missing shared graph endpoint' refusals survive, and the two-hop MENTIONS/STATES -> SUBJECT/OBJECT closure is computed by a second scoped pass, never a whole-table read.) (Amended 2026-09-13 by CC11, corrected by cc11b on the final tree: the per-batch bound covers the knowledge tables as well as the native ones — `_check_knowledge_write`'s membership and binding checks read by `generation_id`, by primary key or by a v7 key, and `derivations._Inventory` reads the generation's own `GenerationMember` and `GenerationEvidenceMember` rows and its `DerivedDependency` rows by `derived_record_id`, built once per `native_write` call or checksum pass through `GenerationViews` rather than once per rendered passage through `validate_view`, so no generation-sized knowledge table is read whole per record written (KSCOPE, `test_knowledge_scoped_reads.py`, `evidence-kscope.md`, `evidence-cc11.md` finding 1); a query's proof, projection, snapshot, collection and retention reads are scoped to the generations it selects, so a session's open, lease renewal, validation, retrieval and dense dispatch read no generation-sized knowledge kind whole except `AppContext._graph_for`'s whole `Artifact` read (`context.py:243`, R21-m4), which `test_query_scoped_reads.py` pins by caller for the cleanup slice (QSCOPE, `test_query_scoped_reads.py`, `evidence-qscope.md`).) (Amended 2026-09-13 by r21a, R21-M1 and R21-M2: a managed code build is not linear in its corpus. Each `native_write` call that writes a rendered view builds its own `GenerationViews` inventory, which reads the generation's whole `GenerationEvidenceMember` and `GenerationMember` membership by `generation_id` (`store/generations.py:1612`, `knowledge/derivations.py:115-122`), 642 rows in one write batch at 10 files and 2,142 at 40, so those reads grow with members x rendered-view batches until one inventory is carried across a build's batches. The rest of a write batch is bounded: the build authority proves its accepted pairs and spans once per authority, again only in a rebaseline or `bind_inputs` child or once its earliest policy deadline passes, and otherwise re-reads the Source row, the actor, the reviewed mappings and the authorization tables, 42 rows in the heaviest write batch at 10 and at 40 files where it read 1,392 and 4,092; the writer's other reads are point reads per record written, 35.4 and 36.5 rows per record. No proof reads `KnowledgeObject` whole, a group member's included, and the counters' generation-sized list names `KnowledgeObject`, `Artifact` and `ArtifactRevision` (`test_knowledge_scoped_reads.py`, `test_query_scoped_reads.py`, `test_build_authority.py`, `evidence-r21a.md`).)
