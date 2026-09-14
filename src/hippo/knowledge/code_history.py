@@ -62,7 +62,7 @@ CODE_HISTORY_RULE_VERSION = "code-history-v1"
 # The binding derivation this history was written against. Pinned rather than imported
 # as a live value: a `CodeEvidenceBundle` carrying any other rule version is refused, so
 # a CC6 bump requires a bump here instead of silently binding a derivation never seen.
-EXPECTED_CODE_BINDING_RULE_VERSION = "code-binding-v1"
+EXPECTED_CODE_BINDING_RULE_VERSION = "code-binding-v2"
 
 # Where this module's rule version enters the hashed configuration. Deliberately a
 # top-level key of its own rather than a third entry under `code_binding`'s reserved

@@ -61,7 +61,8 @@ from .lifecycle import generation_for_inputs, generation_namespace, generation_p
 # module can produce could change. Plan ruling 10 (design review M2) folds it into the
 # configuration `generation_for_inputs` hashes, so a changed derivation is a different
 # generation and a staged row from an older binding can never be resumed into a seal.
-CODE_BINDING_RULE_VERSION = "code-binding-v1"
+# v2 (R21-M12): an overload is observed and bound only from the passages holding its lines.
+CODE_BINDING_RULE_VERSION = "code-binding-v2"
 
 # The mapped-chunk derivation this binding was written against. Not imported: a
 # knowledge module may not reach into `hippo.ingest` (`tests/unit/test_layering.py`).

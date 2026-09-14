@@ -292,7 +292,7 @@ def test_the_module_imports_no_ingest_module():
 
 
 def test_the_rule_versions_are_frozen_and_travel_with_the_bundle(api, raw_store, tmp_path):
-    assert api.CODE_BINDING_RULE_VERSION == "code-binding-v1"
+    assert api.CODE_BINDING_RULE_VERSION == "code-binding-v2"
     assert api.EXPECTED_CODE_CHUNK_RULE_VERSION == "code-chunks-v1"
     bundle, _, prepared, _ = bundle_of(api, raw_store, tmp_path / "repo")
     assert bundle.rule_version == api.CODE_BINDING_RULE_VERSION
@@ -414,7 +414,7 @@ def test_a_changed_binding_rule_version_is_a_different_generation(api, raw_store
         generation_identity_inputs=identity_inputs(api),
         observed_at=INSTANT,
     )
-    monkeypatch.setattr(api, "CODE_BINDING_RULE_VERSION", "code-binding-v2")
+    monkeypatch.setattr(api, "CODE_BINDING_RULE_VERSION", "code-binding-v3")
     other = api.code_generation(
         captured,
         workspace_id=WORKSPACE,
@@ -526,7 +526,7 @@ def test_a_passage_that_is_exactly_its_source_lines_needs_no_view(api, raw_store
 
 def test_changing_the_binding_rule_version_changes_every_view_identity(api, raw_store, tmp_path, monkeypatch):
     bundle, _, _, _ = bundle_of(api, raw_store, tmp_path / "one")
-    monkeypatch.setattr(api, "CODE_BINDING_RULE_VERSION", "code-binding-v2")
+    monkeypatch.setattr(api, "CODE_BINDING_RULE_VERSION", "code-binding-v3")
     other, _, _, _ = bundle_of(api, raw_store, tmp_path / "two")
     assert bundle.views and other.views
     assert {view.id for view in bundle.views}.isdisjoint({view.id for view in other.views})
