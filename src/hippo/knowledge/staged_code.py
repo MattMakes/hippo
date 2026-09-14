@@ -16,6 +16,7 @@ import json
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
+from ..store.code import code_edge_write_rows, modifies_write_rows
 from . import model as k
 from .access import AuthorizationChanged
 from .code_binding import NativeCodeRow
@@ -30,6 +31,15 @@ PAYLOAD_CEILING_BYTES = 64 * 1024 * 1024
 NATIVE_KINDS = ("Symbol", "DataObject", "Commit")
 RELATION_KINDS = ("CODE_EDGE", "DEFINED_IN", "MODIFIES", "PRECEDES")
 CODE_EDGE_FIELDS = ("a", "b", "kind", "omega", "provenance", "extra")
+
+# The properties each native relation carries in the store. A Fake relation row also holds its
+# endpoint fields and a Cypher one does not, so a relation payload is compared on these alone.
+RELATION_PROPERTIES = {
+    "CODE_EDGE": ("kind", "omega", "provenance", "extra"),
+    "DEFINED_IN": (),
+    "MODIFIES": ("omega", "hunk"),
+    "PRECEDES": (),
+}
 
 # Every refusal that needs operator action names the one exit the plan reserves for it.
 CLEANUP = "explicit failed-generation cleanup"
@@ -117,6 +127,37 @@ class _CodeEdge:
     def endpoints(self) -> tuple[str, str]:
         row = self.row
         return row["a"], row["b"]
+
+
+def _relation_key(rel, a, b, payload):
+    """How the store keys one native relation: a `CODE_EDGE` per `(a, b, kind)`, the rest per pair.
+
+    One pair carrying two `CODE_EDGE` kinds is ordinary -- a module-level `main()` call is both
+    CONTAINS and INVOKES -- so a key without the kind would let one kind's row stand in for the
+    other's (R21-B3).
+    """
+    return (rel, a, b, payload["kind"] if rel == "CODE_EDGE" else None)
+
+
+def _stored_relation(rel, payload):
+    """A persisted relation's properties, as every backend returns them."""
+    return {name: payload.get(name) for name in RELATION_PROPERTIES.get(rel, ())}
+
+
+def _written_relation(rel, row):
+    """The properties the store writes for one prepared relation row.
+
+    `add_code_edges` and `add_modifies` shape a row before writing it -- a float omega, and
+    `extra` or `hunk` as sorted JSON text -- so the prepared row goes through the same shaping
+    and is then compared as the store would hold it.
+    """
+    shape = {"CODE_EDGE": code_edge_write_rows, "MODIFIES": modifies_write_rows}.get(rel)
+    if shape is None:
+        return {}
+    shaped = shape([row])
+    if len(shaped) != 1:
+        raise ValueError(f"A prepared {rel} row is not one the store writes")
+    return _stored_relation(rel, shaped[0])
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,16 +255,24 @@ class PreparedCodeIndex:
         return self.bundle.generation
 
     @property
-    def relations(self) -> frozenset[tuple[str, str, str]]:
-        """Every `(kind, a, b)` triple this attempt writes into the native representation."""
-        return frozenset(
-            [
-                *(("CODE_EDGE", *edge.endpoints) for edge in self.edges),
-                *(("DEFINED_IN", item.node_id, item.passage_id) for item in self.definitions),
-                *(("MODIFIES", row.commit_id, row.symbol_id) for row in self.bundle.modifies),
-                *(("PRECEDES", newer, older) for newer, older in self.bundle.precedes),
-            ]
-        )
+    def relation_rows(self) -> dict[tuple[str, str, str, str | None], dict]:
+        """Every native relation this attempt writes, by its store key, with the row it hands over."""
+        rows = {}
+        for edge in self.edges:
+            row = edge.row
+            rows[_relation_key("CODE_EDGE", row["a"], row["b"], row)] = row
+        for item in self.definitions:
+            rows[_relation_key("DEFINED_IN", item.node_id, item.passage_id, {})] = {}
+        for record in self.bundle.modifies:
+            rows[_relation_key("MODIFIES", record.commit_id, record.symbol_id, record.row)] = record.row
+        for newer, older in self.bundle.precedes:
+            rows[_relation_key("PRECEDES", newer, older, {})] = {}
+        return rows
+
+    @property
+    def relations(self) -> frozenset[tuple[str, str, str, str | None]]:
+        """Every `(kind, a, b, code edge kind)` key this attempt writes into the native representation."""
+        return frozenset(self.relation_rows)
 
 
 # ------------------------------------------------------------------ fenced core
@@ -307,8 +356,11 @@ def _groups(prepared):
       with its own observations. That also makes the group recognisable from one scoped
       read -- an observation carries a `GenerationEvidenceMember`, a `KnowledgeObject`
       carries nothing generation-scoped at all.
-    * A `NativeBinding` is written in the same group as the native row it binds, because
-      `put_knowledge` dereferences the row (`store/knowledge.py:696`).
+    * Every `NativeBinding` of a native row is written in the same group as the row, because
+      `put_knowledge` dereferences the row (`store/knowledge.py:696`). A row has one binding
+      per observing `(object, span)`: a function longer than one chunk, two C# overloads sharing
+      a native ID and a table defined in one file and read in another each have several
+      (R21-B1), and every one of them is probed.
     """
     bundle = prepared.bundle
     gen_id = bundle.generation.id
@@ -350,24 +402,33 @@ def _groups(prepared):
         yield _Group(tuple(records), tuple(exact(record) for record in records[::2]))
     for item in prepared.dense:
         yield _Group((item,), (("native", ("Passage", item.id), item.native_row()),))
-    bindings = {(binding.native_kind, binding.native_id): binding for binding in bundle.bindings}
+    bindings = {}
+    for binding in bundle.bindings:
+        bindings.setdefault((binding.native_kind, binding.native_id), []).append(binding)
     for item in prepared.native:
-        binding = bindings[(item.native_kind, item.native_id)]
+        bound = bindings[(item.native_kind, item.native_id)]
         yield _Group(
-            (item, binding),
+            (item, *bound),
             (
                 ("native", (item.native_kind, item.native_id), item.native_row()),
-                ("binding", binding.id, binding),
+                *(("binding", binding.id, binding) for binding in bound),
             ),
         )
+    # A relation probe carries the row the writer hands the store, so a present relation is
+    # compared by its payload as well as found by its key.
     for edge in prepared.edges:
-        yield _Group((edge,), (("relation", ("CODE_EDGE", *edge.endpoints), None),))
+        row = edge.row
+        key = _relation_key("CODE_EDGE", row["a"], row["b"], row)
+        yield _Group((edge,), (("relation", key, row),))
     for item in prepared.definitions:
-        yield _Group((item,), (("relation", ("DEFINED_IN", item.node_id, item.passage_id), None),))
+        key = _relation_key("DEFINED_IN", item.node_id, item.passage_id, {})
+        yield _Group((item,), (("relation", key, {}),))
     for row in bundle.modifies:
-        yield _Group((row,), (("relation", ("MODIFIES", row.commit_id, row.symbol_id), None),))
+        key = _relation_key("MODIFIES", row.commit_id, row.symbol_id, row.row)
+        yield _Group((row,), (("relation", key, row.row),))
     for newer, older in bundle.precedes:
-        yield _Group((_Precedes(newer, older),), (("relation", ("PRECEDES", newer, older), None),))
+        key = _relation_key("PRECEDES", newer, older, {})
+        yield _Group((_Precedes(newer, older),), (("relation", key, {}),))
 
 
 def _payload(record):
@@ -529,7 +590,7 @@ def _persisted(store, prepared):
         },
     }
     rows["relation"] = {
-        (entry[0], entry[1], entry[2]): entry
+        _relation_key(*entry): entry
         for entry in store._native_relationships(generation_id=gen_id)
         if entry[0] != "shared"
     }
@@ -584,6 +645,11 @@ def probe_staged_rows(store, prepared) -> ResumePlan:
                     raise ValueError(f"A staged {kind} row differs from this build; {CLEANUP} required")
             elif flavour in ("member", "binding") and stored != record:
                 raise ValueError(f"A staged {flavour} record differs from this build; {CLEANUP} required")
+            elif flavour == "relation":
+                if _stored_relation(key[0], stored[3]) != _written_relation(key[0], record):
+                    raise ValueError(
+                        f"A staged {key[0]} relation differs from this build; {CLEANUP} required"
+                    )
             present.append(True)
         if not any(present):
             continue
@@ -638,11 +704,12 @@ def _inventory(store, prepared):
         if actual != {key: store._canonical_native(kind, row) for key, row in expected.items()}:
             raise ValueError(f"Native {kind} inventory differs from prepared coverage")
     actual = {
-        (entry[0], entry[1], entry[2])
+        _relation_key(*entry): _stored_relation(entry[0], entry[3])
         for entry in store._native_relationships(generation_id=gen_id)
         if entry[0] != "shared"
     }
-    if actual != prepared.relations:
+    expected = {key: _written_relation(key[0], row) for key, row in prepared.relation_rows.items()}
+    if actual != expected:
         raise ValueError("Native relationship inventory differs from prepared coverage")
     if selected("ProseExtraction"):
         raise ValueError("A code generation produces no prose extraction")

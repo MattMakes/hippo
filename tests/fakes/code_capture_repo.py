@@ -124,6 +124,43 @@ fn scale_{i}(total: u64) -> u64 {
 SQL = "CREATE TABLE orders_{i} (\n  id INT,\n  total INT\n);\n\nSELECT id, total FROM orders_{i};\n"
 YAML = "name: service-{i}\nreplicas: {i}\n"
 
+# The ordinary shapes the CD10 review found the staged code writer refusing or dropping (R21-B1,
+# R21-B3). The unit suites build each one as a small tree; the repository below carries them all.
+
+# A function longer than one chunk (`chunk_size_chars=1500`), so several passages observe it.
+LONG_FUNCTION = (
+    "def build_report():\n"
+    + "".join(f"    value_{i} = {i} * 2 + 1  # padding text\n" for i in range(400))
+    + "    return 1\n"
+)
+
+# Two C# overloads, which share one native symbol ID.
+CSHARP_OVERLOADS = """\
+namespace Acme
+{
+    public class Robot
+    {
+        public int Move(int steps) { return steps; }
+
+        public int Move(string steps) { return 1; }
+    }
+}
+"""
+
+# A table defined in one file...
+ORDERS_SCHEMA = "CREATE TABLE orders (id INT, total INT);\n"
+
+# ...and a function in another directory that selects and updates it: READS and WRITES on one pair.
+READ_WRITE = (
+    "def touch(cursor):\n"
+    '    cursor.execute("SELECT id FROM orders")\n'
+    '    cursor.execute("UPDATE orders SET total = 1")\n'
+    "    return cursor\n"
+)
+
+# A module-level call under the main guard: CONTAINS and INVOKES between the module and `main`.
+MAIN_GUARD = 'def main():\n    return 1\n\n\nif __name__ == "__main__":\n    main()\n'
+
 PROSE = {
     "README.md": "# Fleet\n\nThe fleet repository holds the order services in five languages.\n",
     "docs/architecture.md": "# Architecture\n\nEvery shard places orders and scales their totals.\n",

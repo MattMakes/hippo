@@ -393,12 +393,49 @@ def test_no_query_builder_selects_node_rows_with_a_list_predicate(store):
     offenders = [
         f"{path.name}:{number} ({match.group(1)} IN ...)"
         for root in roots
-        for path in sorted(root.glob("*.py"))
+        for path in sorted(root.rglob("*.py"))
         for number, line in code_lines(path)
-        for match in re.finditer(r"\b(\w+\.\w+) IN \$", line)
+        # Cypher keywords are case-insensitive and any whitespace separates them (R21-m3).
+        for match in re.finditer(r"(?i)\b(\w+\.\w+)\s+IN\s+\$", line)
         if match.group(1) not in UNPROVEN_RELATIONSHIP_LIST_PREDICATES
     ]
     assert offenders == [], f"node lists must drive the MATCH (see base.by_ids): {offenders}"
+
+
+def test_only_an_all_principals_suppression_of_the_source_leaves_the_legacy_lane(store):
+    """R21-m10: `source_serves_legacy`'s suppression term, tested directly.
+
+    A suppression naming principals hides the source from those principals and no one else, so
+    the source keeps serving its legacy graph; an all-principals suppression in the source's own
+    workspace takes it out of the lane.
+    """
+    source_id = store.create_source("text", "legacy")
+    workspace = store.get_source(source_id)["workspace_id"]
+
+    def suppress(**fields):
+        store.put_knowledge(
+            k.Suppression(
+                workspace_id=workspace,
+                target_kind="source",
+                target_id=source_id,
+                epoch=store.suppression_epoch() + 1,
+                created_at=NOW,
+                restoration_barrier="operation-1",
+                **fields,
+            )
+        )
+
+    assert store.source_serves_legacy(store.get_source(source_id))
+    suppress(
+        scope_key=f"source:{source_id}:access",
+        all_principals=False,
+        principal_ids=("user-1",),
+        view_applicability="all_history",
+        reason="access_loss",
+    )
+    assert store.source_serves_legacy(store.get_source(source_id))
+    suppress(scope_key=f"source:{source_id}:delete", view_applicability="current_only", reason="tombstone")
+    assert not store.source_serves_legacy(store.get_source(source_id))
 
 
 def test_knowledge_rows_scoped_by_generation_return_the_unscoped_records(store):
@@ -498,6 +535,33 @@ def test_scoped_relationships_equal_the_reviewed_unscoped_enumeration(store):
             reference_relationships(store, partial)
         with pytest.raises(ValueError, match="Native relationship crosses generations"):
             store._native_relationships(ids=partial)
+
+
+def test_two_code_edge_kinds_between_one_pair_are_both_enumerated(store):
+    """R21-B5: a `CODE_EDGE` exists once per `(a, b, kind)`, so one pair can carry two.
+
+    A module-level `main()` call is both CONTAINS and INVOKES, and a function that selects and
+    updates one table both READS and WRITES it. De-duplicating the scoped passes on the endpoint
+    pair dropped the second kind on LadybugDB and Neo4j only -- the Fake store keys its edges by
+    kind -- and the sealed checksum, the projection and the source's edge counts all read it here.
+    """
+    gen = generation(store)
+    job = claim(store, gen)
+    symbol, row = native_fixture(store, gen, job)
+    [callee] = symbol_rows(store, gen, 1, start=7)
+    with store.generation_write(gen.id, **authority(job)):
+        store.add_symbols([callee])
+        store.add_code_edges(
+            [
+                {"a": symbol["id"], "b": callee["id"], "kind": kind, "omega": omega, "provenance": "syntax"}
+                for kind, omega in (("CONTAINS", 1.0), ("INVOKES", 0.5))
+            ]
+        )
+    selection = {symbol["id"], row["id"], callee["id"]}
+    scoped = store._native_relationships(ids=selection)
+    assert {edge[3]["kind"] for edge in scoped if edge[0] == "CODE_EDGE"} == {"CONTAINS", "INVOKES"}
+    assert scoped == reference_relationships(store, selection)
+    assert store._native_relationships(generation_id=gen.id) == scoped
 
 
 # ------------------------------------------------------- preserved semantics
