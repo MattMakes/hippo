@@ -288,11 +288,59 @@ def default_buffer_pool_bytes() -> int:
     return bounded_buffer_pool_bytes(physical_memory_bytes())
 
 
+# real_ladybug 0.15.3 prepares a fresh statement for every `Connection.execute(query, parameters)` and
+# keeps it, with a copy of its parameters, until that connection closes; `gc.collect()` frees none of it.
+# A statement without parameters keeps nothing. So the store swaps in a fresh connection once the
+# statements run on the current one reach a budget. One fresh process per shape, phys_footprint growth
+# per call (evidence-lbconn.md): `RETURN $x` 1.8 KB, a keyed read 4.9 KB, a long MATCH 43 KB, a
+# 40-term expression 68 KB; on top of the plan, ~125 B per list element, ~300 B per map field and about
+# 1.1 times a string's bytes. How big a plan is cannot be read off the query text, so every statement is
+# charged the same assumed plan and its parameters are charged by size.
+STATEMENT_RETAINED_BYTES = 64 * 2**10
+"""What one parameterised statement is charged for its plan, before its parameters."""
+VALUE_RETAINED_BYTES = 128
+"""What each parameter value (a scalar, a list element, a map field) is charged, besides its text."""
+CONNECTION_RETAINED_BUDGET_BYTES = 256 * 2**20
+DEFAULT_CONNECTION_RECYCLE_STATEMENTS = CONNECTION_RETAINED_BUDGET_BYTES // STATEMENT_RETAINED_BYTES
+"""Parameterised statements one connection runs by default: the 256 MiB budget over the per-statement charge."""
+
+
+def parameter_retained_bytes(value: Any) -> int:
+    """
+    Roughly what the driver keeps of one parameter value until its connection closes.
+
+    A string is charged by its UTF-8 size, taking any non-ASCII character as three bytes, with a quarter
+    on top. A list of numbers is charged per element without walking it (the driver's lists hold one
+    type); anything else nested is walked.
+    """
+    if isinstance(value, str):
+        size = len(value) if value.isascii() else 3 * len(value)
+        return VALUE_RETAINED_BYTES + size * 5 // 4
+    if isinstance(value, (bytes, bytearray)):
+        return VALUE_RETAINED_BYTES + len(value) * 5 // 4
+    if isinstance(value, dict):
+        return VALUE_RETAINED_BYTES + sum(
+            VALUE_RETAINED_BYTES + len(str(key)) + parameter_retained_bytes(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        if value and type(value[0]) in (int, float, bool):
+            return VALUE_RETAINED_BYTES * (len(value) + 1)
+        return VALUE_RETAINED_BYTES + sum(parameter_retained_bytes(item) for item in value)
+    return VALUE_RETAINED_BYTES
+
+
 class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
     knowledge_backend = "ladybug"
     """All of hippo's queries against an embedded LadybugDB file. Same interface as `Store`."""
 
-    def __init__(self, path: str | Path, *, buffer_pool_bytes: int | None = None):
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        buffer_pool_bytes: int | None = None,
+        connection_recycle_statements: int | None = None,
+    ):
         import real_ladybug as lb  # imported here so `hippo.store` loads without the package installed
 
         if buffer_pool_bytes is None:
@@ -302,8 +350,22 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 f"the LadybugDB buffer pool must be a positive number of bytes, not {buffer_pool_bytes} "
                 "(LadybugDB reads 0 as about 80% of memory)"
             )
+        if connection_recycle_statements is None:
+            connection_recycle_statements = DEFAULT_CONNECTION_RECYCLE_STATEMENTS
+        elif connection_recycle_statements <= 0:
+            raise ValueError(
+                "the LadybugDB connection recycle threshold must be a positive number of statements, "
+                f"not {connection_recycle_statements}"
+            )
         self.path = Path(path)
         self.buffer_pool_bytes = buffer_pool_bytes
+        # The connection is swapped for a fresh one once the parameterised statements run on it reach
+        # this many, fewer when their parameters are large (see `STATEMENT_RETAINED_BYTES`).
+        self.connection_recycle_statements = connection_recycle_statements
+        self.connection_recycles = 0
+        self._statements_on_connection = 0
+        self._retained_on_connection = 0
+        self._recycle_failure_logged = False
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock_file = self._take_lock()
         try:
@@ -388,7 +450,13 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             result = None
             try:
                 try:
-                    result = self._conn.execute(query, params) if params else self._conn.execute(query)
+                    if params:
+                        charge = STATEMENT_RETAINED_BYTES + parameter_retained_bytes(params)
+                        self._statements_on_connection += 1
+                        self._retained_on_connection += charge
+                        result = self._conn.execute(query, params)
+                    else:
+                        result = self._conn.execute(query)
                     columns = result.get_column_names()
                     rows = []
                     while result.has_next():
@@ -403,10 +471,49 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 if self._transaction_depth:
                     self._transaction_failed = True
                 raise
+            finally:
+                if params:
+                    self._recycle_connection_if_due()
 
     def run_one(self, query: str, **params: Any) -> dict[str, Any] | None:
         rows = self.run(query, **params)
         return rows[0] if rows else None
+
+    def _recycle_connection_if_due(self) -> None:
+        """
+        Swap in a fresh connection on the same database once the current one's statements reach the budget.
+
+        Safe boundaries only: the caller holds `_lock` (so no other thread is mid-statement), every
+        result has been closed, and a transaction defers it to its own end, where `transaction()` calls
+        this again. The fresh connection opens before the old one closes, so a failed open leaves the
+        store on a working connection; it is tried again at the next boundary and logged once.
+        """
+        budget = self.connection_recycle_statements * STATEMENT_RETAINED_BYTES
+        if self._transaction_depth or self._retained_on_connection < budget:
+            return
+        import real_ladybug as lb
+
+        # The log lines name no file and quote no driver message: hippo's logs carry no paths or raw exception text.
+        try:
+            fresh = lb.Connection(self._db)
+        except Exception as exc:  # noqa: BLE001 - the statement already succeeded; keep serving on the old connection
+            if not self._recycle_failure_logged:
+                self._recycle_failure_logged = True
+                log.warning(
+                    "could not open a fresh LadybugDB connection, keeping the current one (%s)",
+                    type(exc).__name__,
+                )
+            return
+        stale, self._conn = self._conn, fresh
+        statements = self._statements_on_connection
+        self._statements_on_connection = self._retained_on_connection = 0
+        self._recycle_failure_logged = False
+        self.connection_recycles += 1
+        try:
+            stale.close()
+        except Exception as exc:  # noqa: BLE001 - the store already runs on the fresh connection
+            log.warning("could not close a recycled LadybugDB connection (%s)", type(exc).__name__)
+        log.debug("recycled the LadybugDB connection after %d parameterised statements", statements)
 
     def ping(self) -> bool:
         """Always reachable (it is a file). The first call tidies up after any crash, like the Neo4j store."""
@@ -464,6 +571,8 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
                 if outer:
                     self._transaction_failed = False
                     self._transaction_owner = None
+                    # A recycle that came due inside the transaction happens now that it has committed or rolled back.
+                    self._recycle_connection_if_due()
 
     def _ensure_legacy_schema(self) -> None:
         """
