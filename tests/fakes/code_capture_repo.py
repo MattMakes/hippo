@@ -17,8 +17,16 @@ What the tree holds, for `files_per_language` = N:
 * one of each exclusion: `.git` and an untracked `web/node_modules/` (ignored paths), an untracked
   `data/huge.json` above `readers.MAX_FILE_BYTES` (too large), `data/blob.json` with NUL bytes
   (binary), `assets/logo.png` (no reader), and `fleet_link.py`, a committed symlink;
+* one of each shape the CD10 review found the staged code writer refusing or dropping:
+  `services/python/shapes/report.py` (a function longer than one chunk),
+  `services/python/shapes/orders_cli.py` (a function that selects and updates the `orders` table
+  `db/schema.sql` defines, and a module-level `main()` call under the main guard) and
+  `csharp/Orders/Robot.cs` (two overloads of one method);
 * four commits: the services, a Python edit, the later web clients, a Go edit. `refresh()` adds a
   fifth that edits one Python helper.
+
+That is 5N + 2 * max(2, N // 4) + 10 accepted files: 274 at the default N = 48, 54 at N = 8 and
+24 at N = 2.
 
 The returned `CodeCaptureRepository` is the expectation a test asserts against, computed here
 beside the bytes rather than hard-coded in the test.
@@ -260,6 +268,14 @@ def build_code_capture_repository(parent: Path, *, files_per_language: int = 48)
     config = {f"config/service{i:02d}.yaml": _render(YAML, i) for i in range(max(2, n // 4))}
     prose = {path: text.encode() for path, text in PROSE.items()}
     unparsed = {path: text.encode() for path, text in UNPARSED.items()}
+    # The review shapes, once each. The Python ones sort after every `services/python/pkg*` module,
+    # so `refresh()` and the edited-shard commit below still pick the files they always picked.
+    shapes = {
+        "services/python/shapes/report.py": LONG_FUNCTION.encode(),
+        "services/python/shapes/orders_cli.py": f"{READ_WRITE}\n\n{MAIN_GUARD}".encode(),
+    }
+    overloads = {"csharp/Orders/Robot.cs": CSHARP_OVERLOADS.encode()}
+    schema = {"db/schema.sql": ORDERS_SCHEMA.encode()}
     declined = {
         BINARY: b"\x00\x01\x02\x00binary\x00",
         NO_READER: b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR",
@@ -279,6 +295,9 @@ def build_code_capture_repository(parent: Path, *, files_per_language: int = 48)
         **prose,
         **unparsed,
         **declined,
+        **shapes,
+        **overloads,
+        **schema,
     }
     _write(root, first)
     os.symlink("services/python/pkg0/mod000.py", root / SYMLINK)
@@ -301,12 +320,12 @@ def build_code_capture_repository(parent: Path, *, files_per_language: int = 48)
 
     files = {**first, **later_clients, **edited, **tuned}
     languages = {
-        "python": tuple(sorted(python)),
+        "python": tuple(sorted({**python, **shapes})),
         "typescript": tuple(sorted(typescript)),
         "go": tuple(sorted(go)),
-        "csharp": tuple(sorted(csharp)),
+        "csharp": tuple(sorted({**csharp, **overloads})),
         "rust": tuple(sorted(rust)),
-        "sql": tuple(sorted(sql)),
+        "sql": tuple(sorted({**sql, **schema})),
     }
     accepted = frozenset(files) - {BINARY, NO_READER, OVERSIZED, f"{NODE_MODULES}/left-pad/index.js"}
     return CodeCaptureRepository(

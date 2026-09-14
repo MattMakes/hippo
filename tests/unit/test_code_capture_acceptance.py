@@ -70,7 +70,7 @@ from tests.unit.test_managed_source_inventory import row_of
 
 CLONE_URL = "https://git.example.com/acme/fleet.git"
 
-# The size a plain `pytest tests/unit` runs, CI's included: 8 per language (50 accepted files), the
+# The size a plain `pytest tests/unit` runs, CI's included: 8 per language (54 accepted files), the
 # size CD9's CHECK line pins. The ledger's multi-hundred-file run is opt-in, never the default:
 # `HIPPO_CODE_ACCEPTANCE_FILES_PER_LANGUAGE=48`.
 FILES_PER_LANGUAGE = int(os.environ.get("HIPPO_CODE_ACCEPTANCE_FILES_PER_LANGUAGE", "8"))
@@ -414,13 +414,15 @@ def assert_native_defined_in_support(w, generation_id, graph, relations):
     """Exact DEFINED_IN support in the sealed native representation.
 
     Every native DEFINED_IN row of the generation joins a bound native node of the generation to
-    a dense passage of the generation whose original spans include the node's binding span.
+    a dense passage of the generation whose original spans include one of the node's binding spans.
+    A node has one binding per observing `(object, span)` -- a function longer than one chunk, two
+    overloads sharing a native ID, a table defined in one file and read in another -- and the
+    passage that defines it holds the span of one of them (R21-B1).
     """
     store = w.ctx.store
-    bindings = {
-        (b.native_kind, b.native_id): b
-        for b in store._knowledge_rows("NativeBinding", generation_id=generation_id)
-    }
+    bindings = {}
+    for b in store._knowledge_rows("NativeBinding", generation_id=generation_id):
+        bindings.setdefault((b.native_kind, b.native_id), set()).add(b.span_id)
     native = {
         row["id"]: kind
         for kind in NATIVE_KINDS
@@ -432,8 +434,8 @@ def assert_native_defined_in_support(w, generation_id, graph, relations):
     assert defined, "a code generation writes DEFINED_IN"
     for _rel, node, passage, _payload in defined:
         assert node in native and passage in passages
-        span = bindings[(native[node], node)].span_id
-        assert span in originals[projected_passage_id(passages[passage])], (node, passage)
+        spans = bindings[(native[node], node)]
+        assert spans & originals[projected_passage_id(passages[passage])], (node, passage)
     attached = {row[1] for row in defined}
     symbols = [node for node, kind in native.items() if kind == "Symbol"]
     assert symbols and set(symbols) <= attached, "every bound symbol is written down in a passage"
