@@ -46,6 +46,13 @@ from hippo.knowledge.embedding_profile import EmbeddingSpec
 from hippo.knowledge.raw_artifacts import RawArtifactStore
 from hippo.ollama import Ollama
 from tests.conftest import git_env
+from tests.unit.test_staged_code_writer import (
+    SEAL_SHAPES,
+    TWO_KIND_SHAPES,
+    multi_kind_pairs,
+    planned_code_edges,
+    stored_code_edges,
+)
 
 CLONE_URL = "https://git.example.com/acme/robots.git"
 
@@ -789,6 +796,133 @@ def test_a_resume_after_a_changed_tree_supersedes_rather_than_resuming(world, mo
 
     assert result.generation_id != staged.id and result.resumed_from_batches == 0
     assert generation(w, staged.id).status == "failed"
+
+
+def probed(monkeypatch):
+    """Every `(prepared, plan)` pair a build probes, so a test can compare the sealed rows."""
+    seen = []
+    original = staged_code.probe_staged_rows
+
+    def spy(store, prepared):
+        plan = original(store, prepared)
+        seen.append((prepared, plan))
+        return plan
+
+    monkeypatch.setattr(staged_code, "probe_staged_rows", spy)
+    return seen
+
+
+def test_a_failure_after_the_seal_retries_to_publication_of_the_same_generation(world, monkeypatch):
+    """R21-B2: a crash, cancellation or refusal between the seal and publication strands nothing.
+
+    The failed generation keeps its `IndexManifest`, the next attempt adopts it (its ID is
+    input-derived), and the install binds the same verified profile again. Refusing that rebind
+    left the source stuck until its tree changed.
+    """
+    w = world
+    legacy_row(w)
+    seen = probed(monkeypatch)
+    original = w.module._publish
+
+    def fault(*args, **kwargs):
+        raise RuntimeError("injected fault after the seal")
+
+    monkeypatch.setattr(w.module, "_publish", fault)
+    with pytest.raises(RuntimeError, match="after the seal"):
+        build(w)
+    monkeypatch.setattr(w.module, "_publish", original)
+    staged = next(iter(w.store._knowledge_rows("Generation")))
+    assert staged.status == "failed"
+    assert len(w.store._knowledge_rows("IndexManifest", generation_id=staged.id)) == 1
+
+    result = build(w)
+
+    prepared, plan = seen[-1]
+    assert (result.generation_id, result.outcome) == (staged.id, "published")
+    # The seal had staged every group, so the retry skips each one but the accepted preflight and
+    # the revision members the install writes on every attempt.
+    assert result.resumed_from_batches == plan.group_count - 1 - len(prepared.bundle.revision_members)
+    assert w.store.get_source(w.source)["active_generation_id"] == staged.id
+    assert len(w.store._knowledge_rows("IndexManifest", generation_id=staged.id)) == 1
+    assert generation(w, staged.id).created_at == staged.created_at
+
+
+def test_an_authorization_change_in_the_publication_window_refuses_and_the_retry_publishes(
+    world, monkeypatch
+):
+    """R21-m31: the code lane's own publication recheck, then the retry R21-B2 makes possible."""
+    w = world
+    # Patched on the class: a bound method left on the instance would be deep-copied with the
+    # Fake store's transaction snapshot, lock and all.
+    original = type(w.store).publish_staged_generation
+
+    def publish(store, *args, **kwargs):
+        result = original(store, *args, **kwargs)
+        store._bump_authorization_epoch()
+        return result
+
+    monkeypatch.setattr(type(w.store), "publish_staged_generation", publish)
+    with pytest.raises(AuthorizationChanged, match="during publication"):
+        build(w)
+    monkeypatch.setattr(type(w.store), "publish_staged_generation", original)
+    staged = next(iter(w.store._knowledge_rows("Generation")))
+    assert staged.status == "failed" and w.store.get_source(w.source)["active_generation_id"] is None
+    assert not [event for event in w.store._knowledge_rows("IndexEvent") if event.kind == "published"]
+
+    result = build(w)
+
+    assert (result.generation_id, result.outcome) == (staged.id, "published")
+    assert w.store.get_source(w.source)["active_generation_id"] == staged.id
+
+
+# ------------------------------------------------------------------ ordinary tree shapes (CD10 review)
+
+
+def shape_tree(w, files, name):
+    checkout = make_checkout(w.tmp_path, files=files, name=name)
+    return replace(w.tree, root=checkout.resolve(), head_revision=head_of(checkout))
+
+
+@pytest.mark.parametrize("shape", sorted(SEAL_SHAPES))
+def test_a_tree_binding_one_native_row_from_several_spans_publishes(world, shape):
+    """R21-B1 through the coordinator: a long function, C# overloads, a table used elsewhere."""
+    w = world
+    result = build(w, operation=f"op-{shape}", tree=shape_tree(w, SEAL_SHAPES[shape], shape))
+    assert result.outcome == "published"
+    bindings = w.store._knowledge_rows("NativeBinding", generation_id=result.generation_id)
+    assert len(bindings) > len({(row.native_kind, row.native_id) for row in bindings})
+
+
+@pytest.mark.parametrize("shape", sorted(TWO_KIND_SHAPES))
+def test_a_crash_between_two_kinds_of_one_pair_resumes_and_publishes_both(world, monkeypatch, shape):
+    """R21-B3 through the coordinator: the resumed generation publishes every kind of every pair."""
+    w = world
+    files, kinds = TWO_KIND_SHAPES[shape]
+    tree = shape_tree(w, files, shape)
+    seen = probed(monkeypatch)
+    original = staged_code._write_batch
+    started = set()
+
+    def crash(store, prepared, batch, **authority):
+        pairs = multi_kind_pairs(prepared)
+        for record in batch:
+            if type(record) is staged_code._CodeEdge and record.endpoints in pairs:
+                if record.endpoints in started:
+                    raise RuntimeError("injected crash between two kinds of one pair")
+                started.add(record.endpoints)
+        return original(store, prepared, batch, **authority)
+
+    monkeypatch.setattr(staged_code, "_write_batch", crash)
+    with pytest.raises(RuntimeError, match="between two kinds"):
+        build(w, tree=tree, options=options(w, batch_size=1))
+    monkeypatch.setattr(staged_code, "_write_batch", original)
+
+    result = build(w, tree=tree, options=options(w, batch_size=1))
+
+    prepared, _ = seen[-1]
+    assert kinds in multi_kind_pairs(prepared).values()
+    assert result.outcome == "published" and result.resumed_from_batches >= 1
+    assert stored_code_edges(w.store, result.generation_id) == planned_code_edges(prepared)
 
 
 # ------------------------------------------------------------------ long-build authority

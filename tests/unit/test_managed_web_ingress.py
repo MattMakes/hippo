@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from urllib.parse import quote, unquote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -392,6 +393,43 @@ def test_legacy_validation_routes_keep_their_own_messages(web):
     assert settings.status_code == 400 and "damping" in settings.json()["detail"]
     repo = web.client.post("/api/sources/repo", json={"url": "not a url"}, headers=web.reader_headers)
     assert repo.status_code == 400 and "does not look like a git URL" in repo.json()["error"]
+
+
+NOT_A_GIT_URL = (
+    "The address does not look like a git URL. Use https://host/owner/repo, "
+    "ssh://git@host/owner/repo or git@host:owner/repo."
+)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://robot:ghp_s3cr3tT0ken@gitserver/owner/private.git",
+        "git+https://robot:ghp_s3cr3tT0ken@git.example.com/owner/private.git",
+    ],
+)
+def test_a_refused_repo_url_reaches_no_body_redirect_or_log(web, caplog, url):
+    """R21-M10: a credentialed URL `is_git_url` refuses is never quoted back.
+
+    The JSON route answers the 400 body and the page form answers a redirect, whose
+    `Location` becomes the request line of the browser's next request, which is what
+    uvicorn's access log prints. So the sentence is closed on both, and the redirect
+    carries it percent-encoded.
+    """
+    before = len(web.store.list_sources())
+    with caplog.at_level(logging.DEBUG):
+        api = web.client.post("/api/sources/repo", json={"url": url}, headers=web.reader_headers)
+        page = web.client.post(
+            "/sources/repo", data={"url": url}, headers=web.reader_headers, follow_redirects=False
+        )
+    assert api.status_code == 400 and api.json() == {"error": NOT_A_GIT_URL, "code": "invalid_source"}
+    assert page.status_code == 303
+    location = page.headers["location"]
+    assert location == "/?error=" + quote(NOT_A_GIT_URL)
+    assert unquote(location.removeprefix("/?error=")) == NOT_A_GIT_URL
+    for text in (api.text, str(dict(api.headers)), page.text, str(dict(page.headers)), caplog.text):
+        assert "ghp_s3cr3tT0ken" not in text and "robot" not in text and "owner/private" not in text
+    assert len(web.store.list_sources()) == before
 
 
 def test_only_the_exact_repo_error_is_printed_at_the_repo_route(web, monkeypatch):

@@ -490,11 +490,15 @@ class GenerationQueries:
         with self.transaction():
             self._check_build(generation_id, **credentials)
             gen = self._generation(generation_id)
-            if self._knowledge_rows("IndexManifest", generation_id=gen.id):
-                raise ValueError("A sealed profile cannot be rebound")
             result = validate_generation_profile(self, gen, manifest_revision_id)
             if embedding_mode(gen) == "verified_v1":
+                # Binding the profile a generation already holds is a no-op, sealed or not (a
+                # different pointer refuses above). A failure after the seal leaves a failed
+                # generation holding its manifest, and the retry of the same input-derived ID
+                # installs the same binding again (R21-B2).
                 return result
+            if self._knowledge_rows("IndexManifest", generation_id=gen.id):
+                raise ValueError("A sealed profile cannot be rebound")
             if fault_hook:
                 fault_hook("before_binding")
             self._check_build(generation_id, **credentials)
@@ -826,18 +830,29 @@ class GenerationQueries:
                 continue
             if self.knowledge_backend == "fake":
                 selected = set(ids)
-                if attribute is None:
-                    field = "subject_id" if rel == "SUBJECT" else "object_id"
-                    for row in self.facts.values():
-                        pair = (row["id"], row[field])
-                        if (pair[0] in selected and pair[1] in selected) if both else (set(pair) & selected):
-                            edges.append([rel, pair[0], pair[1], {}])
-                    continue
-                values = getattr(self, attribute)
-                for key in values:
-                    a, b = key[:2]
-                    if (a in selected and b in selected) if both else (a in selected or b in selected):
-                        edges.append([rel, a, b, values[key] if isinstance(values, dict) else {}])
+                # The Fake store's writers hold `_lock` for their whole transaction, so its live
+                # tables are read under it too rather than half-applied (R21-m6).
+                with self._lock:
+                    if attribute is None:
+                        field = "subject_id" if rel == "SUBJECT" else "object_id"
+                        for row in self.facts.values():
+                            pair = (row["id"], row[field])
+                            if (
+                                (pair[0] in selected and pair[1] in selected)
+                                if both
+                                else (set(pair) & selected)
+                            ):
+                                edges.append([rel, pair[0], pair[1], {}])
+                    else:
+                        values = getattr(self, attribute)
+                        for key in values:
+                            a, b = key[:2]
+                            if (
+                                (a in selected and b in selected)
+                                if both
+                                else (a in selected or b in selected)
+                            ):
+                                edges.append([rel, a, b, values[key] if isinstance(values, dict) else {}])
                 continue
             selected = set(ids)
             for a_kind in left:
@@ -846,21 +861,21 @@ class GenerationQueries:
                         continue
                     payload = "properties(r)" if self.knowledge_backend == "neo4j" else "r"
                     # `base.by_ids` selects one endpoint at a time, so the `OR` form becomes two
-                    # passes -- one driven from each end -- and the pairs are unioned here. A
-                    # relationship exists once per ordered pair, so the seen set is the whole of
-                    # the de-duplication the `OR` used to get from the engine. `both` needs only
-                    # the left pass: an edge whose far end is outside `ids` is dropped in Python
-                    # rather than by a second list predicate.
+                    # passes -- one driven from each end -- and the rows are unioned here. Every
+                    # row the left pass returns has its `a` in `ids`, so the right pass skips
+                    # exactly those and nothing else is de-duplicated: a `CODE_EDGE` exists once
+                    # per `(a, b, kind)`, and one pair carrying two kinds is ordinary (R21-B5).
+                    # `both` needs only the left pass: an edge whose far end is outside `ids` is
+                    # dropped in Python rather than by a second list predicate.
                     heads = [f"{by_ids(a_kind, 'a')}-[r:{rel}]->(b:{b_kind})"]
                     if not both:
                         heads.append(f"{by_ids(b_kind, 'b')}<-[r:{rel}]-(a:{a_kind})")
-                    seen = set()
-                    for head in heads:
+                    for driven_from_b, head in enumerate(heads):
                         for row in self.run(f"{head} RETURN a.id AS a,b.id AS b,{payload} AS r", ids=ids):
-                            pair = (row["a"], row["b"])
-                            if pair in seen or (both and row["b"] not in selected):
+                            if (both and row["b"] not in selected) or (
+                                driven_from_b and row["a"] in selected
+                            ):
                                 continue
-                            seen.add(pair)
                             edges.append(
                                 [
                                     rel,

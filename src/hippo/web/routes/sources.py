@@ -175,7 +175,22 @@ def source_page(request: Request, source_id: str, page: int = 1):
         if source is None:
             raise HTTPException(404, "no such source")
         page = max(1, page)
-        if source.get("managed"):
+        # The view's lane decides the page, never the `managed` flag, which the first staged row
+        # sets: a converting source keeps its legacy page, facts and entities included, until it
+        # publishes (CD2, ruling 14, R21-M7). The held graph serves exactly the lane's rows, which
+        # for a converting source are its untagged ones -- `passages_for_source` would add the
+        # staged generation's -- so the page is cut from that graph and hydrated from the store.
+        legacy = source_id in view.legacy_ids
+        if legacy:
+            shown = sorted(
+                (passage for passage in view.graph.passages if passage.source_id == source_id),
+                key=lambda passage: (passage.ordinal, passage.id),
+            )[(page - 1) * PASSAGES_PER_PAGE : page * PASSAGES_PER_PAGE]
+            passages = sorted(
+                ctx.store.get_passages([passage.id for passage in shown], access=principal.access),
+                key=lambda row: (row["ordinal"], row["id"]),
+            )
+        else:
             passages = [
                 {
                     "id": passage.id,
@@ -189,15 +204,8 @@ def source_page(request: Request, source_id: str, page: int = 1):
                 for passage in view.graph.passages
                 if passage.source_id == source_id
             ][(page - 1) * PASSAGES_PER_PAGE : page * PASSAGES_PER_PAGE]
-        else:
-            passages = ctx.store.passages_for_source(
-                source_id,
-                limit=PASSAGES_PER_PAGE,
-                offset=(page - 1) * PASSAGES_PER_PAGE,
-                access=principal.access,
-            )
         passage_evidence = {}
-        if source.get("managed"):
+        if not legacy:
             evidence = retrieval_fields(session.graph, [p["id"] for p in passages])
             originals = {row["id"]: row for row in evidence["citations"]}
             passage_evidence = {
@@ -425,7 +433,7 @@ def repo_form(request: Request, url: str = Form(""), visibility: str = Form(None
     except HTTPException as exc:
         return RedirectResponse(f"/?error={quote(str(exc.detail))}", status_code=303)
     except (RepoError, ValueError) as exc:
-        return RedirectResponse(f"/?error={exc}", status_code=303)
+        return RedirectResponse(f"/?error={quote(str(exc))}", status_code=303)
     return RedirectResponse("/", status_code=303)
 
 
@@ -515,8 +523,8 @@ def add_repo(request: Request, body: RepoBody):
     except RepoError as exc:
         # Exact type only, the same rule `render.caller_error` applies one clause down.
         # `pipeline.add_repo` raises `RepoError` for exactly one condition -- the URL does
-        # not look like a git URL -- and that sentence is the caller's own input plus a
-        # fixed hint, which is the bounded validation text the plan's transport table
+        # not look like a git URL -- and that sentence is fixed and quotes nothing the caller
+        # typed (R21-M10), which is the bounded validation text the plan's transport table
         # protects. Cloning happens inside the background job, so `repos.clone_repo`'s
         # errors reach the Source row through `_legacy_failure` and never this 400. A
         # future subclass would carry something this route has not read, so it goes to the

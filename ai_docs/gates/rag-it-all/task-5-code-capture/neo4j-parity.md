@@ -140,3 +140,29 @@ Result: `10 passed in 1637.93s` (log `/tmp/hippo-orch-neo4j-parity-run9.log`). T
 reopen with a fresh `Store` from `NEO4J_URI`, revision reuse, ceilings, the CD1 bound) and the eight
 projection tests pass on Neo4j at 2 files per language; the ledger size is not run on Neo4j (managed
 code builds take minutes each there).
+
+## Run 10: the untagged legacy embedding read (r21i, merged at `2570f16`, run on `2570f16`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
+  tests/unit/test_legacy_index_beside_managed.py tests/unit/test_store_code.py \
+  tests/unit/test_indexer.py -q -o addopts='' -W error
+```
+
+Result: `71 passed in 167.81s` (log `/tmp/hippo-orch-neo4j-parity-run10.log`). Covers the Neo4j
+`load_code_embeddings` read (`WHERE n.embedding IS NOT NULL AND n.generation_id IS NULL` on both
+UNION ALL branches), the legacy synonym pass beside a published and a staging code generation, and
+the unchanged indexer and store-code suites.
+
+## Run 11: the converting source page and the ingress changes (r21c, merged at `4004fbd`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
+  tests/unit/test_managed_web_surfaces.py tests/unit/test_managed_web_ingress.py \
+  tests/unit/test_ingest_pipeline.py -q -o addopts='' -W error \
+  -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"
+```
+
+Result: `204 passed in 1249.40s` (log `/tmp/hippo-orch-neo4j-parity-run11.log`). Covers the
+converting source page cut from the held graph with `get_passages`, the archive member classification
+and budget, the closed git-URL sentence in the repo form redirect, and the ingress lanes on Neo4j.

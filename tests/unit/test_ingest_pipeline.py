@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import io
+import logging
 import subprocess
+import traceback
 import zipfile
 
 import pytest
@@ -178,6 +180,31 @@ def test_add_repo_rejects_bad_urls(ctx: AppContext) -> None:
         pipeline.add_repo(ctx, "/home/user/repo")
     with pytest.raises(RepoError):
         pipeline.add_repo(ctx, "file:///home/user/repo")
+    assert ctx.store.list_sources() == []
+
+
+TOKEN = "ghp_s3cr3tT0ken"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://robot:ghp_s3cr3tT0ken@gitserver/owner/private.git",
+        "git+https://robot:ghp_s3cr3tT0ken@git.example.com/owner/private.git",
+    ],
+)
+def test_add_repo_refuses_an_unrecognised_url_without_quoting_it(
+    ctx: AppContext, caplog: pytest.LogCaptureFixture, url: str
+) -> None:
+    """R21-M10: this message is the 400 body and the redirect, so it names nothing typed."""
+    with caplog.at_level(logging.DEBUG, logger="hippo"):
+        with pytest.raises(RepoError) as info:
+            pipeline.add_repo(ctx, url)
+    assert str(info.value) == (
+        "The address does not look like a git URL. Use https://host/owner/repo, "
+        "ssh://git@host/owner/repo or git@host:owner/repo."
+    )
+    assert TOKEN not in "".join(traceback.format_exception(info.value)) and TOKEN not in caplog.text
     assert ctx.store.list_sources() == []
 
 
@@ -476,6 +503,44 @@ def test_a_broken_history_read_does_not_fail_the_whole_index_job(
     assert code["symbols"] > 0  # the code graph itself is unaffected
     assert (code["commits"], code["modifies"], code["history_skipped"]) == (0, 0, 0)
     assert ctx.store.stats()["commits"] == 0
+
+
+def test_a_broken_history_read_logs_its_class_and_not_the_checkout_or_gits_words(
+    ctx: AppContext, tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R21-m20: `HistoryError` quotes the checkout path and git's stderr; the warning names neither."""
+    from hippo.codegraph import git_history
+    from hippo.ingest import pipeline, repos
+
+    checkout = make_code_checkout(tmp_path / "origin")
+
+    def clone_locally(url, dest, timeout=300, depth=1):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", str(depth), "--single-branch", "--", url, str(dest)],
+            check=True,
+            env=git_env(),
+        )
+        return dest
+
+    source_id = ctx.store.create_source("repo", "broken history", {"url": f"file://{checkout}"})
+    where = pipeline.source_dir(ctx, source_id) / pipeline.REPO_DIR
+
+    def broken(*args, **kwargs):
+        raise git_history.HistoryError(
+            f"could not read the git history of {where}. git said: fatal: unable to access "
+            f"'https://robot:{TOKEN}@git.example.com/owner/private.git/'"
+        )
+
+    monkeypatch.setattr(repos, "clone_repo", clone_locally)
+    monkeypatch.setattr(git_history, "read_history", broken)
+    pipeline.source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
+    with caplog.at_level(logging.DEBUG, logger="hippo"):
+        pipeline.run_indexing(ctx, source_id)
+
+    assert ctx.store.get_source(source_id)["status"] == "ready"
+    assert f"No git history for source {source_id}: HistoryError" in caplog.text
+    assert str(where) not in caplog.text and "git said" not in caplog.text and TOKEN not in caplog.text
 
 
 def test_a_repo_source_still_links_its_prose_to_its_code(git_index) -> None:
