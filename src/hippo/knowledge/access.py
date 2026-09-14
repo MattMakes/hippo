@@ -22,6 +22,12 @@ from .identity import canonical_json
 
 _DERIVED_KINDS = ("DerivedRecord", "DerivedDependency", "RetrievalView", "ProseExtraction")
 
+# Looked up by ID in every proof, bounded or not. No proof reads `KnowledgeObject` whole: each lookup
+# names its records -- a reader's groups, an observation's object -- while the table grows with every
+# symbol, file and commit, so walking it for a handful of groups made every build check corpus-sized
+# (R21-M2).
+_KEYED_KINDS = frozenset({"KnowledgeObject"})
+
 
 class AuthorizationChanged(RuntimeError):
     """An authorization proof expired or changed; discard dependent output."""
@@ -94,11 +100,11 @@ class _ProofReads:
     Every caller still applies the filters it applied to a whole-table read, and each narrowed read
     returns a superset of the rows those filters keep, so the proof is the same.
 
-    A proof with no generation selection -- a legacy reader, or the history lane proving every
-    retained row before time narrows it -- answers over the whole inventory and reads it whole,
-    exactly as before. The authorization tables (`AccessPolicy`, `Connector`, `Workspace`,
-    `GroupMembership`) are read whole either way: they grow with principals and policies, not with
-    evidence.
+    A proof with no generation selection -- a legacy reader, the history lane proving every retained
+    row before time narrows it, or the build authority's overlay -- answers over the whole inventory
+    and reads it whole, exactly as before, except for `_KEYED_KINDS`, which it only ever looks up
+    by ID. The authorization tables (`AccessPolicy`, `Connector`, `Workspace`, `GroupMembership`)
+    are read whole either way: they grow with principals and policies, not with evidence.
     """
 
     def __init__(self, store, *, bounded: bool):
@@ -118,7 +124,7 @@ class _ProofReads:
         wanted = frozenset(identities)
         if not wanted:  # nothing to look up reads nothing, as a lookup per row never ran for no rows
             return {}
-        if not self.bounded:
+        if not self.bounded and kind not in _KEYED_KINDS:
             return {identity: record for identity, record in self.whole(kind).items() if identity in wanted}
         known = self._keyed[kind]
         missing = sorted(wanted - known.keys())
@@ -347,6 +353,21 @@ class EvidenceAccess:
             and member.mapping_authority in self.mapping_authorities
         )
 
+    def _groups(self, reads=None) -> frozenset[str]:
+        """The enabled groups and teams this reader holds in this workspace, each looked up by ID."""
+        reads = _ProofReads(self.store, bounded=False) if reads is None else reads
+        memberships = [
+            member for member in reads.whole("GroupMembership").values() if self._membership(member)
+        ]
+        group_objects = reads.by_id("KnowledgeObject", {member.group_id for member in memberships})
+        return frozenset(
+            member.group_id
+            for member in memberships
+            if (group := group_objects.get(member.group_id)) is not None
+            and group.workspace_id == self.workspace_id
+            and group.kind in {"group", "team"}
+        )
+
     def _suppressed(self, query_mode):
         if query_mode not in {"current", "history"}:
             raise ValueError("Unknown evidence query mode")
@@ -423,15 +444,7 @@ class EvidenceAccess:
         )
 
         suppressed = self._suppressed(selection.query_mode)
-        memberships = [member for member in rows("GroupMembership").values() if self._membership(member)]
-        group_objects = reads.by_id("KnowledgeObject", {member.group_id for member in memberships})
-        groups = {
-            member.group_id
-            for member in memberships
-            if (group := group_objects.get(member.group_id)) is not None
-            and group.workspace_id == self.workspace_id
-            and group.kind in {"group", "team"}
-        }
+        groups = self._groups(reads)
         proofs = {}
 
         def grant(policy_id, artifact):
