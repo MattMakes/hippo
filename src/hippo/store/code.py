@@ -671,12 +671,19 @@ class CodeQueries(Neo4jBase):
         ]
 
     def load_code_embeddings(self) -> tuple[list[str], list[list[float]]]:
-        """Every symbol's and data object's name vector (used to find cross-kind synonyms)."""
+        """
+        Every legacy symbol's and data object's name vector: the key matrix of `find_synonyms`.
+
+        Untagged rows only (ruling 14). A generation's code rows serve the managed lane, and a legacy
+        SYNONYM to one is refused by that generation's write guard or its seal (R21-B4).
+        """
         rows = self.run(
             """
-            MATCH (n:Symbol) WHERE n.embedding IS NOT NULL RETURN n.id AS id, n.embedding AS embedding
+            MATCH (n:Symbol) WHERE n.embedding IS NOT NULL AND n.generation_id IS NULL
+            RETURN n.id AS id, n.embedding AS embedding
             UNION ALL
-            MATCH (n:DataObject) WHERE n.embedding IS NOT NULL RETURN n.id AS id, n.embedding AS embedding
+            MATCH (n:DataObject) WHERE n.embedding IS NOT NULL AND n.generation_id IS NULL
+            RETURN n.id AS id, n.embedding AS embedding
             """
         )
         return [r["id"] for r in rows], [list(r["embedding"]) for r in rows]
