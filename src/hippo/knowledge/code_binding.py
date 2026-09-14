@@ -125,22 +125,24 @@ def _text(value, label: str) -> str:
     return value
 
 
-# The four fields `ArtifactRevision` is written once for. `identity_fields` is
-# `(artifact_id, provider_revision, content_hash)`, so an unchanged file captured by a
-# second generation derives the *same* revision ID with a later `observed_at` -- and the
-# store refuses to rewrite an immutable record ("Immutable record already exists with
-# different contents"). `observed_at` therefore means *first* observed, exactly as the
-# reviewed prose lane's `prose_generation._pair` already treats it.
-_REVISION_IDENTITY = ("artifact_id", "content_hash", "provider_revision", "raw_uri")
-
-
 def _reuse(revision: k.ArtifactRevision, stored) -> k.ArtifactRevision:
-    """The stored revision for this content, when one exists; otherwise the fresh one."""
+    """The stored revision for this content, when one exists; otherwise the fresh one.
+
+    `identity_fields` is `(artifact_id, provider_revision, content_hash)`, so an unchanged file
+    captured by a second generation derives the *same* revision ID with a later `observed_at` --
+    and the store refuses to rewrite an immutable record ("Immutable record already exists with
+    different contents"). `observed_at` therefore means *first* observed, exactly as the reviewed
+    prose lane's `prose_generation._pair` already treats it, and it is the one field that may
+    differ. Any other difference is another record under the same identity -- metadata or a source
+    time a changed rule spells differently -- which was bound silently while only four fields were
+    compared (R21-m26).
+    """
     existing = stored.get(revision.id) if stored else None
     if existing is None:
         return revision
-    if type(existing) is not k.ArtifactRevision or any(
-        getattr(existing, name) != getattr(revision, name) for name in _REVISION_IDENTITY
+    if (
+        type(existing) is not k.ArtifactRevision
+        or existing.model_copy(update={"observed_at": revision.observed_at}) != revision
     ):
         raise ValueError("A stored accepted revision conflicts with this capture")
     return existing
@@ -894,15 +896,43 @@ def _by_native_id(nodes) -> dict[str, list]:
     `codegraph.model.symbol_id` carries no signature discriminator, so two C# or
     TypeScript overloads in one file share a native ID while `symbol_key` -- which does
     carry the signature -- keeps them distinct canonical objects (plan section 5, gate
-    CD5). A passage naming that shared ID therefore observes every node behind it: the
-    chunker's passage boundaries are drawn per symbol, but its `symbol_id` cannot tell
-    the overloads apart, and silently attributing the passage to whichever node was seen
-    last would drop half the inventory.
+    CD5). The chunker's passage boundaries are drawn per symbol, but its `symbol_id`
+    cannot tell the overloads apart, so `_held` picks the nodes a passage observed by
+    their lines.
     """
     grouped: dict[str, list] = {}
     for node in nodes:
         grouped.setdefault(node.id, []).append(node)
     return grouped
+
+
+def _held(nodes, chunk):
+    """The nodes behind one native ID that a passage naming that ID observed.
+
+    A passage naming a shared ID used to observe every node behind it, so `Move(string)`
+    was observed and bound on `Move(int)`'s span (R21-M12). The chunker draws a symbol
+    passage from that symbol's own lines, split into windows when it is long, so a
+    passage observes the nodes whose lines its originals overlap -- overlap rather than
+    containment, because no window of a split symbol holds all of it. A node alone behind
+    its ID is bound as before, whatever its lines, so no tree that could seal before binds
+    differently. A shared ID whose passage overlaps none of its nodes cannot say which
+    one it observed, and refuses.
+    """
+    if len(nodes) == 1:
+        return nodes
+    held = [
+        node
+        for node in nodes
+        if any(
+            original.lines.locator.path == node.path
+            and original.lines.locator.start <= node.line_end
+            and node.line_start <= original.lines.locator.end
+            for original in chunk.originals
+        )
+    ]
+    if not held:
+        raise ValueError("A prepared passage names a shared code ID but holds none of the lines of its nodes")
+    return held
 
 
 def _unknown(label: str):
@@ -956,7 +986,8 @@ class _Inventory:
         `codegraph.model.symbol_id` carries no signature discriminator, so two overloads
         differing only by signature share one native ID while `symbol_key` keeps them two
         distinct canonical objects. That is recorded rather than repaired: the first row
-        in canonical order is kept and both objects bind to it.
+        in canonical order is kept and both objects bind to it, each only from the
+        passages holding its own lines (`_held`).
         """
         if node.id != _native_id(native_kind, self.generation.source_id, node, self.namespace):
             raise ValueError("A native code ID does not match the generation namespace")
@@ -1075,7 +1106,7 @@ def materialize_code_evidence(
         passages.append(BoundCodePassage(chunk, generation, anchor, tuple(chunk_spans), view))
 
         if chunk.symbol_id is not None:
-            for symbol in symbols.get(chunk.symbol_id) or _unknown("symbol"):
+            for symbol in _held(symbols.get(chunk.symbol_id) or _unknown("symbol"), chunk):
                 inventory.bind(
                     native_kind="Symbol",
                     node=symbol,
