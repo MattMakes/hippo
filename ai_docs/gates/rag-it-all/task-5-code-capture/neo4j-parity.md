@@ -166,3 +166,18 @@ HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
 Result: `204 passed in 1249.40s` (log `/tmp/hippo-orch-neo4j-parity-run11.log`). Covers the
 converting source page cut from the held graph with `get_passages`, the archive member classification
 and budget, the closed git-URL sentence in the repo form redirect, and the ingress lanes on Neo4j.
+
+## Run 12: the writer, resume and edge-kind fixes (r21w, merged at `1fc6233`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 .venv/bin/pytest \
+  tests/unit/test_staged_code_writer.py tests/unit/test_generation_resume.py \
+  tests/unit/test_generation_scoped_reads.py tests/unit/test_generation_profiles.py \
+  tests/unit/test_code_projection.py -q -o addopts='' -W error
+```
+
+Result: `150 passed, 2 skipped in 1015.99s` (log `/tmp/hippo-orch-neo4j-parity-run12.log`). Covers
+every binding of a native row sealed and probed (R21-B1), relations keyed by kind with payload
+comparison at probe and seal (B3), `_edges_touching` keeping a second CODE_EDGE kind between one
+endpoint pair (B5, the LadybugDB/Neo4j branch), the idempotent profile rebind after a seal (B2), and
+the projection over those rows on Neo4j.
