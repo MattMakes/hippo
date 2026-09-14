@@ -126,3 +126,17 @@ Result: `166 passed in 1326.86s` (log `/tmp/hippo-orch-neo4j-parity-run8.log`). 
 (`IndexManifest`, `GenerationMember`, `NativeBinding`, `GenerationEvidenceMember`), the scoped
 snapshot, collection and retention reads, and the whole query life (open, renewal, validate,
 retrieval, dense) on the Neo4j backend.
+
+## Run 9: the CD9 acceptance scenario at small size and the code projection (run on `cbed8ca`)
+
+```
+HIPPO_TEST_STORE=neo4j NEO4J_URI=bolt://127.0.0.1:32774 HIPPO_CODE_ACCEPTANCE_FILES_PER_LANGUAGE=2 \
+  .venv/bin/pytest tests/unit/test_code_capture_acceptance.py tests/unit/test_code_projection.py \
+  -q -o addopts='' -W error
+```
+
+Result: `10 passed in 1637.93s` (log `/tmp/hippo-orch-neo4j-parity-run9.log`). The whole CD9 scenario
+(crash and resume, seal, projection equal to native rows, dense dispatch, refresh under a held session,
+reopen with a fresh `Store` from `NEO4J_URI`, revision reuse, ceilings, the CD1 bound) and the eight
+projection tests pass on Neo4j at 2 files per language; the ledger size is not run on Neo4j (managed
+code builds take minutes each there).
