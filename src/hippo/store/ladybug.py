@@ -493,15 +493,15 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             return
         import real_ladybug as lb
 
+        # The log lines name no file and quote no driver message: hippo's logs carry no paths or raw exception text.
         try:
             fresh = lb.Connection(self._db)
         except Exception as exc:  # noqa: BLE001 - the statement already succeeded; keep serving on the old connection
             if not self._recycle_failure_logged:
                 self._recycle_failure_logged = True
                 log.warning(
-                    "could not open a fresh LadybugDB connection on %s, keeping the current one: %s",
-                    self.path,
-                    exc,
+                    "could not open a fresh LadybugDB connection, keeping the current one (%s)",
+                    type(exc).__name__,
                 )
             return
         stale, self._conn = self._conn, fresh
@@ -512,10 +512,8 @@ class LadybugStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
         try:
             stale.close()
         except Exception as exc:  # noqa: BLE001 - the store already runs on the fresh connection
-            log.warning("could not close a recycled LadybugDB connection on %s: %s", self.path, exc)
-        log.debug(
-            "recycled the LadybugDB connection on %s after %d parameterised statements", self.path, statements
-        )
+            log.warning("could not close a recycled LadybugDB connection (%s)", type(exc).__name__)
+        log.debug("recycled the LadybugDB connection after %d parameterised statements", statements)
 
     def ping(self) -> bool:
         """Always reachable (it is a file). The first call tidies up after any crash, like the Neo4j store."""

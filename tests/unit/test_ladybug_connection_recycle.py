@@ -375,13 +375,47 @@ def test_a_failed_reopen_keeps_the_open_connection_and_tries_again(tmp_path, mon
                 store.run("CREATE (:RecycleItem {id: $id, n: $n})", id=f"item-{n}", n=n)
         assert store._conn is stale and not stale.is_closed
         assert store.connection_recycles == recycles
-        assert "no more connections" in caplog.text
+        # Two failed attempts, one warning, naming the kind of error only.
+        assert [record.levelname for record in caplog.records] == ["WARNING"]
+        assert "RuntimeError" in caplog.text
         monkeypatch.setattr(real_ladybug, "Connection", real)
         store.run("RETURN $k AS k", k=1)
         assert store.connection_recycles == recycles + 1
         assert stale.is_closed
         assert count_items(store) == 3
     finally:
+        store.close()
+
+
+def test_recycle_logs_name_neither_the_database_file_nor_the_driver_error(tmp_path, monkeypatch, caplog):
+    """hippo's logs carry no filesystem paths and no raw exception text (as the managed activation suite checks)."""
+    store = open_recycling(tmp_path, statements=2)
+    secret = "/private/var/folders/secret-path sk-live-secret"
+    real = real_ladybug.Connection
+
+    class ClosesBadly(real):
+        def close(self):
+            super().close()
+            raise RuntimeError(secret)
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError(secret)
+
+    try:
+        with caplog.at_level("DEBUG", logger="hippo"):
+            monkeypatch.setattr(real_ladybug, "Connection", ClosesBadly)
+            settle(store)
+            settle(store)  # closes a ClosesBadly connection
+            monkeypatch.setattr(real_ladybug, "Connection", refuse)
+            for n in range(3):
+                store.run("CREATE (:RecycleItem {id: $id, n: $n})", id=f"item-{n}", n=n)
+        levels = {record.levelname for record in caplog.records if record.name == ladybug.log.name}
+        assert levels == {"DEBUG", "WARNING"}
+        for leak in (str(tmp_path), "/private/var", "secret-path", "sk-live-secret"):
+            assert leak not in caplog.text
+        assert count_items(store) == 3
+    finally:
+        monkeypatch.setattr(real_ladybug, "Connection", real)
         store.close()
 
 
