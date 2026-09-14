@@ -31,7 +31,8 @@ Slice `r21a` on `wp/r21a`, based on `rag-it-all-tibs` at `e026640` and merged wi
 - `66400d4` Merge rag-it-all-tibs into wp/r21a before the final green run
 - `f0f4f39` Serve a DEFINED_IN arrow in the acceptance oracle only where the object's binding span is in the passage
 - `aee46db` Record the r21a evidence for R21-M1 to M6 and M12, the ledger lines and the plan sentences
-- a follow-up commit replaces the coordinator capability-loss test (granted) and adds these notes
+- `27ed4fd` Prove the coordinator's capability-loss rebaseline refuses in the child's own check (R21-M4,
+  granted)
 - a last commit records the LadybugDB acceptance result
 
 ## Runs
@@ -66,7 +67,7 @@ Every run sets `HIPPO_TEST_STORE` and `-o addopts=''` and writes to the log name
 | Proposed CD8 CHECK, verbatim, merged tree | 390 passed, 3 skipped | `/tmp/hippo-r21a-final-cd8.log` |
 | CD1 and CD5 CHECK lines, verbatim, merged tree | CD1: 123 passed; CD5: 98 passed | `/tmp/hippo-r21a-final-cd1-cd5.log` |
 | GREEN LadybugDB, the brief's four files, merged tree | 110 passed, 2 skipped in 645.38s | `/tmp/hippo-r21a-final-ladybug.log` |
-| LadybugDB, `test_code_capture_acceptance.py` at 8 files per language, merged tree, after the oracle fix | running at the follow-up commit; result in the last commit | `/tmp/hippo-r21a-ladybug-acceptance.log` |
+| LadybugDB, `test_code_capture_acceptance.py` at 8 files per language, merged tree, after the oracle fix | 2 passed in 694.19s (0:11:34) | `/tmp/hippo-r21a-ladybug-acceptance.log` |
 | GREEN Fake, the granted coordinator twin and `test_build_authority.py`'s M4 test | 2 passed | `/tmp/hippo-r21a-m4-coordinator.log` |
 | Mutation, the same two tests with `child.check_local()` deleted from `rebaseline` in memory (the scratch plugin `/tmp/hippo-r21a-probe/mutate_rebaseline.py`; `build_authority.py` untouched, `shasum` unchanged) | 2 failed: the coordinator test on `no rebaseline was adopted`, `test_build_authority.py`'s on `DID NOT RAISE` | `/tmp/hippo-r21a-m4-coordinator-mutation.log` |
 | Proposed CD8 CHECK, verbatim, with the coordinator twin | 390 passed, 3 skipped in 43.11s | `/tmp/hippo-r21a-cd8-twin.log` |
