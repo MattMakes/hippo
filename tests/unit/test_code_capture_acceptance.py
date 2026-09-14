@@ -450,16 +450,21 @@ def assert_arrows_are_the_sealed_relations(w, generation_id, graph, relations):
     """CODEPROJ: the served arrows are exactly the generation's sealed code relations.
 
     A native node is served as every knowledge object its bindings name, and a passage as its
-    projected ID, so the comparison is by served endpoint, kind and generation.
+    projected ID, so the comparison is by served endpoint, kind and generation. A `DEFINED_IN` row
+    is served for an object only when one of that object's binding spans on the row's node lies in
+    the passage's original spans, the projection's own rule: two overloads sharing a native ID each
+    reach only the passages holding their own lines (R21-M12).
     """
     store = w.ctx.store
-    objects = {}
+    objects, spans = {}, {}
     for binding in store._knowledge_rows("NativeBinding", generation_id=generation_id):
         objects.setdefault(binding.native_id, set()).add(binding.object_id)
+        spans.setdefault((binding.native_id, binding.object_id), set()).add(binding.span_id)
     passages = {
         row["id"]: projected_passage_id(row)
         for row in store._native_rows("Passage", generation_id=generation_id)
     }
+    originals = {row.passage_id: set(row.original_span_ids) for row in graph.retrieval_evidence}
 
     def served_as(identity):
         return objects.get(identity) or {passages[identity]}
@@ -470,6 +475,8 @@ def assert_arrows_are_the_sealed_relations(w, generation_id, graph, relations):
             continue
         kind = row[3]["kind"] if row[0] == "CODE_EDGE" else row[0]
         for source in served_as(row[1]):
+            if kind == "DEFINED_IN" and not spans[(row[1], source)] & originals.get(passages[row[2]], set()):
+                continue
             for target in served_as(row[2]):
                 expected[(source, target, kind)] += 1
     arrows = code_arrows(graph)
