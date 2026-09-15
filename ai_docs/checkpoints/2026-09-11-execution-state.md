@@ -480,3 +480,11 @@ S1b-fix (`wp/s1b-fix`: B1/R47, `evidence_source_definition`, the exclusions one-
 (`wp/s4c-fix`). Ready briefs: `cdk-s2b.md` (after S1b-fix), `cdk-s3c.md` (after S2b, S3a, S3b).
 Rulings through R65. Not yet briefed: S4a, S4b, S5a, S5b, S6.
 
+
+**CDK implementation state (2026-09-15, late).** Merged and pushed: S1b-fix `335d4e3`, S4c-fix
+`95bb105` (origin in sync at `2a9913a`). Running: S3b (`wp/s3b`), S2b (`wp/s2b`), S5a (`wp/s5a`,
+early under R67). Every implementer brief exists (`cdk-s2b.md`, `cdk-s3c.md`, `cdk-s4a.md`,
+`cdk-s4b.md`, `cdk-s5a.md`, `cdk-s5b.md`, `cdk-s6.md`). Remaining order: S3c after S2b and S3b; S4a
+after S3c; S4b after S4a; S5b after S5a, S3b and S4a; S6 after S4b and S5b; then the gate checker
+over CK1–CK7, the CD9 line at N=8 (root-owned, one process), Neo4j parity for CK3 and CK5, and the
+independent review (CK7). Rulings through R67.
