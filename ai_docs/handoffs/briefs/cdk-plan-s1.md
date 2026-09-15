@@ -49,7 +49,9 @@ DECISIONS THE PLAN MUST MAKE AND STATE (each with the reason and the test that p
    impossible, the migration that recomputes ids and every consumer it touches, named).
 6. `EvidenceClass` gains `rule_derived` and `similarity_inferred`: every consumer of the class
    (traversal, support-group rules, status, projections) named with what changes, if anything.
-7. Schema v8: the exact DDL or Cypher per backend, the journaled migration step, what the Fake store
+7. Schema v8, including `Generation.registry_fingerprint` and `Connector.classification_json` (design
+   section 2: `Json`, default `"{}"`, mutable, outside `identity_fields`, which S2 and S3 list under
+   "requires from S1"): the exact DDL or Cypher per backend, the journaled migration step, what the Fake store
    needs, the reopen test on LadybugDB, and the frozen-history test.
 8. The fingerprint: what is hashed, in what canonical order, the `Generation.registry_fingerprint`
    column (schema v8, outside `identity_fields`, never in `configuration_json`), how a kit connector's

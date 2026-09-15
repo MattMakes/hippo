@@ -258,9 +258,10 @@ must never enter `configuration_json`: `inputs._manifest_bytes` hashes the confi
 `Generation.identity_fields` includes the manifest hash, so it would change every generation-scoped id.
 
 Store impact: kinds and predicates are stored as strings on every backend today, so opening the
-vocabularies needs no DDL; the new columns and the new record of §4 need one journaled schema step
-(v8) on LadybugDB, Neo4j, the migrations module and the Fake store, with the frozen v1 to v7 history
-preserved.
+vocabularies needs no DDL; the new columns and the new record of §4, `Generation.registry_fingerprint`,
+and `Connector.classification_json` (§2; `Json`, default `"{}"`, mutable, outside `identity_fields`)
+need one journaled schema step (v8) on LadybugDB, Neo4j, the migrations module and the Fake store,
+with the frozen v1 to v7 history preserved.
 
 Naming: the existing built-in predicates keep their names (`READS_TABLE`, `OWNED_BY`, `ALIAS_OF`, and
 the rest of `predicates.py`). The specification's wider vocabulary (`CALLS_PROC`, `LOCKS`,
