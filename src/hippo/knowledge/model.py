@@ -10,42 +10,54 @@ visibility, fencing and publication transactions are store responsibilities.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from types import MappingProxyType
 from typing import Annotated, ClassVar, Literal, Self, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
-    AfterValidator,
-    BaseModel,
     BeforeValidator,
-    ConfigDict,
     Field,
     TypeAdapter,
     field_validator,
     model_validator,
 )
 
+from .contract import (
+    Code,
+    Contract,
+    EvidenceClass,
+    Instant,
+    Json,
+    Nonnegative,
+    Positive,
+    ProviderURL,
+    Text,
+    VersionOne,
+)
+from .contract import RelativePath as RelativePath
+from .contract import _utc as _utc
 from .identity import (
     canonical_json,
     make_identity,
     normalize_json,
-    normalize_provider_url,
     normalize_relative_path,
     source_relative_path,
     text_hash,
 )
-from .predicates import OBJECT_KINDS, PREDICATES, validate_endpoints
+from .locators import LOCATOR_ADAPTER as LOCATOR_ADAPTER
+from .locators import CommentLocator as CommentLocator
+from .locators import DiffHunkLocator as DiffHunkLocator
+from .locators import FieldLocator as FieldLocator
+from .locators import FileLinesLocator as FileLinesLocator
+from .locators import LocatorBase
+from .locators import PageLocator as PageLocator
+from .locators import SectionLocator as SectionLocator
+from .locators import SourceLocator as SourceLocator
+from .locators import TableCellLocator as TableCellLocator
+from .predicates import OBJECT_KINDS, predicate_definition, validate_endpoints
+from .registry import UnregisteredName, current_registry
 
-Text = Annotated[str, Field(min_length=1, pattern=r"\S")]
-Json = Annotated[str, BeforeValidator(normalize_json)]
-Code = Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")]
-Nonnegative = Annotated[int, Field(strict=True, ge=0)]
-Positive = Annotated[int, Field(strict=True, ge=1)]
-VersionOne = Annotated[int, Field(strict=True, ge=1, le=1)]
-EvidenceClass = Literal[
-    "syntax_observed", "catalog_observed", "declared", "discussion_claim", "model_inferred", "human_verified"
-]
 ValidityKind = Literal["explicit_interval", "observed_snapshot", "atemporal", "unknown"]
 TemporalBasis = Literal[
     "source_explicit", "provider_snapshot", "commit", "catalog_snapshot", "observed", "atemporal", "unknown"
@@ -53,6 +65,8 @@ TemporalBasis = Literal[
 TemporalPrecision = Literal["instant", "second", "minute", "day", "month", "year", "unknown"]
 Lifecycle = Literal["active", "draft", "accepted", "rejected", "superseded", "deleted", "unknown"]
 WorkState = Literal["pending", "running", "ready", "failed", "retry", "completed", "cancelled"]
+# The built-in kinds. `KnowledgeObject.kind` is a plain code: the registry checks it at bind and at
+# store write (`Registry.check_record`), never on read (ruling R39).
 ObjectKind = Literal[
     "service",
     "api",
@@ -85,31 +99,6 @@ ObjectKind = Literal[
     "document",
     "alias",
 ]
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("Timestamp must carry a timezone")
-    return value.astimezone(UTC)
-
-
-Instant = Annotated[datetime, AfterValidator(_utc)]
-RelativePath = Annotated[str, AfterValidator(normalize_relative_path)]
-ProviderURL = Annotated[str, AfterValidator(normalize_provider_url)]
-
-
-class Contract(BaseModel):
-    model_config = ConfigDict(
-        frozen=True, extra="forbid", strict=True, revalidate_instances="always", validate_default=True
-    )
-
-    def replace(self, **changes) -> Self:
-        return type(self).model_validate(self.model_dump() | changes)
-
-    def model_copy(self, *, update=None, deep=False) -> Self:
-        if update:
-            return self.replace(**update)
-        return type(self).model_validate(self.model_dump())
 
 
 def _identity_value(value):
@@ -165,90 +154,27 @@ class Record(Contract):
         return type(self).model_validate(data)
 
 
-class FileLinesLocator(Contract):
-    kind: Literal["file_lines"] = "file_lines"
-    path: RelativePath
-    start: Positive
-    end: Positive
-
-    @model_validator(mode="after")
-    def ordered(self) -> Self:
-        if self.end < self.start:
-            raise ValueError("Line interval is reversed")
-        return self
+def _locator_payload(value: str) -> tuple[dict, str]:
+    payload = json.loads(normalize_json(value))
+    kind = payload.get("kind") if isinstance(payload, dict) else None
+    if type(kind) is not str:
+        raise ValueError("Locator payload requires a kind")
+    return payload, kind
 
 
-class SectionLocator(Contract):
-    kind: Literal["section"] = "section"
-    heading_path: tuple[Text, ...]
-    block_start: Nonnegative
-    block_end: Nonnegative
-
-    @model_validator(mode="after")
-    def ordered(self) -> Self:
-        if self.block_end < self.block_start:
-            raise ValueError("Block interval is reversed")
-        return self
-
-
-class FieldLocator(Contract):
-    kind: Literal["field"] = "field"
-    field_path: Text
-
-
-class CommentLocator(Contract):
-    kind: Literal["comment"] = "comment"
-    comment_id: Text
-    field_path: Text = "body"
-    changeset_id: Text | None = None
-
-
-class PageLocator(Contract):
-    kind: Literal["page"] = "page"
-    page: Positive
-    offset_start: Nonnegative = 0
-    offset_end: Nonnegative | None = None
-
-    @model_validator(mode="after")
-    def ordered(self) -> Self:
-        if self.offset_end is not None and self.offset_end < self.offset_start:
-            raise ValueError("Page offsets are reversed")
-        return self
-
-
-class TableCellLocator(Contract):
-    kind: Literal["table_cell"] = "table_cell"
-    table: Nonnegative
-    row: Nonnegative
-    column: Nonnegative
-    heading_path: tuple[Text, ...] = ()
-
-
-class DiffHunkLocator(FileLinesLocator):
-    kind: Literal["diff_hunk"] = "diff_hunk"
-    base_revision: Text
-    head_revision: Text
-    side: Literal["base", "head"]
-    hunk_id: Text | None = None
-
-
-SourceLocator = Annotated[
-    FileLinesLocator
-    | SectionLocator
-    | FieldLocator
-    | CommentLocator
-    | PageLocator
-    | TableCellLocator
-    | DiffHunkLocator,
-    Field(discriminator="kind"),
-]
-LOCATOR_ADAPTER = TypeAdapter(SourceLocator)
+def parse_locator_json(value: str) -> LocatorBase:
+    """Validate a locator payload with the model its registered `kind` names."""
+    payload, kind = _locator_payload(value)
+    try:
+        model = current_registry().locator(kind)
+    except UnregisteredName as error:
+        raise ValueError("Unknown locator kind") from error
+    return model.model_validate_json(canonical_json(payload))
 
 
 def canonical_locator_json(value: str) -> str:
     """Validate coordinates, normalize paths, and materialize every default."""
-    locator = LOCATOR_ADAPTER.validate_json(normalize_json(value))
-    return canonical_json(locator.model_dump(mode="json"))
+    return canonical_json(parse_locator_json(value).model_dump(mode="json"))
 
 
 class Workspace(Record):
@@ -277,7 +203,7 @@ class GroupMembership(Record):
 
 class Connector(Record):
     workspace_id: Text
-    kind: Literal["local", "git", "github", "gitlab", "jira_cloud", "jira_data_center", "tuleap", "backstage"]
+    kind: Code
     instance_url: ProviderURL
     config_json: Json = "{}"
     credential_ref: Text | None = None
@@ -291,20 +217,7 @@ class Artifact(Record):
     source_id: Text
     connector_id: Text | None = None
     provider_instance: ProviderURL | None = None
-    kind: Literal[
-        "file",
-        "repository",
-        "ticket",
-        "comment",
-        "attachment",
-        "review",
-        "schema_snapshot",
-        "catalog_entity",
-        "document",
-        "manifest",
-        "openapi",
-        "history_event",
-    ]
+    kind: Code
     external_id: Text
     canonical_uri: Text
     policy_id: Text
@@ -411,7 +324,7 @@ class GenerationEvidenceMember(Record):
 
 class EvidenceSpan(Record):
     revision_id: Text
-    locator_kind: Literal["file_lines", "section", "field", "comment", "page", "table_cell", "diff_hunk"]
+    locator_kind: Code
     locator_json: Json
     text_hash: Text = "pending"
     text: str
@@ -422,6 +335,11 @@ class EvidenceSpan(Record):
     @field_validator("locator_json")
     @classmethod
     def canonical_locator(cls, value):
+        # A kind this process has not registered keeps its stored payload, so the row still reads
+        # (ruling R39); `Registry.check_record` validates that payload at bind and write.
+        _, kind = _locator_payload(value)
+        if kind not in current_registry().locator_kinds():
+            return value
         return canonical_locator_json(value)
 
     @model_validator(mode="before")
@@ -439,15 +357,14 @@ class EvidenceSpan(Record):
 
     @model_validator(mode="after")
     def valid_locator(self) -> Self:
-        locator = LOCATOR_ADAPTER.validate_json(self.locator_json)
-        if locator.kind != self.locator_kind:
+        if json.loads(self.locator_json)["kind"] != self.locator_kind:
             raise ValueError("Locator kind disagrees with its payload")
         return self
 
 
 class KnowledgeObject(Record):
     workspace_id: Text
-    kind: ObjectKind
+    kind: Code
     canonical_key: Json
     identity_prefix = "object"
     identity_fields = ("workspace_id", "kind", "canonical_key")
@@ -516,19 +433,20 @@ class Assertion(Record):
     scope_key: Text
     identity_fields = ("workspace_id", "subject_id", "predicate", "object_id", "scope_key")
 
-    @field_validator("predicate")
-    @classmethod
-    def registered_predicate(cls, value):
-        if value not in PREDICATES:
-            raise ValueError("Unknown assertion predicate")
-        return value
-
     def validate_endpoints(self, subject: KnowledgeObject, target: KnowledgeObject) -> None:
         if subject.id != self.subject_id or target.id != self.object_id:
             raise ValueError("Assertion endpoints do not match supplied objects")
         if subject.workspace_id != self.workspace_id or target.workspace_id != self.workspace_id:
             raise ValueError("Assertion endpoints must share its workspace")
         validate_endpoints(self.predicate, subject.kind, target.kind)
+        if predicate_definition(self.predicate).identity:
+            # Stored once: the subject is the smaller (canonical_key, kind) in code-point order (R22).
+            if subject.id == target.id:
+                raise ValueError(f"{self.predicate} requires two distinct objects")
+            if (subject.canonical_key, subject.kind) > (target.canonical_key, target.kind):
+                raise ValueError(
+                    f"{self.predicate} stores the lexically smaller canonical key as its subject"
+                )
 
 
 def checked_assertion(
@@ -1324,7 +1242,7 @@ class QueryRequest(Contract):
     question: Text
     mode: Literal["legacy", "hybrid", "schema", "code", "traceability", "overview", "auto"] = "auto"
     source_ids: tuple[Text, ...] = ()
-    kinds: tuple[ObjectKind, ...] = ()
+    kinds: tuple[Code, ...] = ()
     repository_ids: tuple[Text, ...] = ()
     service_ids: tuple[Text, ...] = ()
     database_ids: tuple[Text, ...] = ()

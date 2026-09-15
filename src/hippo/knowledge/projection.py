@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -64,7 +64,8 @@ from .derivations import GenerationViews, validate_prose
 from .embedding_cache import _vectors
 from .identity import canonical_json, make_identity, normalize_relative_path
 from .lifecycle import generation_passage_id
-from .predicates import PREDICATES
+from .predicates import PREDICATES, predicate_definition
+from .registry import current_registry
 from .staged_code import RELATION_KINDS
 
 # `ProjectionError` is imported above rather than defined here: `canonical_selected_generations`
@@ -159,8 +160,12 @@ def _safe_vectors(
     authorized,
     *,
     structural=False,
+    unregistered_spans=frozenset(),
 ):
-    """Reuse only vectors with an exact persisted and cached input binding."""
+    """Reuse only vectors with an exact persisted and cached input binding.
+
+    A binding anchored on a span whose locator kind the registry lacks is skipped, not refused.
+    """
     positions = {} if structural else {passage.id: index for index, passage in enumerate(full.passages)}
     entries, aliases = {}, {}
     bound = sorted(_passage_bindings(store, generations), key=lambda item: item["id"])
@@ -183,6 +188,8 @@ def _safe_vectors(
     for row in bound:
         view_id = row.get("retrieval_view_id")
         if view_id and view_id not in authorized.retrieval_view_ids:
+            continue
+        if row.get("span_id") in unregistered_spans:
             continue
         span = spans.get(row.get("span_id"))
         position = positions.get(row["id"])
@@ -408,6 +415,7 @@ def project_managed_graph(
     snapshot_bundle=None,
     synonymy_threshold: float = 0.8,
     structural: bool = False,
+    exclusions: Counter | None = None,
 ) -> GraphIndex:
     """Build only the managed lane; no native provenance is inferred from endpoints.
 
@@ -416,6 +424,10 @@ def project_managed_graph(
     KnowledgeObject IDs. Only authorized ProseExtraction supplies inferred facts;
     typed assertions retain their separate channel. Historical generations are
     usable only while a supplied snapshot reference is live.
+
+    Objects, spans and assertions whose kind, locator kind or predicate the current registry
+    lacks are left out, never raised on (ruling R39). A successful build adds the number left out
+    to `exclusions`, under `object_kinds`, `locator_kinds` and `predicates`.
     """
     if structural:
         if embedding_profile is not None or not isinstance(source_profiles, Mapping):
@@ -431,6 +443,8 @@ def project_managed_graph(
     elif full is None:
         raise ProjectionError("Nonstructural projection requires a cached full graph")
     generations = _current_generations(store, authorized, embedding_profile, snapshot_bundle, source_profiles)
+    registry = current_registry()
+    excluded = defaultdict(set)  # registry section -> ids of the rows left out
 
     fetched = {}
 
@@ -454,11 +468,14 @@ def project_managed_graph(
         for row in store._knowledge_rows("GenerationMember", generation_id=generation_id)
     }
     selected_revisions = {revision for generation, revision in members if generation in generations}
-    spans = {
-        key: value
-        for key, value in allowed("EvidenceSpan", authorized.span_ids).items()
-        if value.revision_id in revisions and value.revision_id in selected_revisions
-    }
+    spans = {}
+    for key, value in allowed("EvidenceSpan", authorized.span_ids).items():
+        if value.revision_id not in revisions or value.revision_id not in selected_revisions:
+            continue
+        if value.locator_kind not in registry.locator_kinds():
+            excluded["locator_kinds"].add(key)
+            continue
+        spans[key] = value
     entries, aliases = _safe_vectors(
         full,
         store,
@@ -470,6 +487,7 @@ def project_managed_graph(
         members,
         authorized,
         structural=structural,
+        unregistered_spans=frozenset(excluded["locator_kinds"]),
     )
     vectors = {identity: entry.vector for identity, entry in entries.items()}
     needed_spans = {identity for entry in entries.values() for identity in entry.evidence.original_span_ids}
@@ -493,11 +511,14 @@ def project_managed_graph(
             and row.revision_id == spans[row.span_id].revision_id
         ):
             observations[row.object_id].append(row)
-    objects = {
-        key: value
-        for key, value in allowed("KnowledgeObject", authorized.object_ids).items()
-        if key in observations and value.workspace_id == authorized.workspace_id
-    }
+    objects = {}
+    for key, value in allowed("KnowledgeObject", authorized.object_ids).items():
+        if key not in observations or value.workspace_id != authorized.workspace_id:
+            continue
+        if value.kind not in registry.object_kinds():
+            excluded["object_kinds"].add(key)
+            continue
+        objects[key] = value
     bindings = defaultdict(list)
     for binding in allowed("NativeBinding", authorized.native_binding_ids).values():
         if (
@@ -653,7 +674,10 @@ def project_managed_graph(
             or assertion.object_id not in objects
         ):
             continue
-        if not PREDICATES[assertion.predicate].traversal_permitted:
+        if assertion.predicate not in registry.predicates():
+            excluded["predicates"].add(assertion.id)
+            continue
+        if not predicate_definition(assertion.predicate).traversal_permitted:
             continue
         relation(
             assertion.subject_id,
@@ -704,6 +728,7 @@ def project_managed_graph(
         edges,
         synonymy_threshold,
         structural=structural,
+        unregistered_spans=frozenset(excluded["locator_kinds"]),
     )
     dense_vectors = ()
     code_evidence = ()
@@ -770,13 +795,28 @@ def project_managed_graph(
     )
     if snapshot_bundle is not None:
         snapshot_bundle.validate()
+    if exclusions is not None:
+        exclusions.update({section: len(identities) for section, identities in excluded.items()})
     return result
 
 
 def _project_prose(
-    store, authorized, generations, entries, aliases, entities, edges, synonymy_threshold, *, structural=False
+    store,
+    authorized,
+    generations,
+    entries,
+    aliases,
+    entities,
+    edges,
+    synonymy_threshold,
+    *,
+    structural=False,
+    unregistered_spans=frozenset(),
 ):
-    """Feed the existing inferred Fact channel only from explicit authorized support."""
+    """Feed the existing inferred Fact channel only from explicit authorized support.
+
+    An extraction whose closure reads a span of a locator kind the registry lacks is skipped.
+    """
     entity_vectors, fact_vectors, triples, supports, contributions, owners = {}, {}, {}, {}, {}, {}
     sources, physical_support = defaultdict(dict), {}
     dimensions = defaultdict(set)
@@ -811,6 +851,8 @@ def _project_prose(
             closure = validate_prose(store, generation.id, extraction)
         except ValueError as exc:
             raise ProjectionError("Inferred prose lineage is invalid") from exc
+        if closure.span_ids & unregistered_spans:
+            continue
         if not _closure_allowed(closure, authorized):
             raise ProjectionError("Inferred prose differs from its authorized closure")
         shown_in = set()
