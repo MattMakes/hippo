@@ -54,3 +54,42 @@ R1 onward; later rulings are appended, never renumbered.
   kinds. S1 registers only today's `OBJECT_KINDS` as built-ins. The exemplar keeps `incident`.
 - **R14 — MCP tool name (S6 open question 3).** `hippo_connectors`, matching the `hippo_` prefix of
   the existing tools.
+
+## S1 (plan committed at `5bae615`)
+
+- **R15 — Discovery (S1 deviation 9, open question 7; S4 R-S1-1): S4 owns it.** `Registry.load()`
+  of design §9 becomes a loader in `hippo.connectors` (S4), composed from S1's primitives
+  (`Registry.with_builtins()`, `register(..., declared_families=...)`, `freeze()`, `use_registry()`),
+  because `knowledge/registry.py` may not import `hippo.connectors`. S3's `sync` takes an already
+  frozen registry as an argument and plans no loader; the `hippo connector` commands and `hippo
+  serve` startup call the loader.
+- **R16 — One current registry (S1 deviation 10; S2 Q3; S4 `run_case`).** The process default is
+  `REGISTRY`; `use_registry()` may install another for a bounded run, and `extension_scope()` extends
+  the current one in place. Every identity check, including S2's binder, is against the current
+  registry (`current_registry()`), never against the module constant by identity. S4's `run_case`
+  registers the connector's `TypeExtension` inside `extension_scope()` or under `use_registry()`;
+  either satisfies the binder.
+- **R17 — Unit indexes (open question 1).** v8 indexes `Unit.generation_id`, `Unit.passage_id` and
+  `Unit.content_hash` on LadybugDB and Neo4j now, so the boilerplate weight of spec §7.2 needs no v9.
+- **R18 — Two identities for one table (open question 2): accepted for v1.** The code lane's keys are
+  not re-keyed (CK5 byte-identity). A table seen in code and in a catalog is joined by the database
+  object alias rule of spec §4.2, emitted as `SAME_OBJECT_AS` by the connector that sees both, in
+  Task 12's scope.
+- **R19 — Multi-owner built-ins (open question 3): sets confirmed as planned.** The refusal is
+  `family not in owner_families`; the reviewer checks the table against spec §6.
+- **R20 — Unversioned render text (open question 4): no version fields.** The fingerprint hashes the
+  full canonical definition, so `verb_phrase` and `label_template` changes change it. A kit connector
+  covers its own render text through its connector version: S4's kit asserts that changed
+  `label_template`, `verb_phrase` or fact template text without a connector version bump fails the
+  golden run.
+- **R21 — Classification and the authorization epoch (open question 5): accepted.** Probe is an
+  operator action; S3 writes `classification_json` only when the value changes, so a re-probe with
+  the same result bumps nothing.
+- **R22 — `SAME_OBJECT_AS` ordering (open question 6): code-point order, confirmed.** No collation.
+- **R23 — S1 deviations 1–8: ratified.** `Unit` lands in S1b with the v8 bump (the live v7 checksum
+  forbids otherwise); the three leaf modules and the widened CK7 lint line; the file ownership of
+  §9.3; additive registry API; `LocatorBase` as the refusal rule's `SourceLocator`; `PREDICATES`
+  excludes identity predicates; built-in kinds keep an open attribute model while extensions forbid
+  extras; the schema-version pins move to 8 (CK1 CRITERIA amended). CK1's CHECK lines and the
+  Neo4j parity file are applied as S1 §8 proposes.
+
