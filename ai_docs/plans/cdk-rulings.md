@@ -298,4 +298,8 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   `AssertionVersion` still names `unit_id`: the reference is informational, never a foreign key;
   readers treat a missing unit as "no statement vector" and collection does not wait on it (S3c
   documents it in `sync.py`; S2b's binder never reads a unit back by id).
+- **R67 — S5a starts after S4c; both capture-side kit tests are S5b's (refines R1 and M12).** S5a
+  needs S1a, S1b, S2a and S4c, all merged; its only S4a dependency is the `check_capture` test, so
+  the local connector's and the git connector's `check_capture` tests both land in S5b, which
+  already follows S4a. S5a runs beside S2b, S3b and S3c. R38's order is amended accordingly.
 
