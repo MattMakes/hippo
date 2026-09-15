@@ -29,6 +29,7 @@ from hippo.knowledge.locators import LocatorBase
 from hippo.knowledge.predicates import OBJECT_KINDS, PREDICATES
 from hippo.knowledge.registry import (
     REGISTRY,
+    EvidenceSourceDefinition,
     FactTemplate,
     LocatorKindDefinition,
     ObjectKindDefinition,
@@ -89,12 +90,16 @@ def affects_predicate(**changes) -> PredicateDefinition:
         owner_families=frozenset({"incident"}),
         canonical_direction="subject_to_object",
         family_default="deterministic",
-        # Ruling R29: a source outside the evidence-class derivation table cannot register, so the
-        # fixture allows a built-in source instead of registering its own.
-        sources_allowed=frozenset({"metadata"}),
+        sources_allowed=frozenset({"pager_feed"}),
         verb_phrase="affects",
     )
     return predicate.replace(**changes)
+
+
+# Ruling R40: an extension evidence source registers with its family and its evidence class.
+PAGER_FEED = EvidenceSourceDefinition(
+    name="pager_feed", family="deterministic", evidence_class="catalog_observed"
+)
 
 
 def incident_extension(**changes) -> TypeExtension:
@@ -103,6 +108,7 @@ def incident_extension(**changes) -> TypeExtension:
         artifact_kinds=("incident_export",),
         locator_kinds=(LocatorKindDefinition(name="incident_event", model=IncidentEventLocator),),
         connector_kinds=("incident_ndjson",),
+        evidence_sources=(PAGER_FEED,),
         predicates=(affects_predicate(),),
     ).replace(**changes)
 
@@ -154,6 +160,7 @@ def _declared(*families):
 
 FIXTURE = "object kind 'incident_fixture'"
 AFFECTS = "predicate 'AFFECTS_FIXTURE'"
+PAGER = "evidence source 'pager_feed'"
 REFUSALS = [
     pytest.param("frozen", "Registry is frozen; register extensions before freeze()", _frozen, id="frozen"),
     pytest.param(
@@ -164,7 +171,7 @@ REFUSALS = [
     ),
     pytest.param(
         "duplicate_name",
-        "artifact kind 'incident_export' repeats the registered name 'incident_export'",
+        f"{PAGER} repeats the registered name 'pager_feed'",
         _twice,
         id="duplicate_name",
     ),
@@ -296,15 +303,33 @@ REFUSALS = [
     ),
     pytest.param(
         "unregistered_evidence_source",
-        f"{AFFECTS} allows unregistered evidence source 'pager_feed'",
-        _predicate(sources_allowed=frozenset({"pager_feed"})),
+        f"{AFFECTS} allows unregistered evidence source 'pager_pull'",
+        _predicate(sources_allowed=frozenset({"pager_pull"})),
         id="unregistered_evidence_source",
     ),
     pytest.param(
-        "underivable_evidence_source",
-        "evidence source 'pager_feed' has no row in the evidence class derivation table",
-        _register(evidence_sources=("pager_feed",)),
-        id="underivable_evidence_source",
+        "missing_evidence_family",
+        f"{PAGER} declares no family",
+        _register(evidence_sources=(PAGER_FEED.replace(family=None),)),
+        id="missing_evidence_family",
+    ),
+    pytest.param(
+        "missing_evidence_class",
+        f"{PAGER} declares no evidence class",
+        _register(evidence_sources=(PAGER_FEED.replace(evidence_class=None),)),
+        id="missing_evidence_class",
+    ),
+    pytest.param(
+        "excluded_evidence_class",
+        f"{PAGER} declares evidence class 'model_inferred', which no extension evidence source may declare",
+        _register(evidence_sources=(PAGER_FEED.replace(evidence_class="model_inferred"),)),
+        id="excluded_evidence_class-model_inferred",
+    ),
+    pytest.param(
+        "excluded_evidence_class",
+        f"{PAGER} declares evidence class 'human_verified', which no extension evidence source may declare",
+        _register(evidence_sources=(PAGER_FEED.replace(evidence_class="human_verified"),)),
+        id="excluded_evidence_class-human_verified",
     ),
 ]
 
@@ -529,7 +554,7 @@ def test_register_refuses(scoped, reason, message, action):
 
 def test_a_refused_extension_registers_nothing(scoped):
     before = (scoped.fingerprint(), _sections(scoped))
-    late = affects_predicate(name="ALSO_AFFECTS_FIXTURE", sources_allowed=frozenset({"pager_feed"}))
+    late = affects_predicate(name="ALSO_AFFECTS_FIXTURE", sources_allowed=frozenset({"pager_pull"}))
     with pytest.raises(RegistrationError) as refused:
         scoped.register(incident_extension(predicates=(affects_predicate(), late)))
     assert refused.value.reason == "unregistered_evidence_source"
@@ -690,6 +715,13 @@ def test_fingerprint_covers_label_templates_and_verb_phrases():
     assert _fingerprint_with() == base
     assert _fingerprint_with(object_kinds=(incident_kind(label_template="{title} ({severity})"),)) != base
     assert _fingerprint_with(predicates=(affects_predicate(verb_phrase="disrupts"),)) != base
+
+
+def test_fingerprint_covers_evidence_source_families_and_classes():
+    base = _fingerprint_with()
+    assert _fingerprint_with(evidence_sources=(PAGER_FEED.replace(evidence_class="declared"),)) != base
+    probabilistic = PAGER_FEED.replace(family="probabilistic", evidence_class="similarity_inferred")
+    assert _fingerprint_with(evidence_sources=(probabilistic,)) != base
 
 
 def _declared_configuration(template: FactTemplate) -> tuple[str, dict]:
@@ -867,6 +899,29 @@ def test_evidence_class_derivation_table_is_the_design_table():
         source for _, source, _ in EVIDENCE_CLASS_DERIVATION
     } == Registry.with_builtins().evidence_sources()
     assert "model_inferred" not in EVIDENCE_CLASS_DERIVATION.values()
+
+
+def test_an_extension_evidence_source_registers_with_its_family_and_class(scoped):
+    scoped.register(incident_extension())
+    assert scoped.evidence_source("pager_feed") == "pager_feed"
+    assert "pager_feed" in scoped.evidence_sources()
+    assert scoped.predicate("AFFECTS_FIXTURE").sources_allowed == {"pager_feed"}
+    assert "pager_feed" not in {source for _, source, _ in EVIDENCE_CLASS_DERIVATION}
+
+
+def test_builtin_evidence_sources_take_their_class_from_the_derivation_table():
+    assert BUILTIN_EXTENSION.evidence_sources
+    for definition in BUILTIN_EXTENSION.evidence_sources:
+        assert (definition.family, definition.evidence_class) == (None, None), definition.name
+    without_row = Registry(
+        builtins=lambda: TypeExtension(evidence_sources=(EvidenceSourceDefinition(name="pager_feed"),))
+    )
+    with pytest.raises(RegistrationError) as refused:
+        without_row.evidence_sources()
+    assert (refused.value.reason, str(refused.value)) == (
+        "underivable_evidence_source",
+        "evidence source 'pager_feed' has no row in the evidence class derivation table",
+    )
 
 
 def test_a_locator_kind_may_carry_a_verifier_and_builtins_register_none(scoped):

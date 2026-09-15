@@ -26,6 +26,7 @@ from pydantic import (
 from .contract import (
     Code,
     Contract,
+    EvidenceClass,
     Instant,
     Json,
     Nonnegative,
@@ -57,16 +58,6 @@ from .locators import TableCellLocator as TableCellLocator
 from .predicates import OBJECT_KINDS, predicate_definition, validate_endpoints
 from .registry import UnregisteredName, current_registry
 
-EvidenceClass = Literal[
-    "syntax_observed",
-    "catalog_observed",
-    "declared",
-    "discussion_claim",
-    "model_inferred",
-    "human_verified",
-    "rule_derived",
-    "similarity_inferred",
-]
 ValidityKind = Literal["explicit_interval", "observed_snapshot", "atemporal", "unknown"]
 TemporalBasis = Literal[
     "source_explicit", "provider_snapshot", "commit", "catalog_snapshot", "observed", "atemporal", "unknown"

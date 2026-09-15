@@ -19,7 +19,14 @@ from .locators import (
     TableCellLocator,
 )
 from .predicates import BUILTIN_PREDICATES, OBJECT_KINDS
-from .registry import CUSTOM_FAMILY, SPEC_FAMILIES, LocatorKindDefinition, ObjectKindDefinition, TypeExtension
+from .registry import (
+    CUSTOM_FAMILY,
+    SPEC_FAMILIES,
+    EvidenceSourceDefinition,
+    LocatorKindDefinition,
+    ObjectKindDefinition,
+    TypeExtension,
+)
 
 
 class BuiltinAttributes(BaseModel):
@@ -86,8 +93,9 @@ assert {kind.name for kind in BUILTIN_OBJECT_KINDS} == OBJECT_KINDS
 # Design §4: the evidence class of a kit record from the specification's `family` and `source`. The
 # third key part says where a `metadata` fact came from ("catalog": a catalog or tracker API;
 # "declaration": a document, manifest or declaration in a file) and is None for every other source.
-# The design's "any" family row is spelled once per family. Ruling R29: a source with no row here is
-# refused at `Registry.register`, and S2's binder derives evidence classes from this table.
+# The design's "any" family row is spelled once per family. Ruling R29 as amended by R40: a built-in
+# source needs a row here and takes its class from it; an extension source registers its own family
+# and class with its `EvidenceSourceDefinition`.
 EVIDENCE_CLASS_DERIVATION = MappingProxyType(
     {
         ("deterministic", "parser", None): "syntax_observed",
@@ -107,17 +115,20 @@ EVIDENCE_CLASS_DERIVATION = MappingProxyType(
 
 BUILTIN_EXTENSION = TypeExtension(
     families=(*SPEC_FAMILIES, CUSTOM_FAMILY),
-    evidence_sources=(
-        "parser",
-        "metadata",
-        "rule",
-        "similarity",
-        "cooccurrence",
-        "access_history",
-        "apm",
-        "postmortem",
-        "slack",
-        "reviewed",
+    evidence_sources=tuple(
+        EvidenceSourceDefinition(name=name)
+        for name in (
+            "parser",
+            "metadata",
+            "rule",
+            "similarity",
+            "cooccurrence",
+            "access_history",
+            "apm",
+            "postmortem",
+            "slack",
+            "reviewed",
+        )
     ),
     artifact_kinds=(
         "file",

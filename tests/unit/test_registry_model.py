@@ -106,6 +106,7 @@ def test_moved_contract_names_resolve_through_the_model():
         "RelativePath",
         "ProviderURL",
         "Contract",
+        "EvidenceClass",
     ):
         assert getattr(k, name) is getattr(contract, name), name
     builtins = (

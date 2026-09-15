@@ -17,7 +17,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-from .contract import Code, Contract, Text
+from .contract import Code, Contract, EvidenceClass, Text
 from .identity import canonical_json, text_hash
 from .locators import LocatorBase
 
@@ -90,13 +90,26 @@ class LocatorKindDefinition(Contract):
     verifier: Callable[..., object] | None = None
 
 
+EvidenceFamily = Literal["deterministic", "probabilistic"]  # the derivation table's family column
+EXCLUDED_EVIDENCE_CLASSES = frozenset({"model_inferred", "human_verified"})  # ruling R40
+
+
+class EvidenceSourceDefinition(Contract):
+    name: Code
+    # Ruling R40: an extension source declares both; a built-in declares neither, because its class
+    # comes from `builtin_types.EVIDENCE_CLASS_DERIVATION`. Optional so a missing one is refused at
+    # register.
+    family: EvidenceFamily | None = None
+    evidence_class: EvidenceClass | None = None
+
+
 class TypeExtension(Contract):
     families: tuple[Family, ...] = ()
     object_kinds: tuple[ObjectKindDefinition, ...] = ()
     artifact_kinds: tuple[Code, ...] = ()
     locator_kinds: tuple[LocatorKindDefinition, ...] = ()
     connector_kinds: tuple[Code, ...] = ()
-    evidence_sources: tuple[Code, ...] = ()
+    evidence_sources: tuple[EvidenceSourceDefinition, ...] = ()
     predicates: tuple[PredicateDefinition, ...] = ()
 
 
@@ -222,7 +235,7 @@ class Registry:
         return self._lookup("connector_kinds", name)
 
     def evidence_source(self, name: str) -> str:
-        return self._lookup("evidence_sources", name)
+        return self._lookup("evidence_sources", name).name
 
     # decided by S1 plan
     @property
@@ -353,8 +366,8 @@ def _checked(
 
     for name in extension.families:
         admit("families", name, name)
-    for name in extension.evidence_sources:
-        admit("evidence_sources", name, name)
+    for definition in extension.evidence_sources:
+        admit("evidence_sources", definition.name, definition)
     for name in extension.artifact_kinds:
         admit("artifact_kinds", name, name)
     for name in extension.connector_kinds:
@@ -379,13 +392,26 @@ def _checked(
     )
 
 
-def _check_evidence_source(name: str, **_) -> None:
-    # Ruling R29: the evidence class of every edge is derived from the design §4 table, so a source
-    # with no row in it could never be emitted.
-    if name not in _derivable_evidence_sources():
+def _check_evidence_source(definition: EvidenceSourceDefinition, *, builtin: bool, **_) -> None:
+    subject = f"evidence source '{definition.name}'"
+    if builtin:
+        # Ruling R29: a built-in source's evidence class is derived from the design §4 table.
+        if definition.name not in _derivable_evidence_sources():
+            raise RegistrationError(
+                "underivable_evidence_source", f"{subject} has no row in the evidence class derivation table"
+            )
+        return
+    # Ruling R40: an extension source declares its family and its class, and never a class that only a
+    # model or a reviewer assigns.
+    if definition.family is None:
+        raise RegistrationError("missing_evidence_family", f"{subject} declares no family")
+    if definition.evidence_class is None:
+        raise RegistrationError("missing_evidence_class", f"{subject} declares no evidence class")
+    if definition.evidence_class in EXCLUDED_EVIDENCE_CLASSES:
         raise RegistrationError(
-            "underivable_evidence_source",
-            f"evidence source '{name}' has no row in the evidence class derivation table",
+            "excluded_evidence_class",
+            f"{subject} declares evidence class '{definition.evidence_class}', "
+            "which no extension evidence source may declare",
         )
 
 
@@ -552,7 +578,9 @@ def _document(state: _State) -> dict:
     return {
         "version": FINGERPRINT_VERSION,
         "families": sorted(entries["families"]),
-        "evidence_sources": sorted(entries["evidence_sources"]),
+        "evidence_sources": [
+            entries["evidence_sources"][name].model_dump() for name in sorted(entries["evidence_sources"])
+        ],
         "artifact_kinds": sorted(entries["artifact_kinds"]),
         "connector_kinds": sorted(entries["connector_kinds"]),
         "locator_kinds": [

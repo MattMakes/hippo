@@ -7,7 +7,7 @@ share them without importing each other. `model.py` re-exports every name.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
 
@@ -19,6 +19,16 @@ Code = Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")]
 Nonnegative = Annotated[int, Field(strict=True, ge=0)]
 Positive = Annotated[int, Field(strict=True, ge=1)]
 VersionOne = Annotated[int, Field(strict=True, ge=1, le=1)]
+EvidenceClass = Literal[
+    "syntax_observed",
+    "catalog_observed",
+    "declared",
+    "discussion_claim",
+    "model_inferred",
+    "human_verified",
+    "rule_derived",
+    "similarity_inferred",
+]
 
 
 def _utc(value: datetime) -> datetime:
