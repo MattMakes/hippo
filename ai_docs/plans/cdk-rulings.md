@@ -235,3 +235,22 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   with two or more upserts, `inventory=True`, probe sampling through its own `list_changes` and
   `fetch`) binds the S3c brief.
 
+## During implementation (answers to workers, binding on later slices)
+
+- **R61 — The principal map's shape (S2a question; refines R44).** `base.PrincipalMap(users:
+  dict[Text, Text], groups: dict[Text, Text])`, kept separate so a provider user id cannot collide
+  with a group id, and a pure `base.map_principals(policy, principal_map) -> (PolicyObservation,
+  dropped_count)` applying R44's rules per list: an unmapped deny entry, or an `allow_users` or
+  `allow_groups` list the mapping empties, makes the observation `unknown`; other unmapped allow
+  entries are dropped and counted. S2b's `emit.policy_record` reads `config_json["principal_map"]`
+  and calls it. R30's "instance configuration contract" means this shape, not a base class for
+  `config_model`. `PASSAGE_CHAR_BOUND = 6000` ships in S2a; the bound message is S2b's.
+- **R62 — Evidence sources at write and in the accessor (S1b questions; refines R39 and R40).**
+  `Registry.check_record` also checks `AssertionVersion.source` when not `None` ("Unknown evidence
+  source"), so the store write path and S2b's binder share it. `Registry.evidence_source_definition`
+  returns the registered definition unchanged: built-ins carry `family=None, evidence_class=None`
+  and callers read `EVIDENCE_CLASS_DERIVATION` by `(family, source, metadata_origin)`; extension
+  sources carry both. The four schema-version pins the S1 plan did not name
+  (`test_generation_scoped_reads.py:838`, `:845`; `test_policy_migration.py:173`, `:243`) move to 8
+  with the rest.
+
