@@ -460,7 +460,7 @@ def test_the_constructor_check_ignores_annotations_and_type_tests(case: str) -> 
 def test_keys_is_the_only_knowledge_object_constructor_in_connectors() -> None:
     package = Path(hippo.connectors.__file__).parent
     modules = sorted(package.rglob("*.py"))
-    assert [path.name for path in modules] >= ["__init__.py", "base.py", "classify.py", "keys.py"]
+    assert {path.name for path in modules} >= {"__init__.py", "base.py", "classify.py", "keys.py"}
     offenders = {
         path.name: _constructors(path.read_text())
         for path in modules
