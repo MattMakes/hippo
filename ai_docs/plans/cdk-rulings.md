@@ -289,4 +289,13 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   name contains `credential`, so S5 and S6 config models use `credentials` references by the kit's
   names, never a field called `credential_ref`. `connectors/__init__.py`'s module list gains
   `guard`, `http`, `credentials` in S3c.
+- **R66 — S1b's two remaining questions (S1b-fix merged at `335d4e3`).** (i) Closing the recorded
+  interval of an extension `AssertionVersion` goes through `update_knowledge`, which checks
+  vocabulary, so the runtime and Task 15's recovery load the registry before any lifecycle write;
+  S3c pins this with a test that a sync of an extension partition closes an interval under the
+  loaded registry and that the same write is refused under a registry lacking the extension. (ii) A
+  collected generation's `Unit` rows may be deleted while a superseded or retracted
+  `AssertionVersion` still names `unit_id`: the reference is informational, never a foreign key;
+  readers treat a missing unit as "no statement vector" and collection does not wait on it (S3c
+  documents it in `sync.py`; S2b's binder never reads a unit back by id).
 

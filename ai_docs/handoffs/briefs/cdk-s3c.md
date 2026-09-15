@@ -76,4 +76,6 @@ question the plan, the rulings and the reviews do not answer.
 - Add `guard`, `http`, `credentials`, `sync` and the S2b modules to `connectors/__init__.py`'s
   module list if S2b has not.
 - Base your worktree on the HEAD named in the spawn message, which includes S1b-fix, S2b, S3a and S3b.
+- R66: the registry is loaded before any lifecycle write (pin it with the two tests R66 names), and
+  a tombstoned version's `unit_id` may dangle after collection (document it in `sync.py`).
 
