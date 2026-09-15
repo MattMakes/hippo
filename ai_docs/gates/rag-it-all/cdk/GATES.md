@@ -38,7 +38,7 @@ orchestrator's gate checker, never by an implementer.
   EXPECT: passed
 
 - [ ] CK4: The test kit fires on every seeded violation, the scaffold produces a package that validates, and the commands work against the fixture connector.
-  CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_connector_testing_kit.py tests/unit/test_connector_scaffold.py tests/unit/test_cli_connector.py -q -o addopts='' -W error
+  CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_connector_testing_kit.py tests/unit/test_connector_scaffold.py tests/unit/test_cli_connector.py tests/unit/test_connector_loader.py -q -o addopts='' -W error
   CRITERIA: every contract, purity, runtime and registry assertion of the design's section 8 has a negative fixture that fires it and a positive fixture that passes; `hippo connector new` writes a package whose `hippo connector validate` passes; `probe`, `list` and `sync --dry-run` run against the fixture connector; `remote.py` forwards the commands; the developer guide `docs/spec/cdk-guide.md` exists and its examples are the fixture connector; the loader (`connectors/loader.py`, slice S4c) lists a failing entry point with its error and continues, skips an entry point missing from the allowlist, and `hippo serve` startup installs a frozen registry; the kit's `check_capture` and `probe_deterministic` assertions exist with negative fixtures (M12, M13); one purity guard, S3's per-thread `forbid_effects`, serves the kit and the runtime (B3).
   EXPECT: passed
 

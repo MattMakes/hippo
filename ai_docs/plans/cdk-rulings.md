@@ -266,4 +266,16 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   vocabulary-checked). The one open item, m18, is closed by contract: `emit.evidence_class(registry,
   family, source, metadata_origin)` takes the current registry so an extension source's class is
   reachable (binds S2b, S3c and S4a).
+- **R64 — S4c's findings (loader merged at `c0664a9`).** `LoadResult.error: str | None` and the
+  `error="frozen"` spelling are accepted as the two shapes S6's `GET /api/connectors` renders, keyed
+  on `(origin, name)` because a shadowed entry point and an in-repo package legitimately share a
+  name. The descriptor name is at once the discovered entry name, the registered connector kind and
+  `Connector.kind`; the loader refuses disagreement (`NameMismatch`) and the scaffold keeps them
+  equal, so `__init__.py.tmpl`'s re-export of `Connector` is load-bearing (S4b). `hippo connector
+  enable` (R59) requires a signed-in installation: in open mode `store/authorization.py` refuses
+  `enabled=True` for any kind but `local`, and the command exits 2 with that message (S4b).
+  Tightening `loader._already_registered` to compare evidence-source definitions through
+  `Registry.evidence_source_definition` is S4a's, once S1b-fix lands. Tests that seed `Connector`
+  rows of extension kinds register those kinds in an `extension_scope()` first, because the write
+  path checks vocabulary (S4c-fix).
 
