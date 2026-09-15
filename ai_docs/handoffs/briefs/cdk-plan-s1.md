@@ -37,8 +37,9 @@ DECISIONS THE PLAN MUST MAKE AND STATE (each with the reason and the test that p
    design's normative API in section 3 verbatim; where the design under-specifies, decide and mark
    it "decided by S1 plan".
 3. How the existing `predicates.PREDICATES` mapping and `validate_endpoints` are preserved as
-   built-ins (names unchanged), and how `owner_family`, `canonical_direction`, `family_default`,
-   `sources_allowed`, `verb_phrase` and `windowed` are filled for each existing predicate.
+   built-ins (names unchanged), and how `owner_families`, `identity`, `canonical_direction`, `family_default`,
+   `sources_allowed`, `verb_phrase` and `windowed` are filled for each existing predicate, plus the
+   built-in `SAME_OBJECT_AS` identity predicate (design section 4, `AliasCandidate` row).
 4. `Unit` persistence: table or label per backend, columns, the identity, membership in
    `GenerationEvidenceMember.record_kind`, how it is written, read by generation, checksummed and
    collected with its generation; how vectors key on `content_hash` through
@@ -50,9 +51,11 @@ DECISIONS THE PLAN MUST MAKE AND STATE (each with the reason and the test that p
    (traversal, support-group rules, status, projections) named with what changes, if anything.
 7. Schema v8: the exact DDL or Cypher per backend, the journaled migration step, what the Fake store
    needs, the reopen test on LadybugDB, and the frozen-history test.
-8. The fingerprint: what is hashed, in what canonical order, where it is stored in the generation
-   configuration (`generation_profiles.py` or the configuration dict `prose_generation._configuration`
-   and `code_generation._configuration` build), and the test that a template change changes it.
+8. The fingerprint: what is hashed, in what canonical order, the `Generation.registry_fingerprint`
+   column (schema v8, outside `identity_fields`, never in `configuration_json`), how a kit connector's
+   declared template and parser versions reach `configuration_json` (`prose_generation._configuration`
+   and `code_generation._configuration` are the models), and the test that a template change changes
+   both.
 9. Sizing: S1a and S1b are each one worker; if either exceeds that, split and say where.
 
 FILES:
