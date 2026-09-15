@@ -36,7 +36,16 @@ PROFILE_POINTER = "embedding_manifest_revision_id"
 GENERATION_PROFILE_KEY = "generation_profile"
 PLAIN_PROSE_PROFILE = "plain_prose"
 CODE_PROFILE = "code"
-GENERATION_PROFILES = (PLAIN_PROSE_PROFILE, CODE_PROFILE)
+CONNECTOR_PROFILE = "connector"
+GENERATION_PROFILES = (PLAIN_PROSE_PROFILE, CODE_PROFILE, CONNECTOR_PROFILE)
+
+# A connector generation's inputs are remote, so they cannot be an `accepted-inputs-v1`
+# manifest: that contract describes local files captured into the raw store. The connector
+# runtime writes its own inventory manifest instead, and the branch below is chosen by this
+# metadata key rather than by the configuration, which is the accepted manifest's own content
+# and therefore unreadable until the manifest has already been interpreted.
+CONNECTOR_MANIFEST_EXTERNAL_ID = "connector-inventory-v1"
+CONNECTOR_MANIFEST_KEY = "connector_inventory_v1"
 
 
 @dataclass(frozen=True)
@@ -199,6 +208,72 @@ def _prose_members(originals, accepted, generation, workspace):
     return list(originals.values())
 
 
+def _connector_members(originals, payload, generation, workspace):
+    """The `connector` member set: every original is a remote input this manifest lists.
+
+    The inventory manifest is the identity record of a remote capture, the way
+    `accepted-inputs-v1` is for a local one. It names each member by artifact, revision, raw
+    identity and provider revision, and the comparison is exact in both directions, so neither
+    a member the manifest never saw nor a manifest entry the generation dropped survives.
+    """
+    connector_id, instance = payload["connector_id"], payload["instance"]
+    if (payload["source_id"], payload["workspace_id"]) != (generation.source_id, workspace):
+        raise ValueError("Connector manifest belongs to another source or workspace")
+    for artifact, _ in originals.values():
+        if (artifact.connector_id, artifact.provider_instance) != (connector_id, instance):
+            raise ValueError("Connector generation members differ from their inventory manifest")
+    if type(payload["members"]) is not list:
+        raise ValueError("Connector manifest inventory must be an ordered array")
+    fields = ("artifact_id", "revision_id", "content_hash", "raw_uri", "provider_revision")
+    expected = sorted(tuple(_closed(item, fields)[field] for field in fields) for item in payload["members"])
+    actual = sorted(
+        (a.id, r.id, r.content_hash, r.raw_uri, r.provider_revision) for a, r in originals.values()
+    )
+    if actual != expected:
+        raise ValueError("Connector generation members differ from their inventory manifest")
+    return list(originals.values())
+
+
+def _connector_manifest(artifact, revision, generation, workspace):
+    """The one local `manifest` artifact a connector generation binds, and its closed payload."""
+    if (
+        artifact.external_id != CONNECTOR_MANIFEST_EXTERNAL_ID
+        or artifact.connector_id is not None
+        or artifact.id
+        != make_identity(
+            "artifact", [workspace, generation.source_id, "manifest", CONNECTOR_MANIFEST_EXTERNAL_ID]
+        )
+        or revision.provider_revision is not None
+    ):
+        raise ValueError("Connector manifest identity differs from its local convention")
+    metadata = _closed(json.loads(revision.metadata_json), (CONNECTOR_MANIFEST_KEY,))
+    payload = _closed(
+        metadata[CONNECTOR_MANIFEST_KEY],
+        (
+            "version",
+            "source_id",
+            "workspace_id",
+            "connector_id",
+            "instance",
+            "partition",
+            "configuration",
+            "members",
+        ),
+    )
+    if type(payload["version"]) is not int or payload["version"] != 1:
+        raise ValueError("Unsupported connector manifest version")
+    return payload
+
+
+def _connector_manifest_key(store, manifest_revision_id) -> bool:
+    """Whether this manifest revision is a connector inventory, read before any other check."""
+    revision = store._knowledge_get("ArtifactRevision", manifest_revision_id)
+    if revision is None:
+        return False
+    metadata = json.loads(revision.metadata_json)
+    return type(metadata) is dict and CONNECTOR_MANIFEST_KEY in metadata
+
+
 def validate_generation_profile(store, generation, manifest_revision_id=None) -> GenerationProfile:
     """Validate exact accepted metadata; explicit revision is for staging bind only."""
     mode = embedding_mode(generation)
@@ -219,6 +294,9 @@ def validate_generation_profile(store, generation, manifest_revision_id=None) ->
     selected = {row.artifact_revision_id for row in members}
     if len(selected) != len(members) or manifest_revision_id not in selected:
         raise ValueError("Accepted manifest is outside exact generation membership")
+    # Which manifest contract this generation binds, decided before any original is read: the
+    # local-artifact refusal below belongs to the accepted-inputs path alone (plan section 7.2).
+    connector = _connector_manifest_key(store, manifest_revision_id)
     pairs = []
     for identity in selected:
         revision = store._knowledge_get("ArtifactRevision", identity)
@@ -229,7 +307,7 @@ def validate_generation_profile(store, generation, manifest_revision_id=None) ->
             or (artifact.source_id, artifact.workspace_id) != (generation.source_id, workspace)
         ):
             raise ValueError("Accepted revision crosses generation source or workspace")
-        if artifact.connector_id is not None or artifact.provider_instance is not None:
+        if not connector and (artifact.connector_id is not None or artifact.provider_instance is not None):
             raise ValueError("Profile binding currently requires local artifacts")
         if revision.lifecycle != "active":
             raise ValueError("Accepted revision must be active")
@@ -238,26 +316,40 @@ def validate_generation_profile(store, generation, manifest_revision_id=None) ->
     if len(manifests) != 1 or manifests[0][1].id != manifest_revision_id:
         raise ValueError("Generation requires exactly one accepted manifest revision")
     artifact, revision = manifests[0]
-    if (
-        artifact.external_id != MANIFEST_EXTERNAL_ID
-        or artifact.id
-        != make_identity("artifact", [workspace, generation.source_id, "manifest", MANIFEST_EXTERNAL_ID])
-        or revision.provider_revision is not None
-    ):
-        raise ValueError("Accepted manifest identity differs from its local convention")
-    metadata = _closed(json.loads(revision.metadata_json), ("accepted_manifest_v1",))
-    accepted = _accepted(metadata["accepted_manifest_v1"], revision)
-    if (accepted.source_id, accepted.workspace_id) != (generation.source_id, workspace):
-        raise ValueError("Accepted manifest belongs to another source or workspace")
-    configuration = json.loads(accepted.configuration_json)
-    shape = configuration.get(GENERATION_PROFILE_KEY, PLAIN_PROSE_PROFILE)
-    if shape not in GENERATION_PROFILES:
-        raise ValueError("Unknown accepted generation profile")
     originals = {a.id: (a, r) for a, r in pairs if a.kind != "manifest"}
     if len(originals) != len(pairs) - 1:
         raise ValueError("Accepted original revision inventory differs")
-    members = _code_members if shape == CODE_PROFILE else _prose_members
-    identity_pairs = [manifests[0], *members(originals, accepted, generation, workspace)]
+    if connector:
+        payload = _connector_manifest(artifact, revision, generation, workspace)
+        configuration = payload["configuration"]
+        if configuration.get(GENERATION_PROFILE_KEY) != CONNECTOR_PROFILE:
+            raise ValueError("Connector manifest does not claim the connector generation profile")
+        configuration_json = canonical_json(configuration)
+        identity_pairs = [
+            manifests[0],
+            *_connector_members(originals, payload, generation, workspace),
+        ]
+    else:
+        if (
+            artifact.external_id != MANIFEST_EXTERNAL_ID
+            or artifact.id
+            != make_identity("artifact", [workspace, generation.source_id, "manifest", MANIFEST_EXTERNAL_ID])
+            or revision.provider_revision is not None
+        ):
+            raise ValueError("Accepted manifest identity differs from its local convention")
+        metadata = _closed(json.loads(revision.metadata_json), ("accepted_manifest_v1",))
+        accepted = _accepted(metadata["accepted_manifest_v1"], revision)
+        if (accepted.source_id, accepted.workspace_id) != (generation.source_id, workspace):
+            raise ValueError("Accepted manifest belongs to another source or workspace")
+        configuration = json.loads(accepted.configuration_json)
+        configuration_json = accepted.configuration_json
+        shape = configuration.get(GENERATION_PROFILE_KEY, PLAIN_PROSE_PROFILE)
+        if shape not in GENERATION_PROFILES:
+            raise ValueError("Unknown accepted generation profile")
+        if shape == CONNECTOR_PROFILE:
+            raise ValueError("The connector profile requires a connector inventory manifest")
+        members = _code_members if shape == CODE_PROFILE else _prose_members
+        identity_pairs = [manifests[0], *members(originals, accepted, generation, workspace)]
     descriptor = validate_profile_descriptor(configuration.get("embedding_profile"))
     if descriptor.fingerprint != generation.embedding_profile:
         raise ValueError("Generation and accepted embedding profiles differ")
@@ -271,7 +363,10 @@ def validate_generation_profile(store, generation, manifest_revision_id=None) ->
         embedding_profile=generation.embedding_profile,
         configuration=configuration,
         created_at=generation.created_at,
+        # S1 section 10: recorded on the generation, never hashed, so this changes no identity;
+        # it keeps the re-derived record equal to the stored one field for field.
+        registry_fingerprint=generation.registry_fingerprint,
     )
     if expected.id != generation.id or expected.manifest_hash != generation.manifest_hash:
         raise ValueError("Generation identity differs from its accepted input manifest")
-    return GenerationProfile(descriptor, text_hash(accepted.configuration_json))
+    return GenerationProfile(descriptor, text_hash(configuration_json))

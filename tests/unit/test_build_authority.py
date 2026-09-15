@@ -1,8 +1,10 @@
 """Prospective build permissions use live evidence policies without publishing rows."""
 
 import importlib
+import json
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
+from itertools import count
 from threading import Event, Thread
 from types import SimpleNamespace
 
@@ -632,7 +634,11 @@ def test_a_planned_policy_may_carry_the_code_scope_key(store):
         pairs=((artifact, revision),), spans=(span,), planned_policies=(policy,)
     )
     guard(w, accepted)
-    assert module.PLANNED_POLICY_SCOPES == (module.PLAIN_PROSE_SCOPE, module.MANAGED_CODE_SCOPE)
+    assert module.PLANNED_POLICY_SCOPES == (
+        module.PLAIN_PROSE_SCOPE,
+        module.MANAGED_CODE_SCOPE,
+        module.CONNECTOR_SCOPE,
+    )
 
 
 def test_a_planned_policy_scope_key_outside_the_closed_set_refuses(store):
@@ -799,3 +805,220 @@ def test_a_failed_rebaseline_closes_the_child_it_built(store, monkeypatch):
     child = next(item for item in built if item is not value)
     with pytest.raises(AuthorizationChanged, match="closed"):
         child.check_local()
+
+
+# ------------------------------------------------- CK3: connector sources (plan section 7.3)
+
+INSTANCE = "https://jira.example.com"
+PARTITION = "PROJ"
+_instances = count()
+
+
+def connector_world(store, *, mode="unknown", expires_at=None, partition=PARTITION, stray=False):
+    """A connector Source with one remote original, its provider policy and its local manifest.
+
+    Each call takes its own provider instance. A remote artifact's identity is scoped by
+    `provider_instance`, not by the Source (`Artifact.identity_parts`), so two worlds sharing
+    one instance would mint one artifact id for two Sources and the second write would refuse.
+    """
+    module = api()
+    store.ensure_schema()
+    store.ensure_roles()
+    # One operator for the whole store: a test that builds two connector worlds keeps the
+    # same builder rather than tripping the store's unique-username refusal.
+    known = store.get_user_by_username("builder")
+    user = known["id"] if known else store.create_user("builder", "password", "individual")
+    instance = f"https://jira{next(_instances)}.example.com"
+    source = store.create_source("connector", "Tickets", owner_id=user)
+    workspace = store.get_source(source)["workspace_id"]
+    store.put_knowledge(
+        k.WorkspaceMembership(
+            workspace_id=workspace, principal_id=user, mapping_authority="local", enabled=True, policy_epoch=1
+        )
+    )
+    store.set_meta("reviewed_mapping_authorities", ["local"])
+    connector = k.Connector(workspace_id=workspace, kind="jira_cloud", instance_url=instance, enabled=True)
+    store.put_knowledge(connector)
+    other = k.Connector(
+        workspace_id=workspace, kind="jira_cloud", instance_url=f"https://other{next(_instances)}.example.com"
+    )
+    store.put_knowledge(other)
+    store.update_source(
+        source,
+        meta_json=json.dumps({"connector_id": connector.id, "partition": partition}, sort_keys=True),
+    )
+    owner = other if stray else connector
+    provider = k.AccessPolicy(
+        workspace_id=workspace,
+        origin="provider",
+        scope_key=f"connector:{owner.id}:{partition}",
+        mode=mode,
+        # A policy's expiry must follow its verification, so a deadline in the past needs a
+        # verification further back: the provider said so two hours ago and it lapsed since.
+        verified_at=NOW - timedelta(hours=2) if expires_at is not None else NOW,
+        expires_at=expires_at,
+    )
+    grant = k.AccessPolicy(
+        workspace_id=workspace,
+        origin="local_curated",
+        scope_key=f"source:{source}:{module.CONNECTOR_SCOPE}",
+        mode="workspace",
+        verified_at=NOW,
+    )
+    artifact = k.Artifact(
+        workspace_id=workspace,
+        source_id=source,
+        connector_id=owner.id,
+        provider_instance=owner.instance_url,
+        kind="ticket",
+        external_id="PROJ-1",
+        canonical_uri=f"{owner.instance_url}/browse/PROJ-1",
+        policy_id=provider.id,
+    )
+    revision = k.ArtifactRevision(
+        artifact_id=artifact.id,
+        provider_revision="1",
+        content_hash="c" * 64,
+        raw_uri="hippo-raw:sha256:" + "c" * 64,
+        observed_at=NOW,
+        lifecycle="active",
+    )
+    manifest = k.Artifact(
+        workspace_id=workspace,
+        source_id=source,
+        kind="manifest",
+        external_id="connector-inventory-v1",
+        canonical_uri=f"source:{source}/connector-inventory-v1",
+        policy_id=grant.id,
+    )
+    manifest_revision = k.ArtifactRevision(
+        artifact_id=manifest.id,
+        content_hash="d" * 64,
+        raw_uri="hippo-raw:sha256:" + "d" * 64,
+        observed_at=NOW,
+        lifecycle="active",
+    )
+    span = k.EvidenceSpan(
+        revision_id=revision.id,
+        locator_kind="field",
+        locator_json='{"kind":"field","field_path":"description"}',
+        text="The importer drops the last row.",
+        policy_id=provider.id,
+    )
+    # The remote inputs and their provider grant are durable by capture time; the inventory
+    # manifest is this build's own output, so it is accepted under a planned local grant.
+    for record in (provider, artifact, revision, span):
+        store.put_knowledge(record)
+    inputs = module.AcceptedBuildInputs(
+        pairs=((artifact, revision), (manifest, manifest_revision)),
+        spans=(span,),
+        planned_policies=(grant,),
+    )
+    actor = module.BuildActor.reader(Principal.for_user(store.get_user(user), store.get_role("individual")))
+    return SimpleNamespace(**locals())
+
+
+def connector_guard(w, *, actor=None):
+    return w.module.capture_build_authority(
+        w.store,
+        source_id=w.source,
+        actor=w.module.BuildActor.trusted_local() if actor is None else actor,
+        accepted=w.inputs,
+        clock=lambda: NOW,
+    )
+
+
+def test_a_connector_source_is_captured_for_the_trusted_local_actor(store):
+    module = api()
+    assert "connector" in module.BUILD_SOURCE_KINDS
+    w = connector_world(store)
+    authority = connector_guard(w)
+    try:
+        assert authority.source_control.kind == "connector"
+        assert json.loads(authority.source_control.input_config_json) == {
+            "connector_id": w.connector.id,
+            "partition": PARTITION,
+        }
+        authority.check_local()
+    finally:
+        authority.close()
+
+
+def test_connector_authority_admits_provider_and_unknown_policies_of_its_connector_only(store):
+    """A provider grant of this connector is admitted, `mode="unknown"` included; a stray is not."""
+    module = api()
+    assert module.CONNECTOR_SCOPE == "connector-v1"
+    assert module.PLANNED_POLICY_SCOPES == (
+        module.PLAIN_PROSE_SCOPE,
+        module.MANAGED_CODE_SCOPE,
+        module.CONNECTOR_SCOPE,
+    )
+    w = connector_world(store, mode="unknown")
+    authority = connector_guard(w)
+    try:
+        authority.check_local()
+    finally:
+        authority.close()
+    stray = connector_world(store, mode="unknown", stray=True)
+    with pytest.raises(AuthorizationChanged):
+        connector_guard(stray)
+
+
+def test_connector_authority_refuses_an_artifact_of_another_connector(store):
+    w = connector_world(store, stray=True)
+    with pytest.raises(AuthorizationChanged, match="Accepted original"):
+        connector_guard(w)
+
+
+def test_connector_authority_ignores_provider_policy_expiry_while_readers_do_not(store):
+    """The build is not a read grant and the internal audience ignores deadlines."""
+    expired = connector_world(store, mode="workspace", expires_at=NOW - timedelta(minutes=1))
+    authority = connector_guard(expired)
+    try:
+        authority.check_local()
+    finally:
+        authority.close()
+    with pytest.raises(AuthorizationChanged):
+        connector_guard(expired, actor=expired.actor)
+    live = connector_world(store, mode="workspace", expires_at=NOW + timedelta(hours=1))
+    reader = connector_guard(live, actor=live.actor)
+    try:
+        reader.check_local()
+    finally:
+        reader.close()
+
+
+def test_a_changed_connector_or_partition_in_source_meta_refuses(store):
+    """`meta["connector_id"]` and `meta["partition"]` are `input_config_json`, compared whole."""
+    for changed in (
+        {"connector_id": "connector-" + "0" * 64, "partition": PARTITION},
+        {"partition": "OTHER"},
+    ):
+        w = connector_world(store)
+        authority = connector_guard(w)
+        try:
+            meta = {"connector_id": w.connector.id, "partition": PARTITION} | changed
+            w.store.update_source(w.source, meta_json=json.dumps(meta, sort_keys=True))
+            with pytest.raises(AuthorizationChanged, match="Source controls changed during build"):
+                authority.check_local()
+        finally:
+            authority.close()
+
+
+@pytest.mark.parametrize("kind", ["text", "file", "repo", "archive"])
+def test_text_file_repo_and_archive_authority_is_unchanged(store, kind):
+    """Every pre-kit source kind keeps its own refusals; only `connector` takes the new branch."""
+    module = api()
+    assert module.BUILD_SOURCE_KINDS == frozenset({"text", "file", "repo", "archive", "connector"})
+    assert module.ACCEPTED_ARTIFACT_KINDS == frozenset({"file", "manifest", "repository", "history_event"})
+    w = world(store, kind=kind)
+    guard(w).close()
+    for broken in (
+        w.artifact.replace(connector_id="connector-" + "0" * 64, provider_instance=INSTANCE),
+        w.artifact.replace(kind="ticket"),
+    ):
+        accepted = w.module.AcceptedBuildInputs(
+            pairs=((broken, w.revision.replace(artifact_id=broken.id)),), planned_policies=(w.policy,)
+        )
+        with pytest.raises(AuthorizationChanged, match="Accepted original is not an active local input"):
+            guard(w, accepted=accepted)

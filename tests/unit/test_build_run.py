@@ -353,3 +353,58 @@ def test_the_shared_run_loads_without_either_coordinator():
     )
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.split() == ["hippo.ingest", "hippo.ingest.build_run"], result.stdout
+
+
+# ------------------------------------------- CK3: the lane-neutral helpers (plan section 8)
+
+
+def test_the_moved_helpers_are_the_code_coordinators_bound_names():
+    """Five helpers moved here under public names; the code lane keeps every old name bound."""
+    import inspect
+
+    from hippo.ingest import code_generation
+
+    assert code_generation._instant is build_run.adopt_capture_instant
+    assert code_generation._operation_generation is build_run.operation_generation
+    assert code_generation._rebaseline is build_run.rebaseline_between_batches
+    assert code_generation.published_receipt is build_run.published_receipt
+    assert code_generation.prior_receipt is build_run.prior_receipt
+    # The two that changed shape are wrappers, not aliases: they pass the manifest hash.
+    assert code_generation._receipt is not build_run.published_receipt
+    assert code_generation._prior_receipt is not build_run.prior_receipt
+    assert not hasattr(build_run, "_receipt") and not hasattr(build_run, "_prior_receipt")
+    for name in ("adopt_capture_instant", "operation_generation", "rebaseline_between_batches"):
+        assert inspect.getmodule(getattr(build_run, name)) is build_run
+
+
+def test_published_receipt_and_prior_receipt_take_the_manifest_hash(monkeypatch):
+    """`sync.py` has no `CapturedCode`, so the moved receipts take the hash, not the capture."""
+    import inspect
+
+    from hippo.ingest import code_generation
+
+    assert list(inspect.signature(build_run.published_receipt).parameters)[:4] == [
+        "store",
+        "gen",
+        "manifest_sha256",
+        "outcome",
+    ]
+    assert list(inspect.signature(build_run.prior_receipt).parameters) == [
+        "run",
+        "gen",
+        "manifest_sha256",
+        "operation_id",
+    ]
+    seen = {}
+    monkeypatch.setattr(
+        code_generation, "published_receipt", lambda *a, **kw: seen.setdefault("published", (a, kw))
+    )
+    monkeypatch.setattr(code_generation, "prior_receipt", lambda *a, **kw: seen.setdefault("prior", (a, kw)))
+    captured = SimpleNamespace(accepted=SimpleNamespace(manifest=SimpleNamespace(sha256="manifest-hash")))
+    code_generation._receipt("store", "gen", captured, "published", "job", resumed=2, rebaselines=1)
+    code_generation._prior_receipt("run", "gen", captured, "op-1")
+    assert seen["published"] == (
+        ("store", "gen", "manifest-hash", "published", "job"),
+        {"resumed": 2, "rebaselines": 1},
+    )
+    assert seen["prior"] == (("run", "gen", "manifest-hash", "op-1"), {})

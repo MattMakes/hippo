@@ -736,6 +736,18 @@ def _seal(store, prepared, **authority):
         return manifest
 
 
+# ------------------------------------------------------------------ the shared fenced core
+#
+# `staged_records.py` writes a connector generation through this module's core instead of
+# copying it (plan section 7.1), so the four names it reuses are public here. Review finding
+# m10: a private cross-module import is not a contract. The private spellings stay bound for
+# this module's own callers, and `test_staged_records.py` pins each pair.
+fenced_epochs = _epochs
+fenced_local = _local
+DependencyGroup = _Group
+immutable_native = _immutable_native
+
+
 def write_staged_code(
     store,
     prepared,

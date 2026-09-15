@@ -48,6 +48,12 @@ def prepared(store, tmp_path, *, fault=None, empty=False, digest="a" * 64, exist
         workspace_id=workspace, origin="local_curated", scope_key=source, mode="workspace", verified_at=NOW
     )
     store.put_knowledge(policy)
+    remote = {}
+    if fault == "remote_original":
+        instance = "https://provider.example.com"
+        connector_row = k.Connector(workspace_id=workspace, kind="jira_cloud", instance_url=instance)
+        store.put_knowledge(connector_row)
+        remote = {"connector_id": connector_row.id, "provider_instance": instance}
     originals = []
     for item in accepted.inputs:
         artifact = k.Artifact(
@@ -57,6 +63,7 @@ def prepared(store, tmp_path, *, fault=None, empty=False, digest="a" * 64, exist
             external_id=item.logical_path,
             canonical_uri=f"source:{source}/{item.logical_path}",
             policy_id=policy.id,
+            **remote,
         )
         revision = k.ArtifactRevision(
             artifact_id=artifact.id,
@@ -435,8 +442,16 @@ def test_malformed_manifest_pointer_is_a_controlled_denial(store, tmp_path, poin
 
 def test_the_accepted_generation_profile_names_are_closed():
     module = api()
-    assert module.GENERATION_PROFILES == (module.PLAIN_PROSE_PROFILE, module.CODE_PROFILE)
-    assert (module.PLAIN_PROSE_PROFILE, module.CODE_PROFILE) == ("plain_prose", "code")
+    assert module.GENERATION_PROFILES == (
+        module.PLAIN_PROSE_PROFILE,
+        module.CODE_PROFILE,
+        module.CONNECTOR_PROFILE,
+    )
+    assert (module.PLAIN_PROSE_PROFILE, module.CODE_PROFILE, module.CONNECTOR_PROFILE) == (
+        "plain_prose",
+        "code",
+        "connector",
+    )
     assert module.GENERATION_PROFILE_KEY == "generation_profile"
 
 
@@ -473,3 +488,80 @@ def test_the_profile_selector_is_part_of_generation_identity(store, tmp_path):
     assert revision.id == value.manifest_revision.id
     with pytest.raises(ValueError, match="Immutable record already exists"):
         store.put_knowledge(revision)
+
+
+# ------------------------------------------------- CK3: the connector inventory profile
+
+# The connector fixture lives beside the writer it was built for; importing it here keeps
+# one hand-built connector generation in the tree rather than two that can drift apart.
+from tests.unit import test_staged_records as connector  # noqa: E402
+
+
+def test_connector_profile_validates_its_inventory_manifest(store):
+    """The branch is chosen by the manifest revision's metadata key, not by the configuration."""
+    module = api()
+    w = connector.world(store)
+    assert json.loads(w.manifest_revision.metadata_json).keys() == {module.CONNECTOR_MANIFEST_KEY}
+    connector.install(w)
+    bound = module.validate_generation_profile(store, store._generation(w.generation.id))
+    assert bound.profile.fingerprint == w.profile.fingerprint
+    assert bound.config_fingerprint == text_hash(canonical_json(w.configuration))
+    assert module.CONNECTOR_MANIFEST_EXTERNAL_ID == "connector-inventory-v1"
+    assert w.manifest_artifact.external_id == module.CONNECTOR_MANIFEST_EXTERNAL_ID
+    assert w.manifest_artifact.connector_id is None
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("member_missing", "Connector generation members differ from their inventory manifest"),
+        ("other_connector", "Connector generation members differ from their inventory manifest"),
+    ],
+)
+def test_connector_profile_refuses_a_member_outside_the_manifest_or_another_connector(store, fault, message):
+    w = connector.world(store, fault=fault)
+    with pytest.raises(ValueError, match=message):
+        connector.install(w)
+
+
+def test_connector_profile_rederives_identity_with_the_registry_fingerprint(store):
+    """S1 D21: the fingerprint is recorded on the generation and never hashed into identity."""
+    module = api()
+    from hippo.knowledge.registry import current_registry
+
+    w = connector.world(store)
+    assert w.generation.registry_fingerprint == current_registry().fingerprint()
+    connector.install(w)
+    assert module.validate_generation_profile(store, store._generation(w.generation.id))
+    unfingerprinted = generation_for_inputs(
+        w.pairs,
+        workspace_id=w.workspace,
+        source_id=w.source,
+        parent_id=None,
+        parser_version=w.generation.parser_version,
+        linker_version=w.generation.linker_version,
+        embedding_profile=w.generation.embedding_profile,
+        configuration=w.configuration,
+        created_at=connector.INSTANT,
+    )
+    assert unfingerprinted.registry_fingerprint is None
+    assert (unfingerprinted.id, unfingerprinted.manifest_hash) == (
+        w.generation.id,
+        w.generation.manifest_hash,
+    )
+
+
+def test_plain_prose_and_code_profiles_are_unchanged(store, tmp_path):
+    """The accepted-inputs path keeps every refusal, including the local-artifact one at :232."""
+    module = api()
+    assert module.GENERATION_PROFILES == (
+        module.PLAIN_PROSE_PROFILE,
+        module.CODE_PROFILE,
+        module.CONNECTOR_PROFILE,
+    )
+    assert module.CONNECTOR_PROFILE == "connector"
+    plain = prepared(store, tmp_path)
+    assert bind(store, plain).config_fingerprint == text_hash(canonical_json(plain.config))
+    remote = prepared(store, tmp_path, fault="remote_original", digest="b" * 64)
+    with pytest.raises(ValueError, match="Profile binding currently requires local artifacts"):
+        bind(store, remote)
