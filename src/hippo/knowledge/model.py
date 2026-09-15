@@ -10,39 +10,51 @@ visibility, fencing and publication transactions are store responsibilities.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from types import MappingProxyType
 from typing import Annotated, ClassVar, Literal, Self, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
-    AfterValidator,
-    BaseModel,
     BeforeValidator,
-    ConfigDict,
     Field,
     TypeAdapter,
     field_validator,
     model_validator,
 )
 
+from .contract import (
+    Code,
+    Contract,
+    Instant,
+    Json,
+    Nonnegative,
+    Positive,
+    ProviderURL,
+    Text,
+    VersionOne,
+)
+from .contract import RelativePath as RelativePath
+from .contract import _utc as _utc
 from .identity import (
     canonical_json,
     make_identity,
     normalize_json,
-    normalize_provider_url,
     normalize_relative_path,
     source_relative_path,
     text_hash,
 )
+from .locators import LOCATOR_ADAPTER as LOCATOR_ADAPTER
+from .locators import CommentLocator as CommentLocator
+from .locators import DiffHunkLocator as DiffHunkLocator
+from .locators import FieldLocator as FieldLocator
+from .locators import FileLinesLocator as FileLinesLocator
+from .locators import PageLocator as PageLocator
+from .locators import SectionLocator as SectionLocator
+from .locators import SourceLocator as SourceLocator
+from .locators import TableCellLocator as TableCellLocator
 from .predicates import OBJECT_KINDS, PREDICATES, validate_endpoints
 
-Text = Annotated[str, Field(min_length=1, pattern=r"\S")]
-Json = Annotated[str, BeforeValidator(normalize_json)]
-Code = Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")]
-Nonnegative = Annotated[int, Field(strict=True, ge=0)]
-Positive = Annotated[int, Field(strict=True, ge=1)]
-VersionOne = Annotated[int, Field(strict=True, ge=1, le=1)]
 EvidenceClass = Literal[
     "syntax_observed", "catalog_observed", "declared", "discussion_claim", "model_inferred", "human_verified"
 ]
@@ -85,31 +97,6 @@ ObjectKind = Literal[
     "document",
     "alias",
 ]
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError("Timestamp must carry a timezone")
-    return value.astimezone(UTC)
-
-
-Instant = Annotated[datetime, AfterValidator(_utc)]
-RelativePath = Annotated[str, AfterValidator(normalize_relative_path)]
-ProviderURL = Annotated[str, AfterValidator(normalize_provider_url)]
-
-
-class Contract(BaseModel):
-    model_config = ConfigDict(
-        frozen=True, extra="forbid", strict=True, revalidate_instances="always", validate_default=True
-    )
-
-    def replace(self, **changes) -> Self:
-        return type(self).model_validate(self.model_dump() | changes)
-
-    def model_copy(self, *, update=None, deep=False) -> Self:
-        if update:
-            return self.replace(**update)
-        return type(self).model_validate(self.model_dump())
 
 
 def _identity_value(value):
@@ -163,86 +150,6 @@ class Record(Contract):
         if "identity_key" not in changes:
             data.pop("identity_key")
         return type(self).model_validate(data)
-
-
-class FileLinesLocator(Contract):
-    kind: Literal["file_lines"] = "file_lines"
-    path: RelativePath
-    start: Positive
-    end: Positive
-
-    @model_validator(mode="after")
-    def ordered(self) -> Self:
-        if self.end < self.start:
-            raise ValueError("Line interval is reversed")
-        return self
-
-
-class SectionLocator(Contract):
-    kind: Literal["section"] = "section"
-    heading_path: tuple[Text, ...]
-    block_start: Nonnegative
-    block_end: Nonnegative
-
-    @model_validator(mode="after")
-    def ordered(self) -> Self:
-        if self.block_end < self.block_start:
-            raise ValueError("Block interval is reversed")
-        return self
-
-
-class FieldLocator(Contract):
-    kind: Literal["field"] = "field"
-    field_path: Text
-
-
-class CommentLocator(Contract):
-    kind: Literal["comment"] = "comment"
-    comment_id: Text
-    field_path: Text = "body"
-    changeset_id: Text | None = None
-
-
-class PageLocator(Contract):
-    kind: Literal["page"] = "page"
-    page: Positive
-    offset_start: Nonnegative = 0
-    offset_end: Nonnegative | None = None
-
-    @model_validator(mode="after")
-    def ordered(self) -> Self:
-        if self.offset_end is not None and self.offset_end < self.offset_start:
-            raise ValueError("Page offsets are reversed")
-        return self
-
-
-class TableCellLocator(Contract):
-    kind: Literal["table_cell"] = "table_cell"
-    table: Nonnegative
-    row: Nonnegative
-    column: Nonnegative
-    heading_path: tuple[Text, ...] = ()
-
-
-class DiffHunkLocator(FileLinesLocator):
-    kind: Literal["diff_hunk"] = "diff_hunk"
-    base_revision: Text
-    head_revision: Text
-    side: Literal["base", "head"]
-    hunk_id: Text | None = None
-
-
-SourceLocator = Annotated[
-    FileLinesLocator
-    | SectionLocator
-    | FieldLocator
-    | CommentLocator
-    | PageLocator
-    | TableCellLocator
-    | DiffHunkLocator,
-    Field(discriminator="kind"),
-]
-LOCATOR_ADAPTER = TypeAdapter(SourceLocator)
 
 
 def canonical_locator_json(value: str) -> str:
