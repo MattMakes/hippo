@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal, get_args
 
 import pytest
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict
 
 from hippo.knowledge import model as k
 from hippo.knowledge.builtin_types import BUILTIN_EXTENSION, EVIDENCE_CLASS_DERIVATION, BuiltinAttributes
@@ -740,18 +740,20 @@ def test_a_template_text_change_without_a_version_bump_changes_only_the_fingerpr
     assert _generation(first_configuration) == _generation(second_configuration)
 
 
-def test_use_registry_validates_records_against_the_installed_registry_only():
+def test_use_registry_checks_records_against_the_installed_registry_only():
     before = REGISTRY.fingerprint()
     fresh = Registry.with_builtins()
     fresh.register(incident_extension())
     fresh.freeze()
-    incident = {"workspace_id": "w", "kind": "incident_fixture", "canonical_key": '["pagerduty","P1"]'}
+    incident = k.KnowledgeObject(
+        workspace_id="w", kind="incident_fixture", canonical_key='["pagerduty","P1"]'
+    )
     with use_registry(fresh) as installed:
         assert installed is fresh and current_registry() is fresh
-        assert k.KnowledgeObject(**incident).kind == "incident_fixture"
+        assert current_registry().check_record(incident) is None
     assert current_registry() is REGISTRY
-    with pytest.raises(ValidationError, match="Unknown object kind"):
-        k.KnowledgeObject(**incident)
+    with pytest.raises(ValueError, match="Unknown object kind"):
+        current_registry().check_record(incident)
     with pytest.raises(RuntimeError, match="body failed"):
         with use_registry(fresh):
             raise RuntimeError("body failed")

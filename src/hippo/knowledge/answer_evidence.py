@@ -1,13 +1,23 @@
 """Materialized source DTOs use the originals actually supplied to the answer."""
 
+import json
 from dataclasses import asdict
 
 from .citations import resolve_citations
 from .model import parse_locator_json
 
+# Only the built-in locator kinds have a label. An extension kind has none, and reading its label
+# never consults the registry, so an unregistered kind cannot raise here (ruling R39).
+LABELLED_LOCATOR_KINDS = frozenset(
+    {"file_lines", "diff_hunk", "section", "field", "comment", "page", "table_cell"}
+)
+
 
 def _location(citation):
-    if citation.locator_json is None:
+    if (
+        citation.locator_json is None
+        or json.loads(citation.locator_json).get("kind") not in LABELLED_LOCATOR_KINDS
+    ):
         return ""
     locator = parse_locator_json(citation.locator_json)
     if locator.kind in ("file_lines", "diff_hunk"):
@@ -22,9 +32,7 @@ def _location(citation):
         return f"Comment {locator.comment_id}, {locator.field_path}"
     if locator.kind == "page":
         return f"Page {locator.page}"
-    if locator.kind == "table_cell":
-        return f"Table {locator.table + 1}, row {locator.row + 1}, column {locator.column + 1}"
-    return ""
+    return f"Table {locator.table + 1}, row {locator.row + 1}, column {locator.column + 1}"
 
 
 def retrieval_fields(graph, passage_ids):

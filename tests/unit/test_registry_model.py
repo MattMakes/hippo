@@ -1,6 +1,11 @@
-"""Records validate kinds, locators and predicates through the current ontology registry."""
+"""Records name kinds, locators and predicates as plain codes; the registry checks them at bind and write.
+
+Reads never consult the registry for membership (ruling R39): a row written under an extension reads
+back where the extension is not registered, and projection leaves such rows out and counts them.
+"""
 
 import inspect
+from collections import Counter
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import get_args
@@ -8,16 +13,33 @@ from typing import get_args
 import pytest
 from pydantic import ValidationError
 
+from hippo.access import EVERYTHING
 from hippo.knowledge import answer_evidence, contract, locators, projection
 from hippo.knowledge import model as k
+from hippo.knowledge.access import EvidenceAccess, EvidenceSelection
 from hippo.knowledge.builtin_types import EVIDENCE_CLASS_DERIVATION
+from hippo.knowledge.graph_loader import load_generation_graph
 from hippo.knowledge.identity import canonical_json, normalize_json
+from hippo.knowledge.lifecycle import generation_passage_id
 from hippo.knowledge.predicates import OBJECT_KINDS, PREDICATES, predicate_definition
-from hippo.knowledge.registry import RegistrationError, Registry, extension_scope
+from hippo.knowledge.registry import (
+    RegistrationError,
+    Registry,
+    TypeExtension,
+    extension_scope,
+)
 from hippo.store import migrations
+from tests.unit.test_derived_generation_store import extraction, member, rendered
+from tests.unit.test_evidence_access import NOW as ACCESS_NOW
+from tests.unit.test_evidence_access import engine
+from tests.unit.test_evidence_projection import assertion as supported_assertion
+from tests.unit.test_evidence_projection import fixture as projection_world
+from tests.unit.test_generation_store import NOW as STORE_NOW
+from tests.unit.test_generation_store import authority, claim, evidence, generation, passage, publish, seal
 from tests.unit.test_registry import (  # noqa: F401
     REFUSALS,
     IncidentEventLocator,
+    affects_predicate,
     incident_extension,
     scoped,
 )
@@ -53,6 +75,17 @@ AFFECTS = {
 
 def _object(kind: str, key: list) -> k.KnowledgeObject:
     return k.KnowledgeObject(workspace_id="w", kind=kind, canonical_key=canonical_json(key))
+
+
+def _extension_rows() -> list[tuple[k.Record, str]]:
+    """One record per vocabulary field, each naming the extension, with the refusal `check_record` raises."""
+    return [
+        (k.KnowledgeObject(**INCIDENT), "Unknown object kind"),
+        (k.Artifact(**ARTIFACT), "Unknown artifact kind"),
+        (k.Connector(**CONNECTOR), "Unknown connector kind"),
+        (k.EvidenceSpan(**INCIDENT_SPAN), "Unknown locator kind"),
+        (k.Assertion(**AFFECTS), "Unknown assertion predicate"),
+    ]
 
 
 def test_the_vocabulary_slice_changes_no_persisted_column():
@@ -94,48 +127,74 @@ def test_object_kind_literal_names_exactly_the_builtin_kinds():
     assert k.OBJECT_KINDS is OBJECT_KINDS
 
 
-def test_a_registered_kind_validates_knowledge_objects_and_query_kinds():
-    with extension_scope() as registry:
-        registry.register(incident_extension())
-        assert k.KnowledgeObject(**INCIDENT).kind == "incident_fixture"
-        request = k.QueryRequest(question="What broke checkout?", kinds=("incident_fixture", "service"))
-        assert request.kinds == ("incident_fixture", "service")
-    with pytest.raises(ValidationError, match="Unknown object kind"):
-        k.KnowledgeObject(**INCIDENT)
-    with pytest.raises(ValidationError, match="Unknown object kind"):
-        k.QueryRequest(question="What broke checkout?", kinds=("incident_fixture",))
+def test_vocabulary_fields_accept_any_code_without_a_registration():
+    rows = _extension_rows()
+    assert [row.kind for row, _ in rows[:3]] == ["incident_fixture", "incident_export", "incident_ndjson"]
+    assert rows[3][0].locator_json == '{"event_id":"E1","kind":"incident_event"}'
+    assert rows[4][0].predicate == "AFFECTS_FIXTURE"
+    request = k.QueryRequest(question="What broke checkout?", kinds=("incident_fixture", "service"))
+    assert request.kinds == ("incident_fixture", "service")
+    with pytest.raises(ValidationError):
+        k.KnowledgeObject(**INCIDENT | {"kind": "not a code"})
+    with pytest.raises(ValidationError, match="Locator kind disagrees with its payload"):
+        k.EvidenceSpan(**INCIDENT_SPAN | {"locator_kind": "pager_event"})
+    with pytest.raises(ValidationError, match="Locator payload requires a kind"):
+        k.EvidenceSpan(**INCIDENT_SPAN | {"locator_json": '{"event_id":"E1"}'})
 
 
-def test_registered_artifact_and_connector_kinds_validate_their_records():
+def test_a_row_of_an_unregistered_kind_reads_back_outside_its_registry(store):
+    workspace = k.Workspace(name="incidents")
     with extension_scope() as registry:
         registry.register(incident_extension())
-        assert k.Artifact(**ARTIFACT).kind == "incident_export"
-        assert k.Connector(**CONNECTOR).kind == "incident_ndjson"
-    with pytest.raises(ValidationError, match="Unknown artifact kind"):
-        k.Artifact(**ARTIFACT)
-    with pytest.raises(ValidationError, match="Unknown connector kind"):
-        k.Connector(**CONNECTOR)
+        rows = [row for row, _ in _extension_rows()]
+        incident = k.KnowledgeObject(**INCIDENT | {"workspace_id": workspace.id})
+        service = k.KnowledgeObject(workspace_id=workspace.id, kind="service", canonical_key='["checkout"]')
+        affects = k.checked_assertion(incident, "AFFECTS_FIXTURE", service, scope_key="source:s:all")
+        for record in (workspace, incident, service, affects):
+            store.put_knowledge(record)
+    # What the store does on every read (`store/knowledge.py` `_knowledge_records`).
+    for row in rows:
+        assert type(row).model_validate_json(row.model_dump_json()) == row
+    assert store._knowledge_rows("KnowledgeObject", ids=[incident.id]) == [incident]
+    assert store._knowledge_rows("Assertion", ids=[affects.id]) == [affects]
+
+
+def test_check_record_refuses_an_unregistered_kind(scoped):  # noqa: F811
+    rows = _extension_rows()
+    for row, refusal in rows:
+        with pytest.raises(ValueError, match=refusal):
+            scoped.check_record(row)
+    builtins = (_object("service", ["checkout"]), k.Assertion(**AFFECTS | {"predicate": "BOUND_TO"}))
+    for row in builtins:
+        assert scoped.check_record(row) is None
+    scoped.register(incident_extension())
+    for row, _ in rows:
+        assert scoped.check_record(row) is None
+    assert scoped.check_record(k.Workspace(name="incidents")) is None
+    with pytest.raises(TypeError, match="Registry.check_record takes a knowledge record"):
+        scoped.check_record("KnowledgeObject")
+
+
+def test_check_record_validates_a_span_payload_with_its_registered_model(scoped):  # noqa: F811
+    unchecked = k.EvidenceSpan(**INCIDENT_SPAN | {"locator_json": '{"kind":"incident_event","page":1}'})
+    scoped.register(incident_extension())
+    with pytest.raises(ValidationError):
+        scoped.check_record(unchecked)
+    assert scoped.check_record(k.EvidenceSpan(**INCIDENT_SPAN)) is None
 
 
 @pytest.mark.parametrize(("reason", "message", "action"), REFUSALS)
-def test_a_refused_extension_leaves_no_name_a_record_accepts(scoped, reason, message, action):  # noqa: F811
+def test_a_refused_extension_leaves_no_name_check_record_accepts(scoped, reason, message, action):  # noqa: F811
     with pytest.raises(RegistrationError):
         action(scoped)
     if reason != "duplicate_name":  # the first of the two registrations holds these names
-        records = (
-            lambda: k.KnowledgeObject(**INCIDENT),
-            lambda: k.Assertion(**AFFECTS),
-            lambda: k.EvidenceSpan(**INCIDENT_SPAN),
-            lambda: k.Artifact(**ARTIFACT),
-            lambda: k.Connector(**CONNECTOR),
-        )
-        for record in records:
-            with pytest.raises(ValidationError):
-                record()
+        for row, refusal in _extension_rows():
+            with pytest.raises(ValueError, match=refusal):
+                scoped.check_record(row)
     if reason in {"shadows_builtin", "duplicate_name"}:
         assert scoped.object_kind("file") == Registry.with_builtins().object_kind("file")
-        with pytest.raises(ValidationError, match="Unknown object kind"):
-            k.KnowledgeObject(**INCIDENT | {"kind": "File"})
+        with pytest.raises(ValueError, match="Unknown object kind"):
+            scoped.check_record(k.KnowledgeObject(**INCIDENT | {"kind": "File"}))
 
 
 LOCATOR_SAMPLES = [
@@ -198,6 +257,123 @@ def test_answer_location_is_empty_for_an_extension_locator(scoped):  # noqa: F81
     assert location(SimpleNamespace(locator_json='{"kind":"table_cell","table":0,"row":1,"column":2}')) == (
         "Table 1, row 2, column 3"
     )
+
+
+def test_answer_location_is_empty_for_an_unregistered_locator():
+    citation = SimpleNamespace(locator_json='{"kind":"incident_event","event_id":"E1"}')
+    assert answer_evidence._location(citation) == ""
+
+
+def _calls_fixture() -> TypeExtension:
+    calls = affects_predicate(
+        name="CALLS_FIXTURE",
+        subject_kinds=frozenset({"symbol"}),
+        object_kinds=frozenset({"symbol"}),
+        owner_families=frozenset({"code"}),
+        sources_allowed=frozenset({"parser"}),
+        verb_phrase="calls",
+    )
+    return TypeExtension(predicates=(calls,))
+
+
+def _register_extensions(registry: Registry) -> None:
+    registry.register(incident_extension())
+    registry.register(_calls_fixture(), declared_families=("code",))
+
+
+def _extension_projection() -> SimpleNamespace:
+    """The evidence projection world plus one row per extension vocabulary, written under the extension."""
+    w = projection_world()
+    with extension_scope() as registry:
+        _register_extensions(registry)
+        w.incident = w.store.add(
+            k.KnowledgeObject(workspace_id=w.workspace.id, kind="incident_fixture", canonical_key='["P1"]')
+        )
+        w.store.add(
+            k.ObjectObservation(
+                object_id=w.incident.id,
+                revision_id=w.revision.id,
+                span_id=w.spans[0].id,
+                evidence_class="declared",
+                recorded_from=ACCESS_NOW,
+                attributes_json='{"name":"checkout outage"}',
+            )
+        )
+        w.event = w.store.add(
+            k.EvidenceSpan(**INCIDENT_SPAN | {"revision_id": w.revision.id, "policy_id": w.parent.id})
+        )
+        w.calls = supported_assertion(w, predicate="CALLS_FIXTURE")
+    return w
+
+
+def _project(w: SimpleNamespace, exclusions: Counter | None) -> object:
+    return projection.project_managed_graph(
+        w.full, w.store, engine(w).build(w.selection), embedding_profile="embed-v1", exclusions=exclusions
+    )
+
+
+def test_projection_leaves_out_and_counts_rows_of_unregistered_vocabulary():
+    w = _extension_projection()
+    exclusions = Counter()
+    graph = _project(w, exclusions)
+    first = graph.idx_of[w.objects[0].id]
+    assert w.incident.id not in graph.idx_of
+    assert not any(arrow.kind == "CALLS_FIXTURE" for arrow in graph.out_edges(first))
+    assert w.event.id not in {citation.id for citation in graph.original_citations}
+    assert exclusions == Counter(object_kinds=1, locator_kinds=1, predicates=1)
+
+
+def test_projection_keeps_those_rows_where_their_extension_is_registered():
+    w = _extension_projection()
+    exclusions = Counter()
+    with extension_scope() as registry:
+        _register_extensions(registry)
+        graph = _project(w, exclusions)
+    first, second = (graph.idx_of[obj.id] for obj in w.objects)
+    assert w.incident.id in graph.idx_of
+    assert any(arrow.kind == "CALLS_FIXTURE" and arrow.dst == second for arrow in graph.out_edges(first))
+    assert exclusions == Counter()
+    assert _project(w, None).idx_of.keys() <= graph.idx_of.keys()
+
+
+def test_projection_leaves_out_views_and_prose_anchored_on_an_unregistered_locator(store):
+    gen = generation(store, "incidents")
+    job = claim(store, gen, key="incidents")
+    with extension_scope() as registry:
+        registry.register(incident_extension())
+        with store.generation_write(gen.id, **authority(job)):
+            revision, span = evidence(store, gen)
+            store.add_passages([passage(gen, revision, span)])
+            event = k.EvidenceSpan(
+                **INCIDENT_SPAN | {"revision_id": revision.id, "policy_id": span.policy_id}
+            )
+            member(store, gen, event)
+            view, _, _ = rendered(store, gen, event, text="rendered incident")
+            row = passage(gen, revision, event) | {
+                "id": generation_passage_id(gen.id, revision.id, event.id, 1, retrieval_view_id=view.id),
+                "retrieval_view_id": view.id,
+                "text": view.text,
+                "ordinal": 1,
+            }
+            store.add_passages([row])
+            member(store, gen, extraction(store, gen, event, row))
+        seal(store, gen, job)
+        publish(store, gen, job)
+    selection = EvidenceSelection(generation_ids=frozenset({gen.id}), require_exact_membership=True)
+    access = EvidenceAccess(
+        store, store.get_source(gen.source_id)["workspace_id"], EVERYTHING, clock=lambda: STORE_NOW
+    )
+    full = load_generation_graph(
+        store, generations={gen.source_id: gen.id}, legacy_source_ids=frozenset(), version=1
+    )
+    exclusions = Counter()
+    graph = projection.project_managed_graph(
+        full, store, access.build(selection), embedding_profile="p", exclusions=exclusions
+    )
+    assert [p.id for p in graph.passages] == [span.id]  # an unrendered passage keeps its span id
+    assert [citation.id for citation in graph.original_citations] == [span.id]
+    assert not graph.facts
+    assert exclusions == Counter(locator_kinds=1)
 
 
 def test_predicates_view_holds_the_non_identity_predicates_and_follows_extensions():

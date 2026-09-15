@@ -202,9 +202,9 @@ def test_predicates_validate_real_object_endpoints_and_fk_mapping():
     assert assertion.subject_id == symbol.id
     with pytest.raises(ValueError):
         m.checked_assertion(table, "WRITES_TABLE", symbol, scope_key="prod")
-    with pytest.raises(ValidationError):
-        m.Assertion(
-            workspace_id="w", subject_id=symbol.id, predicate="MADE_UP", object_id=table.id, scope_key="prod"
+    with pytest.raises(ValueError, match="Unknown assertion predicate"):
+        importlib.import_module("hippo.knowledge.registry").current_registry().check_record(
+            assertion.replace(predicate="MADE_UP")
         )
     alien = m.KnowledgeObject(workspace_id="other", kind="table", canonical_key='["db","t"]')
     with pytest.raises(ValueError):

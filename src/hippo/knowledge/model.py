@@ -16,7 +16,6 @@ from typing import Annotated, ClassVar, Literal, Self, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
-    AfterValidator,
     BeforeValidator,
     Field,
     TypeAdapter,
@@ -75,7 +74,8 @@ TemporalBasis = Literal[
 TemporalPrecision = Literal["instant", "second", "minute", "day", "month", "year", "unknown"]
 Lifecycle = Literal["active", "draft", "accepted", "rejected", "superseded", "deleted", "unknown"]
 WorkState = Literal["pending", "running", "ready", "failed", "retry", "completed", "cancelled"]
-# Built-in kinds; fields that accept any registered kind use `RegisteredObjectKind`.
+# The built-in kinds. `KnowledgeObject.kind` is a plain code: the registry checks it at bind and at
+# store write (`Registry.check_record`), never on read (ruling R39).
 ObjectKind = Literal[
     "service",
     "api",
@@ -108,24 +108,6 @@ ObjectKind = Literal[
     "document",
     "alias",
 ]
-
-
-def _registered(lookup: str, message: str) -> AfterValidator:
-    def check(value: str) -> str:
-        try:
-            getattr(current_registry(), lookup)(value)
-        except UnregisteredName as error:
-            raise ValueError(message) from error
-        return value
-
-    return AfterValidator(check)
-
-
-RegisteredObjectKind = Annotated[Code, _registered("object_kind", "Unknown object kind")]
-RegisteredArtifactKind = Annotated[Code, _registered("artifact_kind", "Unknown artifact kind")]
-RegisteredConnectorKind = Annotated[Code, _registered("connector_kind", "Unknown connector kind")]
-RegisteredLocatorKind = Annotated[Code, _registered("locator", "Unknown locator kind")]
-RegisteredEvidenceSource = Annotated[Code, _registered("evidence_source", "Unknown evidence source")]
 
 
 def _identity_value(value):
@@ -181,12 +163,17 @@ class Record(Contract):
         return type(self).model_validate(data)
 
 
-def parse_locator_json(value: str) -> LocatorBase:
-    """Validate a locator payload with the model its registered `kind` names."""
+def _locator_payload(value: str) -> tuple[dict, str]:
     payload = json.loads(normalize_json(value))
     kind = payload.get("kind") if isinstance(payload, dict) else None
     if type(kind) is not str:
         raise ValueError("Locator payload requires a kind")
+    return payload, kind
+
+
+def parse_locator_json(value: str) -> LocatorBase:
+    """Validate a locator payload with the model its registered `kind` names."""
+    payload, kind = _locator_payload(value)
     try:
         model = current_registry().locator(kind)
     except UnregisteredName as error:
@@ -225,7 +212,7 @@ class GroupMembership(Record):
 
 class Connector(Record):
     workspace_id: Text
-    kind: RegisteredConnectorKind
+    kind: Code
     instance_url: ProviderURL
     config_json: Json = "{}"
     credential_ref: Text | None = None
@@ -239,7 +226,7 @@ class Artifact(Record):
     source_id: Text
     connector_id: Text | None = None
     provider_instance: ProviderURL | None = None
-    kind: RegisteredArtifactKind
+    kind: Code
     external_id: Text
     canonical_uri: Text
     policy_id: Text
@@ -346,7 +333,7 @@ class GenerationEvidenceMember(Record):
 
 class EvidenceSpan(Record):
     revision_id: Text
-    locator_kind: RegisteredLocatorKind
+    locator_kind: Code
     locator_json: Json
     text_hash: Text = "pending"
     text: str
@@ -357,6 +344,11 @@ class EvidenceSpan(Record):
     @field_validator("locator_json")
     @classmethod
     def canonical_locator(cls, value):
+        # A kind this process has not registered keeps its stored payload, so the row still reads
+        # (ruling R39); `Registry.check_record` validates that payload at bind and write.
+        _, kind = _locator_payload(value)
+        if kind not in current_registry().locator_kinds():
+            return value
         return canonical_locator_json(value)
 
     @model_validator(mode="before")
@@ -374,14 +366,14 @@ class EvidenceSpan(Record):
 
     @model_validator(mode="after")
     def valid_locator(self) -> Self:
-        if parse_locator_json(self.locator_json).kind != self.locator_kind:
+        if json.loads(self.locator_json)["kind"] != self.locator_kind:
             raise ValueError("Locator kind disagrees with its payload")
         return self
 
 
 class KnowledgeObject(Record):
     workspace_id: Text
-    kind: RegisteredObjectKind
+    kind: Code
     canonical_key: Json
     identity_prefix = "object"
     identity_fields = ("workspace_id", "kind", "canonical_key")
@@ -449,13 +441,6 @@ class Assertion(Record):
     object_id: Text
     scope_key: Text
     identity_fields = ("workspace_id", "subject_id", "predicate", "object_id", "scope_key")
-
-    @field_validator("predicate")
-    @classmethod
-    def registered_predicate(cls, value):
-        if value not in current_registry().predicates():
-            raise ValueError("Unknown assertion predicate")
-        return value
 
     def validate_endpoints(self, subject: KnowledgeObject, target: KnowledgeObject) -> None:
         if subject.id != self.subject_id or target.id != self.object_id:
@@ -1266,7 +1251,7 @@ class QueryRequest(Contract):
     question: Text
     mode: Literal["legacy", "hybrid", "schema", "code", "traceability", "overview", "auto"] = "auto"
     source_ids: tuple[Text, ...] = ()
-    kinds: tuple[RegisteredObjectKind, ...] = ()
+    kinds: tuple[Code, ...] = ()
     repository_ids: tuple[Text, ...] = ()
     service_ids: tuple[Text, ...] = ()
     database_ids: tuple[Text, ...] = ()

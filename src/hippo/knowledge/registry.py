@@ -120,6 +120,17 @@ _LABELS = MappingProxyType(
         "predicates": "predicate",
     }
 )
+# Ruling R39: per record class, the field naming vocabulary, the section it names, and the refusal
+# `check_record` raises. Keyed by class name, because this module may not import `model`.
+_RECORD_VOCABULARY = MappingProxyType(
+    {
+        "Connector": ("kind", "connector_kinds", "Unknown connector kind"),
+        "Artifact": ("kind", "artifact_kinds", "Unknown artifact kind"),
+        "EvidenceSpan": ("locator_kind", "locator_kinds", "Unknown locator kind"),
+        "KnowledgeObject": ("kind", "object_kinds", "Unknown object kind"),
+        "Assertion": ("predicate", "predicates", "Unknown assertion predicate"),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -243,6 +254,25 @@ class Registry:
         registry = cls(builtins=_builtin_extension)
         registry._ensure_builtins()
         return registry
+
+    def check_record(self, record: BaseModel) -> None:
+        """Refuse a record that names vocabulary this registry lacks (ruling R39).
+
+        The binder and the store write path call it; reads never do, so a stored row stays readable
+        where its extension is not registered. A span's payload is validated with its registered model.
+        """
+        if not isinstance(record, BaseModel):
+            raise TypeError("Registry.check_record takes a knowledge record")
+        rule = _RECORD_VOCABULARY.get(type(record).__name__)
+        if rule is None:
+            return
+        field, section, message = rule
+        try:
+            definition = self._lookup(section, getattr(record, field))
+        except UnregisteredName as error:
+            raise ValueError(message) from error
+        if section == "locator_kinds":
+            definition.model.model_validate_json(record.locator_json)
 
     def declared_template_versions(self, kinds: Iterable[str]) -> dict[str, str]:
         """`{"<kind>.<template>": version}` over the fact templates of the named kinds (D25)."""
@@ -544,7 +574,7 @@ _CURRENT: ContextVar[Registry] = ContextVar("hippo_registry", default=REGISTRY)
 
 
 def current_registry() -> Registry:
-    """The registry every model validator and `predicates` consults."""
+    """The registry `predicates`, projection and the callers of `check_record` consult."""
     return _CURRENT.get()
 
 
