@@ -59,3 +59,35 @@ the fallback point if used, and open questions.
 
 REPORT: `horch note` after each commit; `horch tell orchestrator "[<role>] BLOCKED: ..."` only for a
 question the plan and the rulings do not answer.
+
+## Review amendments (2026-09-15, `ai_docs/reports/2026-09-15-cdk-plan-review.md`; these override the plan and the rulings above)
+
+- **M1 (design decision, ruling R39).** Vocabulary is validated at registration, at bind (S2b) and at
+  store write (S1b wires it), never on read. Do NOT implement the plan's D8 `Annotated[Code,
+  AfterValidator(...)]` fields: `KnowledgeObject.kind`, `Artifact.kind`, `Connector.kind`,
+  `EvidenceSpan.locator_kind` and `QueryRequest.kinds` stay plain `Code`. Instead expose
+  `Registry.check_record(record) -> None` in `registry.py`, raising the same developer-facing messages
+  the validators would have raised, for the binder and the store write path to call. Projection and
+  citations (`projection.py`, `answer_evidence.py`, both yours) exclude rows whose kind, locator kind
+  or predicate is not registered in the current registry and count them, instead of raising. Add
+  `test_a_row_of_an_unregistered_kind_reads_back_outside_its_registry` (a row written under an
+  extension is read back, without error, in a registry that lacks it) and a test that
+  `check_record` refuses that row. Commit 4's title becomes "Check kinds, locators and predicates
+  through the registry at bind and write".
+- **M8 (R29 amended by R40).** An extension evidence source registers with its class:
+  `EvidenceSourceDefinition(name, family, evidence_class)`, `evidence_class` never `model_inferred` or
+  `human_verified`. Registration refuses a source whose definition lacks a class or names an excluded
+  one, not a source absent from the built-in table. Built-in sources keep their rows in
+  `builtin_types.py`'s table. The plan's shared fixture `incident_extension()` keeps `pager_feed`,
+  registered with its class. If your commit 2 already refuses sources absent from the table, fix it
+  before commit 3.
+- **m14.** Add `custom` to `ALIAS_OF`'s owner families. Record in the evidence that spec §6's
+  `OWNED_BY → Team (work)` needs `ticket` subjects, which is Task 11's work.
+- **m5.** `test_builtin_key_templates_match_the_identity_helpers` compares part names and order with
+  the helper's parameters through `inspect.signature`, not only lengths.
+- **m22.** Add a test that a stored `SAME_OBJECT_AS` assertion is absent from projection and from
+  structural relations and that loading them raises nothing; `knowledge/dense.py:182-198` raises for a
+  predicate outside `PREDICATES`, so make the structural loader skip identity predicates rather than
+  raise (that edit to `dense.py` is granted to you for those lines only).
+- **m1.** Ignore the plan's second description of `extension_scope()`; R16 stands as written.
+- The fallback split after commit 3 still exists; use it if the added scope needs it, and say so.
