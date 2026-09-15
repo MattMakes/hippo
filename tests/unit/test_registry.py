@@ -260,6 +260,18 @@ REFUSALS = [
         id="repeated_template_attribute",
     ),
     pytest.param(
+        "duplicate_template",
+        f"fact template 'severity' of {FIXTURE} repeats the template name 'severity'",
+        _kind(fact_templates=(SEVERITY, SEVERITY.replace(version="2"))),
+        id="duplicate_template",
+    ),
+    pytest.param(
+        "duplicate_template",
+        f"fact template 'Severity' of {FIXTURE} repeats the template name 'severity'",
+        _kind(fact_templates=(SEVERITY, SEVERITY.replace(name="Severity"))),
+        id="duplicate_template-case",
+    ),
+    pytest.param(
         "identity_predicate",
         f"{AFFECTS} is an identity predicate; identity predicates are built-in",
         _predicate(identity=True),
@@ -639,6 +651,7 @@ def test_extension_scope_restores_the_registry_byte_for_byte():
         (lambda registry: registry.object_kind("pager"), "object kind"),
         (lambda registry: registry.predicate("pager"), "predicate"),
         (lambda registry: registry.locator("pager"), "locator kind"),
+        (lambda registry: registry.locator_kind("pager"), "locator kind"),
         (lambda registry: registry.artifact_kind("pager"), "artifact kind"),
         (lambda registry: registry.connector_kind("pager"), "connector kind"),
         (lambda registry: registry.evidence_source("pager"), "evidence source"),
@@ -648,6 +661,7 @@ def test_extension_scope_restores_the_registry_byte_for_byte():
         "object_kind",
         "predicate",
         "locator",
+        "locator_kind",
         "artifact_kind",
         "connector_kind",
         "evidence_source",
@@ -931,6 +945,11 @@ def test_a_locator_kind_may_carry_a_verifier_and_builtins_register_none(scoped):
     definition = LocatorKindDefinition(name="incident_event", model=IncidentEventLocator, verifier=verify)
     scoped.register(incident_extension(locator_kinds=(definition,)))
     assert scoped.locator("incident_event") is IncidentEventLocator
-    assert definition.verifier is verify
+    registered = scoped.locator_kind("incident_event")
+    assert registered == definition
+    assert registered.model is IncidentEventLocator and registered.verifier is verify
     assert BUILTIN_EXTENSION.locator_kinds
     assert all(builtin.verifier is None for builtin in BUILTIN_EXTENSION.locator_kinds)
+    assert scoped.locator_kind("file_lines") == LocatorKindDefinition(
+        name="file_lines", model=k.FileLinesLocator
+    )

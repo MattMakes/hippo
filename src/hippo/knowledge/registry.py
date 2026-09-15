@@ -228,6 +228,10 @@ class Registry:
     def locator(self, kind: str) -> type[LocatorBase]:
         return self._lookup("locator_kinds", kind).model
 
+    def locator_kind(self, name: str) -> LocatorKindDefinition:
+        """The registered definition, `verifier` included; `locator` returns only its model."""
+        return self._lookup("locator_kinds", name)
+
     def artifact_kind(self, name: str) -> str:
         return self._lookup("artifact_kinds", name)
 
@@ -460,6 +464,15 @@ def _check_object_kind(definition: ObjectKindDefinition, *, entries, builtin: bo
     for field in _template_fields(definition.label_template, "label template", name):
         if field not in attributes:
             raise undeclared("label template", field)
+    template_names = {}
+    for template in definition.fact_templates:
+        folded = template.name.casefold()
+        if folded in template_names:
+            raise RegistrationError(
+                "duplicate_template",
+                f"fact template '{template.name}' of {subject} repeats the template name '{template_names[folded]}'",
+            )
+        template_names[folded] = template.name
     for template in definition.fact_templates:
         where = f"fact template '{template.name}'"
         for attribute in template.consumes:
