@@ -335,6 +335,20 @@ def test_projection_keeps_those_rows_where_their_extension_is_registered():
     assert _project(w, None).idx_of.keys() <= graph.idx_of.keys()
 
 
+def test_a_projection_that_excludes_nothing_counts_no_section():
+    """`Counter` equality reads a missing key as zero, so emptiness is asserted on the keys.
+
+    A caller reading `.items()` or `.most_common()` would otherwise report `locator_kinds: 0` for
+    a projection that left nothing out.
+    """
+    w = _extension_projection()
+    exclusions = Counter()
+    with extension_scope() as registry:
+        _register_extensions(registry)
+        _project(w, exclusions)
+    assert list(exclusions.items()) == []
+
+
 def test_projection_leaves_out_views_and_prose_anchored_on_an_unregistered_locator(store):
     gen = generation(store, "incidents")
     job = claim(store, gen, key="incidents")
