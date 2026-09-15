@@ -93,3 +93,57 @@ R1 onward; later rulings are appended, never renumbered.
   extras; the schema-version pins move to 8 (CK1 CRITERIA amended). CK1's CHECK lines and the
   Neo4j parity file are applied as S1 §8 proposes.
 
+## S2 and S3 (plans committed at `e2be4ab`)
+
+- **R24 — The passage bound (S2 DV6, Q7): 6,000 characters.** `PASSAGE_CHAR_BOUND = 6000`, the
+  specification's 1,500 tokens at four characters per token, measured by the one counter of R11/R26.
+  The chunker's own default size is untouched; the bound is a maximum, not a target. Sibling plans
+  read "token bound" as this constant.
+- **R25 — `kind="connector"` sources (S3 Q7).** S5a's switch in `run_managed_build` routes
+  `kind="connector"` to `sync_connector` (a reindex is a sync of every partition). Until S5a merges,
+  `build_plain_source`'s refusal is the guard and S3c pins it with a test.
+- **R26 — R11 amended on the module.** The counter is `connectors/base.py:token_count`, the design's
+  contract module, reusing the chunker's character measure. Substance of R11 unchanged.
+- **R27 — One clock (S4 R-S3-1 refuted by S3): the store clock.** The kit's purity guard and the
+  `no_ingestion_time` rule intercept and read the store clock; no separate clock argument exists. S4's
+  implementer brief carries this.
+- **R28 — Public key helpers (S2 Q1).** S2a adds public `file_key`, `commit_key` and `resource_key` to
+  `knowledge/identity.py`, wrapping the spellings at the anchors S2 §6 names; that is S2a's only edit
+  to the file, parity tests pin them, and the code lane's private spellings are not touched (CK5).
+- **R29 — Evidence class derivation is registry data (S2 Q4).** The derivation table of design §4
+  lives in `knowledge/builtin_types.py` (S1a); registering an evidence source with no row in it is
+  refused, and S2's binder imports the table from there, so bind has no evidence-class refusal path.
+  Both the S1a and S2a briefs carry this.
+- **R30 — Provider principals (S2 Q5, S3 Q2).** The connector instance configuration carries a
+  `principal_map` from provider principals to local principal or group ids; unmapped principals are
+  dropped from allow lists (deny by omission) and counted in coverage; reviewed mapping authorities
+  are later work. The fixture and the exemplar configure identity maps.
+- **R31 — Locator byte verifier (S2 DV2, Q6).** `LocatorKindDefinition` gains an optional `verifier`
+  (S1a, one attribute); S2a supplies verifiers for the built-in line and byte-range kinds; a span
+  whose locator kind has no verifier is refused at bind and `hippo connector validate` surfaces it
+  before any sync; `section`, `page`, `comment` and `diff_hunk` are admitted when their registering
+  connector supplies a verifier.
+- **R32 — Extension registered (S3 Q1): yes.** `sync_connector` refuses a connector whose
+  `TypeExtension` is not registered in the current registry, beyond `validate_against`.
+- **R33 — Reconcile interval (S3 Q3): an option with the daily default; the scheduler is Task 9A.**
+- **R34 — Policy changes (S3 Q4): accepted with one condition.** Widening waits for the next content
+  revision, since spans keep their creation policy. Narrowing takes effect in the run that observes it
+  through the policy epoch and suppression, never by re-minting spans; S3 §6 must say so and the
+  reviewer verifies it. Unknown stays deny.
+- **R35 — `ensure_connector` and the epoch (S3 Q5): accepted;** connectors are created once, outside
+  build windows (R5), and written only on change (R21).
+- **R36 — In-process emit (S3 Q6): v1 is in-process with the guard;** a timeout fails the sync while
+  the worker thread finishes. Out-of-process isolation is the user's open decision (design §14.2).
+- **R37 — Deviations ratified.** S2 DV1 (`Passage.ts` has no column; the binder requires it to equal
+  the observation's `valid_from` or the revision's `source_updated_at`), DV2 (with R31), DV3 (alias
+  rules 3–5 are Task 12's), DV4 (the kit renders), DV5 (`EmissionBatch.hints`). S3 DV1 (every member
+  revision is emitted; carrying records forward is a later optimisation), DV2 (no new `IndexEvent`
+  kinds), DV3 (the change log is `SyncState`), DV4 (the runtime embeds passages, units stay
+  unembedded), DV5 (a failed page builds nothing in that run).
+- **R38 — Splits and merge order.** Worktrees `s2a`, `s2b`, `s3a`, `s3b`, `s3c` as the plans propose;
+  `ingest/code_generation.py` belongs to S3b for the §8 re-bindings, then to S5b (R2). Order: S1a;
+  S1b; S2a after S1a; S2b after S2a and S1b; S3a after S2a; S3b after S1b; S3c after S2b, S3a and
+  S3b; then S4a, S4b; S5a, S5b (S5b after S4a, R1); S6 after S4b and S5b. CK2's CHECK line stands;
+  CK3's Fake line is replaced and a LadybugDB line added as S3 §14 proposes; the Neo4j line is in
+  `neo4j-parity.md`.
+

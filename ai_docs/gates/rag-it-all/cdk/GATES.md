@@ -32,7 +32,8 @@ orchestrator's gate checker, never by an implementer.
   EXPECT: passed
 
 - [ ] CK3: The runtime syncs any connector durably, publishes through the build authority, keeps the last generation queryable on every failure, and is idempotent under replay.
-  CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_connector_sync.py tests/unit/test_connector_http.py tests/unit/test_staged_records.py tests/unit/test_connector_credentials.py -q -o addopts='' -W error
+  CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_connector_sync.py tests/unit/test_connector_http.py tests/unit/test_staged_records.py tests/unit/test_connector_credentials.py tests/unit/test_connector_guard.py tests/unit/test_generation_profiles.py tests/unit/test_build_authority.py tests/unit/test_build_run.py -q -o addopts='' -W error
+  CHECK: HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_connector_sync.py tests/unit/test_staged_records.py tests/unit/test_generation_profiles.py -q -o addopts='' -W error
   CRITERIA: a fixture connector runs every step of the design's section 7 with failure injection at each durable boundary (crash after fetch before checkpoint, replayed page, failed inventory, policy change mid-page, delete of an artifact with a live query session); no deletion follows a failed inventory; a replayed page changes nothing; publication uses the existing `BuildAuthority` compare; the active generation is never deleted; `IndexEvent` rows are written for the append lane; the runtime forbids network, model and clock use inside `emit`; the same suite passes on LadybugDB with reopen proven, and Neo4j parity is recorded.
   EXPECT: passed
 
