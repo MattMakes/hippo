@@ -193,7 +193,11 @@ class PredicateDefinition(Contract):
     name: Code
     subject_kinds: frozenset[Code]
     object_kinds: frozenset[Code]
-    owner_family: Family  # the connector family that stores the fact (spec §4.4)
+    # the connector families that may store the fact (spec §6 table, "across (owner)"); non-empty
+    owner_families: frozenset[Family]
+    # SAME_OBJECT_AS only: undirected in meaning, any family may emit, exempt from ownership,
+    # stored once with the lexically smaller canonical_key as subject, never traversed
+    identity: bool = False
     canonical_direction: Literal["subject_to_object"]  # the reverse is a view, never a second edge
     inverse_lookup: bool = True  # the earlier registry's "both"
     family_default: Literal["deterministic", "probabilistic"]
@@ -237,16 +241,21 @@ class Registry:
 Registration is refused, with the reason named, when: a name repeats or shadows a built-in; a family
 is unknown; a key template is empty or repeats a part; an attribute model allows extra fields; a fact
 or label template references an attribute the model does not declare; a predicate names an endpoint
-kind that is not registered by the same or an earlier extension; a predicate's owner family is not one
+kind that is not registered by the same or an earlier extension; none of a predicate's owner families is one
 the registering connector declares; a locator kind has no model or its model is not a `SourceLocator`.
 Refusal happens when the registry loads, at process start or in `hippo connector validate`, never when
 a connector emits.
 
 The registry is loaded from three places in order: the built-ins, the in-repo connector packages, and
-the entry points of installed packages (§9). Its fingerprint goes into every managed generation's
-configuration beside the parser and template versions, so a generation records the vocabulary it was
-built with, and a changed template or kind is a new derivation rule version rather than a silent
-re-reading of old evidence.
+the entry points of installed packages (§9). Its fingerprint is recorded on every managed generation
+(`Generation.registry_fingerprint`, schema v8, outside `identity_fields`), so a generation records the
+vocabulary it was built with. What a connector depends on goes into the generation's
+`configuration_json` instead: its name and version and the versions of the templates and parsers its
+descriptor declares, so a changed template is a new manifest and a rebuild rather than a silent
+re-reading of old evidence. The two ported connectors (§13 S5) declare no templates, and their
+configuration stays byte for byte what the prose and code paths write today. The fingerprint itself
+must never enter `configuration_json`: `inputs._manifest_bytes` hashes the configuration and
+`Generation.identity_fields` includes the manifest hash, so it would change every generation-scoped id.
 
 Store impact: kinds and predicates are stored as strings on every backend today, so opening the
 vocabularies needs no DDL; the new columns and the new record of §4 need one journaled schema step
@@ -256,7 +265,7 @@ preserved.
 Naming: the existing built-in predicates keep their names (`READS_TABLE`, `OWNED_BY`, `ALIAS_OF`, and
 the rest of `predicates.py`). The specification's wider vocabulary (`CALLS_PROC`, `LOCKS`,
 `SUSPECT_CHANGE`, `SAME_OBJECT_AS`, `HOSTED_IN`, and the tables of its §5 and §6) is registered by the
-connectors that own each predicate as they are written with the kit, each with its owner family and
+connectors that own each predicate as they are written with the kit, each with its owner families and
 verb phrase. Nothing is renamed.
 
 Two evidence classes are added to `EvidenceClass` so that rule-derived and similarity-derived edges are
@@ -272,13 +281,13 @@ fixed derivation from the specification's `family` and `source` to an evidence c
 | `Node.label`, `Node.attrs`, `Node.ts` | `ObjectObservation.attributes_json` (label rendered by `label_template`), `valid_from`/`temporal_basis`/`temporal_precision` for `ts`, `evidence_class` | One observation per (object, revision, span); conflicting descriptions from two sources are two observations, as the earlier plan requires |
 | `Node.provenance` | `Artifact.canonical_uri`, `Artifact.external_id`, `ArtifactRevision` (`provider_revision`, `observed_at`, `metadata_json.parser`), `EvidenceSpan` with a registered locator | `parser` per revision; the descriptor's parser versions and the registry fingerprint per generation |
 | `Node.acl` | `AccessPolicy` referenced by `Artifact.policy_id` and `EvidenceSpan.policy_id` | Unknown policy is deny (`mode`), never an empty allow list |
-| `Edge.src`, `Edge.dst`, `Edge.type` | `Assertion(subject_id, predicate, object_id, scope_key)` | `scope_key` = connector instance plus partition; the registry checks endpoint kinds and the owner family |
+| `Edge.src`, `Edge.dst`, `Edge.type` | `Assertion(subject_id, predicate, object_id, scope_key)` | `scope_key` = `source:{source_id}:{partition}`, the form the prose and code paths write today (`prose_generation.py`, `code_generation.py`), because `BuildAuthority` supersedes by scope on publication; two derivations of one fact inside a source are two support groups on one assertion; the same fact stored by two sources is two assertions with shared endpoints, which the specification's ownership rule (§6: stored once, by the owner) prevents for cross-domain edges and the linker consolidates otherwise (Task 12); the registry checks endpoint kinds and the owner families |
 | `Edge.family`, `Edge.source`, `Edge.rule`, `Edge.weight`, `Edge.statement`, `Edge.unit_ref` | `AssertionVersion` gains `family`, `source`, `rule`, `weight`, `statement`, `unit_id` (schema v8); `confidence` = `weight`; `rule_version` = the connector or template version | `evidence_class` derived by the table below |
 | `Edge.valid_from`, `Edge.valid_to` | `AssertionVersion.valid_from`, `valid_to`, `validity_kind` | Already on `TemporalRecord`; `windowed` predicates require them or `unknown` |
 | `Edge.provenance` | `AssertionSupport(span_id, derivation_group)` | One group per independently sufficient derivation; a rule that needs two spans puts both in one group |
 | `Passage` | managed `Passage` row bound to its `EvidenceSpan` through the existing `BoundPassage` / `PreparedEvidence` path; `title`, `ts` on the row | ≤ 1,500 tokens is a connector-side split the kit asserts |
 | `Unit` | **new record** `Unit` (below) | The retrieval representation of a span; several per passage |
-| `AliasCandidate` | `Assertion(ALIAS_OF)` + `AssertionVersion(source="rule", rule=<name>, weight=1.0, status="candidate" or "active")` | Guarded kind pairs (service–service, service–repository, database object–resource) stay `candidate` until reviewed; acceptance is `status="active"` with `source="reviewed"` and the reviewer in the support span's attributes (spec §4.3) |
+| `AliasCandidate` | `Assertion(SAME_OBJECT_AS)`, a built-in identity predicate (`identity=True`) over any two registered kinds, subject = the endpoint with the lexically smaller `canonical_key`, `scope_key` as for edges; `AssertionVersion(evidence_class=rule_derived, rule_version=<rule name and version>, source="rule", rule=<name>, weight=1.0, status="candidate" or "active")` | `ALIAS_OF` is untouched: its subject must be an `alias` object (`predicates.py`), so it cannot carry node-to-node identity. `SAME_OBJECT_AS` has no same-kind rule (`RENAMED_TO` keeps its own). Guarded kind pairs (service–service, service–repository, database object–resource) stay `candidate` until reviewed; acceptance is `status="active"`, `source="reviewed"`, `evidence_class=human_verified`, with the reviewer in the support span's attributes (spec §4.3) |
 
 The `Unit` record:
 
@@ -289,21 +298,22 @@ class Unit(Record):
     span_id: Text  # the original evidence; rendered kinds name the span(s) their attributes came from
     ordinal: Nonnegative
     kind: Literal["sentence", "statement", "row", "diff_line", "rendered_fact", "rendered_edge"]
-    text: str  # for sentence/statement/row/diff_line: a verified slice of the span; for rendered kinds: the template output
-    text_hash: Text
-    embed_text: (
-        str  # prefix (heading ≤ 12 tokens, or enclosing symbol) + text; the prefix is recorded separately
-    )
-    content_hash: Text  # sha256 of text with the prefix removed; the boilerplate weight key (spec §7.2)
+    # sentence/statement/row/diff_line: a verified slice of the span; rendered kinds: the template output
+    text: str
+    # sha256 of `text`; identical text anywhere shares it: the boilerplate weight key (spec §7.2)
+    content_hash: Text
+    prefix: str = ""  # heading of at most twelve tokens, or the enclosing symbol; empty for rendered kinds
+    embed_text: str  # prefix + text; what is embedded
+    embed_hash: Text  # sha256 of `embed_text`; the vector cache key
     mentions_json: Json  # object ids; the rows of M
     template: Text | None = None  # fact template name and version for rendered kinds
     identity_prefix = "unit"
-    identity_fields = ("generation_id", "passage_id", "ordinal", "text_hash")
+    identity_fields = ("generation_id", "passage_id", "ordinal", "content_hash")
 ```
 
 `Unit` joins `GenerationEvidenceMember.record_kind`, is written by the staged writer with the passage
 it belongs to, and is collected with its generation. Vectors are keyed by (embedding profile,
-`content_hash` of `embed_text`) through the existing embedding cache, so an unchanged unit is never
+`embed_hash`) through the existing embedding cache, so an unchanged unit is never
 re-embedded. `mentions_json` is what the linker turns into the mention matrix; the containment matrix
 follows from `passage_id`.
 
@@ -345,7 +355,7 @@ environments) are kit services computed from registered key templates, so no con
 them. Synonym proposals and the reconciliation queue are the linker's (`knowledge/linking.py`, Task
 12); the kit only guarantees every alias it stores names its rule.
 
-Direction is enforced. The registry records each predicate's owner family and canonical direction; the
+Direction is enforced. The registry records each predicate's owner families and canonical direction; the
 kit refuses an edge that a connector of another family emits, or that points the wrong way, and tells
 the developer to emit an alias candidate or a reverse-view hint instead. This is what keeps "the work
 connector's fixed-by is the reverse view of `RESOLVES`" (spec §4.4) true by construction.
@@ -363,7 +373,8 @@ that unit's vector (`unit_id` on the version); a rendered edge is a `rendered_ed
 
 `embed_text` is the prefix plus the text: the innermost heading of at most twelve tokens for prose,
 the enclosing symbol for code, nothing for rendered facts. The stored `text` is unchanged, so a
-citation quotes the source exactly. `content_hash` is the hash of the text without the prefix. Template
+citation quotes the source exactly. `content_hash` is the hash of the stored text, so identical text anywhere shares it (the boilerplate key);
+`embed_hash` is the hash of `embed_text`, the vector cache key. Template
 names and versions are part of the registry fingerprint; a changed template is a new rule version and
 a rebuild, never a silent change under an existing generation.
 
@@ -389,8 +400,8 @@ and `ingest/code_generation.build_code_source` do today for their two fixed inpu
    parser; the previous revision's records stay.
 6. **Bind.** Convert the batch to knowledge records (§4): compute identities, verify every span
    against the revision bytes, derive evidence classes, check predicates against the registry, reject
-   reverse-direction edges, attach the connector version and registry fingerprint to the generation
-   configuration.
+   reverse-direction edges, record the registry fingerprint on the generation and the connector's
+   declared versions in its configuration (§3).
 7. **Stage.** A generic staged writer, `knowledge/staged_records.py`, writes spans, passages, units,
    observations, assertions, versions, support, alias candidates and, for code, native bindings, under
    the same fencing the prose and code writers use today (`staged_prose.py`, `staged_code.py`), and
