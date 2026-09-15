@@ -65,3 +65,15 @@ open questions.
 
 REPORT: `horch note` after each step; `horch tell orchestrator "[<role>] BLOCKED: ..."` only for a
 question the plan, the rulings and the reviews do not answer.
+
+## Amendments from S3a and S3b (rulings R65 and later; read `evidence-s3a.md` and `evidence-s3b.md` first)
+
+- Widen `guard.FORBIDDEN_CALLS` by `time.process_time_ns`, `time.thread_time` and
+  `time.thread_time_ns` and update its pin test (R65; the one S3a file you may edit).
+- The guard is thread-local: each emit worker enters `forbid_effects()` inside its own thread, under
+  `contextvars.copy_context().run(...)` for the context, and the runtime expects at most one reported
+  violation per `emit` call.
+- Add `guard`, `http`, `credentials`, `sync` and the S2b modules to `connectors/__init__.py`'s
+  module list if S2b has not.
+- Base your worktree on the HEAD named in the spawn message, which includes S1b-fix, S2b, S3a and S3b.
+

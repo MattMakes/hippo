@@ -278,4 +278,15 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   `Registry.evidence_source_definition` is S4a's, once S1b-fix lands. Tests that seed `Connector`
   rows of extension kinds register those kinds in an `extension_scope()` first, because the write
   path checks vocabulary (S4c-fix).
+- **R65 — S3a's findings (guard, HTTP, credentials merged at `94761f2`).** The guard's forbidden set
+  also names `time.process_time_ns`, `time.thread_time` and `time.thread_time_ns` (m20 read as the
+  process and thread clocks); S3c makes that widening in `connectors/guard.py` with its pin test,
+  the one edit to S3a's files it is granted. The guard is thread-local: emit workers enter
+  `forbid_effects()` inside the worker thread, never around the pool, and after a violation the
+  profiler is unset for that thread, so a second violation in the same call is not reported (the
+  sync fails on the first). `record_transport` numbers recordings from `0000.json` and overwrites,
+  so S4a clears `http/` before re-recording. `refuse_inline_secrets` refuses any config field whose
+  name contains `credential`, so S5 and S6 config models use `credentials` references by the kit's
+  names, never a field called `credential_ref`. `connectors/__init__.py`'s module list gains
+  `guard`, `http`, `credentials` in S3c.
 
