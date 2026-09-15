@@ -160,7 +160,8 @@ BUILTIN_PREDICATES = (
         DISCUSSED,
         "was decided in",
     ),
-    _rule("ALIAS_OF", "alias", ALL, " ".join(SPEC_FAMILIES), DECLARED, "is an alias of"),
+    # Review m14: `custom` owns ALIAS_OF too, as it owns SAME_OBJECT_AS.
+    _rule("ALIAS_OF", "alias", ALL, EVERY_FAMILY, DECLARED, "is an alias of"),
     _rule(
         "BOUND_TO",
         "symbol resource service endpoint " + SCHEMA,

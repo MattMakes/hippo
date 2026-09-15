@@ -19,9 +19,10 @@ from hippo.knowledge import model as k
 from hippo.knowledge.access import EvidenceAccess, EvidenceSelection
 from hippo.knowledge.builtin_types import EVIDENCE_CLASS_DERIVATION
 from hippo.knowledge.graph_loader import load_generation_graph
-from hippo.knowledge.identity import canonical_json, normalize_json
+from hippo.knowledge.identity import canonical_json, normalize_json, text_hash
 from hippo.knowledge.lifecycle import generation_passage_id
 from hippo.knowledge.predicates import OBJECT_KINDS, PREDICATES, predicate_definition
+from hippo.knowledge.query_access import query_session
 from hippo.knowledge.registry import (
     RegistrationError,
     Registry,
@@ -43,6 +44,7 @@ from tests.unit.test_registry import (  # noqa: F401
     incident_extension,
     scoped,
 )
+from tests.unit.test_structural_loading import Offline, published, shared_pair
 
 NOW = datetime(2026, 9, 15, 12, tzinfo=UTC)
 INCIDENT = {"workspace_id": "w", "kind": "incident_fixture", "canonical_key": '["pagerduty","P1"]'}
@@ -375,6 +377,56 @@ def test_projection_leaves_out_views_and_prose_anchored_on_an_unregistered_locat
     assert [citation.id for citation in graph.original_citations] == [span.id]
     assert not graph.facts
     assert exclusions == Counter(locator_kinds=1)
+
+
+def _identity_pair(store, gen, revision, span, now):
+    """The structural lane's two shared symbols, joined by BOUND_TO and by a stored SAME_OBJECT_AS."""
+    shared_pair(store, gen, revision, span, now, relationship=True)
+    first, second = sorted(
+        (row for row in store._knowledge_rows("KnowledgeObject") if row.kind == "symbol"),
+        key=lambda row: (row.canonical_key, row.kind),
+    )
+    support = span.replace(
+        text="f is the same object as g",
+        text_hash=text_hash("f is the same object as g"),
+        locator_json='{"kind":"file_lines","path":"a.txt","start":4,"end":4}',
+    )
+    member(store, gen, support)
+    same = k.checked_assertion(first, "SAME_OBJECT_AS", second, scope_key=gen.source_id)
+    store.put_knowledge(same)
+    version = k.AssertionVersion(
+        assertion_id=same.id,
+        evidence_class="rule_derived",
+        rule_version="r",
+        confidence=1.0,
+        status="active",
+        recorded_from=now,
+    )
+    member(store, gen, version)
+    member(
+        store,
+        gen,
+        k.AssertionSupport(assertion_version_id=version.id, span_id=support.id, derivation_group="rule"),
+    )
+
+
+def test_a_stored_same_object_as_is_absent_from_projection_and_structural_relations(ctx):
+    published(ctx.store, "identity source", enrich=_identity_pair)
+    assert {row.predicate for row in ctx.store._knowledge_rows("Assertion")} == {"BOUND_TO", "SAME_OBJECT_AS"}
+    ctx.ollama.embed_model = "p"
+    baseline = ctx.graph_for(EVERYTHING)
+    try:
+        assert len(baseline.code_nodes) == 2
+        assert "SAME_OBJECT_AS" not in {arrow.kind for rows in baseline.code_out.values() for arrow in rows}
+    finally:
+        baseline.close_snapshot()
+    ctx.ollama = Offline()
+    with query_session(ctx, EVERYTHING, structural=True) as session:
+        graph = session.graph
+        assert [row.predicate for row in graph.structural_relations] == ["BOUND_TO"]
+        arrows = {arrow.kind for rows in graph.code_out.values() for arrow in rows}
+        assert "BOUND_TO" in arrows and "SAME_OBJECT_AS" not in arrows
+        assert not any("same_object_as" in edge.code_kinds for edge in graph.edges.values())
 
 
 def test_predicates_view_holds_the_non_identity_predicates_and_follows_extensions():

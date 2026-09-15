@@ -1,6 +1,7 @@
 """The ontology registry: built-in registrations, refusals at `register`, scopes and the fingerprint."""
 
 import ast
+import inspect
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -453,21 +454,54 @@ def test_builtin_predicates_carry_owner_families_sources_and_verb_phrases():
     assert same.sources_allowed == {"rule", "reviewed"}
 
 
+def test_alias_of_is_owned_by_every_family_including_custom():
+    registry = Registry.with_builtins()
+    assert registry.predicate("ALIAS_OF").owner_families == FAMILIES
+    assert registry.predicate("ALIAS_OF").subject_kinds == {"alias"}
+
+
+def _key_positions(helper, *args, **kwargs) -> tuple[str | None, ...]:
+    """The parameter of `helper` whose argument each position of the key it builds carries."""
+    arguments = inspect.signature(helper).bind(*args, **kwargs).arguments
+
+    def spelled(value):  # the text a normalized key part keeps of its argument
+        if isinstance(value, list | tuple):
+            value = value[0]
+        return getattr(value, "lookup", value)
+
+    return tuple(
+        next((name for name, value in arguments.items() if spelled(value) in canonical_json(part)), None)
+        for part in helper(*args, **kwargs)
+    )
+
+
 def test_builtin_key_templates_match_the_identity_helpers():
     registry = Registry.with_builtins()
-    instance = "https://git.example"
-    helpers = {
-        "repository": repository_key(instance, "42"),
-        "review": review_key(instance, "42", "7"),
-        "service": service_key(instance, "component:default/billing"),
-        "endpoint": endpoint_key("service-billing", "http", "v1", "get", "/invoices"),
-        "symbol": symbol_key("repo", "python", "src/a.py", "pkg.charge"),
-        "table": database_object_key(
-            "pg-main", "prod", "app", "public", [sql_identifier("orders", dialect="postgres")]
+    # Two parts are named for the kit rather than for the helper parameter they carry (plan D13).
+    parameter = {("repository", "repository_id"): "provider_repository_id", ("symbol", "symbol_kind"): "kind"}
+    instance = "https://instance.example"
+    positions = {
+        "repository": _key_positions(repository_key, instance, "repository-id"),
+        "review": _key_positions(review_key, instance, "repository-id", "review-id"),
+        "service": _key_positions(service_key, instance, "component:default/billing"),
+        "endpoint": _key_positions(
+            endpoint_key, "service-x", "protocol-x", "version-x", "GET", "/path-x", api_identity="identity-x"
+        ),
+        "symbol": _key_positions(
+            symbol_key, "repository-x", "language-x", "path-x.py", "qualified-x", "signature-x", kind="kind-x"
+        ),
+        "table": _key_positions(
+            database_object_key,
+            "instance-x",
+            "environment-x",
+            "catalog-x",
+            "schema-x",
+            [sql_identifier("parts-x", dialect="postgres")],
         ),
     }
-    for kind, key in helpers.items():
-        assert len(registry.object_kind(kind).key_template) == len(key), kind
+    for kind, carried in positions.items():
+        template = registry.object_kind(kind).key_template
+        assert tuple(parameter.get((kind, part), part) for part in template) == carried, kind
 
 
 BUILTIN_KINDS = {
