@@ -214,3 +214,24 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   the commands and the guide stand, with M16's template fix. The re-plan is reviewed on §3.1 and S4c
   only.
 
+## After the S4 re-plan (`ai_docs/plans/cdk-s4-kit.md` re-planned, committed at `dffe1a3`)
+
+- **R57 — The S4 re-plan is ratified with its stated deviations,** pending the narrow re-review of
+  §3.1 and §3.5 (S4c): `validate_package` scopes `capture`, `contract` and `full`; `registry_diff`
+  against `Registry.with_builtins()`; `prepare_instance` runs `connector_source` after
+  `store_classification`; `tests/fakes/fake_ollama.py`'s `embed_text` body is S4a's (m17); the
+  allowlist is read in `loader.py` from `HIPPO_CONNECTOR_ALLOWLIST` for v1 (a Config or store
+  setting is Task 15's).
+- **R58 — amends R50 (S4 open question 1).** The `cli.cmd_connector` call of `load_registry` is
+  S4b's, because the command does not exist until S4b; the `web/app.py` lifespan call is S4c's.
+- **R59 — Enabling an instance in v1 (S4 open question 3).** S4b adds `hippo connector enable <kind>
+  <instance_url> [--config <file>]`: `manage_sources`, `BuildActor.trusted_local()`, outside any
+  build window, `ensure_connector(..., enabled=True)` then the probe and `store_classification`,
+  with one test. Task 15's route creates the same row over HTTP later. Local and git rows stay
+  R5's.
+- **R60 — Re-exports and allowlists (S4 open questions 4 and 6).** `connectors/base.py` re-exports
+  `current_registry`, `extension_scope` and `use_registry` (S2a, R-S2-10); S6's import allowlist
+  admits `hippo.connectors.classify`; R-S3-7 (a no-argument `FixtureConnector`, `fixtures/basic`
+  with two or more upserts, `inventory=True`, probe sampling through its own `list_changes` and
+  `fetch`) binds the S3c brief.
+
