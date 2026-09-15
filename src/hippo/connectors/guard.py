@@ -148,8 +148,10 @@ def _qualified(call: object) -> str:
 
 def _refused_c_call(call: object) -> str | None:
     owner = getattr(call, "__self__", None)
-    if owner is None or isinstance(owner, ModuleType):
-        # Only module-level callables are hashable for sure: `[].append.__hash__` raises.
+    if isinstance(owner, ModuleType):
+        # Every identity-matched entry is bound to its module (`os.fork.__self__` is `posix`), and
+        # only those are hashable for sure: `[].append.__hash__` raises, and this runs on every C
+        # call the guarded thread makes.
         return _FORBIDDEN_FUNCTIONS.get(call)
     if getattr(call, "__name__", "") not in _WATCHED_METHODS:
         return None

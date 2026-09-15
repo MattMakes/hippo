@@ -13,11 +13,15 @@ re-export list is `ai_docs/plans/cdk-s4-kit.md` section 3.1 and its R-S3-4 to R-
 | # | Hash | Subject | Files |
 | --- | --- | --- | --- |
 | 1 | `00cd6f4` | Add the connector emit guard, bounded HTTP client and credential references (CDK S3a) | `connectors/guard.py`, `connectors/http.py`, `connectors/credentials.py`, `tests/unit/test_connector_guard.py`, `test_connector_http.py`, `test_connector_credentials.py` (all new, 1705 lines) |
-| 2 | (this commit) | Record the S3a evidence | this file (new) |
+| 2 | `f6bf264` | Record the S3a evidence | this file (new) |
+| 3 | (this commit) | Harden the module check and fix the connectors module-list assertion | `connectors/guard.py` (one branch), `tests/unit/test_connector_keys.py` (one line, granted by the orchestrator for F1), this file |
 
-No file outside the brief's "own" list was modified: `git show --stat 00cd6f4` is exactly the six
-new files. `connectors/__init__.py` is untouched, so its module list does not yet name the three new
-modules; whoever owns that file may want to add them.
+The six files of commit 1 are exactly the brief's "own" list. The one line of
+`tests/unit/test_connector_keys.py` in commit 3 is S2a's file, edited only after the orchestrator
+granted it by name in answer to finding F1 below.
+
+`connectors/__init__.py` is untouched, so its module list does not yet name the three new modules;
+whoever owns that file may want to add them.
 
 ## RED
 
@@ -45,9 +49,9 @@ assertion bites. Two further runs close that gap.
 | Line | Log | Result |
 | --- | --- | --- |
 | Plan step 2 / the S3a line: Fake, `test_connector_guard.py test_connector_http.py test_connector_credentials.py` | `/tmp/hippo-s3a-green.log` | exit 0, **79 passed** |
-| Plan step 3 lint: Ruff `check` then `format --check` over the six files | `/tmp/hippo-s3a-ruff.log` | exit 0 and exit 0; "All checks passed!", "6 files already formatted" |
+| Plan step 3 lint: Ruff `check` then `format --check` over the six files plus `test_connector_keys.py` | `/tmp/hippo-s3a-ruff.log` | exit 0; "All checks passed!", "7 files already formatted" |
 | The CK7 CHECK line of `GATES.md` as spelled, less the two files no slice has created yet | `/tmp/hippo-s3a-ck7.log` | exit 0; "All checks passed!", "20 files already formatted" |
-| Regression: Fake, `test_layering.py test_import_order.py test_connector_contract.py test_connector_keys.py test_connector_classify.py` | `/tmp/hippo-s3a-regress.log` | exit 1, 135 passed, **1 failed** — one pre-existing defect in an S2a test, finding F1 below |
+| Regression: Fake, `test_layering.py test_import_order.py test_connector_contract.py test_connector_keys.py test_connector_classify.py` | `/tmp/hippo-s3a-regress.log` | exit 0, **136 passed**, once finding F1's one-line fix landed (it was exit 1, 135 passed / 1 failed before) |
 
 Counts per file: guard 34, http 37, credentials 8. Counts per backend: Fake 79. No LadybugDB line
 and no Neo4j run: S3a opens no store, persists no column and touches no store path (plan section 12
@@ -74,7 +78,7 @@ creates and `chmod`s itself.
 `guard.FORBIDDEN_CALLS` is one sorted tuple of 44 dotted names, the single source of truth: the
 module resolves each name at import and sorts it into the matcher it needs, and
 `test_the_forbidden_set_is_the_plans_names_plus_m20s` pins the tuple byte for byte. Plan section 10.1
-supplies every name except the five marked **m20**.
+supplies every name except the six marked **m20**.
 
 ```text
 _posixsubprocess.fork_exec          os.execvpe                     time.clock_gettime        (m20)
@@ -113,9 +117,9 @@ C call in the guarded thread.
 
 ## Where a ruling or the review overrode the plan
 
-1. **m20 over plan section 10.1's set.** Five names added: `time.clock_gettime`,
-   `time.clock_gettime_ns`, `time.process_time`, `sys.setprofile`, `threading.setprofile`, plus
-   `threading.Thread.start` for "thread start". Marked in the table above.
+1. **m20 over plan section 10.1's set.** Six names added: `time.clock_gettime`,
+   `time.clock_gettime_ns`, `time.process_time`, `sys.setprofile`, `threading.setprofile` and
+   `threading.Thread.start` (for "thread start"). Marked in the table above.
 2. **`sys.setprofile` being forbidden forced the guard's shape.** The guard installs and removes
    itself with the call it refuses, so a thread-local `armed` flag brackets both `sys.setprofile`
    calls; the hook returns immediately while disarmed. Without it, *leaving* the guard would trip
@@ -175,9 +179,21 @@ which is a *list* comparison and therefore lexicographic, not the superset check
 Any new module under `hippo/connectors` whose filename sorts before `keys.py` fails it: with
 `credentials.py`, `guard.py` and `http.py` present the left list compares less at index 3. The
 assertion the test exists for (`offenders == {}`, no `KnowledgeObject` built outside `keys.py`)
-still passes — none of S3a's three modules constructs one. S3b, S3c and S4 will all hit this. The
-one-line fix is a set: `assert {path.name for path in modules} >= {...}`. The file is S2a's and is
-not in S3a's "own" list, so this was raised with the orchestrator rather than edited.
+still passes — none of S3a's three modules constructs one. S3b, S3c and S4 would all have hit this.
+
+**Disposition: fixed.** The file is S2a's and is not in S3a's "own" list, so it was raised with the
+orchestrator rather than edited; the orchestrator granted the one line by name, and commit 3 changes
+that assertion to the set comparison its context means:
+`assert {path.name for path in modules} >= {"__init__.py", "base.py", "classify.py", "keys.py"}`.
+Nothing else in the file is touched, and the regression line is now exit 0 with 136 passed.
+
+**F2 (fixed in commit 3, S3a's own code).** `guard._refused_c_call` reached its identity lookup when
+a C callable's `__self__` was absent *or* a module. `dict.get` hashes its key, and an unhashable
+`__self__` makes the hash raise `TypeError` — inside the profile hook, in the middle of a connector's
+`emit`. Every identity-matched entry is in fact bound to its module (`os.fork.__self__` is `posix`,
+`sys.setprofile.__self__` is `sys`), so the branch now tests `isinstance(owner, ModuleType)` alone
+and the unhashable case can no longer reach it. All 44 table entries still resolve to a matcher
+(21 by identity, 18 by code object, 5 by owner), and the suite is unchanged at 79 passed.
 
 **Q1. `time.process_time_ns`, `time.thread_time`, `time.thread_time_ns` are absent.** Every other
 clock in the set is present in both its float and its `_ns` spelling. m20 named `process_time` alone,
@@ -195,7 +211,10 @@ call will be reported.
 **Q3. `refuse_inline_secrets` inspects the configuration model's own declared fields only.** Plan
 section 10.3 says "a config model field whose name contains …", which is what is implemented. A
 secret hidden in a *nested* `BaseModel` field would not be refused. Recursing is a one-line change if
-S4's `check_capture` wants it.
+S4's `check_capture` wants it. Note also that the rule refuses a config field named `credential_ref`,
+because "credential" is one of the five words plan section 10.3 lists. That is right — the reference
+belongs on `Connector.credential_ref` (`knowledge/model.py`), not in the configuration — but S5 and
+S6 port connectors whose config model may well name it, and they will meet this refusal.
 
 **Q4. `ProviderClient` is not thread-safe by construction.** It wraps one `httpx.Client`, which is;
 but the injected `rng`, `sleep` and the attempt counters assume one caller. The runtime calls a
