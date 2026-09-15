@@ -15,7 +15,7 @@ from typing import Annotated, Literal, Union, get_args, get_origin
 from ..knowledge.identity import canonical_json, text_hash
 from ..knowledge.model import RECORD_TYPES, Workspace
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 # Published by 4246f5e: never derive v2 from the evolving models.
 V2_DESCRIPTOR = json.loads(
     """[2, {
@@ -197,6 +197,53 @@ V5_CHECKSUM = text_hash(canonical_json(V5_DESCRIPTOR))
 # number; spelling it from the v5 literal keeps it off the evolving models.
 V6_DESCRIPTOR = [6, *V5_DESCRIPTOR[1:]]
 V6_CHECKSUM = text_hash(canonical_json(V6_DESCRIPTOR))
+# Published by df05bac. Frozen before v8 widens the models, so v7 stops tracking them too.
+V7_DESCRIPTOR = json.loads(
+    """[7, {
+"AccessPolicy": {"allow_groups":"STRING[]","allow_users":"STRING[]","deny_groups":"STRING[]","deny_users":"STRING[]","expires_at":"TIMESTAMP","id":"STRING","identity_key":"STRING","mode":"STRING","origin":"STRING","scope_key":"STRING","verified_at":"TIMESTAMP","workspace_id":"STRING"},
+"Alias": {"alias_key":"STRING","authority":"STRING","id":"STRING","identity_key":"STRING","namespace":"STRING","status":"STRING","support_span_ids":"STRING[]","target_object_id":"STRING","workspace_id":"STRING"},
+"Artifact": {"canonical_uri":"STRING","connector_id":"STRING","deleted_at":"TIMESTAMP","external_id":"STRING","id":"STRING","identity_key":"STRING","kind":"STRING","policy_id":"STRING","provider_instance":"STRING","source_id":"STRING","workspace_id":"STRING"},
+"ArtifactRevision": {"artifact_id":"STRING","content_hash":"STRING","id":"STRING","identity_key":"STRING","lifecycle":"STRING","metadata_json":"STRING","observed_at":"TIMESTAMP","provider_revision":"STRING","raw_uri":"STRING","source_precision":"STRING","source_timestamp_original":"STRING","source_timezone":"STRING","source_updated_at":"TIMESTAMP"},
+"Assertion": {"id":"STRING","identity_key":"STRING","object_id":"STRING","predicate":"STRING","scope_key":"STRING","subject_id":"STRING","workspace_id":"STRING"},
+"AssertionSupport": {"assertion_version_id":"STRING","derivation_group":"STRING","id":"STRING","identity_key":"STRING","span_id":"STRING"},
+"AssertionVersion": {"assertion_id":"STRING","confidence":"DOUBLE","evidence_class":"STRING","id":"STRING","identity_key":"STRING","recorded_from":"TIMESTAMP","recorded_to":"TIMESTAMP","rule_version":"STRING","source_timestamp_original":"STRING","source_timezone":"STRING","status":"STRING","temporal_basis":"STRING","temporal_precision":"STRING","valid_from":"TIMESTAMP","valid_to":"TIMESTAMP","validity_kind":"STRING"},
+"ConflictSet": {"assertion_version_ids":"STRING[]","id":"STRING","identity_key":"STRING","resolution_rule":"STRING","resolution_status":"STRING","scope_key":"STRING","support_span_ids":"STRING[]","valid_from":"TIMESTAMP","valid_to":"TIMESTAMP","workspace_id":"STRING"},
+"Connector": {"capabilities_json":"STRING","config_json":"STRING","credential_ref":"STRING","enabled":"BOOLEAN","id":"STRING","identity_key":"STRING","instance_url":"STRING","kind":"STRING","workspace_id":"STRING"},
+"ConsumerAck": {"acknowledged_at":"TIMESTAMP","attempt_count":"INT64","consumer_id":"STRING","event_id":"STRING","fencing_token":"INT64","id":"STRING","identity_key":"STRING","lease_expires_at":"TIMESTAMP","lease_owner":"STRING","retry_at":"TIMESTAMP","state":"STRING"},
+"DerivedDependency": {"derived_record_id":"STRING","id":"STRING","identity_key":"STRING","input_id":"STRING","input_kind":"STRING","input_version":"STRING"},
+"DerivedRecord": {"dependency_fingerprint":"STRING","id":"STRING","identity_key":"STRING","input_binding_ids":"STRING[]","input_revision_ids":"STRING[]","model_version":"STRING","rule_version":"STRING","state":"STRING","view_kind":"STRING","workspace_id":"STRING"},
+"EvidenceSpan": {"id":"STRING","identity_key":"STRING","locator_json":"STRING","locator_kind":"STRING","policy_id":"STRING","revision_id":"STRING","text":"STRING","text_hash":"STRING"},
+"Generation": {"coverage_json":"STRING","created_at":"TIMESTAMP","embedding_profile":"STRING","id":"STRING","identity_key":"STRING","linker_version":"STRING","manifest_hash":"STRING","parent_id":"STRING","parser_version":"STRING","published_at":"TIMESTAMP","source_id":"STRING","status":"STRING"},
+"GenerationEvidenceMember": {"generation_id":"STRING","id":"STRING","identity_key":"STRING","record_id":"STRING","record_kind":"STRING"},
+"GenerationMember": {"artifact_revision_id":"STRING","generation_id":"STRING","id":"STRING","identity_key":"STRING"},
+"GroupMembership": {"enabled":"BOOLEAN","group_id":"STRING","id":"STRING","identity_key":"STRING","mapping_authority":"STRING","policy_epoch":"INT64","principal_id":"STRING","workspace_id":"STRING"},
+"HistoryManifest": {"assertion_version_ids":"STRING[]","coverage_json":"STRING","id":"STRING","identity_key":"STRING","knowledge_cutoff":"TIMESTAMP","link_generation_ids":"STRING[]","retention_gaps":"STRING[]","revision_ids":"STRING[]","temporal_selector_json":"STRING","workspace_id":"STRING"},
+"IndexEvent": {"aggregate_id":"STRING","created_at":"TIMESTAMP","dedupe_key":"STRING","generation_id":"STRING","id":"STRING","identity_key":"STRING","kind":"STRING","payload_json":"STRING","sequence":"INT64","state":"STRING","workspace_id":"STRING"},
+"IndexManifest": {"checksums":"STRING","config_fingerprint":"STRING","generation_id":"STRING","id":"STRING","identity_key":"STRING","missing_optional":"STRING[]","profile_fingerprint":"STRING","ready":"BOOLEAN","required_representations":"STRING[]"},
+"KnowledgeObject": {"canonical_key":"STRING","id":"STRING","identity_key":"STRING","kind":"STRING","workspace_id":"STRING"},
+"LinkGeneration": {"assertion_version_ids":"STRING[]","coverage_json":"STRING","created_at":"TIMESTAMP","id":"STRING","identity_key":"STRING","input_manifest_hash":"STRING","linker_version":"STRING","workspace_id":"STRING"},
+"MaintenanceJob": {"attempt_count":"INT64","cursor_json":"STRING","error_code":"STRING","expected_parent_id":"STRING","fencing_token":"INT64","id":"STRING","identity_key":"STRING","input_fingerprint":"STRING","job_key":"STRING","kind":"STRING","lease_expires_at":"TIMESTAMP","lease_owner":"STRING","phase":"STRING","retry_at":"TIMESTAMP","scope_key":"STRING","source_id":"STRING","status":"STRING"},
+"NativeBinding": {"generation_id":"STRING","id":"STRING","identity_key":"STRING","native_id":"STRING","native_kind":"STRING","object_id":"STRING","span_id":"STRING"},
+"ObjectObservation": {"attributes_json":"STRING","evidence_class":"STRING","id":"STRING","identity_key":"STRING","object_id":"STRING","recorded_from":"TIMESTAMP","recorded_to":"TIMESTAMP","revision_id":"STRING","source_timestamp_original":"STRING","source_timezone":"STRING","span_id":"STRING","temporal_basis":"STRING","temporal_precision":"STRING","valid_from":"TIMESTAMP","valid_to":"TIMESTAMP","validity_kind":"STRING"},
+"ProseExtraction": {"derived_record_id":"STRING","embedding_profile":"STRING","extractor_profile":"STRING","generation_id":"STRING","id":"STRING","identity_key":"STRING","input_id":"STRING","input_kind":"STRING","input_text_hash":"STRING","payload":"STRING","payload_hash":"STRING","support_passage_ids":"STRING[]"},
+"PurgeJob": {"audit_code":"STRING","backup_disposition":"STRING","completed_at":"TIMESTAMP","created_at":"TIMESTAMP","derived_status":"STRING","id":"STRING","identity_key":"STRING","phase":"STRING","raw_status":"STRING","removal_manifest_ids":"STRING[]","request_key":"STRING","saved_output_status":"STRING","scope_key":"STRING","workspace_id":"STRING"},
+"QuerySnapshot": {"created_at":"TIMESTAMP","history_manifest_ids":"STRING[]","id":"STRING","identity_key":"STRING","knowledge_cutoff":"TIMESTAMP","link_generation_id":"STRING","policy_fingerprint":"STRING","profile_fingerprint":"STRING","settings_fingerprint":"STRING","sources":"STRING","suppression_epoch":"INT64","temporal":"STRING","workspace_id":"STRING"},
+"RetrievalView": {"dependency_fingerprint":"STRING","derivation_version":"STRING","derived_record_id":"STRING","id":"STRING","identity_key":"STRING","object_id":"STRING","source_revision_id":"STRING","span_id":"STRING","text":"STRING","text_profile":"STRING","vector_profile":"STRING","view_kind":"STRING"},
+"Section": {"breadcrumb":"STRING[]","id":"STRING","identity_key":"STRING","ordinal":"INT64","original_heading":"STRING","original_span_ids":"STRING[]","parent_section_id":"STRING","source_revision_id":"STRING"},
+"SectionMember": {"child_id":"STRING","child_kind":"STRING","id":"STRING","identity_key":"STRING","ordinal":"INT64","section_id":"STRING"},
+"SnapshotReference": {"created_at":"TIMESTAMP","id":"STRING","identity_key":"STRING","kind":"STRING","lease_expires_at":"TIMESTAMP","lease_owner":"STRING","reference_key":"STRING","released_at":"TIMESTAMP","snapshot_id":"STRING","workspace_id":"STRING"},
+"SourceEvent": {"acceptance_state":"STRING","artifact_id":"STRING","connector_id":"STRING","dedupe_key":"STRING","delivery_id":"STRING","id":"STRING","identity_key":"STRING","operation":"STRING","payload_hash":"STRING","provider_artifact_id":"STRING","provider_instance":"STRING","provider_revision":"STRING","provider_sequence":"STRING","received_at":"TIMESTAMP"},
+"Suppression": {"all_principals":"BOOLEAN","created_at":"TIMESTAMP","epoch":"INT64","id":"STRING","identity_key":"STRING","principal_ids":"STRING[]","reason":"STRING","restoration_barrier":"STRING","scope_key":"STRING","target_id":"STRING","target_kind":"STRING","view_applicability":"STRING","workspace_id":"STRING"},
+"SyncRun": {"attempt_count":"INT64","connector_id":"STRING","cursor_json":"STRING","error_code":"STRING","expected_parent_id":"STRING","fencing_token":"INT64","id":"STRING","identity_key":"STRING","input_fingerprint":"STRING","lease_expires_at":"TIMESTAMP","lease_owner":"STRING","phase":"STRING","retry_at":"TIMESTAMP","run_key":"STRING","scope_key":"STRING","source_id":"STRING","status":"STRING"},
+"SyncState": {"connector_id":"STRING","cursor_json":"STRING","error_code":"STRING","id":"STRING","identity_key":"STRING","last_reconciled_at":"TIMESTAMP","last_success_at":"TIMESTAMP","partition_key":"STRING","watermark":"STRING"},
+"Workspace": {"id":"STRING","identity_key":"STRING","name":"STRING"},
+"WorkspaceMembership": {"enabled":"BOOLEAN","id":"STRING","identity_key":"STRING","mapping_authority":"STRING","policy_epoch":"INT64","principal_id":"STRING","workspace_id":"STRING"}
+}, [["SUBJECT_OBJECT","Assertion","KnowledgeObject"],["TARGET_OBJECT","Assertion","KnowledgeObject"],["VERSION_OF","AssertionVersion","Assertion"],["SUPPORT_VERSION","AssertionSupport","AssertionVersion"],["SUPPORT_SPAN","AssertionSupport","EvidenceSpan"],["REVISION_OF","ArtifactRevision","Artifact"],["SPAN_REVISION","EvidenceSpan","ArtifactRevision"],["OBSERVED_OBJECT","ObjectObservation","KnowledgeObject"],["OBSERVATION_SPAN","ObjectObservation","EvidenceSpan"],["MEMBER_GENERATION","GenerationMember","Generation"],["MEMBER_REVISION","GenerationMember","ArtifactRevision"],["BINDING_OBJECT","NativeBinding","KnowledgeObject"],["BINDING_SPAN","NativeBinding","EvidenceSpan"],["SECTION_PARENT","SectionMember","Section"],["EVIDENCE_GENERATION","GenerationEvidenceMember","Generation"],["REFERENCE_SNAPSHOT","SnapshotReference","QuerySnapshot"]],
+{"active_build_id":"STRING","active_generation_id":"STRING","build_fencing_token":"INT64","generation_lock":"INT64","generation_version":"INT64","managed":"BOOLEAN","workspace_id":"STRING"},
+{"artifact_revision_id":"STRING","content_kind":"STRING","embedding_profile":"STRING","generation_id":"STRING","parent_passage_id":"STRING","retrieval_view_id":"STRING","span_id":"STRING"},
+{"Commit":{"generation_id":"STRING"},"DataObject":{"generation_id":"STRING"},"Symbol":{"generation_id":"STRING"}}]"""
+)
+V7_CHECKSUM = text_hash(canonical_json(V7_DESCRIPTOR))
 MIGRATION_CHECKSUM = text_hash(
     canonical_json(
         [
@@ -216,7 +263,8 @@ SUPPORTED_CHECKSUMS = {
     4: V4_CHECKSUM,
     5: V5_CHECKSUM,
     6: V6_CHECKSUM,
-    7: MIGRATION_CHECKSUM,
+    7: V7_CHECKSUM,
+    8: MIGRATION_CHECKSUM,
 }
 
 
@@ -232,7 +280,10 @@ def _descriptor(version):
     if version == 6:
         return V6_DESCRIPTOR
     if version == 7:
-        return [7, KNOWLEDGE_COLUMNS, KNOWLEDGE_RELATIONS, SOURCE_COLUMNS, PASSAGE_COLUMNS, NATIVE_COLUMNS]
+        return V7_DESCRIPTOR
+    if version == 8:
+        # Live while v8 is current; freeze it as a literal before v9.
+        return [8, KNOWLEDGE_COLUMNS, KNOWLEDGE_RELATIONS, SOURCE_COLUMNS, PASSAGE_COLUMNS, NATIVE_COLUMNS]
     raise SchemaCompatibilityError("Unsupported migration version")
 
 
@@ -439,6 +490,7 @@ def validate_physical_schema(store, *, version=CURRENT_SCHEMA_VERSION) -> None:
     for minimum, declared, refusal in (
         (6, NATIVE_INDEXES, "Evidence schema shape has an absent generation index"),
         (7, V7_INDEXES, "Evidence schema shape has an absent knowledge scope index"),
+        (8, V8_INDEXES, "Evidence schema shape has an absent unit index"),
     ):
         if version < minimum:
             continue
@@ -490,31 +542,62 @@ NATIVE_INDEX_STEPS = [
 ]
 
 
-def _v7_indexes():
-    """The v7 index set: every kind-specific scoped field that v6 does not already index.
-
-    Derived from `knowledge.KIND_SCOPED_FIELDS`, as v6's set was while it was current, so a field
-    cannot join the allow-list without the index that makes it a bounded query. The next field
-    added there is a v8 step, and this set is frozen as a literal first, the way v6's is above.
-    """
-    from .knowledge import KIND_SCOPED_FIELDS
-
-    journaled = {(label, field) for _, label, field in NATIVE_INDEXES}
-    return tuple(
-        (f"knowledge_{label.lower()}_{field}", label, field)
-        for label, fields in sorted(KIND_SCOPED_FIELDS.items())
-        for field in sorted(fields)
-        if (label, field) not in journaled
-    )
-
-
-V7_INDEXES = _v7_indexes()
+# The v7 set exactly as df05bac journaled it. It was derived from `knowledge.KIND_SCOPED_FIELDS` while
+# v7 was current: every kind-specific scoped field v6 did not already index. It is a literal now, like
+# v6's, because a v7 journal row counts these steps.
+V7_INDEXES = (
+    ("knowledge_deriveddependency_derived_record_id", "DerivedDependency", "derived_record_id"),
+    ("knowledge_generationevidencemember_record_id", "GenerationEvidenceMember", "record_id"),
+)
 V7_INDEX_STEPS = [
     f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON (n.{field})" for name, label, field in V7_INDEXES
 ]
 
 
+# v8 (ruling R41): the Unit lookups exist on Neo4j alone, because LadybugDB 0.15.3 has no
+# secondary-index DDL. `generation_id` also answers the generic per-kind index check above.
+V8_INDEXES = (
+    ("knowledge_unit_generation_id", "Unit", "generation_id"),
+    ("knowledge_unit_passage_id", "Unit", "passage_id"),
+    ("knowledge_unit_content_hash", "Unit", "content_hash"),
+)
+V8_INDEX_STEPS = [
+    f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON (n.{field})" for name, label, field in V8_INDEXES
+]
+# The widened columns of design section 4, outside every `identity_fields`, so no stored row moves.
+V8_ADDED_COLUMNS = (
+    ("AssertionVersion", "family"),
+    ("AssertionVersion", "source"),
+    ("AssertionVersion", "rule"),
+    ("AssertionVersion", "weight"),
+    ("AssertionVersion", "statement"),
+    ("AssertionVersion", "unit_id"),
+    ("Generation", "registry_fingerprint"),
+    ("Connector", "classification_json"),
+)
+
+
 def schema_steps(store, *, version=CURRENT_SCHEMA_VERSION) -> list[str]:
+    if version == 8:
+        columns = _descriptor(8)[1]
+        if store.knowledge_backend == "ladybug":
+            return [
+                "CREATE NODE TABLE IF NOT EXISTS Unit("
+                + ", ".join(
+                    f"{field} {kind}" + (" PRIMARY KEY" if field == "id" else "")
+                    for field, kind in columns["Unit"].items()
+                )
+                + ")",
+                *(
+                    f"ALTER TABLE {table} ADD IF NOT EXISTS {field} {columns[table][field]}"
+                    for table, field in V8_ADDED_COLUMNS
+                ),
+            ]
+        # Neo4j properties need no DDL; the Unit identity and its lookups do.
+        return [
+            "CREATE CONSTRAINT knowledge_unit_id IF NOT EXISTS FOR (n:Unit) REQUIRE n.id IS UNIQUE",
+            *V8_INDEX_STEPS,
+        ]
     if version == 7:
         # As for v6: LadybugDB has no secondary-index DDL, so its v7 bound is the predicate alone.
         return [] if store.knowledge_backend == "ladybug" else list(V7_INDEX_STEPS)
@@ -581,10 +664,31 @@ def schema_steps(store, *, version=CURRENT_SCHEMA_VERSION) -> list[str]:
 
 
 def _data_transform(store, *, version=CURRENT_SCHEMA_VERSION):
+    if version == 8:
+        # Added columns read back null, which every widened field accepts except the connector
+        # classification, whose default is an empty object (the v3 `origin` backfill's pattern).
+        if store.knowledge_backend != "fake":
+            store.run(
+                "MATCH (c:Connector) WHERE c.classification_json IS NULL SET c.classification_json='{}'"
+            )
+        store._knowledge_rows("Connector")  # every row must validate before the step is journaled
+        return
     if version in (5, 6, 7):  # v6 and v7 declare indexes only; no row is read or rewritten
         return
     if version == 4:
-        managed = {r.source_id for name in ("Artifact", "Generation") for r in store._knowledge_rows(name)}
+        # Read the one column this step needs, not the whole record: a later version's columns do
+        # not exist on the tables being upgraded here, and `_knowledge_rows` projects the current
+        # model (v8 added `Generation.registry_fingerprint`, which a v4 table has never held).
+        if store.knowledge_backend == "fake":
+            managed = {
+                r.source_id for name in ("Artifact", "Generation") for r in store._knowledge_rows(name)
+            }
+        else:
+            managed = {
+                row["source_id"]
+                for name in ("Artifact", "Generation")
+                for row in store.run(f"MATCH (n:{name}) RETURN n.source_id AS source_id")
+            }
         if store.knowledge_backend == "fake":
             for source in store.sources.values():
                 source["managed"] = bool(source.get("managed")) or source["id"] in managed

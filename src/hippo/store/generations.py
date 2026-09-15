@@ -11,6 +11,20 @@ from .authorization import bump_epoch, epoch
 from .base import by_ids
 
 MANDATORY_REPRESENTATIONS = ("evidence", "dense", "native")
+# Schema v8 columns an older row reads back as null. Hashing the null keys would change the
+# evidence checksum of every generation sealed before v8, and `validate_generation_seal` would
+# then refuse it.
+V8_UNSET_FIELDS = {"AssertionVersion": ("family", "source", "rule", "weight", "statement", "unit_id")}
+
+
+def _evidence_row(record) -> dict:
+    """A record as the evidence representation hashes it, without its unset v8 columns."""
+    row = record.model_dump(mode="json")
+    for field in V8_UNSET_FIELDS.get(type(record).__name__, ()):
+        if row[field] is None:
+            del row[field]
+    return row
+
 
 # A managed refresh leaves the source `ready` with a `refreshing: ...` stage, because its
 # published generation keeps serving throughout. A restart therefore cannot mark it failed
@@ -645,11 +659,14 @@ class GenerationQueries:
                 k.NativeBinding,
                 k.IndexManifest,
                 k.ProseExtraction,
+                k.Unit,
             ),
         ):
             self._assert_generation_writable(
                 record.generation_id,
-                legacy_fixture=not isinstance(record, (k.GenerationEvidenceMember, k.ProseExtraction)),
+                legacy_fixture=not isinstance(
+                    record, (k.GenerationEvidenceMember, k.ProseExtraction, k.Unit)
+                ),
             )
         if isinstance(record, k.GenerationEvidenceMember) and record.record_kind in {
             "RetrievalView",
@@ -680,6 +697,18 @@ class GenerationQueries:
                 for revision_id in self._record_revisions(target)
             ):
                 raise ValueError("Evidence member is outside generation revisions")
+        if isinstance(record, k.Unit):
+            # A unit represents one of this generation's own passages, over a span whose
+            # revision the generation selected.
+            passage = next(iter(self._native_rows("Passage", ids=[record.passage_id])), None)
+            span = self._knowledge_get("EvidenceSpan", record.span_id)
+            if (
+                passage is None
+                or passage.get("generation_id") != record.generation_id
+                or span is None
+                or not self._revision_member(record.generation_id, span.revision_id)
+            ):
+                raise ValueError("Unit passage or span is outside its generation")
         if isinstance(record, k.NativeBinding):
             gen = self._generation(record.generation_id)
             native = self._knowledge_get(record.native_kind, record.native_id)
@@ -981,7 +1010,7 @@ class GenerationQueries:
             key = (type(record).__name__, record.id)
             if key in evidence or key[0] in ("Artifact", "AccessPolicy", "Generation", "Source", "Workspace"):
                 return
-            evidence[key] = record.model_dump(mode="json")
+            evidence[key] = _evidence_row(record)
             for kind, rid in self._references(record):
                 if kind in k.RECORD_TYPES:
                     target = self._knowledge_get(kind, rid)
@@ -1084,6 +1113,13 @@ class GenerationQueries:
             if ("EvidenceSpan", row["span_id"]) not in exact_ids:
                 raise ValueError("Passage span missing from exact manifest")
             dimensions.add(len(row["embedding"]))
+        unit_members = {member.record_id for member in exact if member.record_kind == "Unit"}
+        units = self._knowledge_rows("Unit", generation_id=generation_id)
+        if {row.id for row in units} != unit_members:
+            raise ValueError("Generation units differ from their exact membership")
+        dense_ids = {row["id"] for row in dense}
+        if any(row.passage_id not in dense_ids for row in units):
+            raise ValueError("Unit passage is outside the generation's dense coverage")
         bound = {(b.native_kind, b.native_id) for b in bindings}
         for kind, row in native:
             self._validate_managed_native(kind, row, gen, selected=revisions)

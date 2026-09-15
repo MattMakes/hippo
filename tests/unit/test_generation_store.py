@@ -64,7 +64,8 @@ def publish(store, gen, job, **kwargs):
 
 
 def test_schema4_freezes_v3(store):
-    assert migrations.CURRENT_SCHEMA_VERSION == 7
+    assert migrations.CURRENT_SCHEMA_VERSION == 8
+    assert "Unit" in k.RECORD_TYPES
     assert (
         migrations.SUPPORTED_CHECKSUMS[3]
         == "ffc12b6f274a5b5573eed4dde9798f8b4abe9d37d68a570247a5c281c10d3ddc"
@@ -335,6 +336,238 @@ def test_sealed_proof_cannot_gain_support(store):
         store.put_knowledge(support.replace(derivation_group="new-proof"))
     with pytest.raises(ValueError):
         store.update_knowledge(version.replace(recorded_to=NOW + timedelta(days=1)))
+
+
+def assertion_generation(store, *, source_id=None, **version_fields):
+    """The records of `test_sealed_proof_cannot_gain_support`, copied, with optional version fields."""
+    if source_id is None:
+        gen = generation(store)
+    else:
+        gen = k.Generation(
+            source_id=source_id,
+            status="staging",
+            parser_version="1",
+            linker_version="1",
+            embedding_profile="p",
+            created_at=NOW,
+            manifest_hash="one",
+        )
+        store.put_knowledge(gen)
+        store._generation_clock = lambda: NOW
+    job = claim(store, gen)
+    with store.generation_write(gen.id, **authority(job)):
+        revision, span = evidence(store, gen)
+        store.add_passages([passage(gen, revision, span)])
+        workspace = store.get_source(gen.source_id)["workspace_id"]
+        obj = k.KnowledgeObject(workspace_id=workspace, kind="table", canonical_key='["db","t"]')
+        assertion = k.checked_assertion(obj, "CONTRADICTS", obj, scope_key="test")
+        version = k.AssertionVersion(
+            assertion_id=assertion.id,
+            evidence_class="declared",
+            rule_version="r",
+            confidence=0.9,
+            status="active",
+            recorded_from=NOW,
+            **version_fields,
+        )
+        support = k.AssertionSupport(
+            assertion_version_id=version.id, span_id=span.id, derivation_group="proof"
+        )
+        for record in (obj, assertion, version, support):
+            store.put_knowledge(record)
+        for record in (version, support):
+            store.put_knowledge(
+                k.GenerationEvidenceMember(
+                    generation_id=gen.id, record_kind=type(record).__name__, record_id=record.id
+                )
+            )
+    return gen, job
+
+
+def evidence_checksum(store, gen):
+    (checksum,) = [c for c in store.generation_checksums(gen.id) if c.kind == "evidence"]
+    return checksum.checksum, checksum.row_count
+
+
+def test_a_v7_generation_keeps_its_published_evidence_checksum(store, monkeypatch):
+    """Captured under schema v7: a generation sealed before v8 still verifies after it."""
+    import inspect
+
+    with monkeypatch.context() as patch:
+        patch.setattr(inspect.getmodule(type(store).create_source), "new_id", lambda: "source-pinned")
+        source_id = store.create_source("text", "pinned")
+    assert source_id == "source-pinned"
+    gen, _ = assertion_generation(store, source_id=source_id)
+    assert evidence_checksum(store, gen) == (
+        "356ad2ec426c7d9cef6904f0d464c81cb780ed95b9465f717b2cad3ca5fa99fb",
+        10,
+    )
+
+
+def unit(gen, span, row, *, ordinal=0, text="It refunds the order.", **changes):
+    return k.Unit(
+        generation_id=gen.id,
+        passage_id=row["id"],
+        span_id=span.id,
+        ordinal=ordinal,
+        kind="sentence",
+        text=text,
+        embed_text=text,
+        mentions_json="[]",
+        **changes,
+    )
+
+
+def unit_world(store, key="units"):
+    """A claimed generation with one passage, ready for units."""
+    gen = generation(store, key)
+    job = claim(store, gen)
+    with store.generation_write(gen.id, **authority(job)):
+        revision, span = evidence(store, gen)
+        row = passage(gen, revision, span)
+        store.add_passages([row])
+    return gen, job, span, row
+
+
+def test_unit_write_requires_a_build_lease_and_its_generations_passage(store):
+    gen, job, span, row = unit_world(store)
+    second, second_job, second_span, second_row = unit_world(store, "second")
+    # Finish the second build, so its own source no longer demands authority and the refusals
+    # below are the unit guard's rather than the build guard's.
+    seal(store, second, second_job)
+    publish(store, second, second_job)
+    # No live lease at all: the unit's span reaches a source whose build is running.
+    with pytest.raises(ValueError, match="Managed evidence write requires build authority"):
+        store.put_knowledge(unit(gen, span, row))
+    for record in (unit(gen, span, second_row), unit(gen, second_span, row)):
+        with pytest.raises(ValueError, match="Unit passage or span is outside its generation"):
+            with store.generation_write(gen.id, **authority(job)):
+                store.put_knowledge(record)
+    with store.generation_write(gen.id, **authority(job)):
+        accepted = unit(gen, span, row)
+        store.put_knowledge(accepted)
+    assert store._knowledge_get("Unit", accepted.id) == accepted
+
+
+def test_units_are_exact_members_and_enter_the_evidence_checksum(store):
+    gen, job, span, row = unit_world(store)
+    before = evidence_checksum(store, gen)
+    with store.generation_write(gen.id, **authority(job)):
+        record = unit(gen, span, row)
+        store.put_knowledge(record)
+        store.put_knowledge(
+            k.GenerationEvidenceMember(generation_id=gen.id, record_kind="Unit", record_id=record.id)
+        )
+    after = evidence_checksum(store, gen)
+    assert after[1] == before[1] + 2 and after[0] != before[0]
+    seal(store, gen, job)
+    assert store.validate_generation_seal(gen.id)
+
+
+def test_a_unit_row_outside_exact_membership_refuses_the_checksum(store):
+    gen, job, span, row = unit_world(store)
+    with store.generation_write(gen.id, **authority(job)):
+        store.put_knowledge(unit(gen, span, row))
+    with pytest.raises(ValueError, match="Generation units differ from their exact membership"):
+        store.generation_checksums(gen.id)
+
+
+def test_collection_removes_units_with_their_generation(store):
+    gen, job, span, row = unit_world(store)
+    with store.generation_write(gen.id, **authority(job)):
+        record = unit(gen, span, row)
+        store.put_knowledge(record)
+        store.put_knowledge(
+            k.GenerationEvidenceMember(generation_id=gen.id, record_kind="Unit", record_id=record.id)
+        )
+    assert store._knowledge_rows("Unit", generation_id=gen.id) == [record]
+    store.discard_generation(gen.id, **authority(job))
+    assert store._knowledge_rows("Unit", generation_id=gen.id) == []
+
+
+def v7_row(record):
+    """The columns v7 persisted, so a checksum can be taken as a pre-v8 store would take it."""
+    row = record.model_dump(mode="json")
+    columns = migrations.V7_DESCRIPTOR[1].get(type(record).__name__)
+    return row if columns is None else {key: value for key, value in row.items() if key in columns}
+
+
+def test_unset_v8_assertion_fields_leave_the_evidence_checksum_unchanged(store, monkeypatch):
+    """Six null columns must not move the evidence checksum of a generation sealed under v7."""
+    from hippo.store import generations
+
+    gen, _ = assertion_generation(store)
+    before = evidence_checksum(store, gen)
+    monkeypatch.setattr(generations, "_evidence_row", v7_row)
+    assert evidence_checksum(store, gen) == before
+
+
+def test_set_v8_assertion_fields_enter_the_evidence_checksum(store, monkeypatch):
+    from hippo.store import generations
+
+    gen, _ = assertion_generation(store, family="deterministic", source="metadata")
+    with_provenance = evidence_checksum(store, gen)
+    monkeypatch.setattr(generations, "_evidence_row", v7_row)
+    assert evidence_checksum(store, gen) != with_provenance
+
+
+def test_registry_fingerprint_round_trips_outside_identity_and_cannot_change(store):
+    source = store.create_source("text", "fingerprinted")
+    row = k.Generation(
+        source_id=source,
+        status="staging",
+        parser_version="1",
+        linker_version="1",
+        embedding_profile="p",
+        created_at=NOW,
+        manifest_hash="one",
+        registry_fingerprint="c" * 64,
+    )
+    store.put_knowledge(row)
+    assert store._knowledge_get("Generation", row.id) == row
+    assert row.replace(registry_fingerprint=None).id == row.id
+    with pytest.raises(ValueError, match="Update changes immutable evidence fields"):
+        store.update_knowledge(row.replace(registry_fingerprint="d" * 64))
+
+
+def test_connector_classification_updates_under_the_same_identity(store):
+    store.ensure_schema()
+    connector = k.Connector(
+        workspace_id=migrations.DEFAULT_WORKSPACE_ID, kind="local", instance_url="https://local.example"
+    )
+    assert connector.classification_json == "{}"
+    store.put_knowledge(connector)
+    classified = connector.replace(classification_json='{"partitions":["main"]}')
+    assert classified.id == connector.id
+    store.update_knowledge(classified)
+    assert store._knowledge_get("Connector", connector.id) == classified
+
+
+def test_assertion_version_unit_reference_must_exist(store):
+    gen = generation(store)
+    job = claim(store, gen)
+    with store.generation_write(gen.id, **authority(job)):
+        revision, span = evidence(store, gen)
+        store.add_passages([passage(gen, revision, span)])
+        workspace = store.get_source(gen.source_id)["workspace_id"]
+        obj = k.KnowledgeObject(workspace_id=workspace, kind="table", canonical_key='["db","t"]')
+        assertion = k.checked_assertion(obj, "CONTRADICTS", obj, scope_key="test")
+        for record in (obj, assertion):
+            store.put_knowledge(record)
+    # Outside the build transaction: a refusal inside it would roll the whole write back.
+    version = k.AssertionVersion(
+        assertion_id=assertion.id,
+        evidence_class="declared",
+        rule_version="r",
+        confidence=1.0,
+        status="active",
+        recorded_from=NOW,
+        family="deterministic",
+        source="metadata",
+        unit_id="unit-missing",
+    )
+    with pytest.raises(ValueError, match="Missing Unit reference"):
+        store.put_knowledge(version)
 
 
 def test_existing_revision_write_requires_claimed_authority(store):

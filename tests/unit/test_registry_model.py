@@ -20,13 +20,14 @@ from hippo.knowledge.access import EvidenceAccess, EvidenceSelection
 from hippo.knowledge.builtin_types import EVIDENCE_CLASS_DERIVATION
 from hippo.knowledge.graph_loader import load_generation_graph
 from hippo.knowledge.identity import canonical_json, normalize_json, text_hash
-from hippo.knowledge.lifecycle import generation_passage_id
+from hippo.knowledge.lifecycle import generation_for_inputs, generation_passage_id
 from hippo.knowledge.predicates import OBJECT_KINDS, PREDICATES, predicate_definition
 from hippo.knowledge.query_access import query_session
 from hippo.knowledge.registry import (
     RegistrationError,
     Registry,
     TypeExtension,
+    current_registry,
     extension_scope,
 )
 from hippo.store import migrations
@@ -88,11 +89,6 @@ def _extension_rows() -> list[tuple[k.Record, str]]:
         (k.EvidenceSpan(**INCIDENT_SPAN), "Unknown locator kind"),
         (k.Assertion(**AFFECTS), "Unknown assertion predicate"),
     ]
-
-
-def test_the_vocabulary_slice_changes_no_persisted_column():
-    assert migrations.CURRENT_SCHEMA_VERSION == 7
-    assert migrations.MIGRATION_CHECKSUM == "73720e1eaeed7c148033c269de3a7e3af0d0c167fd87e580622f5c57537787f3"
 
 
 def test_moved_contract_names_resolve_through_the_model():
@@ -493,6 +489,247 @@ def test_renamed_to_and_duplicate_of_keep_the_matching_kind_rule():
 
 def test_projection_reads_predicate_definitions_through_the_registry():
     assert "PREDICATES[" not in inspect.getsource(projection)
+
+
+UNIT = {
+    "generation_id": "generation-x",
+    "passage_id": "passage-x",
+    "span_id": "span-x",
+    "ordinal": 0,
+    "kind": "sentence",
+    "text": "It refunds the order.",
+    "embed_text": "It refunds the order.",
+    "mentions_json": "[]",
+}
+ASSERTION_VERSION = {
+    "assertion_id": "assertion-x",
+    "evidence_class": "declared",
+    "rule_version": "r1",
+    "confidence": 1.0,
+    "status": "active",
+    "recorded_from": NOW,
+}
+
+
+def unit(**changes) -> k.Unit:
+    return k.Unit(**UNIT | changes)
+
+
+def version(**changes) -> k.AssertionVersion:
+    return k.AssertionVersion(**ASSERTION_VERSION | changes)
+
+
+def test_unit_derives_and_checks_its_content_and_embed_hashes():
+    row = unit()
+    assert row.content_hash == text_hash(UNIT["text"]) == row.embed_hash
+    assert unit(content_hash=text_hash(UNIT["text"]), embed_hash=text_hash(UNIT["embed_text"])) == row
+    with pytest.raises(ValidationError, match="Unit content hash does not match its text"):
+        unit(content_hash="a" * 64)
+    with pytest.raises(ValidationError, match="Unit embed hash does not match its embed text"):
+        unit(embed_hash="a" * 64)
+
+
+def test_unit_embed_text_is_its_prefix_followed_by_its_text():
+    # S2 keeps the separator inside the prefix, so the concatenation is exact.
+    row = unit(prefix="Refunds: ", text="It refunds", embed_text="Refunds: It refunds")
+    assert row.embed_text == row.prefix + row.text
+    for changes in (
+        {"prefix": "Refunds", "text": "It refunds", "embed_text": "Refunds: It refunds"},
+        {"embed_text": "Something else entirely"},
+    ):
+        with pytest.raises(ValidationError, match="Unit embed text must be its prefix followed by its text"):
+            unit(**changes)
+    with pytest.raises(ValidationError, match="Unit text must not be blank"):
+        unit(text="   ", embed_text="   ")
+
+
+def test_rendered_units_name_a_template_and_carry_no_prefix():
+    assert unit(kind="rendered_fact", template="severity@1").template == "severity@1"
+    for changes in (
+        {"kind": "rendered_fact"},
+        {
+            "kind": "rendered_edge",
+            "template": "severity@1",
+            "prefix": "Refunds: ",
+            "embed_text": "Refunds: " + UNIT["text"],
+        },
+    ):
+        with pytest.raises(ValidationError, match="A rendered unit names its template and carries no prefix"):
+            unit(**changes)
+    with pytest.raises(ValidationError, match="Only a rendered unit names a template"):
+        unit(template="severity@1")
+    with pytest.raises(ValidationError):  # a template reference is "<name>@<version>"
+        unit(kind="rendered_fact", template="severity")
+
+
+def test_unit_mentions_are_sorted_unique_object_ids():
+    assert unit(mentions_json='["object-a","object-b"]').mentions_json == '["object-a","object-b"]'
+    for value in ('["object-b","object-a"]', '["object-a","object-a"]'):
+        with pytest.raises(ValidationError, match="must be sorted and unique"):
+            unit(mentions_json=value)
+    for value in ('{"object-a":1}', '["object-a",2]', '[""]'):
+        with pytest.raises(ValidationError, match="Unit mentions must be a JSON array of object ids"):
+            unit(mentions_json=value)
+
+
+def test_unit_identity_is_generation_passage_ordinal_and_content_hash():
+    row = unit()
+    assert row.id.startswith("unit-")
+    assert unit(mentions_json='["object-a"]').id == row.id
+    assert unit(prefix="Refunds: ", embed_text="Refunds: " + UNIT["text"]).id == row.id
+    for changes in ({"text": "It refunds nothing.", "embed_text": "It refunds nothing."}, {"ordinal": 1}):
+        assert unit(**changes).id != row.id
+
+
+def test_unit_embed_hash_is_the_embedding_cache_input_hash():
+    from hippo.knowledge.embedding_cache import EmbeddingProfile, cache_key
+
+    profile = EmbeddingProfile(
+        model="nomic-embed-text:latest",
+        model_digest="sha256:" + "a" * 64,
+        dimension=3,
+        preprocessing_version="ollama-prefix-rules-v1",
+        normalization_options_fingerprint="float32-l2;options={}",
+    )
+    plain = unit()
+    prefixed = unit(prefix="Refunds: ", embed_text="Refunds: " + UNIT["text"])
+    assert cache_key(profile, plain.embed_text).input_hash == plain.embed_hash
+    assert cache_key(profile, prefixed.embed_text).input_hash == prefixed.embed_hash
+    # Boilerplate weight keys on the text; the vector keys on what is embedded.
+    assert prefixed.content_hash == plain.content_hash and prefixed.embed_hash != plain.embed_hash
+
+
+def test_assertion_version_kit_provenance_rules():
+    kitted = version(family="deterministic", source="metadata", weight=1.0, statement="a affects b")
+    assert (kitted.family, kitted.source, kitted.weight) == ("deterministic", "metadata", 1.0)
+    for changes, message in (
+        ({"family": "deterministic"}, "Assertion version family and source appear together"),
+        ({"source": "metadata"}, "Assertion version family and source appear together"),
+        ({"rule": "alias"}, "Assertion version provenance fields require a family and source"),
+        ({"statement": "a affects b"}, "Assertion version provenance fields require a family and source"),
+        ({"unit_id": "unit-x"}, "Assertion version provenance fields require a family and source"),
+        ({"weight": 1.0}, "Assertion version provenance fields require a family and source"),
+        (
+            {"family": "deterministic", "source": "rule"},
+            "A rule-sourced assertion version names its rule",
+        ),
+        (
+            {"family": "deterministic", "source": "metadata", "weight": 0.5},
+            "Assertion version weight must equal its confidence",
+        ),
+        (
+            {"family": "deterministic", "source": "metadata", "weight": True},
+            "Confidence must be numeric, not boolean",
+        ),
+    ):
+        with pytest.raises(ValidationError, match=message):
+            version(**changes)
+    assert version(family="deterministic", source="rule", rule="alias").rule == "alias"
+    # Vocabulary is checked at write and at bind, never at construction (ruling R39).
+    with pytest.raises(ValueError, match="Unknown evidence source"):
+        current_registry().check_record(version(family="deterministic", source="pager"))
+
+
+def _v8_samples():
+    recorded = datetime(2026, 1, 1, tzinfo=UTC)
+    return (
+        k.AssertionVersion(
+            assertion_id="assertion-x",
+            evidence_class="declared",
+            rule_version="r1",
+            confidence=1.0,
+            status="active",
+            recorded_from=recorded,
+            validity_kind="atemporal",
+            temporal_basis="atemporal",
+        ),
+        k.Generation(
+            source_id="source-x",
+            status="staging",
+            parser_version="p1",
+            linker_version="l1",
+            embedding_profile="e1",
+            created_at=recorded,
+            manifest_hash="m1",
+        ),
+        k.Connector(workspace_id="workspace-x", kind="github", instance_url="https://github.com"),
+    )
+
+
+def test_v8_fields_leave_existing_identities_unchanged():
+    """The ids computed at ef143b1, before any v8 column existed."""
+    assertion_version, generation_row, connector = _v8_samples()
+    assert assertion_version.id == (
+        "assertionversion-6467ad40c0cb7cc99b5b7bc8dc6b5b9b7ea5329802a02102e6d3676a3f976124"
+    )
+    assert generation_row.id == "generation-48340495d0e8683448ab762da4a3446b32ffe397c8377b22d4654c9decb0e2cc"
+    assert connector.id == "connector-bc33ca852d33fda7c10321746a2eaf767b03f9bf735f2425ab82fa45cfedaa6f"
+    assert assertion_version.replace(family="deterministic", source="metadata").id == assertion_version.id
+    assert generation_row.replace(registry_fingerprint="a" * 64).id == generation_row.id
+    assert connector.replace(classification_json='{"partitions":[]}').id == connector.id
+    for record in (assertion_version, generation_row, connector):
+        assert not {"family", "source", "registry_fingerprint", "classification_json"} & set(
+            type(record).identity_fields
+        )
+
+
+def test_connector_classification_is_a_json_object_outside_identity():
+    _, _, connector = _v8_samples()
+    assert connector.classification_json == "{}"
+    assert connector.replace(classification_json='{"partitions":["main"]}').classification_json == (
+        '{"partitions":["main"]}'
+    )
+    with pytest.raises(ValidationError, match="Connector classification must be a JSON object"):
+        connector.replace(classification_json="[]")
+
+
+def _generation_inputs():
+    artifact = k.Artifact(
+        workspace_id="w",
+        source_id="source-x",
+        kind="file",
+        external_id="a.txt",
+        canonical_uri="a.txt",
+        policy_id="policy-x",
+    )
+    revision = k.ArtifactRevision(
+        artifact_id=artifact.id, content_hash="h", raw_uri="blob:h", observed_at=NOW, lifecycle="active"
+    )
+    return [(artifact, revision)]
+
+
+def test_generation_registry_fingerprint_is_a_sha256_outside_identity_and_the_manifest():
+    inputs = dict(
+        workspace_id="w",
+        source_id="source-x",
+        parent_id=None,
+        parser_version="p",
+        linker_version="l",
+        embedding_profile="e",
+        configuration={},
+        created_at=NOW,
+    )
+    plain = generation_for_inputs(_generation_inputs(), **inputs)
+    fingerprinted = generation_for_inputs(_generation_inputs(), **inputs, registry_fingerprint="b" * 64)
+    assert plain.registry_fingerprint is None and fingerprinted.registry_fingerprint == "b" * 64
+    # Recorded, never hashed: the fingerprint is outside identity and outside the manifest.
+    assert (fingerprinted.id, fingerprinted.manifest_hash) == (plain.id, plain.manifest_hash)
+    for value in ("B" * 64, "b" * 63):
+        with pytest.raises(ValidationError):
+            plain.replace(registry_fingerprint=value)
+
+
+def test_an_unregistered_kind_is_refused_at_write_and_reads_back_afterwards(store):
+    """Ruling R39 at the store boundary: refused at write, still readable where it is unregistered."""
+    workspace = k.Workspace(name="incidents-at-write")
+    store.put_knowledge(workspace)
+    incident = k.KnowledgeObject(**INCIDENT | {"workspace_id": workspace.id})
+    with pytest.raises(ValueError, match="Unknown object kind"):
+        store.put_knowledge(incident)
+    with extension_scope() as registry:
+        registry.register(incident_extension())
+        store.put_knowledge(incident)
+    assert store._knowledge_get("KnowledgeObject", incident.id) == incident
 
 
 def test_the_two_new_evidence_classes_validate_and_change_no_column():
