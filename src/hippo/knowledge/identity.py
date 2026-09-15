@@ -170,6 +170,25 @@ def review_identity(workspace: str, provider_instance: str, repository_id: str, 
     )
 
 
+def file_key(repository_object_id: str, path: str) -> list:
+    """The `file` key the code lane writes today (`code_binding._file_object`).
+
+    Ruling R28: these three kinds had no public helper, so the kit called them by re-spelling their
+    arrays. They are spelled once, here, and the code lane's own call sites are untouched.
+    """
+    return [repository_object_id, normalize_relative_path(path)]
+
+
+def commit_key(repository_object_id: str, sha: str) -> list:
+    """The `commit` key the history lane writes today (`code_history` commit object)."""
+    return [repository_object_id, sha]
+
+
+def resource_key(repository_object_id: str, dialect: str, data_kind: str, qualname: str) -> list:
+    """The `resource`-shaped data object key the code lane writes today (`code_binding._data_object`)."""
+    return [repository_object_id, dialect, data_kind, qualname]
+
+
 def catalog_reference(
     value: str, *, default_kind: str = "Component", default_namespace: str = "default"
 ) -> str:
