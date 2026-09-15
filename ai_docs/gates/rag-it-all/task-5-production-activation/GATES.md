@@ -6,43 +6,43 @@
 
 - [x] PA1: BuildActor propagation and managed eligibility are closed and backward compatible.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_local_workspace_membership.py tests/unit/test_managed_pipeline_activation.py tests/unit/test_managed_route_activation.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=............s................................                            [100%] | 187 passed, 2 skipped in 27.44s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=............s................................                            [100%] | 187 passed, 2 skipped in 25.55s
   CRITERIA: authenticated web page/API, HTTP/stdio MCP, remote CLI, and gated local CLI propagate the current real reader; explicit internal calls may use trusted-local; open/preview/missing-token callers cannot build managed evidence; old actorless library calls remain legacy; only pasted text, the closed plain-prose extension set and (since CC10 of the managed code-capture ledger, `../task-5-code-capture/evidence-cc10.md`) code files named by `readers.is_code_name`, `.zip` archives and repositories opt in; unsupported inputs preserve legacy behavior; existing managed sources never fall back to legacy.
   EXPECT: passed
 
 - [x] PA2: Exact selected-generation metadata makes empty managed sources visible without leaking denied sources.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_source_inventory.py tests/unit/test_status_access.py tests/unit/test_structural_loading.py tests/unit/test_multi_generation_support.py tests/unit/test_status_code_edges.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=........................................                                 [100%] | 111 passed, 1 skipped in 5.12s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=........................................                                 [100%] | 111 passed, 1 skipped in 4.74s
   CRITERIA: canonical selected `(source,generation)` pairs require an authorized exact manifest revision and survive scope/compose/dense replacement/fingerprint; empty active generations appear with Source control presentation and zero counts; denied/suppressed/staging/retired generations do not appear; empty selection performs no Ollama call; shared code/object/relation and Fact support counts use exact current provenance.
   EXPECT: passed
 
 - [x] PA3: Managed add/bootstrap/refresh uses the coordinator and preserves G1 on every non-publication exit.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_pipeline_activation.py tests/unit/test_prose_generation.py tests/unit/test_generation_failure.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=.........................s.......................                        [100%] | 190 passed, 3 skipped in 24.28s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=.........................s.......................                        [100%] | 190 passed, 3 skipped in 23.64s
   CRITERIA: saved plain input is bounded and captured under the configured absolute raw root; profile/options/operation identity are immutable; bootstrap swaps legacy only at publish; refresh serves G1 through cancellation/failure/races; failure state is generation aware; no managed attempt clears source-wide evidence, collects a generation, or deletes raw/source files.
   EXPECT: passed
 
 - [x] PA4: Managed delete is an atomic current-view tombstone and fence, not physical deletion.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_source_lifecycle.py tests/unit/test_ingest_concurrency.py tests/unit/test_generation_store.py tests/unit/test_evidence_access.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=.............................................                            [100%] | 117 passed in 5.94s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=.............................................                            [100%] | 117 passed in 5.82s
   CRITERIA: current-only all-principals Source suppression, next epoch, restoration barrier, Source tombstone presentation, active-builder fencing and exact unpublished-job cancellation commit together; delete does not wait on model I/O; in-flight/current reads deny after commit; active/retired generations, history, saved ingress, raw blobs, snapshots, independent support and unrelated sources remain; legacy delete behavior is unchanged; repeated inaccessible delete reveals nothing.
   EXPECT: passed
 
 - [x] PA5: Reindex and mixed bulk dispatch by source mode without managed cleanup or resurrection.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_pipeline_activation.py tests/unit/test_ingest_pipeline.py tests/unit/test_ingest_concurrency.py tests/unit/test_status_access.py tests/unit/test_ingest_limits.py -q -o addopts='' -W error
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=.............................................                            [100%] | 187 passed, 2 skipped in 26.95s
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=.............................................                            [100%] | 187 passed, 2 skipped in 27.02s
   CRITERIA: managed refresh and eligible conversion never call legacy preparation; unsupported/actorless unmanaged sources preserve legacy preparation; bulk preflights every managed authority before any clear, clears all and only legacy lanes before job submission, skips tombstones, retains the public accepted response, isolates asynchronous failures, and rechecks races without fallback. Destructive managed-operation spies remain untouched.
   EXPECT: passed
 
 - [x] PA6: Production readers hold one structural owner and model routes use dense dispatch with private failure mapping.
   CHECK: HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_managed_route_activation.py tests/unit/test_dense_session.py tests/unit/test_query_session.py tests/unit/test_web_base.py tests/unit/test_web_auth.py tests/unit/test_mcp_http.py tests/unit/test_mcp_server.py tests/unit/test_cli.py tests/unit/test_web_analyze.py tests/unit/test_web_code.py tests/unit/test_eval_access.py tests/unit/test_evals_runner.py tests/unit/test_managed_web_surfaces.py tests/unit/test_managed_web_ingress.py tests/unit/test_graph_surface_access.py tests/unit/test_web_library_evals.py tests/unit/test_managed_eval_activation.py tests/unit/test_evals_question_maker.py tests/unit/test_managed_transport_activation.py tests/unit/test_public_errors.py -q -o addopts='' -W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=..........                                                               [100%] | 730 passed in 69.54s (0:01:09)
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=..........                                                               [100%] | 730 passed in 72.38s (0:01:12)
   CRITERIA: ask/search/analyze/light-up/evaluation activate verified or explicit tag-compatible dense execution from one held structural session; graph/source/status/code/citation routes remain Ollama-offline; hidden or empty sources do not affect routing; authorization/profile changes deny output; HTTP/MCP/CLI stable codes contain no injected secrets, raw text, paths, tokens, prompts, model bodies, or arbitrary exception strings.
   EXPECT: passed
 
-- [x] PA7: Ladybug persistence and full Task 5 regression pass as the primary backend.
+- [ ] PA7: Ladybug persistence and full Task 5 regression pass as the primary backend.
   CHECK: HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_local_workspace_membership.py tests/unit/test_managed_source_lifecycle.py tests/unit/test_managed_source_inventory.py tests/unit/test_managed_pipeline_activation.py tests/unit/test_managed_route_activation.py tests/unit/test_prose_generation.py tests/unit/test_dense_session.py tests/unit/test_query_session.py tests/unit/test_generation_store.py tests/unit/test_structural_loading.py tests/unit/test_status_access.py tests/unit/test_managed_web_surfaces.py tests/unit/test_managed_web_ingress.py tests/unit/test_managed_eval_activation.py tests/unit/test_managed_transport_activation.py -q -o addopts='' -W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/mascott/projects/hippo; path=b6bf9549d64b/37 entries; output=......................                                                   [100%] | 742 passed in 4804.19s (1:20:04)
+  EVIDENCE: pending
   CRITERIA: close/reopen preserves local membership, active pointers, exact manifests, raw references, failed refresh state, tombstone/fence/epochs, empty source visibility and current/history behavior. Existing legacy ingestion/query/source tests remain green. No real model credentials or network are required.
   EXPECT: passed
 

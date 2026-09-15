@@ -1,0 +1,40 @@
+# Brief: independent SPEC/QUALITY review of activation Task 1 (local memberships + managed tombstone)
+
+Read `ai_docs/handoffs/fleet-worker-rules.md` first. You work in the ROOT tree (`/Users/mascott/projects/hippo`). The work under review is committed there: commits `5f6b7e9`, `8b056aa`, `771aac0`, `5564d73` (HEAD). You read and run; you do not edit source or tests.
+
+GOAL: Independent SPEC and QUALITY verdict on Task 1 of `ai_docs/plans/rag-it-all-task-5-production-activation.md` before it is published.
+
+CONTEXT:
+- Plan sections that bind: "Build actors at every boundary" (the numbered membership list 1–4 and the paragraph after), "Managed delete: suppression now, physical purge elsewhere", invariants 1, 2, 7, 10, the adversarial cases about users before/after upgrade and monkeypatched destructive operations. Gate ledger `ai_docs/gates/rag-it-all/task-5-production-activation/GATES.md` gates PA4 (all), PA1 (membership half), PA7 (persistence half).
+- Implementer's evidence and self-reported deviations: `ai_docs/gates/rag-it-all/task-5-production-activation/evidence-pa1.md` (330 lines). Read it fully; verify its claims rather than trusting them.
+- Diff to review: `git diff 26f9a55..5564d73 -- src/ tests/` (14 files, ~1,400 lines). New: `src/hippo/knowledge/source_lifecycle.py`, `tests/unit/test_local_workspace_membership.py`, `tests/unit/test_managed_source_lifecycle.py`. Modified: `src/hippo/store/{knowledge,generations,__init__,ladybug,authorization}.py`, `tests/fakes/fake_store.py`, four existing tests.
+- Orchestrator decisions the implementer followed (do not flag these as deviations): the membership hook lives in `store/authorization.py::permission_mutation` (create_user after the wrapped call, delete_user before) rather than in each backend's method; new memberships are exactly `enabled=True, mapping_authority='local', policy_epoch=1` and the locked helper is a no-op when an equal enabled membership exists; tombstone replay returns the generic `AuthorizationChanged` for readers, and for trusted-local re-establishes standing via `require_source(query_mode='history')` and returns `already_tombstoned` only when reason/applicability/scope_key match and `restoration_barrier == operation_id`; the `-W error` AnyIO collection warning is handled per the rulebook.
+
+FILES:
+  - own: `ai_docs/reports/2026-09-11-pa1-review.md` (your report).
+  - do NOT touch: anything else. Other workers are editing `src/hippo/ingest/prose_generation.py`, `tests/unit/test_prose_generation.py`, `src/hippo/knowledge/temporal.py`, `conflicts.py` and their tests in this tree; ignore them.
+
+STEPS:
+1. Run, each captured to `/tmp/hippo-pa1-review-<n>.log` with `echo EXIT $?`:
+   a. `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_local_workspace_membership.py tests/unit/test_managed_source_lifecycle.py tests/unit/test_ingest_concurrency.py tests/unit/test_generation_store.py tests/unit/test_evidence_access.py tests/unit/test_build_authority.py tests/unit/test_generation_failure.py tests/unit/test_evidence_epochs.py tests/unit/test_store_knowledge.py tests/unit/test_evidence_store_access.py -q -o addopts='' -W error`
+   b. `HIPPO_TEST_STORE=ladybug .venv/bin/pytest tests/unit/test_local_workspace_membership.py tests/unit/test_managed_source_lifecycle.py tests/unit/test_build_authority.py tests/unit/test_generation_failure.py -q -o addopts='' -W error` (about two minutes).
+   c. `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_store_migrations.py tests/unit/test_policy_migration.py -q -o addopts='' -W error` and the same on Ladybug (migration coverage; the implementer added a schema-completeness guard `_local_mapping_available` because a pre-schema-5 file has no membership table).
+   d. `HIPPO_TEST_STORE=fake .venv/bin/pytest tests/unit/test_web_auth.py tests/unit/test_status_access.py -q -o addopts='' -W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"`.
+2. SPEC review; classify each PROVEN (test name) / UNTESTED / VIOLATED (file:line):
+   a. `"local"` present in sorted unique `reviewed_mapping_authorities`; one enabled default-workspace membership per live user; repair via `policy_epoch` increase; locked form counts and does not bump; public form bumps exactly once when count > 0; idempotent startup bumps nothing.
+   b. Hooks: `Store.on_first_connection` and `LadybugStore.on_first_connection` after schema and roles; create_user's existing single epoch bump covers the membership; delete_user disables (retains) the membership first; no nested second epoch-owning wrapper.
+   c. Disabled user, changed role, Source ACL change, deleted user, missing membership, and removal of the reviewed authority each invalidate a captured `BuildAuthority`.
+   d. Tombstone transition exactly as the plan lists it: cancellation requested first (not awaited); one callback-free transaction; authorization lock then Source lock; `guard.check_local()`; managed recheck; fence increment and `active_build_id` cleared; ONLY the exact unpublished active build's generation failed and its job cancelled with `source_tombstoned`; all-principals `Suppression(target_kind='source', reason='tombstone', view_applicability='current_only', scope_key='source:<id>:delete', restoration_barrier=operation_id)` at the next epoch; Source presentation `status='deleted', stage='tombstoned'`, zero progress, no detailed error; `active_generation_id` unchanged; suppression/content/authorization epochs committed together.
+   e. Delete never waits on model I/O; in-flight current sessions fail validation after commit; new sessions exclude the source.
+   f. Nothing physical: no `Store.delete_source`, `_clear_passages`, `delete_passages_for_source`, `delete_code_for_source`, `remove_orphans`, `rmtree`, generation collect/discard, raw unlink, snapshot rewrite, history erasure; active/retired generations, history, raw references, snapshots, independent support and unrelated sources byte-identical.
+   g. Legacy delete unchanged; repeated inaccessible delete reveals nothing; replay contract as decided above.
+   h. Ladybug close/reopen preserves memberships, tombstone, fence, epochs, presentation.
+   i. Bounded `operation_id` (regex `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`) enforced before any lock.
+3. QUALITY review, with particular attention to: `_set_meta_locked` writing through `type(self).set_meta.__wrapped__` to avoid a second epoch bump (is any invariant of `metadata_mutation` lost?); `_local_mapping_available` skipping the mapping when `schema_version()` is not current (can it silently skip on a current store, e.g. during migration recovery, leaving users unmapped without error?); the decorator hook's use of the returned user id (what if create_user returns something else on one backend?); `apply_source_tombstone` requiring the caller's transaction and locks (how is that enforced, or is it a documented precondition only?); the replayed receipt reporting the current fencing token (documented limit; is any caller misled?); whether the four existing-test edits changed what those tests prove; any Neo4j-specific path (`store/base.py`, `users.py`) that has no test in this tree.
+4. Report the verbatim public signatures of `tombstone_managed_source`, `TombstoneReceipt`, `apply_source_tombstone`, `SourceTombstone`, `tombstone_scope_key`, `ensure_local_workspace_memberships` for the Task 3 brief.
+
+DONE WHEN: `ai_docs/reports/2026-09-11-pa1-review.md` exists with `SPEC: PASS|FAIL`, `QUALITY: PASS|FAIL`, the a–i table, numbered findings with severity (blocker / major / minor), file:line, why, proposed fix, the run results with log paths, and the verbatim signatures. `horch done` states both verdicts, finding counts by severity, and the report path.
+
+CONSTRAINTS: no edits outside your report; no Neo4j; use `HIPPO_TEST_STORE` explicitly on every command.
+
+REPORT: `horch note` after the runs, after the SPEC table, after the report. `horch tell orchestrator "[<role>] BLOCKED: ..."` only if a command cannot run.
