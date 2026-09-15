@@ -11,6 +11,20 @@ from .authorization import bump_epoch, epoch
 from .base import by_ids
 
 MANDATORY_REPRESENTATIONS = ("evidence", "dense", "native")
+# Schema v8 columns an older row reads back as null. Hashing the null keys would change the
+# evidence checksum of every generation sealed before v8, and `validate_generation_seal` would
+# then refuse it.
+V8_UNSET_FIELDS = {"AssertionVersion": ("family", "source", "rule", "weight", "statement", "unit_id")}
+
+
+def _evidence_row(record) -> dict:
+    """A record as the evidence representation hashes it, without its unset v8 columns."""
+    row = record.model_dump(mode="json")
+    for field in V8_UNSET_FIELDS.get(type(record).__name__, ()):
+        if row[field] is None:
+            del row[field]
+    return row
+
 
 # A managed refresh leaves the source `ready` with a `refreshing: ...` stage, because its
 # published generation keeps serving throughout. A restart therefore cannot mark it failed
@@ -981,7 +995,7 @@ class GenerationQueries:
             key = (type(record).__name__, record.id)
             if key in evidence or key[0] in ("Artifact", "AccessPolicy", "Generation", "Source", "Workspace"):
                 return
-            evidence[key] = record.model_dump(mode="json")
+            evidence[key] = _evidence_row(record)
             for kind, rid in self._references(record):
                 if kind in k.RECORD_TYPES:
                     target = self._knowledge_get(kind, rid)

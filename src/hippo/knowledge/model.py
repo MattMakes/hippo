@@ -209,7 +209,17 @@ class Connector(Record):
     credential_ref: Text | None = None
     enabled: bool = False
     capabilities_json: Json = "{}"
+    # v8: the stored probe result (design §2). Mutable, and outside identity, so a re-probe
+    # neither renames the connector nor creates a second one.
+    classification_json: Json = "{}"
     identity_fields = ("workspace_id", "kind", "instance_url")
+
+    @field_validator("classification_json")
+    @classmethod
+    def classification_object(cls, value):
+        if not isinstance(json.loads(value), dict):
+            raise ValueError("Connector classification must be a JSON object")
+        return value
 
 
 class Artifact(Record):
@@ -278,6 +288,9 @@ class Generation(Record):
     published_at: Instant | None = None
     manifest_hash: Text
     coverage_json: Json = "{}"
+    # v8: the ontology the generation was built with. Outside identity and outside the manifest,
+    # which hashes the configuration, so recording it renames no generation-scoped row.
+    registry_fingerprint: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
     identity_fields = (
         "source_id",
         "parent_id",
@@ -317,6 +330,7 @@ class GenerationEvidenceMember(Record):
         "DerivedDependency",
         "ConflictSet",
         "Alias",
+        "Unit",
     ]
     record_id: Text
     identity_fields = ("generation_id", "record_kind", "record_id")
@@ -469,6 +483,15 @@ class AssertionVersion(TemporalRecord):
     rule_version: Text
     confidence: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
     status: Literal["active", "candidate", "retracted", "superseded", "disputed"]
+    # v8 (design §4): the specification's edge provenance. None on every pre-kit row and outside
+    # identity, so no stored version is renamed. `source` is a plain code; the registry checks it at
+    # bind and at store write (ruling R39).
+    family: Literal["deterministic", "probabilistic"] | None = None
+    source: Code | None = None
+    rule: Code | None = None
+    weight: Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)] | None = None
+    statement: Text | None = None
+    unit_id: Text | None = None
     identity_fields = (
         "assertion_id",
         "evidence_class",
@@ -483,12 +506,26 @@ class AssertionVersion(TemporalRecord):
         "temporal_precision",
     )
 
-    @field_validator("confidence", mode="before")
+    @field_validator("confidence", "weight", mode="before")
     @classmethod
     def no_boolean_confidence(cls, value):
         if isinstance(value, bool):
             raise ValueError("Confidence must be numeric, not boolean")
         return value
+
+    @model_validator(mode="after")
+    def kit_provenance(self) -> Self:
+        if (self.family is None) != (self.source is None):
+            raise ValueError("Assertion version family and source appear together")
+        if self.family is None and any(
+            value is not None for value in (self.rule, self.weight, self.statement, self.unit_id)
+        ):
+            raise ValueError("Assertion version provenance fields require a family and source")
+        if self.source == "rule" and self.rule is None:
+            raise ValueError("A rule-sourced assertion version names its rule")
+        if self.weight is not None and self.weight != self.confidence:
+            raise ValueError("Assertion version weight must equal its confidence")
+        return self
 
 
 class AssertionSupport(Record):
@@ -530,6 +567,71 @@ class NativeBinding(Record):
     native_id: Text
     span_id: Text
     identity_fields = ("generation_id", "object_id", "native_kind", "native_id", "span_id")
+
+
+UnitKind = Literal["sentence", "statement", "row", "diff_line", "rendered_fact", "rendered_edge"]
+RENDERED_UNIT_KINDS = frozenset({"rendered_fact", "rendered_edge"})
+TEMPLATE_REFERENCE = r"^[A-Za-z][A-Za-z0-9_.:-]*@[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+
+
+class Unit(Record):
+    """The retrieval representation of a span (design §4): several per passage, one embedded text.
+
+    `content_hash` is the identity hash and the boilerplate weight key of spec §7.2; `embed_hash` is
+    the vector cache key, equal to `embedding_cache.cache_key(profile, embed_text).input_hash`.
+    """
+
+    generation_id: Text
+    passage_id: Text
+    span_id: Text  # the original evidence; rendered kinds name the span their attributes came from
+    ordinal: Nonnegative
+    kind: UnitKind
+    text: str  # a verified slice of the span, or the template output for rendered kinds
+    content_hash: Text  # sha256 of `text`: identical text anywhere shares it
+    prefix: str = ""  # heading or enclosing symbol with its separator; empty when rendered
+    embed_text: str  # prefix + text exactly; what is embedded
+    embed_hash: Text  # sha256 of `embed_text`
+    mentions_json: Json  # object ids; the rows of the mention matrix
+    template: Annotated[str, Field(pattern=TEMPLATE_REFERENCE)] | None = None  # "<name>@<version>"
+    identity_prefix = "unit"
+    identity_fields = ("generation_id", "passage_id", "ordinal", "content_hash")
+
+    @model_validator(mode="before")
+    @classmethod
+    def derived_hashes(cls, values):
+        if isinstance(values, dict):
+            for source, target, message in (
+                ("text", "content_hash", "Unit content hash does not match its text"),
+                ("embed_text", "embed_hash", "Unit embed hash does not match its embed text"),
+            ):
+                if isinstance(values.get(source), str):
+                    expected = text_hash(values[source])
+                    if values.get(target, expected) != expected:
+                        raise ValueError(message)
+                    values = values | {target: expected}
+        return values
+
+    @field_validator("mentions_json")
+    @classmethod
+    def canonical_mentions(cls, value):
+        mentions = json.loads(value)
+        if not isinstance(mentions, list) or any(type(item) is not str or not item for item in mentions):
+            raise ValueError("Unit mentions must be a JSON array of object ids")
+        canonical_ids(tuple(mentions), label="Unit mentions")
+        return value
+
+    @model_validator(mode="after")
+    def representation(self) -> Self:
+        if not self.text.strip():
+            raise ValueError("Unit text must not be blank")
+        if self.embed_text != self.prefix + self.text:
+            raise ValueError("Unit embed text must be its prefix followed by its text")
+        if self.kind in RENDERED_UNIT_KINDS:
+            if self.template is None or self.prefix:
+                raise ValueError("A rendered unit names its template and carries no prefix")
+        elif self.template is not None:
+            raise ValueError("Only a rendered unit names a template")
+        return self
 
 
 class ColumnPair(Contract):
@@ -1344,6 +1446,7 @@ _RECORD_CLASSES = (
     AssertionVersion,
     AssertionSupport,
     NativeBinding,
+    Unit,
     AccessPolicy,
     SyncState,
     SyncRun,

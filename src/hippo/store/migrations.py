@@ -15,7 +15,7 @@ from typing import Annotated, Literal, Union, get_args, get_origin
 from ..knowledge.identity import canonical_json, text_hash
 from ..knowledge.model import RECORD_TYPES, Workspace
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 # Published by 4246f5e: never derive v2 from the evolving models.
 V2_DESCRIPTOR = json.loads(
     """[2, {
@@ -264,6 +264,7 @@ SUPPORTED_CHECKSUMS = {
     5: V5_CHECKSUM,
     6: V6_CHECKSUM,
     7: V7_CHECKSUM,
+    8: MIGRATION_CHECKSUM,
 }
 
 
@@ -280,6 +281,9 @@ def _descriptor(version):
         return V6_DESCRIPTOR
     if version == 7:
         return V7_DESCRIPTOR
+    if version == 8:
+        # Live while v8 is current; freeze it as a literal before v9.
+        return [8, KNOWLEDGE_COLUMNS, KNOWLEDGE_RELATIONS, SOURCE_COLUMNS, PASSAGE_COLUMNS, NATIVE_COLUMNS]
     raise SchemaCompatibilityError("Unsupported migration version")
 
 
@@ -486,6 +490,7 @@ def validate_physical_schema(store, *, version=CURRENT_SCHEMA_VERSION) -> None:
     for minimum, declared, refusal in (
         (6, NATIVE_INDEXES, "Evidence schema shape has an absent generation index"),
         (7, V7_INDEXES, "Evidence schema shape has an absent knowledge scope index"),
+        (8, V8_INDEXES, "Evidence schema shape has an absent unit index"),
     ):
         if version < minimum:
             continue
@@ -549,7 +554,50 @@ V7_INDEX_STEPS = [
 ]
 
 
+# v8 (ruling R41): the Unit lookups exist on Neo4j alone, because LadybugDB 0.15.3 has no
+# secondary-index DDL. `generation_id` also answers the generic per-kind index check above.
+V8_INDEXES = (
+    ("knowledge_unit_generation_id", "Unit", "generation_id"),
+    ("knowledge_unit_passage_id", "Unit", "passage_id"),
+    ("knowledge_unit_content_hash", "Unit", "content_hash"),
+)
+V8_INDEX_STEPS = [
+    f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON (n.{field})" for name, label, field in V8_INDEXES
+]
+# The widened columns of design section 4, outside every `identity_fields`, so no stored row moves.
+V8_ADDED_COLUMNS = (
+    ("AssertionVersion", "family"),
+    ("AssertionVersion", "source"),
+    ("AssertionVersion", "rule"),
+    ("AssertionVersion", "weight"),
+    ("AssertionVersion", "statement"),
+    ("AssertionVersion", "unit_id"),
+    ("Generation", "registry_fingerprint"),
+    ("Connector", "classification_json"),
+)
+
+
 def schema_steps(store, *, version=CURRENT_SCHEMA_VERSION) -> list[str]:
+    if version == 8:
+        columns = _descriptor(8)[1]
+        if store.knowledge_backend == "ladybug":
+            return [
+                "CREATE NODE TABLE IF NOT EXISTS Unit("
+                + ", ".join(
+                    f"{field} {kind}" + (" PRIMARY KEY" if field == "id" else "")
+                    for field, kind in columns["Unit"].items()
+                )
+                + ")",
+                *(
+                    f"ALTER TABLE {table} ADD IF NOT EXISTS {field} {columns[table][field]}"
+                    for table, field in V8_ADDED_COLUMNS
+                ),
+            ]
+        # Neo4j properties need no DDL; the Unit identity and its lookups do.
+        return [
+            "CREATE CONSTRAINT knowledge_unit_id IF NOT EXISTS FOR (n:Unit) REQUIRE n.id IS UNIQUE",
+            *V8_INDEX_STEPS,
+        ]
     if version == 7:
         # As for v6: LadybugDB has no secondary-index DDL, so its v7 bound is the predicate alone.
         return [] if store.knowledge_backend == "ladybug" else list(V7_INDEX_STEPS)
@@ -616,10 +664,31 @@ def schema_steps(store, *, version=CURRENT_SCHEMA_VERSION) -> list[str]:
 
 
 def _data_transform(store, *, version=CURRENT_SCHEMA_VERSION):
+    if version == 8:
+        # Added columns read back null, which every widened field accepts except the connector
+        # classification, whose default is an empty object (the v3 `origin` backfill's pattern).
+        if store.knowledge_backend != "fake":
+            store.run(
+                "MATCH (c:Connector) WHERE c.classification_json IS NULL SET c.classification_json='{}'"
+            )
+        store._knowledge_rows("Connector")  # every row must validate before the step is journaled
+        return
     if version in (5, 6, 7):  # v6 and v7 declare indexes only; no row is read or rewritten
         return
     if version == 4:
-        managed = {r.source_id for name in ("Artifact", "Generation") for r in store._knowledge_rows(name)}
+        # Read the one column this step needs, not the whole record: a later version's columns do
+        # not exist on the tables being upgraded here, and `_knowledge_rows` projects the current
+        # model (v8 added `Generation.registry_fingerprint`, which a v4 table has never held).
+        if store.knowledge_backend == "fake":
+            managed = {
+                r.source_id for name in ("Artifact", "Generation") for r in store._knowledge_rows(name)
+            }
+        else:
+            managed = {
+                row["source_id"]
+                for name in ("Artifact", "Generation")
+                for row in store.run(f"MATCH (n:{name}) RETURN n.source_id AS source_id")
+            }
         if store.knowledge_backend == "fake":
             for source in store.sources.values():
                 source["managed"] = bool(source.get("managed")) or source["id"] in managed

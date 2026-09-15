@@ -142,6 +142,8 @@ _RECORD_VOCABULARY = MappingProxyType(
         "EvidenceSpan": ("locator_kind", "locator_kinds", "Unknown locator kind"),
         "KnowledgeObject": ("kind", "object_kinds", "Unknown object kind"),
         "Assertion": ("predicate", "predicates", "Unknown assertion predicate"),
+        # v8, optional: a pre-kit version carries no source, which `check_record` skips.
+        "AssertionVersion": ("source", "evidence_sources", "Unknown evidence source"),
     }
 )
 
@@ -284,8 +286,11 @@ class Registry:
         if rule is None:
             return
         field, section, message = rule
+        value = getattr(record, field)
+        if value is None:  # an optional vocabulary field this record does not carry
+            return
         try:
-            definition = self._lookup(section, getattr(record, field))
+            definition = self._lookup(section, value)
         except UnregisteredName as error:
             raise ValueError(message) from error
         if section == "locator_kinds":

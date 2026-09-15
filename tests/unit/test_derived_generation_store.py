@@ -125,7 +125,7 @@ def extraction(store, gen, span, row, *, payload=None):
 
 
 def test_schema5_freezes_v4_and_preserves_original_checksum_shape(store):
-    assert migrations.CURRENT_SCHEMA_VERSION == 7
+    assert migrations.CURRENT_SCHEMA_VERSION == 8
     assert (
         migrations.SUPPORTED_CHECKSUMS[4]
         == "af3234c2ffd6aa2a5c935b06352ad91c92b8c44f80926969a6c3a775a4d5dfd7"
@@ -322,6 +322,9 @@ def test_actual_v4_upgrade_retains_original_seal(tmp_path, monkeypatch, legacy_v
     with monkeypatch.context() as patch:
         patch.setattr(migrations, "CURRENT_SCHEMA_VERSION", 4)
         old = LadybugStore(path)
+        # The v4 tables predate v8, while this test drives them through today's model, whose
+        # Generation carries `registry_fingerprint`: every read of the row projects that column.
+        old.run("ALTER TABLE Generation ADD IF NOT EXISTS registry_fingerprint STRING")
         gen = generation(old)
         job = claim(old, gen)
         with old.generation_write(gen.id, **authority(job)):

@@ -23,12 +23,15 @@ def generation_for_inputs(
     embedding_profile: str,
     configuration: dict,
     created_at: datetime,
+    registry_fingerprint: str | None = None,
 ) -> k.Generation:
     """Identify one current revision per artifact before producing native nodes.
 
     Observation timestamps and raw blob locations are deliberately excluded:
     replaying accepted inputs must not invent another generation. Input content,
     provider revision identities and extraction configuration do participate.
+    `registry_fingerprint` is recorded on the generation and never hashed: the manifest
+    identifies the inputs, and the ontology the build read is not one of them.
     """
     if not isinstance(workspace_id, str) or not workspace_id.strip():
         raise ValueError("A generation requires an explicit workspace")
@@ -62,6 +65,7 @@ def generation_for_inputs(
         embedding_profile=embedding_profile,
         created_at=created_at,
         manifest_hash=text_hash(canonical_json(manifest)),
+        registry_fingerprint=registry_fingerprint,
     )
 
 

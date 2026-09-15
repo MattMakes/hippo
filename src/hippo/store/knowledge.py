@@ -17,6 +17,7 @@ from typing import get_args, get_origin
 from ..access import Access
 from ..knowledge import model as k
 from ..knowledge.identity import canonical_json
+from ..knowledge.registry import current_registry
 
 LOCAL_MAPPING_AUTHORITY = "local"
 """The one identity mapping this application reviews itself: its own local User records."""
@@ -71,13 +72,16 @@ REFERENCES = {
         "subject_id": "KnowledgeObject",
         "object_id": "KnowledgeObject",
     },
-    "AssertionVersion": {"assertion_id": "Assertion"},
+    "AssertionVersion": {"assertion_id": "Assertion", "unit_id": "Unit"},
     "AssertionSupport": {"assertion_version_id": "AssertionVersion", "span_id": "EvidenceSpan"},
     "NativeBinding": {
         "generation_id": "Generation",
         "object_id": "KnowledgeObject",
         "span_id": "EvidenceSpan",
     },
+    # Units are several per passage and no reader traverses one to its span, so they carry
+    # scalar references and no relationship table.
+    "Unit": {"generation_id": "Generation", "span_id": "EvidenceSpan", "passage_id": "Passage"},
     "AccessPolicy": {"workspace_id": "Workspace"},
     "SyncState": {"connector_id": "Connector"},
     "SyncRun": {"connector_id": "Connector", "source_id": "Source", "expected_parent_id": "Generation"},
@@ -151,7 +155,7 @@ REL_FIELDS = {
 MUTABLE_FIELDS = {
     "WorkspaceMembership": {"enabled", "mapping_authority", "policy_epoch"},
     "GroupMembership": {"enabled", "mapping_authority", "policy_epoch"},
-    "Connector": {"enabled", "config_json", "credential_ref", "capabilities_json"},
+    "Connector": {"enabled", "config_json", "credential_ref", "capabilities_json", "classification_json"},
     "Artifact": {"deleted_at", "policy_id", "canonical_uri"},
     "Generation": {"status", "published_at", "coverage_json"},
     "AccessPolicy": {"verified_at", "expires_at"},
@@ -764,6 +768,8 @@ class KnowledgeQueries:
         ):
             raise TypeError("Expected a registered immutable knowledge record")
         record = type(record).model_validate(record)
+        # Ruling R39: vocabulary is checked at registration, at bind and here, never on read.
+        current_registry().check_record(record)
         with self.transaction():
             self._lock_authorization()
             self._validate_knowledge(record)
@@ -785,6 +791,8 @@ class KnowledgeQueries:
         ):
             raise TypeError("Expected a registered immutable knowledge record")
         record = type(record).model_validate(record)
+        # Ruling R39: vocabulary is checked at registration, at bind and here, never on read.
+        current_registry().check_record(record)
         with self.transaction():
             self._lock_authorization()
             if self.knowledge_backend == "neo4j":

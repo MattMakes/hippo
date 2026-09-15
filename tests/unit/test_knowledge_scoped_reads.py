@@ -540,10 +540,11 @@ def test_the_fake_snapshot_shares_only_records_no_write_can_change(store):
 
 
 def test_schema_version_seven_journals_the_knowledge_scope_indexes(store):
-    assert migrations.CURRENT_SCHEMA_VERSION == 7
-    assert [*migrations.SUPPORTED_CHECKSUMS] == [1, 2, 3, 4, 5, 6, 7]
+    assert migrations.CURRENT_SCHEMA_VERSION == 8
+    assert [*migrations.SUPPORTED_CHECKSUMS] == [1, 2, 3, 4, 5, 6, 7, 8]
     assert migrations.SUPPORTED_CHECKSUMS[6] == V6_CHECKSUM
-    assert migrations.SUPPORTED_CHECKSUMS[7] == migrations.MIGRATION_CHECKSUM != V6_CHECKSUM
+    assert migrations.SUPPORTED_CHECKSUMS[7] == migrations.V7_CHECKSUM != V6_CHECKSUM
+    assert migrations.SUPPORTED_CHECKSUMS[8] == migrations.MIGRATION_CHECKSUM != migrations.V7_CHECKSUM
     steps = migrations.schema_steps(store, version=7)
     if store.knowledge_backend == "ladybug":
         # Probed by CC2 on real_ladybug 0.15.3: no secondary-index DDL exists in the dialect.

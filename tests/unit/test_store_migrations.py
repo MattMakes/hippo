@@ -256,7 +256,7 @@ def test_migration_records_legacy_and_current_checksums(store):
     m = migrations()
     store.ensure_schema()
     history = store.schema_history()
-    assert {row["version"] for row in history} == {1, 2, 3, 4, 5, 6, 7}
+    assert {row["version"] for row in history} == {1, 2, 3, 4, 5, 6, 7, 8}
     assert {row["version"]: row["checksum"] for row in history} == m.SUPPORTED_CHECKSUMS
     assert all(row["state"] == "complete" for row in history)
 
@@ -290,7 +290,7 @@ def test_declared_complete_schema_is_checked_against_physical_shape(tmp_path):
         LadybugStore(path)
 
 
-@pytest.mark.parametrize("version", [2, 3, 4, 5])
+@pytest.mark.parametrize("version", [2, 3, 4, 5, 8])
 def test_recovery_after_each_declared_schema_step(store, version):
     if store.knowledge_backend == "fake":
         pytest.skip("Fake storage has no DDL; its data rollback is tested separately")
@@ -520,3 +520,162 @@ def test_v7_descriptor_and_indexes_are_frozen_at_their_published_values():
         ("knowledge_deriveddependency_derived_record_id", "DerivedDependency", "derived_record_id"),
         ("knowledge_generationevidencemember_record_id", "GenerationEvidenceMember", "record_id"),
     )
+    assert m.SUPPORTED_CHECKSUMS[8] == m.MIGRATION_CHECKSUM != m.V7_CHECKSUM
+    columns = m.V7_DESCRIPTOR[1]
+    assert "Unit" not in columns
+    assert "family" not in columns["AssertionVersion"]
+    assert "registry_fingerprint" not in columns["Generation"]
+    assert "classification_json" not in columns["Connector"]
+
+
+def test_v8_descriptor_adds_unit_and_the_widened_columns_only():
+    from hippo.knowledge.identity import canonical_json
+
+    m = migrations()
+    v7, v8 = m._descriptor(7), m._descriptor(8)
+    assert v8[0] == 8
+    # Relationships, Source, Passage and the native tables are untouched by v8.
+    assert canonical_json(v8[2:]) == canonical_json(v7[2:])
+    pairs = {(table, column) for table, columns in v8[1].items() for column in columns}
+    assert pairs - {(table, column) for table, columns in v7[1].items() for column in columns} == {
+        ("Unit", column) for column in v8[1]["Unit"]
+    } | set(m.V8_ADDED_COLUMNS)
+    assert v8[1]["AssertionVersion"]["weight"] == "DOUBLE"
+    assert v8[1]["Unit"]["ordinal"] == "INT64"
+
+
+def test_v8_schema_steps_are_exact_per_backend():
+    from types import SimpleNamespace
+
+    m = migrations()
+    ladybug = m.schema_steps(SimpleNamespace(knowledge_backend="ladybug"), version=8)
+    assert ladybug == [
+        "CREATE NODE TABLE IF NOT EXISTS Unit(id STRING PRIMARY KEY, identity_key STRING, "
+        "generation_id STRING, passage_id STRING, span_id STRING, ordinal INT64, kind STRING, "
+        "text STRING, content_hash STRING, prefix STRING, embed_text STRING, embed_hash STRING, "
+        "mentions_json STRING, template STRING)",
+        "ALTER TABLE AssertionVersion ADD IF NOT EXISTS family STRING",
+        "ALTER TABLE AssertionVersion ADD IF NOT EXISTS source STRING",
+        "ALTER TABLE AssertionVersion ADD IF NOT EXISTS rule STRING",
+        "ALTER TABLE AssertionVersion ADD IF NOT EXISTS weight DOUBLE",
+        "ALTER TABLE AssertionVersion ADD IF NOT EXISTS statement STRING",
+        "ALTER TABLE AssertionVersion ADD IF NOT EXISTS unit_id STRING",
+        "ALTER TABLE Generation ADD IF NOT EXISTS registry_fingerprint STRING",
+        "ALTER TABLE Connector ADD IF NOT EXISTS classification_json STRING",
+    ]
+    # Ruling R41: LadybugDB 0.15.3 has no secondary-index DDL, so the Unit indexes are Neo4j's alone.
+    assert not any("INDEX" in step for step in ladybug)
+    assert m.schema_steps(SimpleNamespace(knowledge_backend="neo4j"), version=8) == [
+        "CREATE CONSTRAINT knowledge_unit_id IF NOT EXISTS FOR (n:Unit) REQUIRE n.id IS UNIQUE",
+        "CREATE INDEX knowledge_unit_generation_id IF NOT EXISTS FOR (n:Unit) ON (n.generation_id)",
+        "CREATE INDEX knowledge_unit_passage_id IF NOT EXISTS FOR (n:Unit) ON (n.passage_id)",
+        "CREATE INDEX knowledge_unit_content_hash IF NOT EXISTS FOR (n:Unit) ON (n.content_hash)",
+    ]
+
+
+def v7_rows():
+    """The three widened records, built in Python, exactly as §6.4 of the plan spells them."""
+    from datetime import UTC, datetime
+
+    from hippo.knowledge import model as k
+
+    recorded = datetime(2026, 1, 1, tzinfo=UTC)
+    return (
+        k.AssertionVersion(
+            assertion_id="assertion-x",
+            evidence_class="declared",
+            rule_version="r1",
+            confidence=1.0,
+            status="active",
+            recorded_from=recorded,
+            validity_kind="atemporal",
+            temporal_basis="atemporal",
+        ),
+        k.Generation(
+            source_id="source-x",
+            status="staging",
+            parser_version="p1",
+            linker_version="l1",
+            embedding_profile="e1",
+            created_at=recorded,
+            manifest_hash="m1",
+        ),
+        k.Connector(workspace_id="workspace-x", kind="github", instance_url="https://github.com"),
+    )
+
+
+def test_populated_v7_ladybug_reopens_as_v8_without_reidentification(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    from hippo.store.ladybug import LadybugStore
+
+    m = migrations()
+    rows = v7_rows()
+    path = tmp_path / "version7.lbug"
+
+    def literal(value, kind):
+        """A Cypher literal for one v7 column, because this seed binds no parameters."""
+        if kind == "TIMESTAMP":
+            naive = datetime.fromisoformat(value).replace(tzinfo=None)
+            return "CAST('" + naive.isoformat(sep=" ") + "' AS TIMESTAMP)"
+        if kind == "BOOLEAN":
+            return "true" if value else "false"
+        if kind in ("INT64", "DOUBLE"):
+            return repr(value)
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+    with monkeypatch.context() as patch:
+        patch.setattr(m, "CURRENT_SCHEMA_VERSION", 7)
+        store = LadybugStore(path)
+        for row in rows:
+            name = type(row).__name__
+            columns = m.V7_DESCRIPTOR[1][name]
+            # Written raw, restricted to the v7 columns: `_write_knowledge` would SET the v8
+            # columns these tables do not have yet.
+            values = {
+                field: literal(value, columns[field])
+                for field, value in row.model_dump(mode="json").items()
+                if field in columns and value is not None
+            }
+            # Literals, not bound parameters: real_ladybug 0.15.3 segfaults inside `prepare` for a
+            # seed of this shape, and every other raw seed in these tests writes literals too.
+            assignments = ", ".join(f"{field}: {literal}" for field, literal in values.items())
+            store.run(f"CREATE (n:{name} {{{assignments}}})")
+        history = store.schema_history()
+        assert [item["version"] for item in history] == list(range(1, 8))
+        store.close()
+    reopened = LadybugStore(path)
+    try:
+        assert reopened.schema_history()[:7] == history
+        assert reopened.schema_version() == {
+            "version": 8,
+            "checksum": m.MIGRATION_CHECKSUM,
+            "state": "complete",
+            "step": len(m.schema_steps(reopened, version=8)),
+        }
+        for row in rows:
+            assert reopened._knowledge_get(type(row).__name__, row.id) == row
+    finally:
+        reopened.close()
+
+
+def test_v8_backfills_connector_classification_on_existing_rows(store):
+    from hippo.knowledge import model as k
+
+    m = migrations()
+    if store.knowledge_backend == "fake":
+        pytest.skip("Fake storage holds v8 records only")
+    store.ensure_schema()
+    connector = k.Connector(
+        workspace_id=m.DEFAULT_WORKSPACE_ID, kind="github", instance_url="https://github.com"
+    )
+    store._write_knowledge(connector)
+    cleared = (
+        "SET c.classification_json = NULL"
+        if store.knowledge_backend == "ladybug"
+        else "REMOVE c.classification_json"
+    )
+    store.run(f"MATCH (c:Connector {{id:$id}}) {cleared}", id=connector.id)
+    with store.transaction():
+        m._data_transform(store, version=8)
+    assert store._knowledge_get("Connector", connector.id).classification_json == "{}"

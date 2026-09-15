@@ -135,6 +135,7 @@ RECORD_EPOCHS = {
             "Section",
             "SectionMember",
             "Alias",
+            "Unit",
         ),
         "content",
     ),
