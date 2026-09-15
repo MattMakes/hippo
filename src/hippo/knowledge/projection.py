@@ -444,7 +444,9 @@ def project_managed_graph(
         raise ProjectionError("Nonstructural projection requires a cached full graph")
     generations = _current_generations(store, authorized, embedding_profile, snapshot_bundle, source_profiles)
     registry = current_registry()
-    excluded = defaultdict(set)  # registry section -> ids of the rows left out
+    # Registry section -> ids of the rows left out. Read it with `.get`: a plain subscript creates
+    # the section, and a caller's `exclusions` counter would then report a zero it never excluded.
+    excluded = defaultdict(set)
 
     fetched = {}
 
@@ -487,7 +489,7 @@ def project_managed_graph(
         members,
         authorized,
         structural=structural,
-        unregistered_spans=frozenset(excluded["locator_kinds"]),
+        unregistered_spans=frozenset(excluded.get("locator_kinds", ())),
     )
     vectors = {identity: entry.vector for identity, entry in entries.items()}
     needed_spans = {identity for entry in entries.values() for identity in entry.evidence.original_span_ids}
@@ -728,7 +730,7 @@ def project_managed_graph(
         edges,
         synonymy_threshold,
         structural=structural,
-        unregistered_spans=frozenset(excluded["locator_kinds"]),
+        unregistered_spans=frozenset(excluded.get("locator_kinds", ())),
     )
     dense_vectors = ()
     code_evidence = ()

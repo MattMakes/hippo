@@ -243,6 +243,18 @@ class Registry:
     def evidence_source(self, name: str) -> str:
         return self._lookup("evidence_sources", name).name
 
+    def evidence_source_definition(self, name: str) -> EvidenceSourceDefinition:
+        """The registered definition, family and class included; `evidence_source` returns its name.
+
+        Ruling R62. A built-in carries `family=None` and `evidence_class=None`, and this returns it
+        unchanged: callers read `builtin_types.EVIDENCE_CLASS_DERIVATION` by
+        `(family, source, metadata_origin)`, because a single class cannot be returned for
+        `metadata`, which derives two, or for `reviewed`, which spans both families. An extension
+        source carries both (ruling R40), which is what S2b's binder checks an emitted
+        `(family, source)` pair against.
+        """
+        return self._lookup("evidence_sources", name)
+
     # decided by S1 plan
     @property
     def frozen(self) -> bool:

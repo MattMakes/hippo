@@ -689,6 +689,7 @@ def test_extension_scope_restores_the_registry_byte_for_byte():
         (lambda registry: registry.artifact_kind("pager"), "artifact kind"),
         (lambda registry: registry.connector_kind("pager"), "connector kind"),
         (lambda registry: registry.evidence_source("pager"), "evidence source"),
+        (lambda registry: registry.evidence_source_definition("pager"), "evidence source"),
         (lambda registry: registry.declared_template_versions(["pager"]), "object kind"),
     ],
     ids=[
@@ -699,6 +700,7 @@ def test_extension_scope_restores_the_registry_byte_for_byte():
         "artifact_kind",
         "connector_kind",
         "evidence_source",
+        "evidence_source_definition",
         "declared_template_versions",
     ],
 )
@@ -955,6 +957,29 @@ def test_an_extension_evidence_source_registers_with_its_family_and_class(scoped
     assert "pager_feed" in scoped.evidence_sources()
     assert scoped.predicate("AFFECTS_FIXTURE").sources_allowed == {"pager_feed"}
     assert "pager_feed" not in {source for _, source, _ in EVIDENCE_CLASS_DERIVATION}
+
+
+# Ruling R62: S2b's binder checks emitted (family, source) pairs against the registered definition,
+# so the accessor returns it whole rather than deriving a class the built-ins do not carry.
+def test_the_definition_of_an_extension_evidence_source_carries_its_family_and_class(scoped):
+    scoped.register(incident_extension())
+    assert scoped.evidence_source_definition("pager_feed") == PAGER_FEED
+    assert (PAGER_FEED.family, PAGER_FEED.evidence_class) == ("deterministic", "catalog_observed")
+
+
+def test_the_definition_of_a_builtin_evidence_source_carries_neither(scoped):
+    for name in scoped.evidence_sources():
+        definition = scoped.evidence_source_definition(name)
+        assert definition == EvidenceSourceDefinition(name=name)
+        assert (definition.family, definition.evidence_class) == (None, None), name
+    # Which is why callers read the derivation table by `(family, source, metadata_origin)`: one
+    # class cannot answer for `metadata`, which derives two, or for `reviewed`, which spans families.
+    derived = {klass for (_, source, _), klass in EVIDENCE_CLASS_DERIVATION.items() if source == "metadata"}
+    assert derived == {"catalog_observed", "declared"}
+    assert {family for family, source, _ in EVIDENCE_CLASS_DERIVATION if source == "reviewed"} == {
+        "deterministic",
+        "probabilistic",
+    }
 
 
 def test_builtin_evidence_sources_take_their_class_from_the_derivation_table():

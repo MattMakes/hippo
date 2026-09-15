@@ -171,6 +171,9 @@ class PlainProseInputs:
             embedding_profile=self.embedding_profile.fingerprint,
             configuration=config,
             created_at=gen.created_at,
+            # Ruling R47: recorded by the kit runtime, outside identity and outside the manifest,
+            # so it is carried into the recomputation rather than read as a difference.
+            registry_fingerprint=gen.registry_fingerprint,
         )
         if gen.replace(coverage_json="{}") != wanted or evidence.generation_id != gen.id:
             raise ValueError("Generation differs from accepted revision/configuration identity")
