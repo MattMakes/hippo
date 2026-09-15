@@ -405,22 +405,26 @@ FORBIDDEN_SOURCES = {
 
 
 def _constructors(source: str) -> list[str]:
-    """Every `KnowledgeObject` identity construction in one module's source (review minor m21)."""
+    """Every `KnowledgeObject` identity construction in one module's source (review minor m21).
+
+    Calls only. Naming the class is not minting one: S2b's `BoundBatch.objects:
+    tuple[k.KnowledgeObject, ...]` and any `isinstance` test must stay legal, and `ast.parse` keeps
+    annotation nodes whether or not the module postpones evaluation.
+    """
     found = []
     for node in ast.walk(ast.parse(source)):
-        name = None
-        if isinstance(node, ast.Call):
-            name = _dotted(node.func)
-        elif isinstance(node, ast.Attribute):
-            name = _dotted(node)
+        if not isinstance(node, ast.Call):
+            continue
+        name = _dotted(node.func)
         if name is None:
             continue
         parts = name.split(".")
         if "KnowledgeObject" in parts:
             found.append(name)
-        elif parts[-1] in {"replace", "model_copy", "model_construct"} and isinstance(node, ast.Call):
-            if any(keyword.arg == "canonical_key" for keyword in node.keywords):
-                found.append(name)
+        elif parts[-1] in {"replace", "model_copy", "model_construct"} and any(
+            keyword.arg == "canonical_key" for keyword in node.keywords
+        ):
+            found.append(name)
     return sorted(set(found))
 
 
@@ -433,9 +437,24 @@ def _dotted(node: ast.AST) -> str | None:
     return None
 
 
+ALLOWED_SOURCES = {
+    "field annotation": "objects: tuple[k.KnowledgeObject, ...] = ()\n",
+    "return annotation": "def build() -> k.KnowledgeObject:\n    return keys.knowledge_object(r, ref)\n",
+    "isinstance": "if isinstance(row, k.KnowledgeObject):\n    pass\n",
+    "dataclass field": "@dataclass\nclass Bound:\n    objects: tuple[KnowledgeObject, ...]\n",
+    "unrelated replace": "span = stored.replace(policy_id=policy)\n",
+}
+
+
 @pytest.mark.parametrize("case", sorted(FORBIDDEN_SOURCES))
 def test_the_constructor_check_flags_every_way_to_mint_an_identity(case: str) -> None:
     assert _constructors(FORBIDDEN_SOURCES[case]), case
+
+
+@pytest.mark.parametrize("case", sorted(ALLOWED_SOURCES))
+def test_the_constructor_check_ignores_annotations_and_type_tests(case: str) -> None:
+    """S2b's `BoundBatch` names the class in annotations; a name is not an identity."""
+    assert _constructors(ALLOWED_SOURCES[case]) == [], case
 
 
 def test_keys_is_the_only_knowledge_object_constructor_in_connectors() -> None:

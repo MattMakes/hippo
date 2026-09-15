@@ -12,9 +12,11 @@ m7, m21 of `ai_docs/reports/2026-09-15-cdk-plan-review.md`). S1a's surface is re
 | # | Hash | Subject | Files |
 | --- | --- | --- | --- |
 | 1 | `7da6494` | Add the connector contract, canonical keys and classification (CDK S2a) | `connectors/__init__.py`, `connectors/base.py`, `connectors/keys.py`, `connectors/classify.py` (new); `knowledge/identity.py` (the R28 grant); `tests/unit/test_connector_contract.py`, `test_connector_keys.py`, `test_connector_classify.py` (new) |
+| 2 | `a5f936d` | Record the S2a evidence: RED and GREEN logs, counts, overrides and signatures | this file (new) |
+| 3 | (this commit) | Restrict the identity check to calls, so an annotation is not a construction | `tests/unit/test_connector_keys.py`, this file |
 
-This evidence file is a second, documentation-only commit. No file outside the brief's "own" list was
-touched: `git show --stat 7da6494` is exactly the eight files above.
+No file outside the brief's "own" list was touched: `git show --stat 7da6494` is exactly the eight
+files above, and commits 2 and 3 add this evidence file and one test file.
 
 ## RED
 
@@ -31,12 +33,20 @@ identifier to `orders` (the test now pins both the folded and the quoted spellin
 
 | Line | Log | Result |
 | --- | --- | --- |
-| Plan step 2 / the CK2 CHECK line's S2a subset: Fake, `test_connector_contract.py test_connector_keys.py test_connector_classify.py` | `/tmp/hippo-s2a-green.log` | exit 0, 100 passed |
+| Plan step 2 / the CK2 CHECK line's S2a subset: Fake, `test_connector_contract.py test_connector_keys.py test_connector_classify.py` | `/tmp/hippo-s2a-green.log` | exit 0, 105 passed |
 | Plan step 3 regression: Fake, `test_layering.py test_import_order.py test_ingest_readers.py test_knowledge_identity.py test_knowledge_contracts.py` | `/tmp/hippo-s2a-regress.log` | exit 0, 193 passed |
 | The same regression set at the `95867be` baseline, in the root tree before any change | `/tmp/hippo-s2a-regress-baseline.log` | exit 0, 193 passed |
 | Plan step 4 lint: Ruff `check` then `format --check` over `src/hippo/connectors`, `knowledge/identity.py` and the three test files | `/tmp/hippo-s2a-ruff.log` | exit 0 and exit 0; "All checks passed!", "8 files already formatted" |
+| The CK7 CHECK line of `GATES.md` as spelled, less the two files no slice has created yet | `/tmp/hippo-s2a-ck7.log` | exit 0; "All checks passed!", "14 files already formatted" |
 
-Counts per backend: Fake 100 new plus 193 regression, equal to the baseline. No LadybugDB line: S2a
+The CK7 line names `src/hippo/knowledge/staged_records.py` and `tests/unit/test_staged_records.py`,
+which are S1b's and S3's and do not exist at this commit, so Ruff would refuse the path rather than
+the code. Everything else in the line ran verbatim: `src/hippo/connectors`, `registry.py`,
+`contract.py`, `locators.py`, `builtin_types.py`, `predicates.py`, `tests/unit/test_connector_*.py`
+and `tests/unit/test_registry*.py`, both `check` and `format --check`. `knowledge/identity.py` is not
+in the CK7 line, so it is covered by the step 4 run above.
+
+Counts per backend: Fake 105 new plus 193 regression, equal to the baseline. No LadybugDB line: S2a
 adds no persisted column and touches no store path (CK2 needs no LadybugDB line, plan section 11). No
 Neo4j run; the rulebook forbids one without a written grant.
 
@@ -140,6 +150,14 @@ interpreter import test covers `hippo.connectors`, `.base`, `.keys` and `.classi
   `kind`, outcome `<family>/<kind>`.
 - **`EmissionBatch` key uniqueness is per kind** (passage keys among passages, unit keys among units),
   because `unit.passage` and `edge.unit` are separate namespaces.
+- **The identity check looks at calls only.** Its first spelling also flagged a bare attribute node,
+  which would have failed S2b the moment `BoundBatch.objects: tuple[k.KnowledgeObject, ...]` was
+  written: `ast.parse` keeps annotation nodes whether or not a module postpones evaluation, and
+  naming a class is not minting an identity. Calls only, with five allowed-source cases
+  (`test_the_constructor_check_ignores_annotations_and_type_tests`: field and return annotations, an
+  `isinstance` test, a dataclass field, an unrelated `replace`) beside the seven forbidden ones. The
+  residual hole is deliberate: `builder = k.KnowledgeObject` followed by `builder(...)` is not
+  detected, and no rule short of type inference would catch it.
 - **The commit-key parity test is a source pin.** `code_history` builds its commit object inline
   inside a function that needs store rows, so the test asserts `commit_key`'s array and the literal
   spelling at the writer's anchor, rather than calling it.
@@ -194,7 +212,15 @@ Verified by importing the built modules and comparing names and signatures
    `connector.config_json["principal_map"]`, validates it with `base.PrincipalMap`, and calls
    `base.map_principals`, counting the returned drops in `EmissionCoverage` (R30's "counted"). S2a
    counts nothing: it has no coverage record.
-3. **A `symbol` key cannot carry a null signature.** `symbol_key`'s last part is `str | None`, but
+3. **R53's "only on identity-only foreign endpoints" is half enforced here.** `check_key_parts`
+   refuses a declared `NodeRef.instance` on a kind whose template has no instance part, which is all
+   `keys.py` can see. The other half needs the descriptor: `bind_batch` must refuse a declared
+   instance on a node of a family the connector owns, so the escape hatch cannot be used to re-key
+   the connector's own objects. S2b owns that refusal and its test.
+4. **`map_principals` deduplicates.** Two provider principals mapping to one local id yield one
+   entry, first occurrence first. The count it returns is the dropped **allow** entries only; a
+   dropped deny entry is not a count but a refusal (the observation becomes `unknown`).
+5. **A `symbol` key cannot carry a null signature.** `symbol_key`'s last part is `str | None`, but
    `NodeRef.key` values are `Text | SqlPart | tuple[SqlPart, ...]`, so a symbol with no signature
    cannot be emitted through the kit. The code lane, which is the only writer of symbols today, is
    unaffected (S5 keeps its lane binder). If a kit connector ever emits symbols, `KeyValue` needs a
