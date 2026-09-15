@@ -16,6 +16,7 @@ from typing import Annotated, ClassVar, Literal, Self, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
+    AfterValidator,
     BeforeValidator,
     Field,
     TypeAdapter,
@@ -49,14 +50,23 @@ from .locators import CommentLocator as CommentLocator
 from .locators import DiffHunkLocator as DiffHunkLocator
 from .locators import FieldLocator as FieldLocator
 from .locators import FileLinesLocator as FileLinesLocator
+from .locators import LocatorBase
 from .locators import PageLocator as PageLocator
 from .locators import SectionLocator as SectionLocator
 from .locators import SourceLocator as SourceLocator
 from .locators import TableCellLocator as TableCellLocator
-from .predicates import OBJECT_KINDS, PREDICATES, validate_endpoints
+from .predicates import OBJECT_KINDS, predicate_definition, validate_endpoints
+from .registry import UnregisteredName, current_registry
 
 EvidenceClass = Literal[
-    "syntax_observed", "catalog_observed", "declared", "discussion_claim", "model_inferred", "human_verified"
+    "syntax_observed",
+    "catalog_observed",
+    "declared",
+    "discussion_claim",
+    "model_inferred",
+    "human_verified",
+    "rule_derived",
+    "similarity_inferred",
 ]
 ValidityKind = Literal["explicit_interval", "observed_snapshot", "atemporal", "unknown"]
 TemporalBasis = Literal[
@@ -65,6 +75,7 @@ TemporalBasis = Literal[
 TemporalPrecision = Literal["instant", "second", "minute", "day", "month", "year", "unknown"]
 Lifecycle = Literal["active", "draft", "accepted", "rejected", "superseded", "deleted", "unknown"]
 WorkState = Literal["pending", "running", "ready", "failed", "retry", "completed", "cancelled"]
+# Built-in kinds; fields that accept any registered kind use `RegisteredObjectKind`.
 ObjectKind = Literal[
     "service",
     "api",
@@ -97,6 +108,24 @@ ObjectKind = Literal[
     "document",
     "alias",
 ]
+
+
+def _registered(lookup: str, message: str) -> AfterValidator:
+    def check(value: str) -> str:
+        try:
+            getattr(current_registry(), lookup)(value)
+        except UnregisteredName as error:
+            raise ValueError(message) from error
+        return value
+
+    return AfterValidator(check)
+
+
+RegisteredObjectKind = Annotated[Code, _registered("object_kind", "Unknown object kind")]
+RegisteredArtifactKind = Annotated[Code, _registered("artifact_kind", "Unknown artifact kind")]
+RegisteredConnectorKind = Annotated[Code, _registered("connector_kind", "Unknown connector kind")]
+RegisteredLocatorKind = Annotated[Code, _registered("locator", "Unknown locator kind")]
+RegisteredEvidenceSource = Annotated[Code, _registered("evidence_source", "Unknown evidence source")]
 
 
 def _identity_value(value):
@@ -152,10 +181,22 @@ class Record(Contract):
         return type(self).model_validate(data)
 
 
+def parse_locator_json(value: str) -> LocatorBase:
+    """Validate a locator payload with the model its registered `kind` names."""
+    payload = json.loads(normalize_json(value))
+    kind = payload.get("kind") if isinstance(payload, dict) else None
+    if type(kind) is not str:
+        raise ValueError("Locator payload requires a kind")
+    try:
+        model = current_registry().locator(kind)
+    except UnregisteredName as error:
+        raise ValueError("Unknown locator kind") from error
+    return model.model_validate_json(canonical_json(payload))
+
+
 def canonical_locator_json(value: str) -> str:
     """Validate coordinates, normalize paths, and materialize every default."""
-    locator = LOCATOR_ADAPTER.validate_json(normalize_json(value))
-    return canonical_json(locator.model_dump(mode="json"))
+    return canonical_json(parse_locator_json(value).model_dump(mode="json"))
 
 
 class Workspace(Record):
@@ -184,7 +225,7 @@ class GroupMembership(Record):
 
 class Connector(Record):
     workspace_id: Text
-    kind: Literal["local", "git", "github", "gitlab", "jira_cloud", "jira_data_center", "tuleap", "backstage"]
+    kind: RegisteredConnectorKind
     instance_url: ProviderURL
     config_json: Json = "{}"
     credential_ref: Text | None = None
@@ -198,20 +239,7 @@ class Artifact(Record):
     source_id: Text
     connector_id: Text | None = None
     provider_instance: ProviderURL | None = None
-    kind: Literal[
-        "file",
-        "repository",
-        "ticket",
-        "comment",
-        "attachment",
-        "review",
-        "schema_snapshot",
-        "catalog_entity",
-        "document",
-        "manifest",
-        "openapi",
-        "history_event",
-    ]
+    kind: RegisteredArtifactKind
     external_id: Text
     canonical_uri: Text
     policy_id: Text
@@ -318,7 +346,7 @@ class GenerationEvidenceMember(Record):
 
 class EvidenceSpan(Record):
     revision_id: Text
-    locator_kind: Literal["file_lines", "section", "field", "comment", "page", "table_cell", "diff_hunk"]
+    locator_kind: RegisteredLocatorKind
     locator_json: Json
     text_hash: Text = "pending"
     text: str
@@ -346,15 +374,14 @@ class EvidenceSpan(Record):
 
     @model_validator(mode="after")
     def valid_locator(self) -> Self:
-        locator = LOCATOR_ADAPTER.validate_json(self.locator_json)
-        if locator.kind != self.locator_kind:
+        if parse_locator_json(self.locator_json).kind != self.locator_kind:
             raise ValueError("Locator kind disagrees with its payload")
         return self
 
 
 class KnowledgeObject(Record):
     workspace_id: Text
-    kind: ObjectKind
+    kind: RegisteredObjectKind
     canonical_key: Json
     identity_prefix = "object"
     identity_fields = ("workspace_id", "kind", "canonical_key")
@@ -426,7 +453,7 @@ class Assertion(Record):
     @field_validator("predicate")
     @classmethod
     def registered_predicate(cls, value):
-        if value not in PREDICATES:
+        if value not in current_registry().predicates():
             raise ValueError("Unknown assertion predicate")
         return value
 
@@ -436,6 +463,14 @@ class Assertion(Record):
         if subject.workspace_id != self.workspace_id or target.workspace_id != self.workspace_id:
             raise ValueError("Assertion endpoints must share its workspace")
         validate_endpoints(self.predicate, subject.kind, target.kind)
+        if predicate_definition(self.predicate).identity:
+            # Stored once: the subject is the smaller (canonical_key, kind) in code-point order (R22).
+            if subject.id == target.id:
+                raise ValueError(f"{self.predicate} requires two distinct objects")
+            if (subject.canonical_key, subject.kind) > (target.canonical_key, target.kind):
+                raise ValueError(
+                    f"{self.predicate} stores the lexically smaller canonical key as its subject"
+                )
 
 
 def checked_assertion(
@@ -1231,7 +1266,7 @@ class QueryRequest(Contract):
     question: Text
     mode: Literal["legacy", "hybrid", "schema", "code", "traceability", "overview", "auto"] = "auto"
     source_ids: tuple[Text, ...] = ()
-    kinds: tuple[ObjectKind, ...] = ()
+    kinds: tuple[RegisteredObjectKind, ...] = ()
     repository_ids: tuple[Text, ...] = ()
     service_ids: tuple[Text, ...] = ()
     database_ids: tuple[Text, ...] = ()

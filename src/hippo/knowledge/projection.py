@@ -64,7 +64,7 @@ from .derivations import GenerationViews, validate_prose
 from .embedding_cache import _vectors
 from .identity import canonical_json, make_identity, normalize_relative_path
 from .lifecycle import generation_passage_id
-from .predicates import PREDICATES
+from .predicates import PREDICATES, predicate_definition
 from .staged_code import RELATION_KINDS
 
 # `ProjectionError` is imported above rather than defined here: `canonical_selected_generations`
@@ -653,7 +653,7 @@ def project_managed_graph(
             or assertion.object_id not in objects
         ):
             continue
-        if not PREDICATES[assertion.predicate].traversal_permitted:
+        if not predicate_definition(assertion.predicate).traversal_permitted:
             continue
         relation(
             assertion.subject_id,

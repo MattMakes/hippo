@@ -3,13 +3,13 @@
 from dataclasses import asdict
 
 from .citations import resolve_citations
-from .model import LOCATOR_ADAPTER
+from .model import parse_locator_json
 
 
 def _location(citation):
     if citation.locator_json is None:
         return ""
-    locator = LOCATOR_ADAPTER.validate_json(citation.locator_json)
+    locator = parse_locator_json(citation.locator_json)
     if locator.kind in ("file_lines", "diff_hunk"):
         lines = str(locator.start) if locator.start == locator.end else f"{locator.start}–{locator.end}"
         label = f"{locator.path}, lines {lines}"
@@ -22,7 +22,9 @@ def _location(citation):
         return f"Comment {locator.comment_id}, {locator.field_path}"
     if locator.kind == "page":
         return f"Page {locator.page}"
-    return f"Table {locator.table + 1}, row {locator.row + 1}, column {locator.column + 1}"
+    if locator.kind == "table_cell":
+        return f"Table {locator.table + 1}, row {locator.row + 1}, column {locator.column + 1}"
+    return ""
 
 
 def retrieval_fields(graph, passage_ids):
