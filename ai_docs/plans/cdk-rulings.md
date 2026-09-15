@@ -147,3 +147,70 @@ R1 onward; later rulings are appended, never renumbered.
   CK3's Fake line is replaced and a LadybugDB line added as S3 §14 proposes; the Neo4j line is in
   `neo4j-parity.md`.
 
+## After the plan review (`ai_docs/reports/2026-09-15-cdk-plan-review.md`, committed at `9c5fc8e`)
+
+The review's fix column binds the owning slice's brief for every finding not listed here; these
+rulings record the decisions and the amendments to earlier rulings. Earlier rulings are not rewritten.
+
+- **R39 — Vocabulary is never validated on read (review M1; design §3 amended).** Registration, bind
+  and store write check vocabulary; model fields stay plain codes; reads accept any code; projection
+  and citations exclude and count rows of unregistered vocabulary. S1a exposes
+  `Registry.check_record`; S2b's binder and S1b's write path (`store/knowledge.py`) call it.
+- **R40 — amends R29 (review M8).** An extension evidence source registers with its class:
+  `EvidenceSourceDefinition(name, family, evidence_class)`, never `model_inferred` or
+  `human_verified`. Registration refuses a source with no class or an excluded class, not a source
+  absent from the built-in table. S2's refusal of invalid (family, source) pairs at bind stays.
+- **R41 — amends R17 (review m2).** The `Unit` indexes are Neo4j only; LadybugDB 0.15.3 has no
+  secondary-index DDL.
+- **R42 — amends R24 (review m6).** The 6,000-character bound stands as an approximation of the
+  specification's 1,500 tokens, recorded as such; S2's message interpolates `PASSAGE_CHAR_BOUND` and
+  S4 sets `TOKEN_BOUND = base.PASSAGE_CHAR_BOUND`.
+- **R43 — amends R25 (review M14).** Until Task 15, `run_managed_build` refuses `kind="connector"`
+  with `ManagedDispatchError`; S5a adds the branch and its test. No route from the reader actor to
+  `sync_connector` exists.
+- **R44 — amends R30 (review M9).** The principal map is applied in S2's `policy_record`: an
+  unmapped principal in a deny list makes the observation `unknown` (deny); an allow list the mapping
+  empties becomes `unknown`; unmapped allow entries are dropped and counted.
+- **R45 — amends R31 (review M10).** Only extension locator kinds set `verifier`. Built-in verifiers
+  are S2b's table in `connectors/emit.py`, consulted first. A kind with neither is refused at bind and
+  by `validate`. There is no byte-range built-in kind.
+- **R46 — amends R32 (review m7).** `ConnectorDescriptor` gains `extension: TypeExtension`; S3 checks
+  that each registered definition equals it.
+- **R47 — B1 (CK5): S1b owns the fingerprint-tolerant comparisons.** S1b edits
+  `knowledge/prose_preparation.py:164-174` (pass `registry_fingerprint=gen.registry_fingerprint` to
+  `generation_for_inputs`) and `knowledge/staged_code.py:310` (normalize the fingerprint on both
+  sides) with the review's two tests; the S1b brief's do-not-touch list yields for those lines.
+- **R48 — B2 (CK3): span policy is the first capture's.** `RevisionInput.span_policy_id` (S2a,
+  `base.py`), used by `bind_batch` for every span; S3 records it in
+  `ArtifactRevision.metadata_json["span_policy_id"]` at first capture and passes it. Matrix row M8b.
+- **R49 — B3 and B4 (CK4): one guard, one runtime entry.** `testing.purity_guard` is S3's
+  `guard.forbid_effects`; S3's forbidden set gains m20's names; `run_case` calls `sync_connector`
+  with S3's full signature after `ensure_connector(..., enabled=True)`, `connector_source`, the replay
+  probe and `store_classification`; `sync_connector` gains `connector_id: str`; `RUNTIME_FAILPOINTS`
+  are S3 §9's five scenarios on `_ReplayConnector`; `testing` re-exports S3's transports.
+- **R50 — M2: slice S4c, the loader.** `connectors/loader.py` with
+  `load_registry(*, enabled_kinds, allowlist) -> LoadResult` (built-ins, enabled in-repo packages,
+  allowlisted entry points, then `freeze()`); `cli.cmd_connector` and the `web/app.py` lifespan call
+  it (those lines granted to S4c); enabling a kind takes effect at restart. R38's order gains "S4c
+  before any caller of `load_registry`", and S5's `default_registry()` and S6's R-S1-3 use it.
+- **R51 — M5: only enabled instances run.** `ensure_connector` defaults to `enabled=False`;
+  `sync_connector` refuses a disabled instance at entry. This answers design §14.3 for v1: an
+  installed connector package runs only when an operator enables its kind and its instance.
+- **R52 — M3 and M4 (CK3).** A stored policy is refreshed only when `expires_at - now <
+  policy_ttl_seconds / 2` (row M21); `no_changes` is decided after computing the candidate
+  generation, by `manifest_hash` equality and no policy change.
+- **R53 — M6: foreign endpoints carry their declared instance.** `NodeRef` gains
+  `instance: Text = None`, admitted only on identity-only foreign endpoints, normalized by
+  `normalize_provider_url`, with the value from instance configuration (S6's config gains
+  `catalog_instance`).
+- **R54 — M11: the one `ingest` to `connectors` import edge is ratified.** `managed_activation` is
+  the only ingest module that may import `hippo.connectors`; `connectors.{lanes,local,git}` never
+  import `managed_activation` or `pipeline`; S5a pins it in `tests/unit/test_layering.py` (granted).
+- **R55 — Minors.** Every minor in the review's table is applied by the slice its "Plan and section"
+  column names, through that slice's brief; m3 (CK1 wording), m6, m18 (design §8 reads "a source
+  with a deterministic row in the §4 table") and m12/m14 are recorded here as applied.
+- **R56 — S4 is re-planned.** S4 §3.1 (`run_case`, the guard, the transports, `check_capture`,
+  `probe_deterministic`) and a new S4c (the loader) are re-planned by a fresh planner; the scaffold,
+  the commands and the guide stand, with M16's template fix. The re-plan is reviewed on §3.1 and S4c
+  only.
+

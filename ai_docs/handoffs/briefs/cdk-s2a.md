@@ -55,3 +55,24 @@ them in the evidence with the file and line where each is defined); the evidence
 
 REPORT: `horch note` after each plan step; `horch tell orchestrator "[<role>] BLOCKED: ..."` only for
 a question the plan and the rulings do not answer.
+
+## Review amendments (2026-09-15, `ai_docs/reports/2026-09-15-cdk-plan-review.md`; these override the text above)
+
+- **B2 / R48.** `RevisionInput` gains `span_policy_id: str`; the binder (S2b) will use it for every
+  span. Add its validator and test here.
+- **M6 / R53.** `NodeRef` gains `instance: Text = None`, admitted only on identity-only foreign
+  endpoints and normalized by `normalize_provider_url`; add
+  `test_identity_only_endpoint_is_keyed_by_its_declared_instance` to the keys tests.
+- **M10 / R45.** Delete the R31 instruction above: you supply NO built-in verifiers. Built-in
+  verifiers are S2b's table in `connectors/emit.py`; only extension locator kinds set `verifier`.
+  Use `Registry.locator_kind(name)` (S1a-fix) where you need the definition.
+- **M9 / R44.** `policy_record` applies the instance `principal_map`: an unmapped principal in a deny
+  list makes the observation `unknown`; an allow list the mapping empties becomes `unknown`;
+  unmapped allow entries are dropped and counted. One test per rule.
+- **m6 / R42.** The bound message interpolates `PASSAGE_CHAR_BOUND` and names it an approximation of
+  the specification's 1,500 tokens.
+- **m7 / R46.** `ConnectorDescriptor` gains `extension: TypeExtension`.
+- **m21.** `test_keys_is_the_only_knowledge_object_constructor_in_connectors` also flags
+  `KnowledgeObject.model_validate`, `.model_construct` and `.replace` outside `keys.py`.
+- **M13** (`probe_deterministic`) and **M16** (the scaffold template) are S4's, not yours.
+- Base your worktree on the HEAD named in the spawn message, which includes the S1a-fix commits.

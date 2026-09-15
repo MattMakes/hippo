@@ -246,6 +246,13 @@ the registering connector declares; a locator kind has no model or its model is 
 Refusal happens when the registry loads, at process start or in `hippo connector validate`, never when
 a connector emits.
 
+Vocabulary is checked at registration, at bind and at store write, never on read (review M1, ruling
+R39). Model fields that name a kind, a locator kind or a predicate stay plain codes; the store's
+reads accept any code, so a process that has not registered an extension (the MCP stdio server,
+`hippo ask`, startup recovery, a `hippo serve` whose connector package failed to import) still reads
+every row. `Registry.check_record` is what the binder and the write path call; projection and
+citations exclude rows whose vocabulary the current registry lacks and count them in coverage.
+
 The registry is loaded from three places in order: the built-ins, the in-repo connector packages, and
 the entry points of installed packages (§9). Its fingerprint is recorded on every managed generation
 (`Generation.registry_fingerprint`, schema v8, outside `identity_fields`), so a generation records the
@@ -280,7 +287,7 @@ fixed derivation from the specification's `family` and `source` to an evidence c
 | `Node.id` | `KnowledgeObject.id` from `knowledge_object_identity(workspace, kind, canonical_key)` | Key parts come from the kind's `key_template`; the connector supplies parts, the kit builds the key (§5) |
 | `Node.type`, `Node.domain` | `KnowledgeObject.kind`; the family is a property of the registered kind | `KnowledgeObject` stays identity-only |
 | `Node.label`, `Node.attrs`, `Node.ts` | `ObjectObservation.attributes_json` (label rendered by `label_template`), `valid_from`/`temporal_basis`/`temporal_precision` for `ts`, `evidence_class` | One observation per (object, revision, span); conflicting descriptions from two sources are two observations, as the earlier plan requires |
-| `Node.provenance` | `Artifact.canonical_uri`, `Artifact.external_id`, `ArtifactRevision` (`provider_revision`, `observed_at`, `metadata_json.parser`), `EvidenceSpan` with a registered locator | `parser` per revision; the descriptor's parser versions and the registry fingerprint per generation |
+| `Node.provenance` | `Artifact.canonical_uri`, `Artifact.external_id`, `ArtifactRevision` (`provider_revision`, `source_updated_at` = the specification's `observed_at` with its original spelling, timezone and precision, null when the provider gives none; `ArtifactRevision.observed_at` stays the kit's receipt clock; `metadata_json.parser`), `EvidenceSpan` with a registered locator | `parser` per revision; the descriptor's parser versions and the registry fingerprint per generation (review M7) |
 | `Node.acl` | `AccessPolicy` referenced by `Artifact.policy_id` and `EvidenceSpan.policy_id` | Unknown policy is deny (`mode`), never an empty allow list |
 | `Edge.src`, `Edge.dst`, `Edge.type` | `Assertion(subject_id, predicate, object_id, scope_key)` | `scope_key` = `source:{source_id}:{partition}`, the form the prose and code paths write today (`prose_generation.py`, `code_generation.py`), because `BuildAuthority` supersedes by scope on publication; two derivations of one fact inside a source are two support groups on one assertion; the same fact stored by two sources is two assertions with shared endpoints, which the specification's ownership rule (§6: stored once, by the owner) prevents for predicates with one owner family; merging two sources' assertions is not the kit's job (cross-source linking is Task 12; it does not de-duplicate assertions); the registry checks endpoint kinds and the owner families |
 | `Edge.family`, `Edge.source`, `Edge.rule`, `Edge.weight`, `Edge.statement`, `Edge.unit_ref` | `AssertionVersion` gains `family`, `source`, `rule`, `weight`, `statement`, `unit_id` (schema v8); `confidence` = `weight`; `rule_version` = the connector or template version | `evidence_class` derived by the table below |
@@ -436,7 +443,8 @@ command rather than a sentence.
 - **Contract assertions** (`assert_contract(batch, registry)`), each with a negative fixture in the
   kit's own tests so the assertion is known to fire: no unregistered kind, predicate, locator or
   source; every node has a locator and a policy; unknown policy is deny; every edge has a family, a
-  source, a statement and, for deterministic edges, a parser or metadata or rule origin; no alias
+  source, a statement and, for deterministic edges, a source with a deterministic row in the §4
+  table (review m18); no alias
   without a named rule; no `ts` equal to the injected clock or within the run's window (ingestion
   time never fills a missing timestamp); one fact per unit (every unit is a template output or a
   verified slice, never a join of two); every span's text hash matches the revision bytes at its

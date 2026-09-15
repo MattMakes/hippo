@@ -58,3 +58,21 @@ and open questions.
 
 REPORT: `horch note` after each commit; `horch tell orchestrator "[<role>] BLOCKED: ..."` only for a
 question the plan and the rulings do not answer.
+
+## Review amendments (2026-09-15, `ai_docs/reports/2026-09-15-cdk-plan-review.md`; these override the text above)
+
+- **B1 / R47.** You also own `src/hippo/knowledge/prose_preparation.py` lines 164–174 (pass
+  `registry_fingerprint=gen.registry_fingerprint` to `generation_for_inputs`) and
+  `src/hippo/knowledge/staged_code.py` line 310 (normalize the fingerprint on both sides of the
+  compare), with the review's two tests (`test_a_fingerprinted_generation_passes_prose_preparation`
+  and `test_a_fingerprinted_generation_passes_the_code_writer`, or the names the review's B1 fix
+  gives). The do-not-touch list above yields for those lines only.
+- **m2 / R41.** `Unit` indexes on Neo4j only (`CREATE INDEX` for `passage_id` and `content_hash`
+  beside `generation_id`); no LadybugDB index DDL; `test_v8_schema_steps_are_exact_per_backend`
+  says so.
+- **M1 / R39.** The store write path (`store/knowledge.py`, yours) calls `Registry.check_record`
+  (S1a-fix) on every knowledge write, with a test that an unregistered kind is refused at write and a
+  test that the same row, once stored, reads back in a registry that lacks it.
+- **m3.** The CK1 wording is "on every generation built by the kit runtime or a coordinator lane";
+  the pre-kit lanes store `None`.
+- Base your worktree on the HEAD named in the spawn message, which includes the S1a-fix commits.
