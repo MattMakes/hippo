@@ -9,7 +9,9 @@ N15 (a duplicate name is decided before the module is imported).
 Every test that reaches `load_registry` runs under `use_registry(Registry.with_builtins())`. Freezing
 alone is harmless, but *population* is not: an extension left in `REGISTRY` makes a later
 `extension_scope()` registration of the same extension fail with `duplicate_name`, and pytest runs
-this file in one process with `test_connector_sync.py` and `test_registry.py` (N1).
+this file in one process with `test_connector_sync.py` and `test_registry.py` (N1). Every test that
+seeds `Connector` rows takes the same fixture, because `seed_connectors` registers the kinds it
+writes (see its docstring) and that registration must not reach `REGISTRY` either.
 """
 
 from __future__ import annotations
@@ -23,7 +25,13 @@ import pytest
 
 from hippo.connectors import loader
 from hippo.knowledge import model as k
-from hippo.knowledge.registry import Registry, current_registry, use_registry
+from hippo.knowledge.registry import (
+    Registry,
+    TypeExtension,
+    current_registry,
+    extension_scope,
+    use_registry,
+)
 
 # The package root the loader scans in these tests, in place of `hippo/connectors/`. A temporary
 # root keeps the source tree free of fixture packages, which no brief grants.
@@ -193,21 +201,32 @@ def seed_connectors(store, kinds: Mapping[str, bool]) -> None:
     The user comes first on purpose: `store/authorization.py:44` refuses an enabled provider
     connector while the installation has no users, so enabling a kind is a signed-in operator's act
     (which is the installation R59's `hippo connector enable` runs in).
+
+    The kinds are registered before they are written, because the write path calls
+    `Registry.check_record` (ruling R39, `store/knowledge.py:772`), which refuses a `Connector` row
+    whose kind no registry knows. Production writes such a row under the connector's own extension,
+    already registered by the time `hippo connector enable` runs (R63 N5); here a throwaway
+    `TypeExtension` stands in for it inside `extension_scope()`, which restores the registry whole
+    and so never leaves these names behind (N1). The scope closes before this function returns on
+    purpose: a caller that goes on to load registers the discovered connector's real extension under
+    these same names, which a throwaway still in place would refuse as a `duplicate_name`.
     """
     store.ensure_schema()
     store.ensure_roles()
     store.create_user("loader-operator", "secret1", "individual")
     workspace = k.Workspace(name="default")
     store.put_knowledge(workspace)
-    for kind, enabled in kinds.items():
-        store.put_knowledge(
-            k.Connector(
-                workspace_id=workspace.id,
-                kind=kind,
-                instance_url=f"https://{kind}.invalid",
-                enabled=enabled,
+    with extension_scope() as scoped:
+        scoped.register(TypeExtension(families=tuple(kinds), connector_kinds=tuple(kinds)))
+        for kind, enabled in kinds.items():
+            store.put_knowledge(
+                k.Connector(
+                    workspace_id=workspace.id,
+                    kind=kind,
+                    instance_url=f"https://{kind}.invalid",
+                    enabled=enabled,
+                )
             )
-        )
 
 
 def named(result: loader.LoadResult, name: str) -> loader.ConnectorEntry:
@@ -400,7 +419,7 @@ def test_connector_class_answers_for_a_registered_entry_and_refuses_otherwise(pa
 
 
 def test_enabled_kinds_come_from_enabled_instances_and_the_allowlist_from_the_environment(
-    store, monkeypatch: pytest.MonkeyPatch
+    store, registry, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seed_connectors(store, {"acme": True, "beta": False})
 
