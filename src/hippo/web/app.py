@@ -63,7 +63,14 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # `startup` first, because its `ping()` is what bootstraps the schema and it is built to
+        # tolerate a store that comes up minutes later; loading the connector registry against an
+        # unreachable store would otherwise freeze an empty vocabulary for the life of the process
+        # (S4 re-review N2). The import is function-local so `hippo --help` never reaches it.
+        from ..connectors.loader import load_connectors
+
         startup(ctx)
+        app.state.connector_load = load_connectors(ctx)
         yield
         ctx.close()
 
