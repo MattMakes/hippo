@@ -307,7 +307,12 @@ def _local(
     with store.generation_write(gen.id, **credentials):
         _epochs(store, expected_authorization_epoch, expected_suppression_epoch)
         current = store._generation(gen.id)
-        if current.replace(coverage_json=gen.coverage_json) != gen:
+        # Ruling R47: the merged bundle's generation is re-settled from the inputs, so it carries
+        # no `registry_fingerprint` while the persisted row does. The field is outside identity and
+        # cannot be updated, so it is normalized away on both sides; every other field still counts.
+        if current.replace(coverage_json=gen.coverage_json, registry_fingerprint=None) != gen.replace(
+            registry_fingerprint=None
+        ):
             raise ValueError("Persisted generation differs from accepted preparation")
         yield
         _epochs(store, expected_authorization_epoch, expected_suppression_epoch)
