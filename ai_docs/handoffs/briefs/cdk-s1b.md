@@ -76,3 +76,11 @@ question the plan and the rulings do not answer.
 - **m3.** The CK1 wording is "on every generation built by the kit runtime or a coordinator lane";
   the pre-kit lanes store `None`.
 - Base your worktree on the HEAD named in the spawn message, which includes the S1a-fix commits.
+- **From S1a-fix (merged at `d0bd052`; read its evidence section "Review amendments" first).** Two
+  small grants beyond your file list: (i) `src/hippo/knowledge/registry.py`, one method
+  `Registry.evidence_source_definition(name) -> EvidenceSourceDefinition` returning an extension
+  source's family and class (built-ins: family `None`, class from the derivation table), with a
+  test in `tests/unit/test_registry.py`, because S2b's binder checks emitted (family, source) pairs
+  against it; (ii) `src/hippo/knowledge/projection.py`, the one-line fix so a caller's `exclusions`
+  counter gains no `locator_kinds: 0` entry when nothing was left out (`excluded.get(...)`), with a
+  test. Where the counts surface in `Generation.coverage_json` is S3's decision, not yours.
