@@ -209,7 +209,15 @@ Each is specified enough to start from this file alone.
 
 ## Open questions
 
-1. **A collected generation's `unit_id` dangles.** `_collect_generation` deletes a generation's
+1. **Closing a recorded interval needs the extension registered.** `check_record` sits on
+   `put_knowledge` and `update_knowledge`, not on `_write_knowledge`, because that internal primitive
+   has about twenty-five callers which write `Generation`, `MaintenanceJob`, `IndexManifest` and
+   `SnapshotReference` rows — none of them in `_RECORD_VOCABULARY`. The consequence is that the
+   recorded-interval closure a publication performs goes through `update_knowledge`, so closing an
+   extension `AssertionVersion` (one that carries `source`) is refused in a process that has not
+   registered that extension. That follows R39's "checked at store write", but it is a new
+   constraint on S3's runtime and on Task 15's startup recovery, and they should confirm it.
+2. **A collected generation's `unit_id` dangles.** `_collect_generation` deletes a generation's
    `Unit` rows, while a published generation keeps its `GenerationEvidenceMember` tombstones and its
    `AssertionVersion` rows. An `AssertionVersion` whose `unit_id` named a collected unit would then
    fail `_validate_knowledge`'s "Missing Unit reference" on any later `update_knowledge`, such as a
