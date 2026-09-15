@@ -50,3 +50,12 @@ evidence; `horch done` names the commit, counts, log paths, overrides and open q
 
 REPORT: `horch note` after each plan step; `horch tell orchestrator "[<role>] BLOCKED: ..."` only for
 a question the plan, the rulings and the review do not answer.
+
+## Amendment from the S4 re-review (ruling R63)
+
+- `emit.evidence_class` takes the registry: `evidence_class(registry, family, source,
+  metadata_origin) -> EvidenceClass`, reading built-ins from `EVIDENCE_CLASS_DERIVATION` and
+  extension sources from `registry.evidence_source_definition(source)`; the kit's
+  `edges_fully_attributed` and the runtime call it with `current_registry()`. Adjust the plan's
+  section 4.5 signature and its tests accordingly and say so in the evidence.
+

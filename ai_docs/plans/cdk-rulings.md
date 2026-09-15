@@ -253,4 +253,17 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   sources carry both. The four schema-version pins the S1 plan did not name
   (`test_generation_scoped_reads.py:838`, `:845`; `test_policy_migration.py:173`, `:243`) move to 8
   with the rest.
+- **R63 — The S4 re-plan stands (re-review `ai_docs/reports/2026-09-15-cdk-s4-replan-review.md`:
+  3.1 and 3.5 APPROVED WITH CHANGES; 12 of 13 rejecting findings closed).** Its findings bind the
+  S4a, S4b and S4c briefs, not another plan: N1 (tests that register an extension use
+  `extension_scope()` or `use_registry(Registry.with_builtins())`; population, not the frozen flag,
+  is what collides), N2 (the lifespan calls `startup(ctx)` before `load_connectors(ctx)`, and an
+  unreachable store never freezes an empty registry; the S4c worker runs the lifespan once against
+  a v7 store file), N3 (`extension_lock` hashes definitions through the registry's canonical schema,
+  never `model_dump` of `attrs_model`), N4 (`run_case` reads passages with
+  `store._native_rows("Passage", generation_id=...)`), N5 (`hippo connector enable`, R59, runs
+  `ensure_connector` under the connector's own scratch registry because the row write is
+  vocabulary-checked). The one open item, m18, is closed by contract: `emit.evidence_class(registry,
+  family, source, metadata_origin)` takes the current registry so an extension source's class is
+  reachable (binds S2b, S3c and S4a).
 
