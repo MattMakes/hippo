@@ -458,3 +458,15 @@ is a coordinator lane; R15: discovery is S4's; R16: one current registry). CK1 C
 wording and CK7 lint applied to the ledger; `neo4j-parity.md` created. Next: commit S2/S3, spawn the
 architect review with `ai_docs/handoffs/briefs/review-cdk-plans.md`, then implementer briefs per
 slice (S1a first). Everything through this commit is pushed to `origin/rag-it-all-tibs`.
+
+**CDK implementation state (2026-09-15, evening).** Plan review `ai_docs/reports/2026-09-15-cdk-plan-review.md`
+(4 blockers, 16 majors, 22 minors; S4 rejected on §3.1 plus the missing loader) applied through
+rulings R39–R56 (`ai_docs/plans/cdk-rulings.md`), design §3/§4/§8 edits and the CK1–CK4 rows.
+S1a merged at `d0bd052` (registry, leaf modules, built-ins, `Registry.check_record`; vocabulary never
+validated on read; evidence `ai_docs/gates/rag-it-all/cdk/evidence-s1a.md`); the root-tree CK1 Fake
+line plus layering passed (308 passed, 7 skipped). Running: S1b (`wp/s1b`, brief `cdk-s1b.md`), S2a
+(`wp/s2a`, brief `cdk-s2a.md`), the S4 re-plan (in-place edit of `ai_docs/plans/cdk-s4-kit.md`, brief
+`cdk-plan-s4-replan.md`). Next: merge S1b and S2a, write S2b/S3a/S3b briefs (S2b carries R40 and the
+`evidence_source_definition` accessor; S3 carries coverage placement of the exclusion counts and
+`ArtifactRevision.metadata_json["span_policy_id"]`), re-review S4 §3.1 and S4c only, then S3c, S4,
+S5, S6. Everything through this commit is pushed.
