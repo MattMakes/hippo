@@ -191,3 +191,72 @@ raised out of the lifespan.
 4. **The CK4 CHECK line replacement** proposed in plan section 6 is safe as written for this slice:
    `test_connector_loader.py` needs no anyio filter, which the green line above demonstrates. The
    ledger change is the orchestrator's to apply.
+
+## S4c-fix: the seeded connector kinds are registered before they are written
+
+Worker `backend-developer-9`, branch `wp/s4c-fix`, base `2c15134` (the `rag-it-all-tibs` HEAD that
+merges S4c on top of S1b), brief `ai_docs/handoffs/briefs/cdk-s4c-fix.md`. One commit,
+`Register the loader tests' seeded connector kinds through the registry`, touching
+`tests/unit/test_connector_loader.py` and this file. No source file was changed and none needed to
+be: the refusal is `check_record` doing its job.
+
+### The failure
+
+S1b (`9e5b93c`) made `put_knowledge` call `current_registry().check_record(record)` on every
+knowledge write (ruling R39, `src/hippo/store/knowledge.py:772`). `seed_connectors` writes
+`Connector` rows of kinds `acme` and `beta`, which no registry knows, so all three tests that seed
+rows died in the helper with `ValueError: Unknown connector kind`, raised from
+`UnregisteredName: Unknown connector kind: 'acme'` at `registry.py:295`. Nothing about S4c's loader
+was wrong; the tests were writing rows production writes under the connector's own extension.
+
+| Stage | Log | Result |
+| --- | --- | --- |
+| `tests/unit/test_connector_loader.py` on Fake at `2c15134`, before the fix | `/tmp/hippo-s4c-fix-red.log` | exit 1; 3 failed, 14 passed — the three the brief names, each with the traceback above |
+
+### The fix
+
+`seed_connectors` now registers the kinds it is about to write, inside `extension_scope()`:
+
+```python
+with extension_scope() as scoped:
+    scoped.register(TypeExtension(families=tuple(kinds), connector_kinds=tuple(kinds)))
+```
+
+Four things decided it:
+
+1. **A throwaway extension, not a relaxed check.** `check_record` is untouched, nothing is skipped,
+   and no test is marked. The seeded kinds become real vocabulary for the length of the write, which
+   is the state production is in when `hippo connector enable` writes the same row (R63 N5).
+2. **`extension_scope()`, so nothing reaches `REGISTRY` (N1).** The scope restores the registry's
+   state whole — `test_registry.py::test_extension_scope_restores_the_registry_byte_for_byte` is the
+   proof — including the frozen flag, so a seeded kind survives neither the test nor the process.
+3. **The scope closes before the helper returns.** This is the part worth reading twice: a caller
+   that goes on to `load_connectors` registers the *discovered* connector's real extension under
+   these same names, and a throwaway still in place would make that registration fail with
+   `duplicate_name`. Only the `Connector` writes are inside the scope; the schema, roles, user and
+   workspace calls stay outside it.
+4. **`test_enabled_kinds_come_from_enabled_instances_and_the_allowlist_from_the_environment` now
+   takes the `registry` fixture.** It is the one seeding test that never reaches `load_registry`, so
+   it had no fixture, and under the default `extension_scope()` yields `REGISTRY` itself (R16).
+   Taking the fixture keeps the throwaway extension out of the process registry literally and not
+   just by restoration. It changed no assertion in that test. The module docstring's N1 paragraph
+   now states the seeding rule alongside the `load_registry` one.
+
+Only the helper, that one signature, the module docstring and the registry import line changed. No
+test case, assertion or name was altered, so the 17 cases and the coverage table above still read
+true.
+
+### GREEN
+
+| Line | Log | Result |
+| --- | --- | --- |
+| Fake: `test_connector_loader.py test_import_order.py test_layering.py test_registry.py test_registry_model.py` (the brief's line) | `/tmp/hippo-s4c-fix-green.log` | exit 0, 191 passed |
+| LadybugDB: `test_connector_loader.py` | `/tmp/hippo-s4c-fix-ladybug.log` | exit 0, 17 passed |
+| Fake: `test_connector_loader.py` alone, the first run after the fix | `/tmp/hippo-s4c-fix-first-green.log` | exit 0, 17 passed |
+| Ruff `check` then `format --check` over the two changed files | `/tmp/hippo-s4c-fix-ruff.log` | exit 0 and exit 0 |
+
+Both lines carry `-W error` with no filter and no suppression: neither this file nor the four
+regression files imports `fastapi.testclient` at module level, so form (b) of the fleet rules is not
+needed here, and the CK4 CHECK line proposed above still holds. LadybugDB is green because a read
+never calls `check_record` and `Connector.kind` is a plain `Code`, so a row written under the
+throwaway extension validates on the way back out with no registry involved. No Neo4j run.
