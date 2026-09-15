@@ -25,6 +25,7 @@ MODULES = [
     "hippo.ask",
     "hippo.mcp_server",
     "hippo.cli",
+    "hippo.connectors.loader",
 ]
 
 
