@@ -38,6 +38,7 @@ duplicate name legitimately puts two entries under one name in `LoadResult.entri
 | Plan section 6 S4c regression: Fake, `test_connector_loader.py test_web_base.py test_managed_web_surfaces.py test_registry.py test_registry_model.py` | `/tmp/hippo-cdk-s4c-regress.log` | exit 0, 275 passed |
 | The same regression set without the new file, at the `bc647ef` baseline in the root tree | `/tmp/hippo-cdk-s4c-regress-baseline.log` | exit 0, 258 passed |
 | M2's three tests by name (the DONE WHEN check) | `/tmp/hippo-cdk-s4c-m2.log` | exit 0, 4 passed (the first is parametrized) |
+| The same file on LadybugDB, because the `store` fixture defaults to it | `/tmp/hippo-cdk-s4c-ladybug.log` | exit 0, 17 passed |
 | Ruff `check` then `format --check` over the four files | `/tmp/hippo-s4c-ruff.log` | exit 0 and exit 0; "All checks passed!", "4 files already formatted" |
 | `hippo --help` under the new tree, listing the `hippo.connectors` and serving modules it loaded | `/tmp/hippo-s4c-help.log` | exit 0; `connector/serving modules after --help: []` |
 
@@ -51,11 +52,13 @@ imports a test client, and the startup tests reach the lifespan through
 `app.router.lifespan_context(app)`. This confirms the re-review's claim for the proposed CK4 CHECK
 line. No warning was suppressed, and no ini-wide filter was added.
 
-Counts per backend: Fake 17 new, plus 258 regression equal to the baseline. No LadybugDB pytest
-line: S4c persists nothing and adds no store path (its one store call is the existing
-`_knowledge_rows("Connector")`). The store *is* exercised on LadybugDB outside pytest, in the v7
-lifespan run below, which the brief asks for by name. No Neo4j run; the rulebook forbids one without
-a written grant.
+Counts per backend: Fake 17 new plus 258 regression equal to the baseline, LadybugDB 17. The
+LadybugDB line is not a gate line — S4c persists nothing and adds no store path, its one store call
+being the existing `_knowledge_rows("Connector")` — but the `store` fixture defaults to LadybugDB,
+so the file is proved on the backend an invocation without `HIPPO_TEST_STORE` would pick: the two
+lifespan tests close the store inside the lifespan and again in the fixture, and a real file takes
+it. The store is exercised on LadybugDB outside pytest too, in the v7 lifespan run below, which the
+brief asks for by name. No Neo4j run; the rulebook forbids one without a written grant.
 
 ## The tests
 
