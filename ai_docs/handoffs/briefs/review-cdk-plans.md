@@ -11,7 +11,9 @@ can be executed as written to meet gates CK1–CK6 of `ai_docs/gates/rag-it-all/
 design `docs/spec/connector-developer-kit.md`, and whether the design itself honours the
 specification's section 3 contract and the repository's invariants.
 
-CONTEXT: `docs/spec/enterprise-graph-rag-v1.md` (sections 3, 4, 6, 13.1), the design (all sections),
+CONTEXT: `ai_docs/plans/cdk-rulings.md` (the orchestrator's rulings R1 onward; a ruling supersedes the
+plan section it names, so review the plans as amended by the rulings),
+`docs/spec/enterprise-graph-rag-v1.md` (sections 3, 4, 6, 13.1), the design (all sections),
 `docs/rag_it_all.md` sections 4.2 (invariants I1–I14), 5, 7, the earlier design review
 `ai_docs/reports/2026-09-12-code-capture-plan-review.md` (your form: BLOCKER/MAJOR/MINOR with the
 per-task table, and a verdict APPROVED / APPROVED WITH CHANGES / REJECTED). Read the code every plan
@@ -36,6 +38,8 @@ REQUIRED:
    satisfied by the other plans' contracts, with signatures that agree character for character.
 5. The design's section 14 open decisions: state for each whether any plan silently assumed an
    answer.
+6. The rulings: state for each ruling whether it contradicts the design, the specification's section 3
+   or an invariant; a ruling you find wrong is a finding against the ruling, not against the plan.
 
 FILES:
   - own: `ai_docs/reports/<today>-cdk-plan-review.md`.
