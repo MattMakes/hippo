@@ -296,7 +296,8 @@ class SnapshotQueries:
         )
         # Keep ever-published exact-membership provenance as an immutability
         # tombstone. It conveys no serving reachability without a sealed manifest.
-        kinds = ["GenerationMember", "NativeBinding", "IndexManifest"]
+        # Units are retrieval representations of this generation's passages and go with them.
+        kinds = ["GenerationMember", "NativeBinding", "IndexManifest", "Unit"]
         if not published:
             kinds.append("GenerationEvidenceMember")
         for kind in kinds:

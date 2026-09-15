@@ -325,6 +325,9 @@ def test_actual_v4_upgrade_retains_original_seal(tmp_path, monkeypatch, legacy_v
         # The v4 tables predate v8, while this test drives them through today's model, whose
         # Generation carries `registry_fingerprint`: every read of the row projects that column.
         old.run("ALTER TABLE Generation ADD IF NOT EXISTS registry_fingerprint STRING")
+        # Sealing here compares this generation's Unit rows with its exact membership, so the v4
+        # store also needs the v8 table that read names, and nothing else of v8.
+        old.run(migrations.schema_steps(old, version=8)[0])
         gen = generation(old)
         job = claim(old, gen)
         with old.generation_write(gen.id, **authority(job)):

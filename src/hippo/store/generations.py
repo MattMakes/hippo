@@ -659,11 +659,14 @@ class GenerationQueries:
                 k.NativeBinding,
                 k.IndexManifest,
                 k.ProseExtraction,
+                k.Unit,
             ),
         ):
             self._assert_generation_writable(
                 record.generation_id,
-                legacy_fixture=not isinstance(record, (k.GenerationEvidenceMember, k.ProseExtraction)),
+                legacy_fixture=not isinstance(
+                    record, (k.GenerationEvidenceMember, k.ProseExtraction, k.Unit)
+                ),
             )
         if isinstance(record, k.GenerationEvidenceMember) and record.record_kind in {
             "RetrievalView",
@@ -694,6 +697,18 @@ class GenerationQueries:
                 for revision_id in self._record_revisions(target)
             ):
                 raise ValueError("Evidence member is outside generation revisions")
+        if isinstance(record, k.Unit):
+            # A unit represents one of this generation's own passages, over a span whose
+            # revision the generation selected.
+            passage = next(iter(self._native_rows("Passage", ids=[record.passage_id])), None)
+            span = self._knowledge_get("EvidenceSpan", record.span_id)
+            if (
+                passage is None
+                or passage.get("generation_id") != record.generation_id
+                or span is None
+                or not self._revision_member(record.generation_id, span.revision_id)
+            ):
+                raise ValueError("Unit passage or span is outside its generation")
         if isinstance(record, k.NativeBinding):
             gen = self._generation(record.generation_id)
             native = self._knowledge_get(record.native_kind, record.native_id)
@@ -1098,6 +1113,13 @@ class GenerationQueries:
             if ("EvidenceSpan", row["span_id"]) not in exact_ids:
                 raise ValueError("Passage span missing from exact manifest")
             dimensions.add(len(row["embedding"]))
+        unit_members = {member.record_id for member in exact if member.record_kind == "Unit"}
+        units = self._knowledge_rows("Unit", generation_id=generation_id)
+        if {row.id for row in units} != unit_members:
+            raise ValueError("Generation units differ from their exact membership")
+        dense_ids = {row["id"] for row in dense}
+        if any(row.passage_id not in dense_ids for row in units):
+            raise ValueError("Unit passage is outside the generation's dense coverage")
         bound = {(b.native_kind, b.native_id) for b in bindings}
         for kind, row in native:
             self._validate_managed_native(kind, row, gen, selected=revisions)

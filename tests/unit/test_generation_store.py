@@ -404,6 +404,87 @@ def test_a_v7_generation_keeps_its_published_evidence_checksum(store, monkeypatc
     )
 
 
+def unit(gen, span, row, *, ordinal=0, text="It refunds the order.", **changes):
+    return k.Unit(
+        generation_id=gen.id,
+        passage_id=row["id"],
+        span_id=span.id,
+        ordinal=ordinal,
+        kind="sentence",
+        text=text,
+        embed_text=text,
+        mentions_json="[]",
+        **changes,
+    )
+
+
+def unit_world(store, key="units"):
+    """A claimed generation with one passage, ready for units."""
+    gen = generation(store, key)
+    job = claim(store, gen)
+    with store.generation_write(gen.id, **authority(job)):
+        revision, span = evidence(store, gen)
+        row = passage(gen, revision, span)
+        store.add_passages([row])
+    return gen, job, span, row
+
+
+def test_unit_write_requires_a_build_lease_and_its_generations_passage(store):
+    gen, job, span, row = unit_world(store)
+    second, second_job, second_span, second_row = unit_world(store, "second")
+    # Finish the second build, so its own source no longer demands authority and the refusals
+    # below are the unit guard's rather than the build guard's.
+    seal(store, second, second_job)
+    publish(store, second, second_job)
+    # No live lease at all: the unit's span reaches a source whose build is running.
+    with pytest.raises(ValueError, match="Managed evidence write requires build authority"):
+        store.put_knowledge(unit(gen, span, row))
+    for record in (unit(gen, span, second_row), unit(gen, second_span, row)):
+        with pytest.raises(ValueError, match="Unit passage or span is outside its generation"):
+            with store.generation_write(gen.id, **authority(job)):
+                store.put_knowledge(record)
+    with store.generation_write(gen.id, **authority(job)):
+        accepted = unit(gen, span, row)
+        store.put_knowledge(accepted)
+    assert store._knowledge_get("Unit", accepted.id) == accepted
+
+
+def test_units_are_exact_members_and_enter_the_evidence_checksum(store):
+    gen, job, span, row = unit_world(store)
+    before = evidence_checksum(store, gen)
+    with store.generation_write(gen.id, **authority(job)):
+        record = unit(gen, span, row)
+        store.put_knowledge(record)
+        store.put_knowledge(
+            k.GenerationEvidenceMember(generation_id=gen.id, record_kind="Unit", record_id=record.id)
+        )
+    after = evidence_checksum(store, gen)
+    assert after[1] == before[1] + 2 and after[0] != before[0]
+    seal(store, gen, job)
+    assert store.validate_generation_seal(gen.id)
+
+
+def test_a_unit_row_outside_exact_membership_refuses_the_checksum(store):
+    gen, job, span, row = unit_world(store)
+    with store.generation_write(gen.id, **authority(job)):
+        store.put_knowledge(unit(gen, span, row))
+    with pytest.raises(ValueError, match="Generation units differ from their exact membership"):
+        store.generation_checksums(gen.id)
+
+
+def test_collection_removes_units_with_their_generation(store):
+    gen, job, span, row = unit_world(store)
+    with store.generation_write(gen.id, **authority(job)):
+        record = unit(gen, span, row)
+        store.put_knowledge(record)
+        store.put_knowledge(
+            k.GenerationEvidenceMember(generation_id=gen.id, record_kind="Unit", record_id=record.id)
+        )
+    assert store._knowledge_rows("Unit", generation_id=gen.id) == [record]
+    store.discard_generation(gen.id, **authority(job))
+    assert store._knowledge_rows("Unit", generation_id=gen.id) == []
+
+
 def v7_row(record):
     """The columns v7 persisted, so a checksum can be taken as a pre-v8 store would take it."""
     row = record.model_dump(mode="json")
