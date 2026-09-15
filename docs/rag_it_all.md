@@ -1,5 +1,7 @@
 # RAG it all: an implementation plan for connected engineering knowledge
 
+> **Direction change (2026-09-15).** The direction of record is now [`docs/spec/enterprise-graph-rag-v1.md`](spec/enterprise-graph-rag-v1.md) (the Enterprise Graph-RAG unified specification v1.0) with [`docs/spec/connector-developer-kit.md`](spec/connector-developer-kit.md) as the SDK output added to it. This plan stays authoritative for the records, identity rules, evidence classes, generations and lifecycle it defines (sections 5 and 7), which the specification and the kit build on; the kit's section 11 records which of Tasks 6–16 it absorbs, keeps or re-scopes. Retrieval (section 8 here versus sections 7–9 there) is reconciled only after the user's stack decision (kit section 14).
+
 **Prepared:** 2026-09-11. **Repository inspected:** `3ac02f30054fff3827ec25aa799147be99967692`.
 
 **Implementation branch:** `rag-it-all-tibs`, created directly from `code-graph` at the inspected commit. Execution evidence lives in `ai_docs/checkpoints/` and task ledgers under `ai_docs/gates/rag-it-all/`. Unchecked gates remain unimplemented or unverified; the plan text is not a completion claim.

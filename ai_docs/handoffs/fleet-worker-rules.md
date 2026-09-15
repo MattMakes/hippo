@@ -1,20 +1,20 @@
-# Fleet worker rules (rag-it-all-tibs, 2026-09-11)
+# Fleet worker rules (rag-it-all-tibs, 2026-09-11; base revised 2026-09-15)
 
 Every worker reads this file first, then its own brief. These rules override habits.
 
 ## Project
 
-- Repo: `/Users/mascott/projects/hippo`. Branch `rag-it-all-tibs`, HEAD `26f9a55`. Public remote `MattMakes/hippo`.
-- Master plan: `docs/rag_it_all.md`. Progress record: `ai_docs/checkpoints/2026-09-11-execution-state.md` (read the last ~60 lines for the current state). Handoff: `ai_docs/handoffs/whats-next.md`.
+- Repo: `/Users/mascott/projects/hippo`. Branch `rag-it-all-tibs`. Base for new worktrees: the HEAD named in your spawn message (never older than `d6d9a6c`). Public remote `MattMakes/hippo`.
+- Direction of record since 2026-09-15: `docs/spec/enterprise-graph-rag-v1.md` (the unified specification) and `docs/spec/connector-developer-kit.md` (the SDK design). Earlier plan, still authoritative for the records, identity and lifecycle it defines: `docs/rag_it_all.md`. Progress record: `ai_docs/checkpoints/2026-09-11-execution-state.md` (read the last ~60 lines for the current state). Handoff: `ai_docs/handoffs/whats-next.md`.
 - Per-slice contracts live in `ai_docs/plans/rag-it-all-task-*.md`; per-slice gate ledgers in `ai_docs/gates/rag-it-all/<slug>/GATES.md`.
-- Tasks 0–4 are complete and published. Task 5 is OPEN. Production ingestion is still the legacy pipeline. Nothing you do activates production routes unless your brief says so.
+- Tasks 0–4 are complete and published; Task 5's code-capture and activation ledgers are MET by the checker (CD10 and PA8 sign-offs parked by the direction change). Production ingestion is the managed pipeline behind the activation dispatch. The Connector Developer Kit (gates CK1–CK7, `ai_docs/gates/rag-it-all/cdk/GATES.md`) is the open work. Nothing you do activates a new production route unless your brief says so.
 
 ## Never
 
 - Never touch `data/`, `.rag-dev-data/`, the server on port 8011, or the user's Ollama. Never print, log, or commit anything from `.rag-dev-data/smoke-credentials.json` or any token.
 - Never run tests against Neo4j unless the orchestrator has told you, in writing, that you hold the disposable container. There is exactly one (`hippo-rag-test-b780ab5`, bolt `127.0.0.1:32774`) and one pytest process at a time may use it. Never point tests at port 7687.
 - Never `pkill -f` any pytest pattern. It kills other workers' runs. Kill your own run by PID or let it finish.
-- Never `git add -A` / `git add .` / `git commit -a`. Stage only files your brief says you own. Never push. Never rebase or merge branches. Never edit `docs/rag_it_all.md`, the checkpoint file, or another slice's gate ledger.
+- Never `git add -A` / `git add .` / `git commit -a`. Stage only files your brief says you own. Never push. Never rebase or merge branches. Never edit `docs/rag_it_all.md`, `docs/spec/*.md`, the checkpoint file, or another slice's gate ledger.
 - Never edit a file your brief lists under "do NOT touch". If you believe you must, stop and ask the orchestrator (see Reporting).
 - Never suppress application warnings to make `-W error` pass. The one sanctioned third-party exception is `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated`, raised by importing `fastapi.testclient` with anyio 4.15 + starlette 1.6. Two sanctioned ways to handle it, nothing else: (a) when the warning fires inside a test, the per-test marker exactly `@pytest.mark.filterwarnings("ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning")` as `tests/unit/test_eval_access.py:251` does; (b) when a test module imports `fastapi.testclient` at module level, the warning fires at collection and no marker can catch it, so append the exact filter to the command line after `-W error`: `-W error -W "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"`. Record which form you used in your evidence. Never add an ini-wide `filterwarnings`. Gate CHECK lines that include module-level importers must carry form (b); the orchestrator maintains those lines.
 - Worktree venvs resolve `mcp` to 2.2.0 while the root venv has 2.1.1; after installing, run `uv pip install --python .venv/bin/python 'mcp==2.1.1'` so MCP test behavior matches the reviewed root results.
@@ -34,7 +34,7 @@ Every worker reads this file first, then its own brief. These rules override hab
 Run from `/Users/mascott/projects/hippo`:
 
 ```
-git worktree add .worktrees/<name> -b wp/<name> 26f9a55
+git worktree add .worktrees/<name> -b wp/<name> <HEAD named in your spawn message>
 cd .worktrees/<name>
 uv venv .venv --python 3.12
 uv pip install --python .venv/bin/python -e '.[dev,neo4j]'
