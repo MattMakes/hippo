@@ -337,6 +337,72 @@ def test_sealed_proof_cannot_gain_support(store):
         store.update_knowledge(version.replace(recorded_to=NOW + timedelta(days=1)))
 
 
+def assertion_generation(store, *, source_id=None, **version_fields):
+    """The records of `test_sealed_proof_cannot_gain_support`, copied, with optional version fields."""
+    if source_id is None:
+        gen = generation(store)
+    else:
+        gen = k.Generation(
+            source_id=source_id,
+            status="staging",
+            parser_version="1",
+            linker_version="1",
+            embedding_profile="p",
+            created_at=NOW,
+            manifest_hash="one",
+        )
+        store.put_knowledge(gen)
+        store._generation_clock = lambda: NOW
+    job = claim(store, gen)
+    with store.generation_write(gen.id, **authority(job)):
+        revision, span = evidence(store, gen)
+        store.add_passages([passage(gen, revision, span)])
+        workspace = store.get_source(gen.source_id)["workspace_id"]
+        obj = k.KnowledgeObject(workspace_id=workspace, kind="table", canonical_key='["db","t"]')
+        assertion = k.checked_assertion(obj, "CONTRADICTS", obj, scope_key="test")
+        version = k.AssertionVersion(
+            assertion_id=assertion.id,
+            evidence_class="declared",
+            rule_version="r",
+            confidence=0.9,
+            status="active",
+            recorded_from=NOW,
+            **version_fields,
+        )
+        support = k.AssertionSupport(
+            assertion_version_id=version.id, span_id=span.id, derivation_group="proof"
+        )
+        for record in (obj, assertion, version, support):
+            store.put_knowledge(record)
+        for record in (version, support):
+            store.put_knowledge(
+                k.GenerationEvidenceMember(
+                    generation_id=gen.id, record_kind=type(record).__name__, record_id=record.id
+                )
+            )
+    return gen, job
+
+
+def evidence_checksum(store, gen):
+    (checksum,) = [c for c in store.generation_checksums(gen.id) if c.kind == "evidence"]
+    return checksum.checksum, checksum.row_count
+
+
+def test_a_v7_generation_keeps_its_published_evidence_checksum(store, monkeypatch):
+    """Captured under schema v7: a generation sealed before v8 still verifies after it."""
+    import inspect
+
+    with monkeypatch.context() as patch:
+        patch.setattr(inspect.getmodule(type(store).create_source), "new_id", lambda: "source-pinned")
+        source_id = store.create_source("text", "pinned")
+    assert source_id == "source-pinned"
+    gen, _ = assertion_generation(store, source_id=source_id)
+    assert evidence_checksum(store, gen) == (
+        "356ad2ec426c7d9cef6904f0d464c81cb780ed95b9465f717b2cad3ca5fa99fb",
+        10,
+    )
+
+
 def test_existing_revision_write_requires_claimed_authority(store):
     gen = generation(store)
     job = claim(store, gen)

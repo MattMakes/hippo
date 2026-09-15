@@ -500,3 +500,23 @@ def test_v4_backfill_enters_managed_mode_for_existing_generation(store):
     with store.transaction():
         migrations()._data_transform(store, version=4)
     assert store.source_is_managed(source)
+
+
+def test_v7_descriptor_and_indexes_are_frozen_at_their_published_values():
+    from hippo.knowledge.identity import canonical_json, text_hash
+
+    m = migrations()
+    assert {version: m.SUPPORTED_CHECKSUMS[version] for version in range(1, 8)} == {
+        1: "c7499192a9762dc424094c0bb4292914607748cd907e603fc8fddd9076ff6d12",
+        2: "f4419a33c505b28fc7239c6aa6ac323c9bbcb926159df457c2a3876f0bbc5b0f",
+        3: "ffc12b6f274a5b5573eed4dde9798f8b4abe9d37d68a570247a5c281c10d3ddc",
+        4: "af3234c2ffd6aa2a5c935b06352ad91c92b8c44f80926969a6c3a775a4d5dfd7",
+        5: "45745388d17d797b5c67879c98c80f53d0507cad28b0d6f60fec4268ee032619",
+        6: "4b639a6ba1b60516f2cf31d74bd1aeb0e59295d3aaf7e1fd7825e85d5d95137d",
+        7: "73720e1eaeed7c148033c269de3a7e3af0d0c167fd87e580622f5c57537787f3",
+    }
+    assert text_hash(canonical_json(m._descriptor(7))) == m.V7_CHECKSUM
+    assert m.V7_INDEXES == (
+        ("knowledge_deriveddependency_derived_record_id", "DerivedDependency", "derived_record_id"),
+        ("knowledge_generationevidencemember_record_id", "GenerationEvidenceMember", "record_id"),
+    )
