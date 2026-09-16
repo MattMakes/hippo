@@ -418,13 +418,16 @@ def test_a_package_named_after_a_built_in_kind_keeps_its_built_in_entry(packages
     in-repo candidate: it keeps exactly one entry, the built-in one.
     """
     packages("local")
+    packages("git")
     packages("acme")
 
     assert "local" not in [entry.name for entry in loader.discover_connectors(allowlist=frozenset())]
+    assert "git" not in [entry.name for entry in loader.discover_connectors(allowlist=frozenset())]
 
-    result = loader.load_registry(enabled_kinds=frozenset({"local", "acme"}), allowlist=frozenset())
-    entry = named(result, "local")
-    assert (entry.origin, entry.target, entry.trusted, entry.registered) == ("built-in", None, True, True)
+    result = loader.load_registry(enabled_kinds=frozenset({"local", "git", "acme"}), allowlist=frozenset())
+    for kind in ("local", "git"):  # S5a's `local` and S5b's `git`, by the same rule (R69)
+        entry = named(result, kind)
+        assert (entry.origin, entry.target, entry.trusted, entry.registered) == ("built-in", None, True, True)
     assert named(result, "acme").origin == "in-repo"
 
 

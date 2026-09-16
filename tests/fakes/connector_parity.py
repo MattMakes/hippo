@@ -17,7 +17,10 @@ S5a creates this helper for the prose lane; S5b extends it with the code worlds.
 
 from __future__ import annotations
 
+import io
 import os
+import subprocess
+import zipfile
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import UTC, datetime
@@ -29,14 +32,17 @@ import httpx
 from hippo.access import Principal
 from hippo.config import Config
 from hippo.context import AppContext
-from hippo.ingest import managed_activation, pipeline
+from hippo.ingest import managed_activation, pipeline, repos
+from hippo.ingest.code_generation import CodeTreeInput, build_code_source
 from hippo.ingest.prose_generation import build_plain_source
+from hippo.ingest.repo_capture import repository_descriptor
 from hippo.knowledge.build_authority import BuildActor
 from hippo.knowledge.embedding_cache import EmbeddingCache
 from hippo.knowledge.identity import canonical_json
 from hippo.knowledge.raw_artifacts import RawArtifactStore
 from hippo.ollama import Ollama
 from hippo.store.migrations import DEFAULT_WORKSPACE_ID
+from tests.conftest import git_env
 
 # The instant both worlds read from the store clock. Operation identities are a counter, not one
 # value: a refresh is a second build, and the two must not share one operation's identity.
@@ -51,6 +57,14 @@ SECOND_TEXT = "ACME now builds Robot."
 LONG_TEXT = "ACME builds Robot. " * 200
 PROSE_FILENAME = "notes.md"
 PROSE_FILE = b"# Notes\n\nACME builds Robot.\n"
+
+# The code fixtures of plan section 6, from `tests/unit/test_managed_code_activation.py:59-80`.
+# The saved remote URL a managed `repo` source records; `clone_from` serves it from a local
+# origin, because `repos.is_git_url` refuses a filesystem path.
+CLONE_URL = "https://git.example.com/acme/robots.git"
+CODE_FILENAME = "orders.py"
+ARCHIVE_FILENAME = "bundle.zip"
+ARCHIVE_PROSE = b"# Robots\n\nACME builds robots, and this file is prose inside an archive.\n"
 
 # Section 6: the native kinds `generation_checksums` walks (`store/generations.py:917`).
 NATIVE_KINDS = ("Passage", "Symbol", "DataObject", "Commit")
@@ -230,6 +244,93 @@ def inline_jobs(monkeypatch, ctx) -> list:
     return started
 
 
+# --------------------------------------------------------------- the code fixtures
+
+# `tests/unit/test_code_generation.py` is imported lazily, exactly as the prose `Runtime` is:
+# a fake that pulls a test module at import time would make every collection pay for it.
+
+
+def _code_texts() -> tuple[str, str]:
+    from tests.unit.test_code_generation import ORDERS_V1, ORDERS_V2
+
+    return ORDERS_V1, ORDERS_V2
+
+
+def code_file_bytes() -> bytes:
+    """The single saved code file of the `file` fixture (`test_managed_code_activation.py:78`)."""
+    return _code_texts()[0].encode()
+
+
+def archive_bytes() -> bytes:
+    """The `.zip` of the `archive` fixture: one code file and one prose file."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, data in sorted({"src/orders.py": code_file_bytes(), "README.md": ARCHIVE_PROSE}.items()):
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+def make_origin(root: Path, name: str = "origin") -> Path:
+    """One world's own origin repository, with the commit dates the fixture pins.
+
+    Each world gets its own, so a refresh commit made in world A can never be present when
+    world B bootstraps. The dates are fixed, so two origins built from the same files carry
+    the same commit ids and the two worlds agree on every `head_revision` and every commit
+    identity derived from one.
+    """
+    from tests.unit.test_code_generation import make_checkout
+
+    return make_checkout(root, name=name)
+
+
+def commit_refresh(origin: Path, ordinal: int = 3) -> None:
+    """The `ORDERS_V2` refresh of plan section 6: one further commit, at a pinned instant."""
+    from tests.unit.test_code_generation import _commit
+
+    _, orders_v2 = _code_texts()
+    (origin / "src" / "orders.py").write_text(orders_v2.replace("total * 2", "total * 3"))
+    _commit(origin, "Triple the order total", ordinal)
+
+
+def head_revision(checkout: Path) -> str:
+    from tests.unit.test_code_generation import head_of
+
+    return head_of(checkout)
+
+
+def clone_from(monkeypatch, origin: Path) -> list:
+    """Serve every managed clone from `origin`, recording `(url, dest, depth)` for each.
+
+    `repos.clone_repo` is replaced through the module attribute, which is how the dispatch
+    and the git connector both reach it, so one patch covers both worlds
+    (`test_managed_code_activation.py:129-140`).
+    """
+    clones: list[tuple[str, Path, int]] = []
+
+    def clone_locally(url, dest, timeout=300, depth=1):
+        clones.append((url, Path(dest), depth))
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "-q",
+                "--depth",
+                str(depth),
+                "--single-branch",
+                "--",
+                f"file://{origin}",
+                str(dest),
+            ],
+            check=True,
+            env=git_env(),
+        )
+        return dest
+
+    monkeypatch.setattr(repos, "clone_repo", clone_locally)
+    return clones
+
+
 def pre_kit_prose_build(ctx, *, source_id: str, actor: BuildActor, operation_id: str, job_key: str):
     """The prose branch `run_managed_build` was at `2a9913a`, before S5a replaced it.
 
@@ -266,6 +367,69 @@ def pre_kit_prose_build(ctx, *, source_id: str, actor: BuildActor, operation_id:
     )
 
 
+def _pre_kit_build_code(ctx, source_id, actor, operation_id, job_key, refresh, tree, options, spec):
+    """`managed_activation._build_code` at `2710262`, before S5b added the fingerprint."""
+    limits = options.capture_limits
+    raw_store = RawArtifactStore(
+        managed_activation.raw_root(ctx),
+        max_object_bytes=max(limits.max_input_bytes, limits.max_manifest_bytes),
+    )
+    cache = EmbeddingCache(managed_activation.cache_root(ctx))
+    return build_code_source(
+        ctx,
+        source_id=source_id,
+        actor=actor,
+        tree=tree,
+        options=options,
+        raw_store=raw_store,
+        embedding_spec=spec,
+        operation_id=operation_id,
+        should_stop=lambda: ctx.jobs.is_cancelled(job_key),
+        on_progress=lambda progress: managed_activation._present_progress(
+            ctx, source_id, progress, refresh=refresh
+        ),
+        embedding_cache=cache,
+    )
+
+
+def pre_kit_code_build(ctx, *, source_id: str, actor: BuildActor, operation_id: str, job_key: str):
+    """The code branch `_run_code_build` was at `2710262`, before S5b replaced it.
+
+    Copied verbatim from `managed_activation._run_code_build:710-746`, including the clone and
+    the `finally` that discards the checkout, so world A keeps calling the pre-kit arguments
+    after the switch has replaced them. `repos.clone_repo` is reached through the module
+    attribute, so `clone_from`'s patch applies here exactly as it does in world B.
+    """
+    source = ctx.store.get_source(source_id)
+    refresh = bool(source.get("active_generation_id"))
+    options = managed_activation.code_build_options(ctx)
+    spec = managed_activation.embedding_spec(ctx.ollama)
+    if source.get("kind") != "repo":
+        saved = managed_activation.ingress_file(
+            ctx, source_id, stored_name=managed_activation._recorded_name(source)
+        )
+        tree = CodeTreeInput(root=saved, kind=source["kind"])
+        managed_activation.present(ctx, source_id, **managed_activation._starting_fields(refresh))
+        return _pre_kit_build_code(ctx, source_id, actor, operation_id, job_key, refresh, tree, options, spec)
+
+    url = managed_activation._clone_url(source)
+    descriptor = repository_descriptor(url)
+    checkout = managed_activation.checkout_directory(ctx, source_id, operation_id)
+    managed_activation.present(ctx, source_id, **managed_activation._starting_fields(refresh))
+    managed_activation.discard_checkout(ctx, source_id, operation_id)
+    try:
+        repos.clone_repo(url, checkout, depth=managed_activation.clone_depth(options))
+        tree = CodeTreeInput(
+            root=checkout.resolve(),
+            kind="repo",
+            repository=descriptor,
+            head_revision=repos.head_revision(checkout, timeout=options.git_timeout_seconds),
+        )
+        return _pre_kit_build_code(ctx, source_id, actor, operation_id, job_key, refresh, tree, options, spec)
+    finally:
+        managed_activation.discard_checkout(ctx, source_id, operation_id)
+
+
 def runtime_prose_build(ctx, *, source_id: str, actor: BuildActor, operation_id: str):
     """World B's build: the call `pipeline._run_managed_indexing` makes (`pipeline.py:361-367`)."""
     return managed_activation.run_managed_build(
@@ -275,6 +439,11 @@ def runtime_prose_build(ctx, *, source_id: str, actor: BuildActor, operation_id:
         operation_id=operation_id,
         job_key=pipeline.job_key(source_id),
     )
+
+
+# The runtime path is one dispatch for both families: `run_managed_build` routes a code source
+# to `_run_code_build` itself, so world B's code call is the same call world B's prose call is.
+runtime_code_build = runtime_prose_build
 
 
 def spy_receipts(monkeypatch) -> list:

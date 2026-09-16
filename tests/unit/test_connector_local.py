@@ -24,6 +24,7 @@ import pytest
 from hippo.ingest import managed_activation, pipeline
 from hippo.knowledge.registry import Registry, TypeExtension, current_registry
 from tests.fakes import connector_parity as parity
+from tests.unit.test_connector_git import published_vocabulary
 
 
 def lanes():
@@ -59,6 +60,18 @@ def _stage_upload(world, filename: str, data: bytes) -> str:
     return pipeline.add_upload(world.ctx, filename, data, owner_id=world.user, build_actor=world.actor)
 
 
+def _pre_kit(world, source_id: str):
+    """Which pre-kit branch world A is: the saved Source row decides, as the dispatch does.
+
+    S5b's archive and code-file worlds reach the code coordinator, so the descriptor pin can
+    cover every kind the local connector declares (ruling R72).
+    """
+    source = world.ctx.store.get_source(source_id)
+    if managed_activation.is_code_source(source):
+        return parity.pre_kit_code_build
+    return parity.pre_kit_prose_build
+
+
 def _drive(world, source_id: str, *, runtime: bool, operation_id: str | None = None):
     """One managed build of `source_id`, through the world's own path and one operation identity.
 
@@ -72,7 +85,7 @@ def _drive(world, source_id: str, *, runtime: bool, operation_id: str | None = N
             "world B is not the runtime path: the dispatch does not hold the coordinator lane"
         )
     operation_id = operation_id or managed_activation.new_operation_id()
-    call = parity.runtime_prose_build if runtime else parity.pre_kit_prose_build
+    call = parity.runtime_prose_build if runtime else _pre_kit(world, source_id)
     kwargs = {} if runtime else {"job_key": pipeline.job_key(source_id)}
     receipt = call(world.ctx, source_id=source_id, actor=world.actor, operation_id=operation_id, **kwargs)
     if runtime and receipt.outcome == "published":
@@ -124,34 +137,86 @@ def test_local_descriptor_declares_no_templates_parsers_predicates_or_emit():
     assert not isinstance(connector(), base.Connector)
 
 
-def test_local_descriptor_covers_every_record_the_lanes_write(tmp_path, monkeypatch):
-    """Every artifact and locator kind the prose lane publishes is declared, and registered."""
+@pytest.mark.parametrize("kind", ["text", "archive", "file"])
+def test_local_descriptor_covers_every_record_the_lanes_write(tmp_path, kind):
+    """Every object, artifact and locator kind the two lanes publish is declared, and registered.
+
+    Ruling R72: S5a could only pin the prose subset, so the archive and code-file worlds are
+    pinned here. The declaration is the superset of both lanes, so each world is required to be
+    covered by it rather than equal to it, and the measured sets are recorded in the evidence.
+    """
     descriptor = connector().descriptor
     descriptor.validate_against(current_registry())
 
     def scenario(world, runtime):
-        source = _stage_text(world, parity.FIRST_TEXT)
+        if kind == "text":
+            source = _stage_text(world, parity.FIRST_TEXT)
+        elif kind == "archive":
+            source = _stage_upload(world, parity.ARCHIVE_FILENAME, parity.archive_bytes())
+        else:
+            source = _stage_upload(world, parity.CODE_FILENAME, parity.code_file_bytes())
         receipt = _first(world, source, runtime=runtime)
-        store = world.ctx.store
-        artifacts = {
-            store._knowledge_get(
-                "Artifact",
-                store._knowledge_get("ArtifactRevision", member.artifact_revision_id).artifact_id,
-            ).kind
-            for member in store._knowledge_rows("GenerationMember", generation_id=receipt.generation_id)
-        }
-        locators = {
-            store._knowledge_get("EvidenceSpan", member.record_id).locator_kind
-            for member in store._knowledge_rows(
-                "GenerationEvidenceMember", generation_id=receipt.generation_id
-            )
-            if member.record_kind == "EvidenceSpan"
-        }
-        return artifacts, locators
+        assert receipt.outcome == "published"
+        return published_vocabulary(world.ctx.store, receipt.generation_id)
 
-    (artifacts, locators), _ = run_worlds(tmp_path, scenario)
+    (objects, artifacts, locators), _ = run_worlds(tmp_path, scenario)
     assert artifacts and artifacts <= set(descriptor.artifact_kinds), (artifacts, descriptor.artifact_kinds)
     assert locators and locators <= set(descriptor.locator_kinds), (locators, descriptor.locator_kinds)
+    assert objects <= set(descriptor.kinds), (objects, descriptor.kinds)
+    if kind == "text":
+        assert objects == set(), "the prose lane writes no knowledge object"
+    else:
+        assert objects, "the code lane writes knowledge objects"
+    # Ruling R72's narrowing, pinned: a saved local source is never a repository tree, so
+    # `code_generation._history:397` walks nothing and no commit or history event is published.
+    assert "commit" not in objects and "history_event" not in artifacts
+    assert "commit" not in descriptor.kinds and "history_event" not in descriptor.artifact_kinds
+
+
+def test_the_local_connector_passes_check_capture(tmp_path):
+    """Ruling R67 / review M12: the kit's capture-side assertions run on the ported connector.
+
+    The kit ships one negative fixture per capture assertion
+    (`tests/unit/test_connector_testing_kit.py` `VIOLATIONS`), so none is added here; the last
+    case proves the rules are read against *this* connector rather than passing vacuously.
+    """
+    from hippo.connectors import testing
+
+    text = tmp_path / "text.md"
+    text.write_bytes(parity.FIRST_TEXT.encode())
+    archive = tmp_path / parity.ARCHIVE_FILENAME
+    archive.write_bytes(parity.archive_bytes())
+    code = tmp_path / parity.CODE_FILENAME
+    code.write_bytes(parity.code_file_bytes())
+
+    for source_id, kind, root in (
+        ("c1", "text", text),
+        ("c2", "file", tmp_path / parity.PROSE_FILENAME),
+        ("c3", "archive", archive),
+        ("c4", "file", code),
+    ):
+        if not root.exists():
+            root.write_bytes(parity.PROSE_FILE)
+        cfg = config(source_id=source_id, kind=kind, root=str(root))
+        assert testing.check_capture(connector(), cfg, sample=8) == (), (source_id, kind)
+
+    class WrongFetch(local().LocalConnector):
+        """S4a's `_fetch_that_answers_another_ref` shape, over the real connector.
+
+        A perfectly valid `RawFetch` for the archive's other member. Nothing refuses it before
+        the kit does: `RawFetch` revalidates on copy (`Contract.model_config` sets
+        `revalidate_instances="always"`), so a mangled copy would raise inside `fetch` and be
+        recorded under the same name for the wrong reason.
+        """
+
+        def fetch(self, config, ref):
+            refs = [change.ref for change in self.list_changes(config, None).changes]
+            other = next(candidate for candidate in refs if candidate != ref)
+            return super().fetch(config, other)
+
+    broken = config(source_id="c5", kind="archive", root=str(archive))
+    fired = {v.assertion for v in testing.check_capture(WrongFetch(), broken, sample=2)}
+    assert fired == {"fetch_matches_ref"}, fired
 
 
 def test_local_list_changes_for_pasted_text_and_a_prose_file_is_one_complete_upsert(tmp_path):

@@ -16,7 +16,9 @@ capture refuses an input that changed while it was read
 dry run (plan deviation 3).
 
 S5a implements the text and prose-file branches; S5b adds the archive and code-file branches and
-the `check_capture` assertion (ruling R67).
+the `check_capture` assertion (ruling R67). The code branches answer the walk
+`code_generation._capture` makes (`:314-319`), so the inventory the lane derives and the inventory
+the connector reports are the same walk of the same saved bytes.
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ from pydantic import BaseModel, ConfigDict
 
 from ...codegraph.model import CODE_MAX_FILES
 from ...ingest import readers
+from ...ingest.repo_capture import CaptureInventory, walk_tree
+from ...knowledge.inputs import ByteInput
 from .. import base, classify
 from .types import EXTENSION
 
@@ -74,15 +78,19 @@ DESCRIPTOR = base.ConnectorDescriptor(
     name="local",
     version="local-v1",
     families=("prose", "code"),
-    # Every `KnowledgeObject` kind the two lanes write: the code lane's repository, file, symbol
-    # and commit objects and its data objects (`knowledge/code_binding.py:719-886`,
-    # `code_history.py:943`). The prose lane writes no knowledge object.
-    kinds=("repository", "file", "symbol", "commit", "table", "column", "resource"),
+    # Every `KnowledgeObject` kind the two lanes write for a saved local source: the code lane's
+    # repository, file and symbol objects and its data objects (`knowledge/code_binding.py:88-93`,
+    # `:719-886`). The prose lane writes no knowledge object. `commit` is **not** here: a commit
+    # comes from `read_history`, which `code_generation._history:397` runs only for a repository
+    # tree, and a `LocalSourceConfig` is never one (ruling R72's narrowing; plan section 4.1 had
+    # the superset). `resource` stays: a Mongo collection or a Cypher label in an archive binds
+    # to one (`code_binding.DATA_OBJECT_KINDS`), although no fixture here holds either.
+    kinds=("repository", "file", "symbol", "table", "column", "resource"),
     predicates=(),
-    # `file` and `manifest` for every source; `repository` and `history_event` for the code lane
-    # (`code_binding.py:644-702`, `code_history.py:6`). Plan section 4.2 records that the local
-    # descriptor carries `history_event` as the git descriptor does.
-    artifact_kinds=("file", "manifest", "repository", "history_event"),
+    # `file` and `manifest` for every source, `repository` for a code tree
+    # (`code_binding.py:644-702`). `history_event` is **not** here, by the same rule that drops
+    # `commit`: the local lane walks no history.
+    artifact_kinds=("file", "manifest", "repository"),
     # `file_lines` for every chunk span, `field` for the repository and commit-message spans.
     locator_kinds=("file_lines", "field"),
     capabilities=base.ConnectorCapabilities(
@@ -103,6 +111,34 @@ DESCRIPTOR = base.ConnectorDescriptor(
 def _is_code(config: LocalSourceConfig) -> bool:
     """The dispatch's own rule, read without importing it (ruling R54)."""
     return config.kind == "archive" or (config.kind == "file" and readers.is_code_name(config.path.name))
+
+
+def _inventory(config: LocalSourceConfig) -> CaptureInventory:
+    """The walk `code_generation._capture` makes for an archive or a code file (`:313-319`).
+
+    The same call with the same rails, so the inventory this connector reports and the one the
+    code lane derives from are the same walk of the same saved bytes. `walk_tree` orders by
+    normalized logical path, which is the order the capture accepts them in.
+    """
+    return walk_tree(
+        config.path,
+        exclusions=config.exclusions,
+        max_files=config.max_files,
+        max_file_bytes=config.max_file_bytes,
+    )
+
+
+def coverage_warnings(inventory: CaptureInventory) -> tuple[str, ...]:
+    """One page warning per exclusion reason, with the number of entries that carried it.
+
+    Spelled `excluded.<reason>:<count>`, which `ConnectorDescriptor`'s `Code` alphabet admits.
+    `connectors/git/connector.py` carries the same eight lines: a connector package is
+    self-contained, so neither imports the other.
+    """
+    counts: dict[str, int] = {}
+    for item in inventory.exclusions:
+        counts[item.reason] = counts.get(item.reason, 0) + 1
+    return tuple(f"excluded.{reason}:{count}" for reason, count in sorted(counts.items()))
 
 
 def _decision(config: LocalSourceConfig) -> classify.ItemDecision:
@@ -150,17 +186,27 @@ class LocalConnector:
         )
 
     def list_changes(self, config: LocalSourceConfig, cursor: base.SyncCursor | None) -> base.ChangePage:
-        """The complete inventory of one saved source. There is no cursor to resume from."""
+        """The complete inventory of one saved source. There is no cursor to resume from.
+
+        A pasted text or a prose file is the one saved name. An archive or a code file is the
+        walk of the saved bytes: one upsert per capturable entry, in walk order, with one
+        coverage warning per exclusion reason. A local source has no provider revision.
+        """
         if _is_code(config):
-            raise NotImplementedError(
-                "The archive and code-file inventory is slice S5b's; this source goes to the code lane"
+            inventory = _inventory(config)
+            return base.ChangePage(
+                partition=config.partition,
+                changes=tuple(
+                    base.Change(ref=self._ref(config, item.logical_path), operation="upsert")
+                    for item in inventory.inputs
+                ),
+                next_cursor=None,
+                complete=True,
+                warnings=coverage_warnings(inventory),
             )
-        ref = base.ExternalRef(
-            partition=config.partition, artifact_kind=FILE_KIND, external_id=config.path.name
-        )
         return base.ChangePage(
             partition=config.partition,
-            changes=(base.Change(ref=ref, operation="upsert"),),
+            changes=(base.Change(ref=self._ref(config, config.path.name), operation="upsert"),),
             next_cursor=None,
             complete=True,
         )
@@ -169,7 +215,7 @@ class LocalConnector:
         """The saved bytes, under the canonical URI `_accepted_pairs` writes (`:160`)."""
         return base.RawFetch(
             ref=ref,
-            data=self._member(config, ref).read_bytes(),
+            data=self._member(config, ref),
             content_type=CONTENT_TYPE,
             external_id=ref.external_id,
             canonical_uri=f"{config.partition}/{ref.external_id}",
@@ -183,11 +229,23 @@ class LocalConnector:
         """
         return base.PolicyObservation(ref=ref, state="known", mode="workspace")
 
-    def _member(self, config: LocalSourceConfig, ref: base.ExternalRef) -> Path:
+    def _ref(self, config: LocalSourceConfig, external_id: str) -> base.ExternalRef:
+        return base.ExternalRef(partition=config.partition, artifact_kind=FILE_KIND, external_id=external_id)
+
+    def _member(self, config: LocalSourceConfig, ref: base.ExternalRef) -> bytes:
+        """The bytes of one walked entry, or of the one saved input.
+
+        Re-walking is also the traversal guard: a reference is answered only when the walk
+        itself produced that logical path, so a `..` or an absolute name reaches nothing. An
+        archive member's bytes are already in hand from the walk; a file's are read from disk.
+        """
         if ref.partition != config.partition:
             raise base.ContractError("An external reference belongs to its own source partition")
         if _is_code(config):
-            raise NotImplementedError("Reading an archive member is slice S5b's")
+            for item in _inventory(config).inputs:
+                if item.logical_path == ref.external_id:
+                    return item.data if type(item) is ByteInput else item.path.read_bytes()
+            raise base.ContractError("This source captured no member under that name")
         if ref.external_id != config.path.name:
             raise base.ContractError("A local source holds exactly one saved input")
-        return config.path
+        return config.path.read_bytes()
