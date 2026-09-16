@@ -541,7 +541,7 @@ def connectors_tool(
             return {"connectors": connectors_payload(ctx)}
         except ConnectorNotFound as exc:
             # The caller's own name, and nothing that was read on the way to not finding it.
-            raise ToolError(str(exc)) from exc
+            raise ToolError(exc.message) from exc
 
 
 def remember_tool(

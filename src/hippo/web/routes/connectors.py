@@ -61,7 +61,17 @@ CONNECTOR_FAILURES: tuple[tuple[str, str, str, int], ...] = (
 
 
 class ConnectorNotFound(LookupError):
-    """An instance or a kind this process cannot see. The name is the caller's own input."""
+    """An instance or a kind this process cannot see.
+
+    `message` is a bounded sentence written here, naming the caller's own input and nothing that was
+    read on the way to not finding it. The route answers with that attribute rather than with the
+    exception's own words, which is the rule `render.py` states for the whole web layer and
+    `tests/unit/test_managed_web_surfaces.py` enforces by counting every site that prints one.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 # ---------------------------------------------------------- payload builders
@@ -215,7 +225,7 @@ def _answer(request: Request, build):
     try:
         return build(ctx_of(request))
     except ConnectorNotFound as exc:
-        return coded_response(str(exc), NOT_FOUND, 404)
+        return coded_response(exc.message, NOT_FOUND, 404)
     except Exception as exc:
         answered = connector_failure(exc)
         if answered is None:
