@@ -13,7 +13,7 @@ Where a ruling and the plan differ, the ruling wins; every such case is under "O
 
 | # | Hash | Subject | Files |
 | --- | --- | --- | --- |
-| 1 | (filled by the commit) | Add the connector test kit: contract, purity, capture, runtime and registry assertions (CDK S4a) | `connectors/testing.py` (new), `connectors/loader.py` (the R64 lines), `tests/unit/test_connector_testing_kit.py` (new), `tests/unit/test_connector_loader.py` (one test), `tests/unit/test_import_order.py` (one line), `tests/unit/test_connector_sync.py` (two granted edits), `tests/fakes/fake_ollama.py` (the `embed_text` body), `tests/fakes/fixture_connector/__init__.py`, `tests/fakes/fixture_connector/fixtures/registry.lock.json` (new), `tests/fakes/fixture_connector/fixtures/basic/changes.json`, `tests/fakes/fixture_connector/fixtures/basic/expected/*.json` (new), this file |
+| 1 | `c707974` | Add the connector test kit: contract, purity, capture, runtime and registry assertions (CDK S4a) | `connectors/testing.py` (new), `connectors/loader.py` (the R64 lines), `tests/unit/test_connector_testing_kit.py` (new), `tests/unit/test_connector_loader.py` (one test), `tests/unit/test_import_order.py` (one line), `tests/unit/test_connector_sync.py` (two granted edits), `tests/fakes/fake_ollama.py` (the `embed_text` body), `tests/fakes/fixture_connector/__init__.py`, `tests/fakes/fixture_connector/fixtures/registry.lock.json` (new), `tests/fakes/fixture_connector/fixtures/basic/changes.json`, `tests/fakes/fixture_connector/fixtures/basic/expected/*.json` (new), this file |
 
 ### Grants beyond the brief's "own" list
 
