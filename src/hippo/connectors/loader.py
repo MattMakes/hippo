@@ -185,6 +185,16 @@ def _entry_points() -> Iterable:
 
 
 def _in_repo_candidates() -> list[tuple[ConnectorEntry, Callable[[], type]]]:
+    """Every in-repo package, except one named after a built-in connector kind.
+
+    Slice S5's ported lane connectors live in `hippo/connectors/local/` and `hippo/connectors/git/`,
+    which is a connector package by shape. They are built-in kinds, they carry no `Connector` row an
+    operator could enable (ruling R5), and `managed_activation` constructs them directly rather than
+    through this result. Discovering them here would take them off the built-in list and report a
+    built-in vocabulary as unregistered, so a built-in kind keeps exactly one entry: the built-in
+    one. An entry point is a different question and keeps its existing shadowing behaviour.
+    """
+    built_in = Registry.with_builtins().connector_kinds()
     candidates: list[tuple[ConnectorEntry, Callable[[], type]]] = []
     for package in IN_REPO_PACKAGES:
         try:
@@ -192,6 +202,8 @@ def _in_repo_candidates() -> list[tuple[ConnectorEntry, Callable[[], type]]]:
         except (ImportError, TypeError):
             continue  # `hippo.connectors.examples` need not exist
         for child in children:
+            if child.name in built_in:
+                continue
             if not child.is_dir() or not all((child / name).is_file() for name in PACKAGE_FILES):
                 continue
             module = f"{package}.{child.name}"

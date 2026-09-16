@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+import hippo.connectors
+import hippo.ingest
 import hippo.knowledge
 
 KNOWLEDGE = Path(hippo.knowledge.__file__).parent
@@ -45,6 +47,61 @@ ALLOWED = {
         "so it cannot be built without importing them"
     ),
 }
+
+
+# Ruling R54 (review M11): `hippo.connectors` sits above `hippo.ingest`, and the port opens
+# exactly one edge back the other way. `managed_activation` is the only ingest module that may
+# import the kit, and the kit's two ported modules never import the dispatch or the pipeline --
+# which is what keeps the edge acyclic rather than merely untested.
+INGEST = Path(hippo.ingest.__file__).parent
+CONNECTORS = Path(hippo.connectors.__file__).parent
+
+CONNECTORS_IMPORT = re.compile(
+    r"^[ \t]*(?:from[ \t]+(?:\.{2,}connectors|hippo\.connectors)\b"
+    r"|from[ \t]+(?:\.{2,}|hippo)[ \t]+import[ \t]+connectors\b"
+    r"|import[ \t]+hippo\.connectors\b)",
+    re.MULTILINE,
+)
+INGEST_IMPORT = re.compile(
+    r"^[ \t]*(?:from[ \t]+\S*(?:managed_activation|pipeline)[ \t]+import"
+    r"|from[ \t]+\S*ingest[ \t]+import[ \t]+[^#\n]*\b(?:managed_activation|pipeline)\b"
+    r"|import[ \t]+\S*\bingest\.(?:managed_activation|pipeline)\b)",
+    re.MULTILINE,
+)
+# The kit modules the port adds. S5b appends `connectors/git/connector.py`.
+PORTED = ("connectors/lanes.py", "connectors/local/connector.py")
+
+
+def test_only_managed_activation_imports_the_connector_kit() -> None:
+    """Ruling R54: one ingest module may reach the kit, and it is the dispatch."""
+    offenders = sorted(
+        path.name
+        for path in INGEST.rglob("*.py")
+        if CONNECTORS_IMPORT.search(path.read_text()) and path.name != "managed_activation.py"
+    )
+    assert offenders == [], f"ingest -> connectors imports outside the dispatch: {offenders}"
+    assert CONNECTORS_IMPORT.search("from ..connectors import lanes"), "the guard matches a real import"
+    assert CONNECTORS_IMPORT.search((INGEST / "managed_activation.py").read_text()), (
+        "the one allowed edge is gone; shrink this rule with it"
+    )
+
+
+@pytest.mark.parametrize("relative", PORTED)
+def test_the_ported_connectors_never_import_the_dispatch_or_the_pipeline(relative: str) -> None:
+    """Ruling R54: the lane's refusal is its own, so no cycle can form through the switch."""
+    path = CONNECTORS / Path(relative).relative_to("connectors")
+    assert path.is_file(), f"{relative} is missing"
+    offenders = [line for line in path.read_text().splitlines() if INGEST_IMPORT.match(line)]
+    assert offenders == [], f"{relative} imports the dispatch or the pipeline: {offenders}"
+    for spelling in (
+        "from ..ingest.managed_activation import run_managed_build",
+        "from ..ingest import pipeline",
+        "import hippo.ingest.pipeline",
+    ):
+        assert INGEST_IMPORT.search(spelling), f"the guard misses {spelling!r}"
+    assert not INGEST_IMPORT.search("from ...ingest import readers"), (
+        "the guard refuses an import the port is allowed to make"
+    )
 
 
 def _run(source: str) -> subprocess.CompletedProcess:

@@ -212,7 +212,14 @@ def _configuration(embedding, extractor, options):
     }
 
 
-def _generation(run, accepted, config, profile):
+def _generation(run, accepted, config, profile, registry_fingerprint=None):
+    """The candidate generation, with the registry the build read recorded but never hashed.
+
+    `registry_fingerprint` is outside `Generation.identity_fields`, so setting it moves no
+    generation id and no id namespaced by one. A stored generation's value is adopted exactly as
+    its `created_at` is: a rebuild of unchanged inputs keeps what was published, so the immutable
+    record never changes contents under a different process registry.
+    """
     gen = generation_for_inputs(
         accepted.pairs,
         workspace_id=run.guard.source_control.workspace_id,
@@ -223,9 +230,12 @@ def _generation(run, accepted, config, profile):
         embedding_profile=profile.fingerprint,
         configuration=config,
         created_at=run.store._now(),
+        registry_fingerprint=registry_fingerprint,
     )
     existing = run.store._knowledge_get("Generation", gen.id)
-    return gen.replace(created_at=existing.created_at) if existing is not None else gen
+    if existing is None:
+        return gen
+    return gen.replace(created_at=existing.created_at, registry_fingerprint=existing.registry_fingerprint)
 
 
 def _receipt(store, gen, captured, outcome, job=None):
@@ -492,7 +502,12 @@ def build_plain_source(
     should_stop,
     on_progress=None,
     embedding_cache: EmbeddingCache | None = None,
+    registry_fingerprint: str | None = None,
 ):
+    if registry_fingerprint is not None and (
+        type(registry_fingerprint) is not str or not registry_fingerprint
+    ):
+        raise ValueError("A registry fingerprint is an explicit nonempty string, or omitted")
     if (
         type(actor) is not BuildActor
         or type(options) is not PlainBuildOptions
@@ -542,7 +557,7 @@ def build_plain_source(
             raise ValueError("All-excluded inventory cannot publish a source")
         accepted = _accepted_pairs(run, captured)
         run.adopt(run.guard.bind_inputs(accepted))
-        gen = _generation(run, accepted, config, embedding)
+        gen = _generation(run, accepted, config, embedding, registry_fingerprint)
         if current := _prior_receipt(run, gen, captured, operation_id):
             run.pause()
             run.check()
