@@ -762,6 +762,10 @@ def test_the_fixture_connector_passes_every_assertion(connector, case, registry)
         assert kit.check_capture(replay, _config(), sample=10) == ()
         kit.assert_registry_lock(DESCRIPTOR.extension, version=DESCRIPTOR.version, lock_path=LOCK_PATH)
     kit.assert_runtime_resilience(connector, case)
+    # The committed `expected/` tree, read without `update_golden`: this is what fails when S2b's
+    # binder, S3c's runtime or the fixture connector's `emit` changes what a case publishes.
+    result = kit.run_case(connector, case)
+    assert result.passed, (result.error, result.diff[:800])
 
 
 def test_assert_contract_raises_the_first_violation_in_assertion_order(bench):

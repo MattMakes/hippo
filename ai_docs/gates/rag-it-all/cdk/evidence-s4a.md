@@ -14,6 +14,7 @@ Where a ruling and the plan differ, the ruling wins; every such case is under "O
 | # | Hash | Subject | Files |
 | --- | --- | --- | --- |
 | 1 | `c707974` | Add the connector test kit: contract, purity, capture, runtime and registry assertions (CDK S4a) | `connectors/testing.py` (new), `connectors/loader.py` (the R64 lines), `tests/unit/test_connector_testing_kit.py` (new), `tests/unit/test_connector_loader.py` (one test), `tests/unit/test_import_order.py` (one line), `tests/unit/test_connector_sync.py` (two granted edits), `tests/fakes/fake_ollama.py` (the `embed_text` body), `tests/fakes/fixture_connector/__init__.py`, `tests/fakes/fixture_connector/fixtures/registry.lock.json` (new), `tests/fakes/fixture_connector/fixtures/basic/changes.json`, `tests/fakes/fixture_connector/fixtures/basic/expected/*.json` (new), this file |
+| 2 | (filled below) | Check the fixture connector's committed goldens in the positive fixture (CDK S4a) | `tests/unit/test_connector_testing_kit.py` |
 
 ### Grants beyond the brief's "own" list
 
@@ -135,7 +136,12 @@ capture names and requires the fired set to be exactly `{name}`, so no rule stan
 The positive fixture is S3's `FixtureConnector` with its `fixtures/basic` case (R10, R-S3-7):
 `test_the_fixture_connector_passes_every_assertion` runs `assert_emit_pure`, `check_contract`,
 `check_capture` and `assert_registry_lock` against the committed lock, then
-`assert_runtime_resilience` over all five scenarios, and finds nothing.
+`assert_runtime_resilience` over all five scenarios, then `run_case` **without**
+`update_golden`, against the committed `expected/` tree, and finds nothing. The last step is what
+makes gotcha 7 below true: every other golden test works on a `tmp_path` copy it rewrites first, so
+without it nothing in the suite would ever read the committed files. Proved by corrupting
+`expected/nodes.json` to `[]` and re-running the test: it fails at the `run_case` assertion, and
+the file was restored from the committed copy.
 
 ## Overrides: where a ruling, a review finding or the code overrode the plan
 
