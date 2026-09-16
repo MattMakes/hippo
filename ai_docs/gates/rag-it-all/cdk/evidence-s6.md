@@ -16,7 +16,8 @@ landed code overrode the plan, is under "Overrides".
 | 1 | `e7e47ce` | Scaffold the incidents_ndjson example connector, unedited (CDK S6) | `src/hippo/connectors/examples/__init__.py` (new, hand written); `src/hippo/connectors/examples/incidents_ndjson/**` (18 files, the scaffold's own output) |
 | 2 | `03359a6` | Edit the scaffold into the incidents exemplar and add the connector surfaces (CDK S6) | `examples/incidents_ndjson/{connector,types,templates}.py`, its `export/` and `fixtures/`; `src/hippo/web/routes/connectors.py` (new); `src/hippo/web/app.py` (the import and the one `include_router`); `src/hippo/mcp_server.py`; `src/hippo/cli.py` (one line, R79); `tests/unit/test_connector_exemplar.py`, `tests/unit/test_connector_surfaces.py` (new); `tests/unit/test_mcp_server.py` (`TOOL_NAMES`); `tests/unit/test_mcp_http.py` (one string, granted); `docs/MCP.md`, `docs/CONTRACTS.md`, `README.md`, `docs/spec/cdk-guide.md` (one paragraph, R79) |
 | 3 | `7afbe55` | Answer a missing connector with the module's own sentence (CDK S6) | `src/hippo/web/routes/connectors.py`, `src/hippo/mcp_server.py` |
-| 4 | (this commit) | Record the S6 evidence | this file (new) |
+| 4 | `2aee148` | Record the S6 evidence | this file (new) |
+| 5 | `d504921` | Correct the S6 evidence: the CK4 line, the RED shapes, the order line | this file |
 
 Commit 1 is the unedited scaffold, committed before a byte of it was edited, so the review reads the
 diff from scaffold to exemplar (plan section 7 step 1).
@@ -33,7 +34,7 @@ ledger checkbox, no checkpoint, no `data/`, no `.rag-dev-data/`.
    goldens **and `fixtures/registry.lock.json`**", with the reason the lock is rewritten rather than
    compared on that run. Granted by name in R79. The guide's four fenced examples are untouched and
    still equal their marked regions (`test_the_guide_exists_and_every_python_example_is_the_fixture_connector`
-   is green on the CK4 line).
+   is green on the CK4 CHECK line, `/tmp/hippo-cdk-s6-ck4.log`, exit 0, 166 passed).
 3. **`tests/unit/test_mcp_http.py`, one string.** The plan's section 8 second GREEN line includes
    that file, and `test_a_real_mcp_client_can_list_and_call_the_tools` asserts the tool-name list
    **inline** (`:86-96`) rather than through `TOOL_NAMES`, so `hippo_connectors` had to be added
