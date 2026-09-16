@@ -15,7 +15,7 @@ landed code overrode the plan, is under "Overrides".
 | # | Hash | Subject | Files |
 | --- | --- | --- | --- |
 | 1 | `434733a` | Add the connector scaffold, the hippo connector commands and the developer guide (CDK S4b) | `src/hippo/connectors/scaffold/__init__.py` and `scaffold/templates/*.tmpl` (new, 10 templates); `src/hippo/cli.py` (the `connector` group, the handler entry and `cmd_connector` with its helpers); `src/hippo/remote.py` (`connectors()`); `docs/spec/cdk-guide.md` (new); `tests/unit/test_connector_scaffold.py`, `tests/unit/test_cli_connector.py` (new); `tests/fakes/fixture_connector/{connector,types}.py` (the `cdk-guide` marker comments only) |
-| 2 | (this commit) | Record the S4b evidence | this file (new) |
+| 2 | `b537cd9` | Record the S4b evidence | this file (new) |
 
 ### The one grant beyond the brief's "own" list
 
