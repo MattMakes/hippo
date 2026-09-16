@@ -395,4 +395,14 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   seeds one user. R59's `BuildActor.trusted_local()` for `enable` is satisfied by the
   `manage_sources` check, because none of `ensure_connector`, `probe` or `store_classification`
   takes an actor; the actor appears on the non-dry-run `sync`.
+- **R78 — S5b's findings (git connector and code parity merged at `01a121e`).** The
+  fingerprint-adoption branch is load-bearing on the code lane (a reclaim never re-puts a stored
+  generation; R72 answered). The local descriptor is narrowed to what the local lanes write
+  (`commit` and `history_event` dropped: a local tree is never a repository), so the S5 plan's
+  "as for local" sentence in §4.2 is stale; `resource` stays in both descriptors. `GitConnector.probe`
+  observes only whether the checkout is a clone, so two probes an instant apart are identical
+  (M13). For S6 and later: kit records re-validate on `model_copy(update=...)` (`revalidate_instances
+  ="always"`), so a negative fixture that mangles a copy passes for the wrong reason; answer another
+  record instead. Each parity world needs its own origin repository. CD9 at N=8 and the Neo4j
+  parity of `test_connector_local.py` and `test_connector_git.py` are the orchestrator's.
 

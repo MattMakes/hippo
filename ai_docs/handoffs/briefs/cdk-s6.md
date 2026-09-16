@@ -71,4 +71,5 @@ question the plan, the rulings and the reviews do not answer.
 - R73: the routes pass `enabled=` deliberately on any `ensure_connector` call; `fetch_policy` maps forbidden and not-found to `unknown` (deny).
 - R75: the exemplar's fixture includes one malformed record so `failures.json` and the per-parser counts are exercised; if the exemplar reads over HTTP it commits an `http/` recording, else it states that it reads files only.
 - R77: the exemplar declares `descriptor` as a class attribute; every list, sync, enable and route test seeds one signed-in user because open mode refuses provider connector rows; S4a-fix (before you) makes `failures.json` fill and re-goldening rewrite the lock.
+- R78: never build a negative fixture by `model_copy(update=...)` on a kit record (it re-validates); answer another record instead, as S4a's `_fetch_that_answers_another_ref` does.
 
