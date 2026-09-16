@@ -315,4 +315,10 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   S3c's fixtures: ordered batch writes, the `unit` probe flavour, an instance per fixture from a
   counter, one user for an enabled provider connector, `_write_batches` for unsealed generations,
   `verified_at` well before `expires_at` for a lapsed policy.
+- **R69 — Built-in lane connectors under the loader (S5a question).** `local` and `git` are in-repo
+  packages by the loader's package rule yet built-in kinds with no `Connector` row (R5), so
+  `load_registry` keeps a built-in kind's built-in entry when an in-repo package shadows it; S5a
+  makes that edit in `connectors/loader.py` with a loader test (granted), S4c's existing assertion
+  stands, and S5b's `connectors/git/` relies on the same rule. The status surface (S6) lists them
+  as built-in, never as unregistered.
 
