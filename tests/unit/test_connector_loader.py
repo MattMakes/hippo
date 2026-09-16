@@ -26,6 +26,7 @@ import pytest
 from hippo.connectors import loader
 from hippo.knowledge import model as k
 from hippo.knowledge.registry import (
+    EvidenceSourceDefinition,
     Registry,
     TypeExtension,
     current_registry,
@@ -536,3 +537,30 @@ def test_serve_startup_with_an_unreachable_store_loads_no_kinds_and_says_so(
         assert not current_registry().frozen, "a store that is late must not freeze an empty registry"
 
     run_lifespan(app, inside)
+
+
+def _source_extension(evidence_class: str) -> TypeExtension:
+    """The smallest extension that registers one evidence source (ruling R40)."""
+    return TypeExtension(
+        families=("pager",),
+        evidence_sources=(
+            EvidenceSourceDefinition(
+                name="pager_feed", family="deterministic", evidence_class=evidence_class
+            ),
+        ),
+    )
+
+
+def test_an_evidence_source_that_changed_under_its_name_is_not_already_registered(registry) -> None:
+    """Ruling R64: the restart rule compares evidence-source definitions, not just their names.
+
+    `Registry.evidence_source` returns only a name, so a package whose source kept its name but
+    changed its class would have read as "already registered" under a frozen registry and the
+    process would serve a class it never registered.
+    """
+    registered = _source_extension("catalog_observed")
+    registry.register(registered, declared_families=("pager",))
+
+    assert loader._already_registered(registry, registered)
+    assert not loader._already_registered(registry, _source_extension("declared"))
+    assert registry.evidence_source("pager_feed") == "pager_feed", "the name alone cannot tell them apart"

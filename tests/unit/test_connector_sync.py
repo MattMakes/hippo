@@ -538,7 +538,9 @@ def test_no_production_module_passes_fault_hook_to_sync_connector():
     offenders = [
         path.relative_to(root).as_posix()
         for path in root.rglob("*.py")
-        if path.name != "sync.py"
+        # The kit is the sanctioned second caller: design section 8's runtime scenarios inject at
+        # `after_fetch` and `after_checkpoint` through `testing.scratch_sync` (R49 / review B4).
+        if path.relative_to(root).as_posix() not in ("connectors/sync.py", "connectors/testing.py")
         and "fault_hook" in path.read_text(encoding="utf-8")
         and "sync_connector" in path.read_text(encoding="utf-8")
     ]
@@ -550,12 +552,10 @@ def test_the_fixture_connector_constructs_with_no_arguments():
     connector = FixtureConnector()
     assert connector.descriptor.capabilities.inventory is True
     assert connector.descriptor.capabilities.acls is True
-    upserts = [
-        change
-        for page in connector.provider.case_pages()
-        for change in page
-        if change["operation"] == "upsert"
-    ]
+    # `changes.json` holds one `ChangePage` per page, the kit's documented layout (S4 section 3.1),
+    # so the pages are read from the case file rather than through the provider's page list.
+    pages = json.loads((CASE / "changes.json").read_text(encoding="utf-8"))["pages"]
+    upserts = [change for page in pages for change in page["changes"] if change["operation"] == "upsert"]
     assert len(upserts) >= 2
 
 

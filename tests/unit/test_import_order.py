@@ -26,6 +26,7 @@ MODULES = [
     "hippo.mcp_server",
     "hippo.cli",
     "hippo.connectors.loader",
+    "hippo.connectors.testing",
     # The port's one `ingest` -> `connectors` edge (ruling R54): the dispatch imports these two,
     # and they import only leaves, so every order must still load in a fresh interpreter.
     "hippo.connectors.lanes",

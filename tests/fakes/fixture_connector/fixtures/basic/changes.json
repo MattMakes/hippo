@@ -1,8 +1,20 @@
 {
   "pages": [
-    [
-      {"operation": "upsert", "external_id": "n1"},
-      {"operation": "upsert", "external_id": "n2"}
-    ]
+    {
+      "partition": "notes",
+      "changes": [
+        {
+          "ref": {"partition": "notes", "artifact_kind": "document", "external_id": "n1"},
+          "operation": "upsert"
+        },
+        {
+          "ref": {"partition": "notes", "artifact_kind": "document", "external_id": "n2"},
+          "operation": "upsert"
+        }
+      ],
+      "next_cursor": null,
+      "complete": true,
+      "warnings": []
+    }
   ]
 }
