@@ -31,6 +31,7 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -53,7 +54,7 @@ from tests.fakes.fixture_connector import (
     FixtureConnector,
     FixtureProvider,
 )
-from tests.fakes.fixture_connector.types import FIXTURE_EXTENSION
+from tests.fakes.fixture_connector.types import FIXTURE_EXTENSION, FIXTURE_FAMILY
 
 PARTITION = "notes"
 CASE = Path(__file__).resolve().parents[1] / "fakes" / "fixture_connector" / "fixtures" / "basic"
@@ -806,6 +807,15 @@ def _m11(world):
     assert receipt.coverage["emit_failed"]
 
 
+def _m11b(world):
+    """CK7 F15: the counted family is the revision's classification, not the first declared one."""
+    failing = _TwoFamilyFailingConnector(world.connector_impl, "n2")
+    assert failing.descriptor.families[0] == "service"
+    receipt = world.sync(connector=failing)
+    assert receipt.outcome == "published"
+    assert receipt.coverage["emit_failed"] == {FIXTURE_FAMILY: 1}
+
+
 def _m12(world, monkeypatch):
     calls = {"n": 0}
     real = staged_records._write_batch
@@ -991,6 +1001,7 @@ _MATRIX = {
     "M10": _m10,
     "M10b": _m10b,
     "M11": _m11,
+    "M11b": _m11b,
     "M12": _m12,
     "M13": _m13,
     "M14": _m14,
@@ -1166,6 +1177,24 @@ class _DriftedConnector(_Delegating):
         super().__init__(inner)
         drifted = _bumped_extension()
         self.descriptor = inner.descriptor.model_copy(update={"extension": drifted})
+
+
+class _TwoFamilyFailingConnector(_Delegating):
+    """CK7 F15: two declared families, the partition classified as the *second* of them.
+
+    The count of a revision-level emit failure used to land on `descriptor.families[0]`, which on
+    this connector is the family the failing revision has nothing to do with.
+    """
+
+    def __init__(self, inner, external_id):
+        super().__init__(inner)
+        self.descriptor = inner.descriptor.model_copy(update={"families": ("service", FIXTURE_FAMILY)})
+        self._external_id = external_id
+
+    def emit(self, revision, mapping):
+        if revision.artifact.external_id == self._external_id:
+            raise ValueError("this revision cannot be parsed")
+        return self._inner.emit(revision, mapping)
 
 
 class _FailingEmitConnector(_Delegating):
@@ -1374,3 +1403,15 @@ def test_a_new_connector_instance_is_created_disabled_whether_or_not_enabled_is_
         world.store, instance_url="https://third.invalid", config=third, enabled=False, **fields
     )
     assert explicit.enabled is False
+
+
+def test_a_failure_counted_without_a_classified_family_is_counted_as_unknown():
+    """CK7 F15's fallback: `unknown` rather than a family that did not fail.
+
+    Every target built by `sync_connector` carries a validated `TypeMapping`, so this is the answer
+    for a target that reached the counter without one - which is why it is a named string and not
+    `descriptor.families[0]`.
+    """
+    assert sync._failure_family(SimpleNamespace(mapping=None)) == "unknown"
+    assert sync._failure_family(SimpleNamespace(mapping=SimpleNamespace(family=""))) == "unknown"
+    assert sync._failure_family(SimpleNamespace(mapping=SimpleNamespace(family="db"))) == "db"

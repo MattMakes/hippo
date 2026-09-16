@@ -974,6 +974,18 @@ def _manifest_pair(store, target: _Target, payload: dict, policy: k.AccessPolicy
 # ------------------------------------------------------------------ step 5: emit
 
 
+def _failure_family(target: _Target) -> str:
+    """The family a revision-level emit failure is counted against (review CK7 finding F15).
+
+    Spec section 3 counts parse failures per language and dialect, so the family has to be the one
+    this partition was classified as. `target.descriptor.families[0]` was the wrong answer on any
+    connector that declares more than one: the count landed on whichever family it happened to
+    declare first. A classification with no family at all is counted as `"unknown"` rather than
+    silently attributed to a family that did not fail.
+    """
+    return getattr(target.mapping, "family", None) or "unknown"
+
+
 def _emit_one(connector, revision_input: RevisionInput, mapping: TypeMapping) -> EmissionBatch:
     """The worker's whole body: the guard is entered *inside* the worker thread (ruling R65)."""
     with guard.forbid_effects():
@@ -1023,7 +1035,7 @@ def _emit(run: ConnectorRun, target: _Target, inputs: _SyncInputs, raw_store, op
                 target.count("emit_failed")
                 target.counters.setdefault("emit_failed_families", {})
                 families = target.counters["emit_failed_families"]
-                family = target.descriptor.families[0]
+                family = _failure_family(target)
                 families[family] = families.get(family, 0) + 1
                 continue
             if len(batch.nodes) + len(batch.edges) + len(batch.passages) + len(batch.units) > (
