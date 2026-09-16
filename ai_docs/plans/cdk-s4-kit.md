@@ -1746,7 +1746,7 @@ def store_classification(store, *, connector: k.Connector, classification: Class
 `use_registry` reaches them.
 
 ```python
-class EmitSideEffect(RuntimeError): ...
+class EmitSideEffect(BaseException)  # rebased by the CK7 review, F1: ...
 
 
 @contextmanager

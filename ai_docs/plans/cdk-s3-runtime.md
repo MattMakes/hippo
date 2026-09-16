@@ -156,7 +156,7 @@ the S4, S5 and S6 plans by name.
 ### 4.1 `connectors/guard.py` (S3a)
 
 ```python
-class EmitSideEffect(RuntimeError):
+class EmitSideEffect(BaseException)  # rebased by the CK7 review, F1:
     """emit touched the network, a model, a subprocess, a thread or the clock."""
 
 
