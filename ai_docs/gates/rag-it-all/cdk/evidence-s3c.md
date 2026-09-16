@@ -13,12 +13,15 @@ Where a ruling and the plan differ, the ruling wins; every such case is in "Over
 
 | # | Hash | Subject | Files |
 | --- | --- | --- | --- |
-| 1 | (this commit) | Add the connector sync runtime and its fixture connector (CDK S3c) | `connectors/sync.py` (new), `connectors/__init__.py`, `connectors/guard.py`, `knowledge/staged_records.py`, `store/knowledge.py`, `tests/fakes/fixture_connector/**` (new), `tests/unit/test_connector_sync.py` (new), `tests/unit/test_connector_guard.py`, `tests/unit/test_import_order.py`, `tests/unit/test_connector_contract.py`, this file |
+| 1 | `4edd742` | Add the connector sync runtime and its fixture connector (CDK S3c) | `connectors/sync.py` (new), `connectors/__init__.py`, `connectors/guard.py`, `knowledge/staged_records.py`, `store/knowledge.py`, `tests/fakes/fixture_connector/**` (new), `tests/unit/test_connector_sync.py` (new), `tests/unit/test_connector_guard.py`, `tests/unit/test_import_order.py`, `tests/unit/test_connector_contract.py`, this file |
+
+Both CK3 lines and the CK7 line were re-run against the committed tree at `4edd742`; the logs above
+are that run. A second commit records this hash and nothing else.
 
 Every file outside the brief's "own" list is there under a grant the brief or the orchestrator gave
 by name: `guard.py` and its pin test (R65, the one S3a file S3c may edit), `connectors/__init__.py`
 and `test_connector_contract.py` (R70(2)), `staged_records.py`'s one field (R68(1)),
-`store/knowledge.py` (R68(3), see override 2), and the three appended lines of
+`store/knowledge.py` (R68(3), **two edits**, see overrides 2 and 3), and the three appended lines of
 `test_import_order.py` (m12). Nothing else was touched: no `docs/spec`, no gate ledger checkbox, no
 checkpoint, no `data/`, no `.rag-dev-data/`, no other `connectors` module.
 
