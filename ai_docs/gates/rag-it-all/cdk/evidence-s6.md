@@ -53,10 +53,20 @@ ledger checkbox, no checkpoint, no `data/`, no `.rag-dev-data/`.
 | `test_connector_exemplar.py` alone, against the unedited scaffold | `/tmp/hippo-cdk-s6-red-exemplar.log` | exit 1; **15 failed, 2 passed, 4 errors** |
 
 The second stage exists because a collection error proves a module is absent but not that each
-assertion bites (the gap S4b and S3c both recorded). Against the scaffolded package every exemplar
-assertion bit on its own subject: no `AFFECTS` predicate, no second fact template, no `export/`
-file, a `fetch` that reads `<id>.json` rather than a line, no `service` endpoint, no window, no
-counted `ParseFailure`.
+assertion bites (the gap S4b and S3c both recorded). Of the 21 exemplar cases, **15 failed on their
+own subject** against the scaffolded package: no `AFFECTS` predicate, no second fact template, no
+`export/` file, a `fetch` that reads `<id>.json` rather than a line, no `service` endpoint, no
+window, no counted `ParseFailure`. The **4 errors** are weaker and worth naming: they are the `world`
+fixture failing to construct, because the scaffold's configuration model refuses `catalog_instance`
+and `principal_map` and there is no export file to point it at, so the four scratch-workspace cases
+never reached their assertions. They bit properly once the package existed, and their assertions are
+in the GREEN run.
+
+**The surfaces RED is single-stage.** `tests/unit/test_connector_surfaces.py` fails at collection
+against the base tree, because `hippo.web.routes.connectors` does not exist; there is no stub-only
+second stage of the kind S4b built. Each of its 21 cases went green on its own subject during
+implementation, and two of them bit on real defects (findings 1 and 3 below), but a reviewer should
+read the surfaces RED as "the module is absent" and nothing more.
 
 The two that passed against the scaffold are pins on what must **not** change, not TDD steps:
 
@@ -79,8 +89,18 @@ The two that passed against the scaffold are pins on what must **not** change, n
 | `hippo connector validate ... --update-golden` (plan step 3) | `/tmp/hippo-cdk-s6-golden.log` | exit 0; the diff reviewed below |
 | Regression: loader, cli_connector, testing kit, scaffold, import order, layering, Fake | `/tmp/hippo-cdk-s6-regress.log` | exit 0, **209 passed** |
 | Regression: the web layer this slice adds a router to, Fake | `/tmp/hippo-cdk-s6-web.log` | exit 0, **170 passed** |
+| The CK4 CHECK line of `GATES.md`, verbatim (the guide, the scaffold pins, the loader) | `/tmp/hippo-cdk-s6-ck4.log` | exit 0, **166 passed** |
+| Registry poisoning: the surfaces file, then the loader and the runtime, in **one** process | `/tmp/hippo-cdk-s6-order.log` | exit 0, **96 passed, 1 skipped** |
 
 **Counts per backend** for the two S6 files: **Fake 42**, **LadybugDB 42**, the same cases on both.
+
+**The order line is deliberate.** `test_connector_surfaces.py` builds the whole app, whose lifespan
+calls `load_connectors` and freezes `current_registry()` with `incidents_ndjson` **enabled**, in the
+test client's own portal thread. If that reached the module-level `REGISTRY`, every file that later
+opens an `extension_scope()` in the same process would fail with `duplicate_name`. The order line
+runs the surfaces file first and then `test_connector_loader.py` and `test_connector_sync.py`, which
+both register extensions: exit 0. `test_the_connector_row_seeder_leaves_no_registration_behind` pins
+the same property for the seeder alone.
 
 **Warning filters.** The CK6 line and the LadybugDB line ran with `-W error` alone — **form (a)** of
 rulebook line 19, and no marker was needed at module level, because neither S6 file imports
