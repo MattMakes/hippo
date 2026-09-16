@@ -689,6 +689,23 @@ routes/code.py     (router prefix /api/code) the code graph a repository source 
     GET  /api/code/blast-radius?symbol=&depth=   -> {symbol,symbol_id,depth,levels,truncated,lines}  depth clamped 1-4
     GET  /api/code/exception-path?symbol=&exception=   -> {symbol,symbol_id,exception,found,edges,lines}
     GET  /api/code/history?symbol=&limit=        -> {symbol,symbol_id,commits,lines}
+routes/connectors.py  (router prefix /api/connectors) the operator's view of the connector kit. Every route
+    first requires manage_sources; the payload builders are shared with mcp_server.py so the two never drift.
+    An unknown instance or kind is 404 {error, code:"not_found"}; CredentialError, Provider*Error,
+    RegistrationRequired and ConnectorSyncRefused become coded bodies whose message is this module's own,
+    never the raised text (a provider error can name a URL a mistaken configuration gave a token to).
+    GET  /api/connectors                -> [{name,version,families,origin,enabled,error,instances:[{id,enabled,
+                                           partitions:[{partition,family}]}]}]  keyed on (origin,name); `error` is
+                                           an exception class name, "not allowlisted", "NameMismatch",
+                                           "DuplicateName" or "frozen"; read off app.state.connector_load
+    GET  /api/connectors/{id}/classification  -> the stored Classification JSON, or 404
+    POST /api/connectors/{id}/probe     -> the Classification, probed against the instance's STORED config and
+                                           stored through sync.store_classification. No request body is read: a
+                                           caller-supplied config would make the server read an arbitrary path.
+    POST /api/connectors/kinds/{name}/validate -> ValidationReport.to_json() at scope "contract"
+                                           (validate_package(runtime=False)): registration, the registry lock,
+                                           the capture assertions and the emission contract. No scratch build --
+                                           that is `hippo connector validate`, and `cases` is empty here.
 Mounted, not routes: /static (files), /mcp (the MCP server), /api/docs (FastAPI's own docs).
 The Analyze page shows, top to bottom:
     1. the question, expected answer (if any), the answer given, judge verdict/reason, metrics; "History" of this question across runs
@@ -734,6 +751,11 @@ mcp_server.py  build_server(ctx) -> MCPServer (mcp>=2: from mcp.server.mcpserver
                           @server.tool closure, and each sharing routes/code.py's payload builder so the two never drift:
                       hippo_explain_path(a, b) ; hippo_blast_radius(symbol, depth=2) ;
                       hippo_exception_path(symbol, exception) ; hippo_history(symbol, limit=3)
+                      hippo_connectors(connector_id=None, validate=None) -> {"connectors":[...]} | {"classification":{...}}
+                          | {"validation":{...}}; needs manage_sources (ToolError naming it otherwise); shares
+                          routes/connectors.py's builders; both arguments at once is ValueError "Choose connector_id
+                          or validate, not both"; never runs probe -- an MCP client triggering a provider read is
+                          Task 15's call
                           AmbiguousSymbol / UnknownSymbol / ValueError -> ToolError with the message verbatim, the
                           candidates inline: ToolError is the one error a client is shown, so anything a caller could
                           act on has to be inside it

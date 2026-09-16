@@ -93,6 +93,7 @@ def test_a_real_mcp_client_can_list_and_call_the_tools(server_url):
                     "hippo_blast_radius",
                     "hippo_exception_path",
                     "hippo_history",
+                    "hippo_connectors",
                 ]
 
                 sources = tool_payload(await session.call_tool("hippo_sources", {}))

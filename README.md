@@ -291,10 +291,11 @@ One thing to plan for: the depth is fixed when the repository is **cloned**, not
 
 ## Use it from Claude / Cursor (MCP)
 
-hippo serves MCP at `http://localhost:8000/mcp` with nine tools. Five are about the memory as a whole —
-`hippo_search`, `hippo_ask`, `hippo_remember`, `hippo_sources`, `hippo_whoami` — and four answer
+hippo serves MCP at `http://localhost:8000/mcp` with ten tools. Five are about the memory as a whole —
+`hippo_search`, `hippo_ask`, `hippo_remember`, `hippo_sources`, `hippo_whoami` — four answer
 structural questions about indexed source code: `hippo_explain_path`, `hippo_blast_radius`,
-`hippo_exception_path`, `hippo_history`.
+`hippo_exception_path`, `hippo_history` — and `hippo_connectors` lists the installed connectors for
+an operator.
 
 ```bash
 claude mcp add --transport http hippo http://localhost:8000/mcp
@@ -402,7 +403,8 @@ src/hippo/
   analysis/         explain a result, simulate changes, save/apply changesets
   web/              FastAPI app, routes, Jinja templates, static files
     routes/code.py  the /api/code endpoints: symbol search, call path, blast radius, exception path, history
-  mcp_server.py     the nine MCP tools (HTTP at /mcp and stdio)
+    routes/connectors.py  the /api/connectors endpoints: list, stored classification, probe, validate
+  mcp_server.py     the ten MCP tools (HTTP at /mcp and stdio)
   cli.py            the `hippo` command
 tests/
   fakes/            FakeStore, FakeOllama

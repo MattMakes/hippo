@@ -1,0 +1,1 @@
+{"id": "P7Q2X3", "number": 2212, "title": "Checkout latency above target", "severity": "SEV3", "status": "monitoring", "service": "checkout", "started_at": "2026-09-15T06:40:00Z", "detected_at": "2026-09-15T06:44:00Z", "mitigated_at": "2026-09-15T07:05:00Z", "updated_at": "2026-09-15T07:10:00Z", "visibility": {"mode": "workspace"}}
