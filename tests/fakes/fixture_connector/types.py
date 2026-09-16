@@ -23,6 +23,7 @@ FIXTURE_LINKS = "FIXTURE_LINKS"
 FIXTURE_FAMILY = "custom"
 
 
+# cdk-guide: begin types
 class FixtureNoteAttributes(BaseModel):
     """A note's typed attributes; `extra="forbid"` is required of every extension kind (S1 D5)."""
 
@@ -77,3 +78,4 @@ def fixture_extension(**overrides) -> TypeExtension:
 
 
 FIXTURE_EXTENSION = fixture_extension()
+# cdk-guide: end types

@@ -17,6 +17,12 @@ The `hippo` command line.
     hippo user token <name>     print a user's API/MCP token (or --new to issue another)
     hippo user role <name> <r>  move a user to another role
     hippo user remove <name>    delete a user
+    hippo connector new <name>  write a connector package that already validates
+    hippo connector list        the connectors this hippo can see, and their instances
+    hippo connector validate X  run the contract test kit over a package
+    hippo connector probe <n>   ask a connector what a provider holds
+    hippo connector sync <id>   sync one instance (--dry-run throws the result away)
+    hippo connector enable <k>  create or enable one instance, and probe it
 
 Who the CLI is. Administration is not gated by users: creating the first admin
 from `docker exec` is exactly what it is for (see hippo/access.py). Everything
@@ -144,6 +150,38 @@ def build_parser() -> argparse.ArgumentParser:
     role.add_argument("role_id")
     remove = user_sub.add_parser("remove", help="delete a user (their sources stay, without an owner)")
     remove.add_argument("username")
+
+    # The connector group copies the `user` group's shape. Everything it reaches lives behind a
+    # function-local import, so `hippo --help` still loads neither the kit nor the serving stack.
+    connector = sub.add_parser("connector", help="write, check and run connectors")
+    connector_sub = connector.add_subparsers(dest="connector_command", required=True)
+    new = connector_sub.add_parser("new", help="write a new connector package that already validates")
+    new.add_argument("name", help="the package name, which is also its connector kind (lower case)")
+    new.add_argument("--family", default=None, help="the family it writes into (default: custom)")
+    new.add_argument(
+        "--kinds", nargs="*", default=[], help="the object kinds it registers (default: the name)"
+    )
+    new.add_argument("--dest", default=None, help="where to write the package (default: here)")
+    connector_sub.add_parser("list", help="the connectors this hippo can see, and their instances")
+    validate = connector_sub.add_parser("validate", help="run the contract test kit over a package")
+    validate.add_argument("target", help="a package directory, or an installed connector name")
+    validate.add_argument(
+        "--update-golden", action="store_true", help="rewrite the expected files and print the diff"
+    )
+    probe = connector_sub.add_parser("probe", help="ask a connector what a provider holds")
+    probe.add_argument("name", help="an installed, trusted connector name")
+    probe.add_argument("--config", required=True, help="a JSON file of that connector's configuration")
+    connector_sync = connector_sub.add_parser("sync", help="sync one instance, or dry-run a connector")
+    connector_sync.add_argument("instance", help="a stored Connector id, or a connector name with --config")
+    connector_sync.add_argument("--config", default=None, help="a JSON configuration file (dry runs)")
+    connector_sync.add_argument("--partition", default=None, help="one partition (default: every one)")
+    connector_sync.add_argument(
+        "--dry-run", action="store_true", help="publish into a scratch workspace and throw it away"
+    )
+    enable = connector_sub.add_parser("enable", help="create or enable one instance, and probe it")
+    enable.add_argument("kind", help="the connector kind to enable")
+    enable.add_argument("instance_url", help="the provider instance this row points at")
+    enable.add_argument("--config", default=None, help="a JSON file of that connector's configuration")
     return parser
 
 
@@ -166,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
         "settings": cmd_settings,
         "users": cmd_users,
         "user": cmd_user,
+        "connector": cmd_connector,
     }
     try:
         return handlers[args.command](args)
@@ -773,6 +812,420 @@ def _user_remotely(remote: RemoteHippo, args: argparse.Namespace) -> int:
         print(f"Removed {user['username']}. Their sources stay, without an owner.")
         return 0
     return 2
+
+
+# ------------------------------------------------------ connectors (CDK S4b)
+#
+# Six subcommands over `hippo.connectors`. Every import below is function-local, because
+# `test_import_order.py` requires `hippo --help` to load neither the kit nor the serving stack,
+# and the kit reaches the whole ingest lane.
+#
+# Only `list` forwards to a running server (plan deviation 4, ratified by R7): it is the one
+# command whose answer lives in the configured store. `new`, `validate` and `sync --dry-run` open
+# no configured store at all, `probe` keeps the caller's configuration file and credential
+# references on the caller's machine, and a non-dry-run `sync` refuses while `hippo serve` holds
+# the database, because the server-side sync route is Task 15's and does not exist yet.
+#
+# `connector` is not an `EVIDENCE_COMMANDS` member: its store reads are administration, gated by
+# `manage_sources` rather than by a reader's audience.
+
+
+def cmd_connector(args: argparse.Namespace) -> int:
+    handlers = {
+        "new": _connector_new,
+        "list": _connector_list,
+        "validate": _connector_validate,
+        "probe": _connector_probe,
+        "sync": _connector_sync,
+        "enable": _connector_enable,
+    }
+    return handlers[args.connector_command](args)
+
+
+def _connector_new(args: argparse.Namespace) -> int:
+    """Write a package whose `hippo connector validate` already passes (plan section 3.2)."""
+    from .connectors import scaffold
+
+    dest = Path(args.dest or ".")
+    request = scaffold.ScaffoldRequest(
+        name=args.name, family=args.family or "custom", kinds=tuple(args.kinds)
+    )
+    try:
+        written = scaffold.render_package(request, dest)
+    except scaffold.ScaffoldError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    package = dest / args.name
+    print(f"Wrote {len(written)} files to {package}:")
+    for path in written:
+        print(f"  {path.relative_to(package)}")
+    print(f"\nIt already validates. Edit the provider half, then: hippo connector validate {package}")
+    return 0
+
+
+def _connector_list(args: argparse.Namespace) -> int:
+    """Every connector this process can see, with its instances (the `GET /api/connectors` shape)."""
+    ctx, remote = _context_or_running_server()
+    if remote is not None:
+        summaries = remote.connectors()
+    else:
+        _require(_principal(ctx), "manage_sources")
+        summaries = _connector_summaries(ctx)
+    print_table(
+        ["name", "version", "families", "origin", "enabled", "instances", "partitions", "error"],
+        [
+            [
+                row["name"],
+                row["version"],
+                ", ".join(row["families"]),
+                row["origin"],
+                "yes" if row["enabled"] else "no",
+                len(row["instances"]),
+                ", ".join(sorted(_partition_names(row))) or "-",
+                row["error"] or "",
+            ]
+            for row in summaries
+        ],
+    )
+    return 0
+
+
+def _partition_names(summary: dict[str, Any]) -> set[str]:
+    return {entry["partition"] for instance in summary["instances"] for entry in instance["partitions"]}
+
+
+def _connector_summaries(ctx: AppContext) -> list[dict[str, Any]]:
+    """The `ConnectorSummary` list of plan section 3.3, which S6's route builds the same way.
+
+    Rows are keyed on `(origin, name)`, not on `name`: an in-repo package and an entry point it
+    shadows legitimately share a name, and both are shown (ruling R64).
+    """
+    import json
+
+    from .connectors import loader
+
+    load = loader.load_connectors(ctx)
+    instances: dict[str, list[dict[str, Any]]] = {}
+    for row in ctx.store._knowledge_rows("Connector"):
+        stored = json.loads(row.classification_json or "{}")
+        instances.setdefault(row.kind, []).append(
+            {
+                "id": row.id,
+                "enabled": row.enabled,
+                "partitions": [
+                    {"partition": entry["partition"], "family": entry["family"]}
+                    for entry in stored.get("partitions", ())
+                ],
+            }
+        )
+    summaries = []
+    for entry in load.entries:
+        descriptor = getattr(entry.connector_class, "descriptor", None)
+        summaries.append(
+            {
+                "name": entry.name,
+                "version": getattr(descriptor, "version", ""),
+                "families": list(getattr(descriptor, "families", ())),
+                "origin": entry.origin,
+                "enabled": entry.enabled,
+                "error": entry.error,
+                "instances": instances.get(entry.name, []),
+            }
+        )
+    return summaries
+
+
+def _connector_validate(args: argparse.Namespace) -> int:
+    """0 passed, 1 a violation or a golden diff, 2 the package could not load (plan section 3.3)."""
+    from .connectors import loader, testing
+
+    report = testing.validate_package(
+        args.target, update_golden=args.update_golden, allowlist=loader.configured_allowlist()
+    )
+    if report.error is not None:
+        print(f"error: {report.error}", file=sys.stderr)
+        return 2
+    for line in report.registry_diff:
+        print(line)
+    for violation in report.violations:
+        print(_violation_line(violation))
+    for case in report.cases:
+        if case.error is not None:
+            print(f"{case.case}: {case.error}")
+        for violation in case.violations:
+            print(_violation_line(violation))
+        if case.diff:
+            print(case.diff)
+    if args.update_golden:
+        # The diff above is the point of the run, so it is not a failure: the developer asked for
+        # the expected files to be rewritten and now reads what changed.
+        print(f"{report.connector} {report.version}: goldens written")
+        return 0
+    if report.passed:
+        print(f"{report.connector} {report.version}: passed ({report.scope})")
+        return 0
+    return 1
+
+
+def _violation_line(violation) -> str:
+    record = f" [{violation.record}]" if violation.record else ""
+    return f"{violation.assertion}: {violation.message}{record}"
+
+
+def _connector_probe(args: argparse.Namespace) -> int:
+    """What a provider holds, read through the connector. No configured store is opened."""
+    from .connectors import base, testing
+
+    try:
+        connector = _resolve_connector(args.name)
+        config = _connector_config(connector.descriptor, args.config)
+    except (ConnectorRefused, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    registry = testing.kit_registry(connector.descriptor)
+    try:
+        with base.use_registry(registry):
+            classification = connector.probe(config, _wall_clock())
+    except base.RegistrationRequired as exc:
+        # Not a failure: the connector is asking for vocabulary nobody has registered yet, and the
+        # skeleton is the answer. Paste it into the package's `types.py` and probe again.
+        print(f"{exc}\n")
+        print(exc.skeleton)
+        return 1
+    print(f"registry fingerprint: {classification.registry_fingerprint}")
+    for entry in classification.partitions:
+        print(f"\npartition {entry.partition}")
+        print(f"  family: {entry.family}")
+        for mapped in entry.mapping.kinds:
+            print(f"  {mapped.provider_type} -> {mapped.kind or 'custom/unclassified'}")
+        print(f"  capabilities: {_capabilities(entry.capabilities)}")
+        print(f"  sampled: {entry.sample_count}")
+        for warning in entry.warnings:
+            print(f"  warning: {warning}")
+    return 0
+
+
+def _capabilities(capabilities) -> str:
+    named = [name for name, value in capabilities.model_dump().items() if value is True]
+    return ", ".join(named) or "none declared"
+
+
+def _connector_sync(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _connector_dry_run(args)
+    return _connector_sync_instance(args)
+
+
+def _connector_dry_run(args: argparse.Namespace) -> int:
+    """`testing.dry_run_sync`: the real provider, read-only, into a scratch workspace it throws away."""
+    from .connectors import testing
+
+    try:
+        connector = _resolve_connector(args.instance)
+        config = _connector_config(connector.descriptor, args.config)
+    except (ConnectorRefused, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    try:
+        receipts = testing.dry_run_sync(connector, config, partition=args.partition)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for receipt in receipts:
+        print(f"partition {receipt.partition}: {receipt.outcome}")
+        print(f"  pages {receipt.pages}, changes {receipt.changes}, deleted {receipt.deleted}")
+        print(f"  inventory: {receipt.inventory}")
+        for key, value in sorted(receipt.coverage.items()):
+            print(f"  {key}: {value}")
+    print("\nNothing was written: a dry run publishes into a temporary workspace and removes it.")
+    return 0
+
+
+def _connector_sync_instance(args: argparse.Namespace) -> int:
+    """The non-dry-run sync, in the order ruling m19 fixes. Every step can exit 2 by itself."""
+    from .connectors import sync
+    from .knowledge.build_authority import BuildActor
+    from .knowledge.raw_artifacts import RawArtifactStore
+    from .knowledge.registry import current_registry
+
+    try:
+        ctx = AppContext.from_env()
+    except StoreLockedError:
+        print(
+            "error: the database is open in hippo serve; stop it to sync, or use --dry-run",
+            file=sys.stderr,
+        )
+        return 2
+    _require(_principal(ctx), "manage_sources")
+
+    from .connectors import loader
+    from .ingest.managed_activation import embedding_spec, new_operation_id, raw_root
+
+    load = loader.load_connectors(ctx)
+    row = ctx.store._knowledge_get("Connector", args.instance)
+    if row is None:
+        print(f"error: no connector instance '{args.instance}'", file=sys.stderr)
+        return 2
+    try:
+        connector = load.connector_class(row.kind)()
+    except loader.ConnectorLoadError:
+        print(f"error: connector kind {row.kind} is not enabled", file=sys.stderr)
+        return 2
+    try:
+        config = connector.descriptor.config_model.model_validate_json(row.config_json)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    partitions = _sync_partitions(args, row)
+    if not partitions:
+        print(
+            f"error: connector instance {row.id} has no stored classification; probe it first",
+            file=sys.stderr,
+        )
+        return 2
+
+    raw_store = RawArtifactStore(raw_root(ctx), max_object_bytes=int(ctx.config.max_upload_bytes))
+    for partition in partitions:
+        try:
+            sync.connector_source(
+                ctx.store, connector=row, partition=partition, name=f"{row.kind} {partition}"
+            )
+            receipt = sync.sync_connector(
+                ctx,
+                connector,
+                connector_id=row.id,
+                config=config,
+                partition=partition,
+                # S3 refuses any other actor: the operator's authorization was the capability
+                # check above, and the build itself is local maintenance (S3 section 5.5).
+                actor=BuildActor.trusted_local(),
+                registry=current_registry(),
+                options=sync.SyncOptions(),
+                raw_store=raw_store,
+                embedding_spec=embedding_spec(ctx.ollama),
+                operation_id=new_operation_id(),
+                should_stop=lambda: False,
+            )
+        except sync.ConnectorSyncRefused as exc:
+            # A disabled instance (R51) and a partition with no stored classification both land
+            # here, and both are the operator's to fix rather than a failure of the run.
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"partition {partition}: {receipt.outcome} ({receipt.changes} changes)")
+    return 0
+
+
+def _sync_partitions(args: argparse.Namespace, row) -> tuple[str, ...]:
+    import json
+
+    if args.partition:
+        return (args.partition,)
+    stored = json.loads(row.classification_json or "{}")
+    return tuple(entry["partition"] for entry in stored.get("partitions", ()))
+
+
+def _connector_enable(args: argparse.Namespace) -> int:
+    """Ruling R59: create or re-enable one instance, probe it, and store its classification.
+
+    The three calls run under the connector's own scratch registry (re-review N5): a `Connector`
+    row is vocabulary-checked on the way into the store, and the process registry does not know
+    this kind yet — enabling it is what makes the next `hippo serve` load it.
+
+    There is no build window to stand outside of: `ensure_connector` is never called from inside a
+    sync, and this command is a shell invocation of its own. Ruling R59 also names
+    `BuildActor.trusted_local()`; none of the three calls below accepts an actor, so the actor
+    appears where S3 requires one, in the non-dry-run `sync` above.
+    """
+    from .connectors import base, sync, testing
+    from .store.migrations import DEFAULT_WORKSPACE_ID
+
+    try:
+        ctx = AppContext.from_env()
+    except StoreLockedError:
+        print(
+            "error: the database is open in hippo serve; stop it to enable a connector",
+            file=sys.stderr,
+        )
+        return 2
+    _require(_principal(ctx), "manage_sources")
+    try:
+        connector = _resolve_connector(args.kind)
+        config = _connector_config(connector.descriptor, args.config)
+    except (ConnectorRefused, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    declared = getattr(config, "instance_url", None)
+    if declared and declared != args.instance_url:
+        # S3's sync entry refuses a row whose instance URL disagrees with its configuration, so
+        # the disagreement is named here rather than at the first sync.
+        print(
+            f"error: the configuration names instance {declared}, not {args.instance_url}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        with base.use_registry(testing.kit_registry(connector.descriptor)):
+            row = sync.ensure_connector(
+                ctx.store,
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                kind=connector.descriptor.name,
+                instance_url=args.instance_url,
+                config=config,
+                enabled=True,  # R73: passed deliberately, including on a re-ensure
+            )
+            classification = connector.probe(config, _wall_clock())
+            row = sync.store_classification(ctx.store, connector=row, classification=classification)
+    except ValueError as exc:
+        # Open mode refuses an enabled connector of any kind but `local`: "Provider connectors
+        # require a signed-in installation" (`store/knowledge.py`, ruling R64).
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"Enabled {row.kind} instance {row.id} at {row.instance_url}.")
+    for entry in classification.partitions:
+        print(f"  partition {entry.partition}: {entry.family} ({entry.sample_count} sampled)")
+    print(f"\nRestart hippo serve to register {row.kind}, then: hippo connector sync {row.id}")
+    return 0
+
+
+class ConnectorRefused(ValueError):
+    """A connector this command may not use, named with the reason the loader gave."""
+
+
+def _resolve_connector(name: str):
+    """One trusted connector by name: an in-repo package, or an allowlisted entry point.
+
+    Enablement is not checked here. `validate`, `probe` and `sync --dry-run` need a connector that
+    is *trusted*, not one an operator has turned on: they open no configured store (M5, R51).
+    """
+    from .connectors import loader
+
+    allowlist = loader.configured_allowlist()
+    for entry in loader.discover_connectors(allowlist=allowlist):
+        if entry.name != name:
+            continue
+        if entry.error is not None:
+            raise ConnectorRefused(f"connector '{name}' cannot be used: {entry.error}")
+        if entry.connector_class is None:
+            raise ConnectorRefused(f"'{name}' is a built-in connector kind with no package")
+        return entry.connector_class()
+    raise ConnectorRefused(f"no connector named '{name}' is installed and trusted")
+
+
+def _connector_config(descriptor, path: str | None):
+    """A connector's typed configuration, read from a file the caller's machine keeps."""
+    model = descriptor.config_model
+    if path is None:
+        return model()
+    return model.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def _wall_clock():
+    from datetime import UTC, datetime
+
+    return lambda: datetime.now(UTC)
 
 
 # -------------------------------------------------------------- helpers

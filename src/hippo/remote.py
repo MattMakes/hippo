@@ -159,6 +159,16 @@ class RemoteHippo:
     def sources(self) -> list[dict[str, Any]]:
         return self._json(self._client.get("/api/sources"))
 
+    def connectors(self) -> list[dict[str, Any]]:
+        """The `ConnectorSummary` list behind `hippo connector list` (CDK S4b, plan section 3.3).
+
+        The one connector command that forwards. The rest either open no store at all, or, for a
+        non-dry-run sync, refuse while the server holds the database: the server-side sync route is
+        Task 15's `POST /api/connectors/{id}/sync`, which does not exist yet (plan deviation 4).
+        This route is S6's to implement; the shape is fixed here because the CLI reads it.
+        """
+        return self._json(self._client.get("/api/connectors"))
+
     def source(self, source_id: str) -> dict[str, Any]:
         return self._json(self._client.get(f"/api/sources/{source_id}"))
 

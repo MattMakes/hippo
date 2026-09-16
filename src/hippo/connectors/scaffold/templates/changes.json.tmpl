@@ -1,0 +1,32 @@
+{
+  "pages": [
+    {
+      "partition": "export",
+      "changes": [
+        {
+          "ref": {
+            "partition": "export",
+            "artifact_kind": "document",
+            "external_id": "record-1"
+          },
+          "operation": "upsert"
+        },
+        {
+          "ref": {
+            "partition": "export",
+            "artifact_kind": "document",
+            "external_id": "record-2"
+          },
+          "operation": "upsert"
+        }
+      ],
+      "next_cursor": null,
+      "complete": true,
+      "warnings": []
+    }
+  ],
+  "fetches": {
+    "record-1": {"content_type": "application/json"},
+    "record-2": {"content_type": "application/json"}
+  }
+}
