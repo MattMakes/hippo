@@ -10,7 +10,7 @@ The connector has no `emit`. Its emission is the code lane's `_prepare` - `extra
 `staged_code`, all unchanged, which is what keeps the published generation byte for byte what the
 pre-kit path publishes (gate CK5). **History is read by the coordinator, never inside a connector
 method**, because `read_history` is a `git` subprocess that needs the extracted symbols
-(`code_generation.py:401-410`).
+(`code_generation._history`).
 
 The checkout lifecycle stays in `managed_activation._run_code_build`: discard before, discard in
 `finally`. This module never removes one.

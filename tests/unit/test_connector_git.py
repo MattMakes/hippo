@@ -399,14 +399,21 @@ def test_the_git_connector_passes_check_capture(tmp_path):
         # (`tests/unit/test_connector_testing_kit.py` `VIOLATIONS`), so none is added here. This
         # one proves the rules are read against *this* connector rather than passing vacuously.
         class WrongFetch(git().GitConnector):
-            def fetch(self, config, ref):
-                # `model_copy` does not re-run the validator, which is how a real connector
-                # would answer the wrong record: nothing refuses it before the kit does.
-                return super().fetch(config, ref).model_copy(update={"external_id": "never/seen.py"})
+            """S4a's `_fetch_that_answers_another_ref` shape, over the real connector.
 
-        assert {violation.assertion for violation in testing.check_capture(WrongFetch(), cfg, sample=2)} == {
-            "fetch_matches_ref"
-        }
+            A perfectly valid `RawFetch` for the *next* walked member. Nothing refuses it before
+            the kit does: `RawFetch` revalidates on copy (`Contract.model_config` sets
+            `revalidate_instances="always"`), so a mangled copy would raise inside `fetch` and be
+            recorded under the same name for the wrong reason.
+            """
+
+            def fetch(self, config, ref):
+                refs = [change.ref for change in self.list_changes(config, None).changes]
+                other = next(candidate for candidate in refs if candidate != ref)
+                return super().fetch(config, other)
+
+        fired = {violation.assertion for violation in testing.check_capture(WrongFetch(), cfg, sample=2)}
+        assert fired == {"fetch_matches_ref"}, fired
 
 
 # ------------------------------------------------------------------- the lane
