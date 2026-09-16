@@ -368,4 +368,16 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   LadybugDB, and adapts the one S3c test that iterated bare pages; S3c's CK3 lines stay green. The
   guide (S4b) and the exemplar (S6) cite this package as the worked example. The loader stays
   strict (no lenient spelling).
+- **R75 — S4a's overrides (kit merged at `d2906ae`).** (1) `unknown_policy_is_deny` fires when a
+  policy record's mode is not `unknown` for an unknown observation OR when an unknown observation's
+  principals reach an allow list; that is the reachable half and it has a negative fixture. (2)
+  Goldens normalize run-local ids (`new_id()` is uuid4, so the Source id and every id hashed over
+  it) to stable tokens (`<source>`, `<generation>`, `<passage-0>`, `<edge-0>`, ...) before diffing;
+  content-hash ids are written whole; making `new_id()` injectable is a store change no CDK slice
+  makes. (3) The fixture connector's goldens are committed: any change to S2b's binder, S3c's
+  runtime or the fixture's `emit` regenerates them with `validate_package(package,
+  update_golden=True)` and re-checks both backends, and says so in the evidence. (4) No committed
+  case records HTTP, so `record_transport`/`replay_transport` are exercised first by S6's exemplar
+  fixture if it uses a transport, else by Task 15; `failures.json` stays empty until a fixture
+  exercises `ParseFailure` (S6's exemplar adds one malformed record).
 

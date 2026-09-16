@@ -69,3 +69,5 @@ question the plan, the rulings and the reviews do not answer.
   statement reads "… affects service checkout". A label anywhere else is ignored (R71).
 - Base your worktree on the HEAD named in the spawn message, which includes S2b-fix.
 - R73: the routes pass `enabled=` deliberately on any `ensure_connector` call; `fetch_policy` maps forbidden and not-found to `unknown` (deny).
+- R75: the exemplar's fixture includes one malformed record so `failures.json` and the per-parser counts are exercised; if the exemplar reads over HTTP it commits an `http/` recording, else it states that it reads files only.
+
