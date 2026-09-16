@@ -1,5 +1,12 @@
 # The Connector Developer Kit (SDK)
 
+> **Amendments.** `ai_docs/plans/cdk-rulings.md` amends this document: each ruling names the section or
+> earlier ruling it changes, later rulings supersede earlier ones, and the ledger
+> `ai_docs/gates/rag-it-all/cdk/GATES.md` names the range in force. Where a ruling changed a rule this
+> document states (for example R40 over evidence sources, R42 over the passage bound, R43 over
+> connector-kind dispatch, R45 over locator verifiers, R76 over the lane re-export), the ruling is the
+> rule and the shipped code follows it.
+
 **A v1.0 output of the Enterprise Graph-RAG unified specification. Design of record, 2026-09-15.**
 
 > **Status.** This document is the design the implementation plans are written from. It is owned by

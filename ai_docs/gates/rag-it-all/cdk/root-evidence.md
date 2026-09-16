@@ -9,3 +9,5 @@ the revision, the exit code and the log.
   process on the machine: exit 0, 354 passed, 2 skipped, log `/tmp/hippo-orch-cd9-n8.log`. The
   code path through the git and local connectors and the coordinator lane holds at the ledger's
   recorded size.
+  The review's fix slice `r7-fix` (merged later at `7c8f132`) changed no file on the code lane's path (`guard.py`, `emit.py`, `predicates.py`, `sync.py`, `base.py`, `keys.py`, `cli.py`), and the CK5 CHECK line reran green on the checker's second pass, so this run stands for CK5 at the revision of record.
+
