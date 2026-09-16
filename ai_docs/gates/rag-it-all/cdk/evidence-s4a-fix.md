@@ -126,6 +126,14 @@ The fixture connector's malformed note produces `{"family": "custom", "parser": 
 holds — the file fills the moment a fixture exercises a `ParseFailure`, which is what S6's exemplar
 adds.
 
+**The brief asks the test to prove more than the data holds.** It says the row should name "the
+parser and the record". A count is all `coverage_json` keeps: `emit._count_failures` sums by
+`family|parser|dialect` and no record id, external id or `ParseFailure.reason` survives into the
+generation's coverage at all, and the fixture connector's own failure names no parser. The test
+therefore asserts the whole row it can — `{"family": "custom", "parser": null, "count": 1}` — plus
+the coverage key `custom|-|-` it was read from. A `failures.json` that names records would need
+S3c to carry them into the coverage, which is a `sync.py`/`emit.py` change no brief grants.
+
 ### 2. `--update-golden` rewrites the registry lock (R77, S4b finding 2 and override 2)
 
 `assert_registry_lock` only compares; it writes nothing. So a developer who added a kind and reran
@@ -185,10 +193,11 @@ emits a class attribute; S5b's `git` and S6's exemplar must carry one.
 
 ## Gotchas for the next worker
 
-1. **A change to the fixture connector's `emit`, its `types.py` or its case now moves two things**:
-   the committed goldens (S4a gotcha 7) and — through `failures.json` — nothing else, because the
-   basic case has no malformed record. The scaffolded package is the one with a `ParseFailure`, and
-   its `failures.json` digest is pinned in `test_connector_scaffold.py`.
+1. **Two `failures.json` files answer to different code now.** The fixture connector's stays `[]`,
+   because `fixtures/basic` has no malformed record. The scaffolded package's holds one row, and its
+   digest is pinned in `test_connector_scaffold.py`, so a change to the scaffold's `emit` template,
+   to `_parse_failures` or to S3c's counter moves that pin and nothing else. A change to the fixture
+   connector's `emit`, its `types.py` or its case still moves the committed goldens (S4a gotcha 7).
 2. **A test that re-goldens must copy the package first**, now more than before: an update run
    rewrites `fixtures/registry.lock.json` as well as the seven goldens, so
    `validate_package(tests/fakes/fixture_connector, update_golden=True)` would rewrite the committed

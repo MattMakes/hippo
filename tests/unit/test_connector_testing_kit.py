@@ -1277,7 +1277,9 @@ def test_update_golden_rewrites_a_stale_registry_lock(tmp_path):
 
     assert report.error is None, report.error
     assert [violation.message for violation in report.violations] == []
+    assert [case.error for case in report.cases] == [None]
     rewritten = lock_path.read_text(encoding="utf-8")
-    assert rewritten != stale
+    key = f"predicate:{FIXTURE_LINKS}@{DESCRIPTOR.version}"
+    assert json.loads(rewritten)[key] != json.loads(stale)[key], "the one moved digest moved"
     assert rewritten == canonical_json(kit.extension_lock(moved, version=DESCRIPTOR.version))
     kit.assert_registry_lock(moved, version=DESCRIPTOR.version, lock_path=lock_path)
