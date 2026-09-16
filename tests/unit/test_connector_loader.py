@@ -407,6 +407,26 @@ def test_built_in_connector_kinds_are_listed_with_their_enablement(registry) -> 
     assert not built_in["github"].enabled
 
 
+def test_a_package_named_after_a_built_in_kind_keeps_its_built_in_entry(packages, registry) -> None:
+    """The ported lane connectors live in `hippo/connectors/<kind>/`, which is a package by shape.
+
+    Slice S5a's `local` and S5b's `git` are built-in connector kinds with no `Connector` row of
+    their own (ruling R5), so an operator never enables them and they can never be registered
+    through the enablement gate. Discovering them as in-repo packages would take them off the
+    built-in list and report a built-in vocabulary as unregistered, so a built-in kind is not an
+    in-repo candidate: it keeps exactly one entry, the built-in one.
+    """
+    packages("local")
+    packages("acme")
+
+    assert "local" not in [entry.name for entry in loader.discover_connectors(allowlist=frozenset())]
+
+    result = loader.load_registry(enabled_kinds=frozenset({"local", "acme"}), allowlist=frozenset())
+    entry = named(result, "local")
+    assert (entry.origin, entry.target, entry.trusted, entry.registered) == ("built-in", None, True, True)
+    assert named(result, "acme").origin == "in-repo"
+
+
 def test_connector_class_answers_for_a_registered_entry_and_refuses_otherwise(packages, registry) -> None:
     packages("acme")
     result = loader.load_registry(enabled_kinds=frozenset({"acme"}), allowlist=frozenset())

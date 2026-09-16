@@ -14,6 +14,14 @@ has captured every byte it needed.
 Failures reach the Source row as a bounded generic code. Source text, raw
 bytes, absolute paths, clone URLs, tokens, prompts, provider bodies, model
 output and the text of an unknown exception never do.
+
+Since gate CK5 the prose hand-off goes through the kit: the `local` connector
+answers the inventory and `connectors.lanes.run_coordinator_lane` calls
+`build_plain_source` with the frozen registry's fingerprint. The coordinator's
+arguments, its capture and its output are unchanged - the fingerprint is the
+one field a runtime build records that the pre-kit path did not. This module is
+the only one in `hippo.ingest` that may import `hippo.connectors` (ruling R54),
+and the kit never imports back.
 """
 
 from __future__ import annotations
@@ -28,6 +36,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from uuid import uuid4
 
+from ..connectors.base import ChangePage, current_registry
+from ..connectors.lanes import CoordinatorLane, run_coordinator_lane
+from ..connectors.local.connector import LocalConnector, LocalSourceConfig
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.build_authority import BuildActor
 from ..knowledge.embedding_cache import EmbeddingCache
@@ -69,6 +80,10 @@ CACHE_DIR = ("cache", "embeddings-v1")
 # Where a managed repository build clones, one folder per operation. Not beside the legacy
 # lane's `repo/` checkout, because `repo` is itself a valid operation identity.
 CHECKOUTS_DIR = "checkouts"
+
+# A Source row Task 15 will create for one connector instance. It has no saved bytes, so it has no
+# managed build here; ruling R43 makes the refusal explicit rather than leaving it to `ingress_file`.
+CONNECTOR_KIND = "connector"
 
 # The saved presentation of a current tombstone (hippo.knowledge.source_lifecycle).
 TOMBSTONE = ("deleted", "tombstoned")
@@ -646,6 +661,11 @@ def run_managed_build(
         raise ManagedDispatchError("A tombstoned source is never rebuilt")
     if eligibility == "unsupported":
         raise ManagedDispatchError("This source family has no managed build")
+    if source.get("kind") == CONNECTOR_KIND:
+        # Ruling R43 (review M14): a connector source is synced by the kit's runtime, over its own
+        # partitions, and until Task 15 nothing routes a reader actor there. Refusing here keeps a
+        # managed `connector` row out of the prose branch, which would read it as a saved file.
+        raise ManagedDispatchError("A connector source is synced by the runtime, never rebuilt here")
     refresh = bool(source.get("active_generation_id"))
     if is_code_source(source):
         return _run_code_build(
@@ -658,19 +678,32 @@ def run_managed_build(
     store = RawArtifactStore(raw_root(ctx), max_object_bytes=int(ctx.config.max_upload_bytes))
     cache = EmbeddingCache(cache_root(ctx))
 
+    def build(page: ChangePage, registry_fingerprint: str) -> BuildReceipt:
+        """The lane's derivation half: the reviewed prose coordinator, unchanged (ruling R1).
+
+        The connector's inventory is the same one saved file the coordinator captures, so `page`
+        names nothing the capture does not already read; capture stays `FileInput`, which is the
+        only capture that refuses an input changed while it was read.
+        """
+        return build_plain_source(
+            ctx,
+            source_id=source_id,
+            actor=actor,
+            inputs=(FileInput(saved.name, saved),),
+            options=options,
+            raw_store=store,
+            embedding_spec=spec,
+            operation_id=operation_id,
+            should_stop=lambda: ctx.jobs.is_cancelled(job_key),
+            on_progress=lambda progress: _present_progress(ctx, source_id, progress, refresh=refresh),
+            embedding_cache=cache,
+            registry_fingerprint=registry_fingerprint,
+        )
+
     present(ctx, source_id, **_starting_fields(refresh))
-    return build_plain_source(
-        ctx,
-        source_id=source_id,
-        actor=actor,
-        inputs=(FileInput(saved.name, saved),),
-        options=options,
-        raw_store=store,
-        embedding_spec=spec,
-        operation_id=operation_id,
-        should_stop=lambda: ctx.jobs.is_cancelled(job_key),
-        on_progress=lambda progress: _present_progress(ctx, source_id, progress, refresh=refresh),
-        embedding_cache=cache,
+    config = LocalSourceConfig(source_id=source_id, kind=source["kind"], root=str(saved))
+    return run_coordinator_lane(
+        LocalConnector(), config, CoordinatorLane("prose", build), registry=current_registry()
     )
 
 
