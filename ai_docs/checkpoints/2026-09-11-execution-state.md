@@ -496,3 +496,11 @@ after S3c; S5b after S4a (brief amended through R72); S4b after S4a; S6 after S4
 amended through R71). Rulings through R72. Root-owned still to run: CD9 at N=8, Neo4j parity for
 CK3 and CK5, the gate checker over CK1–CK7, and the independent code review.
 
+
+**CDK implementation state (2026-09-16, morning).** Merged: S3c `94c891f`, S4a `d2906ae`, S4b
+`833feed`, S5b `01a121e`, S4a-fix `8ce4544` (plus S2b-fix `61757cb`). Root-owned proofs done: CK1
+Neo4j (114 passed), CK3 Neo4j (108 passed), CK5 Neo4j (54 passed), all in `neo4j-parity.md`; CD9 at
+N=8 running (`/tmp/hippo-orch-cd9-n8.log`). Running: S6 (`wp/s6`, brief `cdk-s6.md` with amendments
+through R79). Next: merge S6; run the gate checker over CK1–CK7 (CK7 after the review); spawn the
+CK7 review with `ai_docs/handoffs/briefs/review-cdk-code.md`; close or assign its findings; final
+report to the user. Rulings through R79.
