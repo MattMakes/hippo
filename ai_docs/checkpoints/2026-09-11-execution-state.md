@@ -512,3 +512,12 @@ recorded. Pending: the CK7 independent review (`architect-reviewer-3`, brief
 `ai_docs/handoffs/briefs/review-cdk-code.md`, report `ai_docs/reports/2026-09-16-cdk-code-review.md`),
 then closing or assigning its findings, the final report to the user, and the user's stack decision
 (design §14). Rulings R1–R80.
+
+**CDK complete (2026-09-16, afternoon).** CK1–CK7 MET: the checker's second pass at `8206795` after
+the CK7 review (`ai_docs/reports/2026-09-15-cdk-code-review.md`, PASS WITH CHANGES) and its fix slice
+`r7-fix` (`7c8f132`). Ledger status line is the revision of record; Neo4j parity (CK1, CK3, CK5, CK6)
+and CD9 at N=8 recorded. Rulings R1–R81. Assigned onward by name: F4 and F12 (Task 15), F9 (the slice
+that retires the pre-kit writers), F13 (Task 11). Open for the user: the retrieval stack decision
+(design §14.1; recommendation recorded there), connector isolation (§14.2, v1 in-process with the
+guard, R36), third-party trust (§14.3, answered conservatively for v1 by R51: enabled kind and
+instance required). The pre-change verification wave (CD10 round 2, PA7, PA8 round 5) stays parked.
