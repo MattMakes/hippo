@@ -17,7 +17,8 @@ The `hippo` command line.
     hippo user token <name>     print a user's API/MCP token (or --new to issue another)
     hippo user role <name> <r>  move a user to another role
     hippo user remove <name>    delete a user
-    hippo connector new <name>  write a connector package that already validates
+    hippo connector new <name> --family <f>
+                                write a connector package that already validates
     hippo connector list        the connectors this hippo can see, and their instances
     hippo connector validate X  run the contract test kit over a package
     hippo connector probe <n>   ask a connector what a provider holds
@@ -157,7 +158,10 @@ def build_parser() -> argparse.ArgumentParser:
     connector_sub = connector.add_subparsers(dest="connector_command", required=True)
     new = connector_sub.add_parser("new", help="write a new connector package that already validates")
     new.add_argument("name", help="the package name, which is also its connector kind (lower case)")
-    new.add_argument("--family", default=None, help="the family it writes into (default: custom)")
+    # Review CK7 finding F11: required, as design section 9 writes it. A `custom`-family connector
+    # owns no predicate in spec section 6's table, so a defaulted family moved the refusal from
+    # `new` to the first real edge the developer emitted.
+    new.add_argument("--family", required=True, help="the family it writes into")
     new.add_argument(
         "--kinds", nargs="*", default=[], help="the object kinds it registers (default: the name)"
     )
@@ -847,9 +851,7 @@ def _connector_new(args: argparse.Namespace) -> int:
     from .connectors import scaffold
 
     dest = Path(args.dest or ".")
-    request = scaffold.ScaffoldRequest(
-        name=args.name, family=args.family or "custom", kinds=tuple(args.kinds)
-    )
+    request = scaffold.ScaffoldRequest(name=args.name, family=args.family, kinds=tuple(args.kinds))
     try:
         written = scaffold.render_package(request, dest)
     except scaffold.ScaffoldError as exc:
