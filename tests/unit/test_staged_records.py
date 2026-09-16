@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import subprocess
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -752,7 +753,22 @@ def test_staged_records_imports_nothing_from_connectors():
     source = Path(module.__file__).read_text(encoding="utf-8")
     imports = [line for line in source.splitlines() if line.lstrip().startswith(("import ", "from "))]
     assert imports and not [line for line in imports if "connectors" in line]
-    assert not [name for name in sys.modules if name.startswith("hippo.connectors")]
+    # In a fresh interpreter, as `test_layering` proves its own boundary: this process has
+    # already imported `hippo.connectors` for any S2 test module pytest collected beside this one.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, hippo.knowledge.staged_records\n"
+            "print('\\n'.join(sorted(n for n in sys.modules if n.startswith('hippo.connectors'))))\n",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.split() == []
     assert module.CLEANUP is staged_code.CLEANUP
     assert module.ResumePlan is staged_code.ResumePlan
     assert (staged_code.fenced_epochs, staged_code.fenced_local) == (staged_code._epochs, staged_code._local)

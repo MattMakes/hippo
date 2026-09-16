@@ -5,11 +5,13 @@ the spawn message, after S1a `d0bd052`, S2a `96eda9f` and S1b `9e5b93c` merged).
 of `ai_docs/plans/cdk-s3-runtime.md` section 12, with sections 4.4–4.6, 7 and 8, amended by rulings
 R38, R39, R47/B1 and review finding m10 (`ai_docs/handoffs/briefs/cdk-s3b.md`).
 
-## Commit
+## Commits
 
-| Hash | Subject | Files |
-| --- | --- | --- |
-| `7941635` | Add the generic staged writer, the connector generation profile and connector build authority (CDK S3b) | `knowledge/staged_records.py` (new), `knowledge/staged_code.py`, `knowledge/generation_profiles.py`, `knowledge/build_authority.py`, `ingest/build_run.py`, `ingest/code_generation.py`, `tests/unit/test_staged_records.py` (new), `tests/unit/test_generation_profiles.py`, `tests/unit/test_build_authority.py`, `tests/unit/test_build_run.py` |
+| # | Hash | Subject | Files |
+| --- | --- | --- | --- |
+| 1 | `7941635` | Add the generic staged writer, the connector generation profile and connector build authority (CDK S3b) | `knowledge/staged_records.py` (new), `knowledge/staged_code.py`, `knowledge/generation_profiles.py`, `knowledge/build_authority.py`, `ingest/build_run.py`, `ingest/code_generation.py`, `tests/unit/test_staged_records.py` (new), `tests/unit/test_generation_profiles.py`, `tests/unit/test_build_authority.py`, `tests/unit/test_build_run.py` |
+| 2 | `76b5d25` | Record the S3b evidence: logs, counts, the promoted names and four overrides | this file |
+| 3 | `36a0ab5` | Prove the connectors boundary in a fresh interpreter | `tests/unit/test_staged_records.py`, `knowledge/build_authority.py`, this file |
 
 ## Baseline (at `89ff6ac`, before any change)
 
@@ -85,8 +87,16 @@ that module's own callers:
 
 `CLEANUP`, `PAYLOAD_CEILING_BYTES` and `ResumePlan` were already public and are imported unchanged.
 The pairing is pinned by `test_staged_records.py::test_staged_records_imports_nothing_from_connectors`,
-which also asserts that no import line of `staged_records.py` names `connectors` and that no
-`hippo.connectors` module is loaded.
+which asserts that no import line of `staged_records.py` names `connectors` and that importing
+the module **in a fresh interpreter** loads no `hippo.connectors` module. The fresh interpreter is
+the point: the first spelling of that test read this process's `sys.modules`, which passes on the
+four-file S3b line and fails the moment pytest collects any of S2a's
+`tests/unit/test_connector_{keys,classify,contract}.py` beside it, because collection imports them
+before any test runs. Reproduced (`AssertionError: assert not ['hippo.connectors',
+'hippo.connectors.base', 'hippo.connectors.keys']`), then fixed with the subprocess `test_layering`
+already uses for its own boundary. Proof both ways:
+`HIPPO_TEST_STORE=fake pytest tests/unit/test_connector_{keys,classify,contract}.py` plus the four
+S3b files, `/tmp/hippo-s3b-boundary.log`, exit 0, 264 passed, 1 skipped.
 
 **`ingest/provenance.py._lines` was not touched.** m10 lists it beside the `staged_code` names, but
 that half of the finding belongs to S2's `§8.4`; nothing in S3b's sections 4.4–4.6, 7 or 8 reads it,
@@ -128,13 +138,19 @@ and no file of this branch imports it.
    what the plan asks for and what `test_a_planned_policy_may_carry_the_code_scope_key` and
    `test_connector_authority_admits_provider_and_unknown_policies_of_its_connector_only` now pin. If
    the scopes should be partitioned by source kind, that is a one-line change and a reviewer's call.
-5. **The connector authority's refusal message is new wording.** §7.3 specifies the checks, not the
+5. **`_provider_grant` compares the workspace itself.** §7.3 names only the origin, the scope
+   prefix and the dropped expiry check. Comparing `policy.workspace_id` against the frozen
+   `SourceControl` as well keeps the refusal in `_inventory`: without it, a cross-workspace provider
+   policy whose `scope_key` happened to name this connector would be admitted there and refused two
+   lines later by `EvidenceAccess.grant`, which is a worse place to learn it. No behaviour a caller
+   can observe changes; `check_local` refused either way.
+6. **The connector authority's refusal message is new wording.** §7.3 specifies the checks, not the
    text. A connector input that is not an active input of its connector refuses with
    `Accepted original is not an active input of this connector`; the inventory manifest refuses with
    `Connector inventory manifest must be a local artifact`. The pre-kit path keeps
    `Accepted original is not an active local input` byte for byte, which
    `test_text_file_repo_and_archive_authority_is_unchanged` pins for all four legacy kinds.
-6. **`build_run` defers its `generation_profiles` import.** `prior_receipt` needs `embedding_mode`
+7. **`build_run` defers its `generation_profiles` import.** `prior_receipt` needs `embedding_mode`
    and `validate_generation_profile`. Importing them at module level made
    `test_the_shared_run_loads_without_either_coordinator` fail: `generation_profiles` reaches
    `input_binding`, the one knowledge module `test_layering.ALLOWED` lets import `ingest`, so the

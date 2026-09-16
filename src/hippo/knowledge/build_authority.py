@@ -289,10 +289,15 @@ class BuildAuthority:
         grant: it writes evidence whose spans carry this policy, and the internal audience
         ignores deadlines anyway (`access.py:458-459`). A reader still needs an unexpired,
         non-unknown policy to see any of it, which `EvidenceAccess` enforces on its own.
+
+        Expiry is the only check this branch drops. The workspace is still compared here, so a
+        cross-workspace provider policy whose scope happens to name this connector is refused by
+        the inventory rather than two lines later by `EvidenceAccess.grant`.
         """
         return (
             connector_id is not None
             and policy.origin == "provider"
+            and policy.workspace_id == self.source_control.workspace_id
             and type(policy.scope_key) is str
             and policy.scope_key.startswith(f"connector:{connector_id}:")
             and policy.verified_at <= now
