@@ -4,6 +4,7 @@ The coordinator owns leases, transactions, heartbeat threads and publication.
 This boundary reuses EvidenceAccess policy decisions on an unpersisted overlay.
 """
 
+import json
 from dataclasses import dataclass
 from threading import Lock
 from typing import Literal
@@ -12,21 +13,26 @@ from ..access import Access, Principal
 from . import model as k
 from .access import AuthorizationChanged, EvidenceAccess, EvidenceSelection, utc_now
 from .identity import canonical_json
+from .registry import current_registry
 
 # Every source kind a managed build can be captured for. `repo` and `archive` joined the
 # set with CC8 (design review B3): `capture_build_authority` calls `_source_control`
-# first, so before that a repository build could not take its first step.
-BUILD_SOURCE_KINDS = frozenset({"text", "file", "repo", "archive"})
+# first, so before that a repository build could not take its first step. `connector` joined
+# with the kit (plan section 7.3); its inputs are remote, so it takes the branches below.
+BUILD_SOURCE_KINDS = frozenset({"text", "file", "repo", "archive", "connector"})
 
-# The accepted-artifact kinds a build may present. `repository` is the captured tree and
-# `history_event` is one commit; both are generation members that carry evidence.
+# The accepted-artifact kinds a *local* build may present. `repository` is the captured tree
+# and `history_event` is one commit; both are generation members that carry evidence. A
+# connector's kinds are open instead, and validated against the registry (S1 D8): the whole
+# point of a connector is that it brings artifact kinds this table never enumerated.
 ACCEPTED_ARTIFACT_KINDS = frozenset({"file", "manifest", "repository", "history_event"})
 
 # A planned policy is an explicit local source grant for one lane and nothing else, so
 # the suffix set is closed rather than free text.
 PLAIN_PROSE_SCOPE = "plain-prose-v1"
 MANAGED_CODE_SCOPE = "managed-code-v1"
-PLANNED_POLICY_SCOPES = (PLAIN_PROSE_SCOPE, MANAGED_CODE_SCOPE)
+CONNECTOR_SCOPE = "connector-v1"
+PLANNED_POLICY_SCOPES = (PLAIN_PROSE_SCOPE, MANAGED_CODE_SCOPE, CONNECTOR_SCOPE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,8 +251,61 @@ class BuildAuthority:
             raise AuthorizationChanged("Build actor cannot manage source")
         return access
 
+    def _connector_id(self):
+        """The connector a `connector` Source names, from the meta `_source_control` froze.
+
+        Read from `input_config_json` rather than from a widened `SourceControl`, so the
+        connector and the partition are compared as part of the whole control record a
+        rebaseline refuses to adopt (`_source_control`, plan section 7.3).
+        """
+        if self.source_control.kind != "connector":
+            return None
+        identity = json.loads(self.source_control.input_config_json).get("connector_id")
+        if type(identity) is not str or not identity:
+            raise AuthorizationChanged("Connector source names no connector")
+        return identity
+
+    def _connector_input(self, artifact, revision, connector_id):
+        """One accepted input of a connector build: a remote original, or the local manifest."""
+        registry = current_registry()
+        if artifact.kind not in registry.artifact_kinds() or revision.lifecycle != "active":
+            raise AuthorizationChanged("Accepted original is not an active input of this connector")
+        if artifact.kind == "manifest":
+            # The inventory manifest is written here, not fetched, so it stays a local artifact.
+            if artifact.connector_id is not None or artifact.deleted_at is not None:
+                raise AuthorizationChanged("Connector inventory manifest must be a local artifact")
+            return
+        if (
+            artifact.connector_id != connector_id
+            or not artifact.provider_instance
+            or artifact.deleted_at is not None
+        ):
+            raise AuthorizationChanged("Accepted original is not an active input of this connector")
+
+    def _provider_grant(self, policy, connector_id, now):
+        """Whether this policy is the connector's own provider grant, which the build admits.
+
+        `mode="unknown"` is admitted and `expires_at` is not read. The build is not a read
+        grant: it writes evidence whose spans carry this policy, and the internal audience
+        ignores deadlines anyway (`access.py:458-459`). A reader still needs an unexpired,
+        non-unknown policy to see any of it, which `EvidenceAccess` enforces on its own.
+
+        Expiry is the only check this branch drops. The workspace is still compared here, so a
+        cross-workspace provider policy whose scope happens to name this connector is refused by
+        the inventory rather than two lines later by `EvidenceAccess.grant`.
+        """
+        return (
+            connector_id is not None
+            and policy.origin == "provider"
+            and policy.workspace_id == self.source_control.workspace_id
+            and type(policy.scope_key) is str
+            and policy.scope_key.startswith(f"connector:{connector_id}:")
+            and policy.verified_at <= now
+        )
+
     def _inventory(self, now):
         accepted, control, store = self._accepted, self.source_control, self._store
+        connector_id = self._connector_id()
         policies = {p.id: p for p in store._knowledge_rows("AccessPolicy")}
         used_policies = {a.policy_id for a, _ in accepted.pairs} | {s.policy_id for s in accepted.spans}
         for policy in accepted.planned_policies:
@@ -266,10 +325,12 @@ class BuildAuthority:
                 raise AuthorizationChanged("Planned policy cannot replace existing policy")
             policies.setdefault(policy.id, policy)
         for artifact, revision in accepted.pairs:
-            if (
-                artifact.source_id != control.source_id
-                or artifact.workspace_id != control.workspace_id
-                or artifact.kind not in ACCEPTED_ARTIFACT_KINDS
+            if artifact.source_id != control.source_id or artifact.workspace_id != control.workspace_id:
+                raise AuthorizationChanged("Accepted original is not an active local input")
+            if connector_id is not None:
+                self._connector_input(artifact, revision, connector_id)
+            elif (
+                artifact.kind not in ACCEPTED_ARTIFACT_KINDS
                 or artifact.connector_id is not None
                 or artifact.deleted_at is not None
                 or revision.lifecycle != "active"
@@ -281,6 +342,8 @@ class BuildAuthority:
                 raise AuthorizationChanged("Accepted record differs from current stored identity")
         for identity in used_policies:
             policy = policies.get(identity)
+            if policy is not None and self._provider_grant(policy, connector_id, now):
+                continue
             if (
                 policy is None
                 or policy.workspace_id != control.workspace_id

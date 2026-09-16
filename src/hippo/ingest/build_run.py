@@ -17,6 +17,7 @@ default. Nothing here knows what a chunk, a document or a repository is.
 its own frozen options type.
 """
 
+import json
 from dataclasses import dataclass
 from datetime import timedelta
 from threading import RLock
@@ -199,3 +200,116 @@ class BuildRun:
             with self._lock:
                 self._closed = True
             self.guard.close()
+
+
+# --------------------------------------------------------- lane-neutral coordinator helpers
+#
+# Five helpers the code coordinator owned privately, moved here under public names because the
+# connector runtime (`connectors/sync.py`) needs the same five and must not import a build
+# lane to get them (plan section 8). Nothing below knows what a repository, a chunk or a
+# connector is: each takes a store or a run, a generation, and the accepted manifest's hash.
+# `code_generation.py` keeps every old name bound, as `prose_generation.py` keeps `_Run`.
+
+
+def adopt_capture_instant(store, gen, candidate):
+    """Design review B4: identity first, then one instant, adopted from a resumable attempt.
+
+    `Generation.identity_fields` excludes `created_at`, so the same inputs at two
+    instants are one generation with two different `ObjectObservation` inventories --
+    which is exactly what a resume must never produce. The accepted manifest and the
+    generation ID are instant-independent, so they are settled first and the instant is
+    resolved once: a never-published attempt's stored instant, or one `store._now()`.
+    """
+    existing = store._knowledge_get("Generation", gen.id)
+    if existing is None or existing.published_at is not None or existing.status not in ("staging", "failed"):
+        return candidate
+    return existing.created_at
+
+
+def operation_generation(store, gen, operation_id):
+    """This operation's prior generation, if this operation ran before."""
+    jobs = [
+        job
+        for job in store._knowledge_rows("MaintenanceJob")
+        if job.source_id == gen.source_id and job.kind == "rebuild" and job.job_key == operation_id
+    ]
+    if len(jobs) > 1:
+        raise ValueError("Conflicting source operation identity")
+    if not jobs:
+        return None
+    job = jobs[0]
+    previous = store._generation(job.input_fingerprint)
+    if previous.source_id != gen.source_id or previous.manifest_hash != gen.manifest_hash:
+        raise ValueError("Source operation cannot target different accepted inputs")
+    if previous.status not in {"active", "retired"} and previous.id != gen.id:
+        raise ValueError("Source operation cannot target a different generation")
+    return previous, job
+
+
+def published_receipt(store, gen, manifest_sha256, outcome, job=None, *, resumed=0, rebaselines=0):
+    """The receipt of a published generation, from its one `published` event.
+
+    Takes the accepted manifest's hash rather than a lane's capture record: the code lane
+    reads it off `CapturedCode`, the connector runtime off its inventory manifest, and the
+    receipt itself cares about neither.
+    """
+    events = [
+        e for e in store._knowledge_rows("IndexEvent") if e.generation_id == gen.id and e.kind == "published"
+    ]
+    if len(events) != 1:
+        raise ValueError("Published generation lacks a unique receipt")
+    if job is not None and (
+        json.loads(events[0].payload_json) != credentials(job)
+        or job.expected_parent_id != gen.parent_id
+        or events[0].aggregate_id != gen.source_id
+    ):
+        raise ValueError("Publication receipt differs from original build credentials")
+    return BuildReceipt(gen.source_id, gen.id, events[0].id, manifest_sha256, outcome, resumed, rebaselines)
+
+
+def prior_receipt(run, gen, manifest_sha256, operation_id):
+    """`operation_id` replay and `already_current`, both without inference or writes."""
+    # Deferred, as `staged_code._accepted` defers the same pair: `generation_profiles` reaches
+    # `input_binding`, the one knowledge module allowed to import `ingest`, and importing it
+    # here would drag the reader stack into every module that only wants the run state.
+    from ..knowledge.generation_profiles import embedding_mode, validate_generation_profile
+
+    active = run.guard.source_control.active_generation_id
+    with run.store.transaction():
+        run.store._lock_source(gen.source_id)
+        run.guard.check_local()
+        operation = operation_generation(run.store, gen, operation_id)
+        if operation is not None and operation[0].status in {"active", "retired"}:
+            old, job = operation
+            if job.status != "completed" or embedding_mode(old) != "verified_v1":
+                raise ValueError("Source operation lacks a verified publication")
+            run.store.validate_generation_seal(old.id)
+            validate_generation_profile(run.store, old)
+            result = published_receipt(run.store, old, manifest_sha256, "already_published", job)
+            run.guard.check_local()
+            return result
+        if not active:
+            return None
+        old = run.store._generation(active)
+        if old.manifest_hash != gen.manifest_hash or embedding_mode(old) != "verified_v1":
+            return None
+        run.store.validate_generation_seal(old.id)
+        validate_generation_profile(run.store, old)
+        result = published_receipt(run.store, old, manifest_sha256, "already_current")
+        run.guard.check_local()
+        return result
+
+
+def rebaseline_between_batches(run):
+    """Ruling 2: adopt an unrelated authorization epoch between two batches, or abort.
+
+    CC8 finding 2: `check_local()` latches its own refusal and a rebaseline is forbidden
+    after a sticky failure, so the epoch comparison has to happen *before* the external
+    check rather than in response to it. Everything else -- a lost capability, a
+    suppression change, a changed `SourceControl` -- refuses inside `rebaseline()` and
+    aborts this build with the staged inventory retained.
+    """
+    if run.store.authorization_epoch() == run.guard.expected_authorization_epoch:
+        return 0
+    run.adopt(run.guard.rebaseline())
+    return 1

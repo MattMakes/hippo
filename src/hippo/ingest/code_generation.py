@@ -48,12 +48,7 @@ from ..knowledge.embedding_profile import (
     resolve_embedding_profile,
     validate_profile_descriptor,
 )
-from ..knowledge.generation_profiles import (
-    CODE_PROFILE,
-    GENERATION_PROFILE_KEY,
-    embedding_mode,
-    validate_generation_profile,
-)
+from ..knowledge.generation_profiles import CODE_PROFILE, GENERATION_PROFILE_KEY
 from ..knowledge.identity import canonical_json, normalize_relative_path
 from ..knowledge.inputs import CaptureLimits
 from ..knowledge.lifecycle import generation_namespace
@@ -63,10 +58,15 @@ from .build_run import (
     BuildBusy,
     BuildCancelled,
     BuildProgress,  # noqa: F401  -- re-exported for the code lane's callers, as prose does
-    BuildReceipt,
+    BuildReceipt,  # noqa: F401  -- same
     BuildRun,
+    adopt_capture_instant,
     authority_fields,
     credentials,
+    operation_generation,
+    prior_receipt,
+    published_receipt,
+    rebaseline_between_batches,
 )
 from .code_provenance import CodeProvenance, CodeUnit, read_code_provenance
 from .prepared_code_chunks import CapturedCode, CodeChunkSettings, prepare_code_chunks
@@ -599,84 +599,23 @@ def _policy(run, now):
     return (existing, ()) if existing is not None else (policy, (policy,))
 
 
-def _instant(store, gen, candidate):
-    """Design review B4: identity first, then one instant, adopted from a resumable attempt.
-
-    `Generation.identity_fields` excludes `created_at`, so the same inputs at two
-    instants are one generation with two different `ObjectObservation` inventories --
-    which is exactly what a resume must never produce. The accepted manifest and the
-    generation ID are instant-independent, so they are settled first and the instant is
-    resolved once: a never-published attempt's stored instant, or one `store._now()`.
-    """
-    existing = store._knowledge_get("Generation", gen.id)
-    if existing is None or existing.published_at is not None or existing.status not in ("staging", "failed"):
-        return candidate
-    return existing.created_at
-
-
-def _operation_generation(store, gen, operation_id):
-    """This operation's prior generation, if this operation ran before."""
-    jobs = [
-        job
-        for job in store._knowledge_rows("MaintenanceJob")
-        if job.source_id == gen.source_id and job.kind == "rebuild" and job.job_key == operation_id
-    ]
-    if len(jobs) > 1:
-        raise ValueError("Conflicting source operation identity")
-    if not jobs:
-        return None
-    job = jobs[0]
-    previous = store._generation(job.input_fingerprint)
-    if previous.source_id != gen.source_id or previous.manifest_hash != gen.manifest_hash:
-        raise ValueError("Source operation cannot target different accepted inputs")
-    if previous.status not in {"active", "retired"} and previous.id != gen.id:
-        raise ValueError("Source operation cannot target a different generation")
-    return previous, job
+# The five lane-neutral helpers live in `build_run.py` now (plan section 8); the code lane
+# keeps every old name bound, as `prose_generation.py` keeps `_Run`. Only the two receipts
+# changed shape: they take the accepted manifest's hash, which this lane reads off its own
+# capture record and the connector runtime reads off its inventory manifest.
+_instant = adopt_capture_instant
+_operation_generation = operation_generation
+_rebaseline = rebaseline_between_batches
 
 
 def _receipt(store, gen, captured, outcome, job=None, *, resumed=0, rebaselines=0):
-    events = [
-        e for e in store._knowledge_rows("IndexEvent") if e.generation_id == gen.id and e.kind == "published"
-    ]
-    if len(events) != 1:
-        raise ValueError("Published generation lacks a unique receipt")
-    if job is not None and (
-        json.loads(events[0].payload_json) != credentials(job)
-        or job.expected_parent_id != gen.parent_id
-        or events[0].aggregate_id != gen.source_id
-    ):
-        raise ValueError("Publication receipt differs from original build credentials")
-    return BuildReceipt(
-        gen.source_id, gen.id, events[0].id, captured.accepted.manifest.sha256, outcome, resumed, rebaselines
+    return published_receipt(
+        store, gen, captured.accepted.manifest.sha256, outcome, job, resumed=resumed, rebaselines=rebaselines
     )
 
 
 def _prior_receipt(run, gen, captured, operation_id):
-    """`operation_id` replay and `already_current`, both without inference or writes."""
-    active = run.guard.source_control.active_generation_id
-    with run.store.transaction():
-        run.store._lock_source(gen.source_id)
-        run.guard.check_local()
-        operation = _operation_generation(run.store, gen, operation_id)
-        if operation is not None and operation[0].status in {"active", "retired"}:
-            old, job = operation
-            if job.status != "completed" or embedding_mode(old) != "verified_v1":
-                raise ValueError("Source operation lacks a verified publication")
-            run.store.validate_generation_seal(old.id)
-            validate_generation_profile(run.store, old)
-            result = _receipt(run.store, old, captured, "already_published", job)
-            run.guard.check_local()
-            return result
-        if not active:
-            return None
-        old = run.store._generation(active)
-        if old.manifest_hash != gen.manifest_hash or embedding_mode(old) != "verified_v1":
-            return None
-        run.store.validate_generation_seal(old.id)
-        validate_generation_profile(run.store, old)
-        result = _receipt(run.store, old, captured, "already_current")
-        run.guard.check_local()
-        return result
+    return prior_receipt(run, gen, captured.accepted.manifest.sha256, operation_id)
 
 
 # ----------------------------------------------------------------- install, write, publish
@@ -754,21 +693,6 @@ def _install(run, bundle, accepted, operation_id, coverage_json):
         fresh.close()
         raise AuthorizationChanged("Setup changed unrelated source controls")
     return job, fresh
-
-
-def _rebaseline(run):
-    """Ruling 2: adopt an unrelated authorization epoch between two batches, or abort.
-
-    CC8 finding 2: `check_local()` latches its own refusal and a rebaseline is forbidden
-    after a sticky failure, so the epoch comparison has to happen *before* the external
-    check rather than in response to it. Everything else -- a lost capability, a
-    suppression change, a changed `SourceControl` -- refuses inside `rebaseline()` and
-    aborts this build with the staged inventory retained.
-    """
-    if run.store.authorization_epoch() == run.guard.expected_authorization_epoch:
-        return 0
-    run.adopt(run.guard.rebaseline())
-    return 1
 
 
 def _batch_bytes(batch):
