@@ -380,4 +380,8 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   case records HTTP, so `record_transport`/`replay_transport` are exercised first by S6's exemplar
   fixture if it uses a transport, else by Task 15; `failures.json` stays empty until a fixture
   exercises `ParseFailure` (S6's exemplar adds one malformed record).
+- **R76 — supersedes R3 (S5b question).** No re-export of the coordinator lane in
+  `connectors/sync.py`: lane connectors have no `Connector` row in v1 (R5), so `hippo connector
+  sync` never targets them and `managed_activation` is their only dispatcher. S5b appends
+  `connectors/git/connector.py` to the `PORTED` pin in `tests/unit/test_layering.py` (granted).
 
