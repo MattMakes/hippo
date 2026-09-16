@@ -1436,6 +1436,43 @@ def test_identity_only_endpoint_of_a_foreign_family_binds_its_object_and_a_minim
     assert one(other, "KnowledgeObject").id == one(bound, "KnowledgeObject").id
 
 
+def test_an_emitted_label_on_an_identity_only_endpoint_is_stored_and_read_by_the_statement(
+    world,
+) -> None:
+    """Ruling R70: the label the connector emits is stored, so the statement stays re-derivable."""
+    labelled = service_ref().replace(label="checkout")
+    bound = world.bind(
+        base.EmissionBatch(
+            nodes=(node_emission(), service_emission(ref=labelled)),
+            edges=(edge_emission(object=labelled),),
+        )
+    )
+    endpoint = object_id(world.registry, labelled)
+    observation = next(record for record in bound.observations if record.object_id == endpoint)
+    assert json.loads(observation.attributes_json) == {
+        "key": readable(world.registry, labelled),
+        "label": "checkout",
+    }
+    rendered = [unit for unit in bound.units if unit.kind == "rendered_edge"]
+    assert len(rendered) == 1
+    assert rendered[0].text == "incident fixture Checkout is down affects service checkout"
+    assert one(bound, "AssertionVersion").statement == rendered[0].text
+
+
+def test_an_identity_only_endpoint_without_a_label_is_still_named_by_its_readable_key(world) -> None:
+    """The behaviour R70 leaves alone: no emitted label, so the canonical key names the endpoint."""
+    bound = world.bind(edge_batch())
+    endpoint = object_id(world.registry, service_ref())
+    observation = next(record for record in bound.observations if record.object_id == endpoint)
+    assert json.loads(observation.attributes_json) == {"key": readable(world.registry, service_ref())}
+    rendered = [unit for unit in bound.units if unit.kind == "rendered_edge"]
+    assert len(rendered) == 1
+    assert rendered[0].text == (
+        "incident fixture Checkout is down affects service " + readable(world.registry, service_ref())
+    )
+    assert one(bound, "AssertionVersion").statement == rendered[0].text
+
+
 # ------------------------------------------------------------------ units and passages (8.7)
 
 

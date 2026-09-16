@@ -703,11 +703,14 @@ class _Binder:
                 }
             else:
                 # Ruling R6: an endpoint of a family this connector does not own is identity only.
-                # It stores no label, so a statement about it names it by its readable canonical
-                # key. That keeps the statement re-derivable from the records that were stored:
-                # the key is in `attributes_json`, while the emitted attributes are not (S2b).
-                self.labels.setdefault(obj.id, key.readable)
+                # Ruling R70: it is named by the label the connector emitted for it when there is
+                # one, and by its readable canonical key otherwise. Both spellings go to
+                # `attributes_json`, so a statement about the endpoint stays re-derivable from the
+                # records that were stored, while the emitted attributes are not (S2b).
                 attributes = {"key": key.readable}
+                if emission.ref.label is not None:
+                    attributes["label"] = emission.ref.label
+                self.labels.setdefault(obj.id, emission.ref.label or key.readable)
             observation = k.ObjectObservation(
                 object_id=obj.id,
                 revision_id=span.revision_id,

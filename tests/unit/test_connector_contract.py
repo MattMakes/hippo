@@ -713,6 +713,17 @@ def test_node_reference_needs_its_key_parts_and_may_declare_a_foreign_instance()
     assert "s3cret" not in str(error.value), "a refusal never echoes the credential"
 
 
+def test_node_reference_may_carry_an_emitted_label_and_refuses_a_blank_one() -> None:
+    """Ruling R70: an identity-only foreign endpoint may name itself, and a name is never blank."""
+    assert node_ref().label is None
+    foreign = base.NodeRef(kind="service", key={"reference": "component:default/checkout"}, label="checkout")
+    assert foreign.label == "checkout"
+    for blank in ("", "   "):
+        with pytest.raises(ValueError) as error:
+            base.NodeRef(kind="service", key={"reference": "r"}, label=blank)
+        assert "label" in str(error.value)
+
+
 def test_node_emission_cannot_carry_an_id_or_an_evidence_class() -> None:
     for extra in ({"id": "object-1"}, {"evidence_class": "declared"}, {"object_id": "object-1"}):
         with pytest.raises(ValueError) as error:
