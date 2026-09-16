@@ -330,4 +330,9 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   fresh-interpreter import parametrization in `tests/unit/test_connector_contract.py` gain
   `render`, `emit`, `guard`, `http`, `credentials` and `sync`; S3c owns both edits (granted). (3)
   Workers' commit trailers carry their own herdr session ids; that is acceptable.
+- **R71 — Endpoint labels as landed (S2b-fix merged at `61757cb`).** The binder reads an emitted
+  `label` only from the identity-only branch of a `NodeEmission`'s ref; a label on an edge or alias
+  ref, or on a node of a family the connector owns, is accepted and ignored (`label_template` wins
+  there), and the first emission of an object keeps its name. S6 puts the label on the foreign
+  endpoint's `NodeEmission` (`NodeRef(kind="service", key=..., instance=..., label="checkout")`).
 

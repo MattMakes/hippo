@@ -61,3 +61,11 @@ retrieval check, overrides and open questions.
 
 REPORT: `horch note` after each step; `horch tell orchestrator "[<role>] BLOCKED: ..."` only for a
 question the plan, the rulings and the reviews do not answer.
+
+## Amendments (rulings R70, R71)
+
+- The `service` endpoint of `AFFECTS` is an identity-only foreign `NodeEmission` whose ref carries
+  `instance=<catalog_instance>` and `label="checkout"`; the binder stores the label and the edge
+  statement reads "… affects service checkout". A label anywhere else is ignored (R71).
+- Base your worktree on the HEAD named in the spawn message, which includes S2b-fix.
+
