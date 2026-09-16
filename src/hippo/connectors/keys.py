@@ -48,6 +48,10 @@ _DATABASE_KINDS = {
     "routine": None,
 }
 _INSTANCE_REFUSAL = "The connector instance must be a normalized ASCII HTTP(S) provider URL"
+# The key parts an identity helper declares optional, so a connector may emit them null (review CK7
+# finding F10). Every other part is a value or a refusal: `None` is never a stand-in for a missing
+# one, and `check_key_parts` already requires every template part to be present.
+_NULLABLE_PARTS = frozenset({("symbol", "signature")})
 
 
 class KeyPartsRefused(BindRefused):
@@ -139,6 +143,10 @@ def _checked_instance(instance: str) -> str:
 
 def _check_plain(kind: str, values: dict) -> None:
     for name, value in values.items():
+        if value is None:
+            if (kind, name) not in _NULLABLE_PARTS:
+                raise KeyPartsRefused(f"Key part {name} of {kind} cannot be null")
+            continue
         if not isinstance(value, str):
             raise KeyPartsRefused(f"Kind {kind} has plain key parts; SqlPart values belong to database kinds")
         if any(ord(character) < 32 or ord(character) == 127 for character in value):
@@ -256,6 +264,9 @@ def _database_parts(kind: str, values: dict, count: int | None) -> list:
     The dialect comes from the first `SqlPart` among catalog, schema and the object parts: the helper
     keeps dialect-aware identifiers, and a plain string alone cannot say which dialect folds it.
     """
+    for name, value in values.items():
+        if value is None:  # F10: no part of a database key is optional
+            raise KeyPartsRefused(f"Key part {name} of {kind} cannot be null")
     emitted = values.get("parts")
     parts = list(emitted) if isinstance(emitted, tuple) else ([emitted] if emitted is not None else [])
     candidates = [values.get("catalog"), values.get("schema"), *parts]

@@ -548,7 +548,11 @@ class SqlPart(Contract):
         return self
 
 
-KeyValue = Text | SqlPart | tuple[SqlPart, ...]
+# Review CK7 finding F10: `None` is a member, because an identity helper may declare a key part
+# optional - `symbol_key`'s `signature` is `str | None`, and the code lane mints its symbols with
+# `None`. `""` is a different identity for the same symbol, so without this a kit connector and the
+# code lane minted two objects for one thing. `keys.py` names the parts that may be null.
+KeyValue = Text | SqlPart | tuple[SqlPart, ...] | None
 
 
 class NodeRef(Contract):

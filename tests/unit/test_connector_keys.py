@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import Literal
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import hippo.connectors
 from hippo.connectors import base, keys
@@ -31,6 +31,7 @@ from hippo.knowledge.identity import (
     review_key,
     service_key,
     sql_identifier,
+    symbol_identity,
     symbol_key,
 )
 from hippo.knowledge.locators import LocatorBase
@@ -321,6 +322,100 @@ def test_symbol_key_equals_symbol_key(registry) -> None:
         "(argv: list[str]) -> int",
         kind="function",
     )
+
+
+def test_a_symbol_with_no_signature_mints_the_code_lanes_identity(registry) -> None:
+    """CK7 F10: `KeyValue` had no null member, so a kit connector could not say "no signature".
+
+    `symbol_key`'s `signature` is `str | None`, and the code lane mints its symbols with `None`.
+    Without a null `KeyValue` the nearest a kit connector could get was `""`, which is a different
+    identity for the same symbol, so the two lanes would have minted two objects for one thing.
+    """
+    built = key_of(
+        registry,
+        "symbol",
+        {
+            "repository": "object-repo",
+            "language": "python",
+            "path": "src/hippo/cli.py",
+            "qualified_name": "hippo.cli.main",
+            "symbol_kind": "function",
+            "signature": None,
+        },
+    )
+    expected = symbol_key(
+        "object-repo", "python", "src/hippo/cli.py", "hippo.cli.main", None, kind="function"
+    )
+    assert list(built.parts) == expected
+    assert built.parts[-1] is None
+
+    # The claim the finding makes: the object a kit connector mints *is* the code lane's object,
+    # which is where `knowledge_object`'s own identity check has to agree with a null part too.
+    signatureless = {
+        "repository": "object-repo",
+        "language": "python",
+        "path": "src/hippo/cli.py",
+        "qualified_name": "hippo.cli.main",
+        "symbol_kind": "function",
+        "signature": None,
+    }
+    minted = object_of(registry, "symbol", signatureless)
+    assert minted.id == symbol_identity(
+        "object-repo",
+        "python",
+        "src/hippo/cli.py",
+        "hippo.cli.main",
+        None,
+        kind="function",
+        workspace=WORKSPACE,
+    )
+
+    # `None` is the only way to say it: an empty string is a different identity, and `NodeRef`
+    # refuses one anyway, so before this the part could not be expressed at all.
+    assert expected != symbol_key(
+        "object-repo", "python", "src/hippo/cli.py", "hippo.cli.main", "", kind="function"
+    )
+    with pytest.raises(ValidationError, match="A node reference needs its key parts"):
+        key_of(
+            registry,
+            "symbol",
+            {
+                "repository": "object-repo",
+                "language": "python",
+                "path": "src/hippo/cli.py",
+                "qualified_name": "hippo.cli.main",
+                "symbol_kind": "function",
+                "signature": "",
+            },
+        )
+
+
+def test_a_null_key_part_is_refused_where_the_identity_helper_does_not_declare_one(registry) -> None:
+    """F10 widened `KeyValue`, it did not make every key part optional."""
+    with pytest.raises(keys.KeyPartsRefused, match="Key part path of symbol cannot be null"):
+        key_of(
+            registry,
+            "symbol",
+            {
+                "repository": "object-repo",
+                "language": "python",
+                "path": None,
+                "qualified_name": "hippo.cli.main",
+                "symbol_kind": "function",
+                "signature": None,
+            },
+        )
+    with pytest.raises(keys.KeyPartsRefused, match="Key part environment of table cannot be null"):
+        key_of(
+            registry,
+            "table",
+            {
+                "environment": None,
+                "catalog": base.SqlPart(original="Shop", dialect="postgres"),
+                "schema": base.SqlPart(original="Public", dialect="postgres"),
+                "parts": (base.SqlPart(original="Orders", dialect="postgres"),),
+            },
+        )
 
 
 def test_database_kind_keys_equal_database_object_key_and_its_prefixes(registry) -> None:
