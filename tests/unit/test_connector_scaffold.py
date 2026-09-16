@@ -412,7 +412,7 @@ PINNED_DIGESTS: dict[str, str] = {
     "fixtures/basic/expected/aliases.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
     "fixtures/basic/expected/coverage.json": "2aea408ebe59787eae9bc74954fc59fd67b4e57e0c5ad9955346aac073f03dd4",
     "fixtures/basic/expected/edges.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-    "fixtures/basic/expected/failures.json": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "fixtures/basic/expected/failures.json": "13e34d72fc736904d7a816fbb8caf4562d3a8ad32bc55e2b8e407a21ce326d62",
     "fixtures/basic/expected/nodes.json": "24631b1b6260f63ea838646eb16782a04bc88c388dd3573e20d499d37366371c",
     "fixtures/basic/expected/passages.json": "25079825e2cdecdc90941abda55be540a87bb0d3f7036e67b7f7bfee98425f9c",
     "fixtures/basic/expected/units.json": "a5ec4a180f142dadb8124fb879cf6d88739ddef8d760ea9df2543e4d2d06e2df",

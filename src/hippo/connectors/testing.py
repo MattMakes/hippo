@@ -1510,9 +1510,23 @@ def _golden_records(store, generation_id: str) -> dict[str, list]:
 
 
 def _parse_failures(coverage) -> list[dict]:
-    counted = coverage.get("failures") or coverage.get("parse_failures") or []
+    """What `ParseFailure` the generation counted, from S3c's own section of `coverage_json`.
+
+    `sync._coverage_json` writes `EmissionCoverage.to_json()` under `emission`, which keys each
+    count `family|parser|dialect` with `-` for a part the failure omits (`emit._count_failures`).
+    The top-level keys are read after it for a coverage some other writer produced.
+    """
+    emission = coverage.get("emission") if isinstance(coverage.get("emission"), Mapping) else {}
+    counted = emission.get("failures") or coverage.get("failures") or coverage.get("parse_failures") or []
     if isinstance(counted, Mapping):
-        return [{"family": name, "parser": None, "count": count} for name, count in counted.items()]
+        rows = []
+        for name, count in counted.items():
+            family, _, rest = str(name).partition("|")
+            parser = rest.partition("|")[0]
+            rows.append(
+                {"family": family, "parser": parser if parser not in ("", "-") else None, "count": count}
+            )
+        return rows
     return [entry for entry in counted if isinstance(entry, Mapping)]
 
 

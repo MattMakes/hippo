@@ -310,6 +310,28 @@ def _copied_package(tmp_path: Path, *, derivation=None, connector_kinds=None) ->
     return target
 
 
+def _add_a_malformed_record(package: Path, external_id: str = "n3") -> None:
+    """One more upsert whose note carries no `body`, so `emit` counts a `ParseFailure`.
+
+    The shape S4b's scaffolded case has by design: a change in the page, a policy of its own, and
+    input bytes the connector can fetch but not parse.
+    """
+    case = package / "fixtures" / "basic"
+    note = {"id": external_id, "title": "Third note", "url": f"https://fixture.example/notes/{external_id}"}
+    (case / "inputs" / external_id).write_bytes(json.dumps(note).encode("utf-8"))
+    changes = json.loads((case / "changes.json").read_text(encoding="utf-8"))
+    changes["pages"][0]["changes"].append(
+        {
+            "ref": {"partition": PARTITION, "artifact_kind": "document", "external_id": external_id},
+            "operation": "upsert",
+        }
+    )
+    (case / "changes.json").write_text(json.dumps(changes, indent=2), encoding="utf-8")
+    policies = json.loads((case / "policies.json").read_text(encoding="utf-8"))
+    policies[external_id] = {"state": "known", "mode": "workspace"}
+    (case / "policies.json").write_text(json.dumps(policies, indent=2), encoding="utf-8")
+
+
 # =========================================================================== the negative table
 
 
@@ -1201,3 +1223,27 @@ def test_validate_package_names_a_connector_whose_extension_omits_its_kind(tmp_p
     report = kit.validate_package(package, runtime=False)
     assert report.passed is False
     assert DESCRIPTOR.name in (report.error or "")
+
+
+def test_a_malformed_record_fills_failures_json(tmp_path):
+    """R77 finding 1: S3c counts a `ParseFailure` under `coverage["emission"]["failures"]`.
+
+    The kit read `coverage["failures"]`, a key S3c never writes, so `failures.json` stayed `[]` for
+    a case that exercises a `ParseFailure` (S4b's scaffolded package, whose `record-2` is malformed
+    by design) and R75(4)'s "it fills once a fixture exercises one" could not hold.
+    """
+    package = _copied_package(tmp_path)
+    _add_a_malformed_record(package)
+
+    report = kit.validate_package(package, update_golden=True)
+
+    assert report.error is None, report.error
+    assert [violation.message for violation in report.violations] == []
+    assert [case.error for case in report.cases] == [None]
+    expected = package / "fixtures" / "basic" / "expected"
+    coverage = json.loads((expected / "coverage.json").read_text(encoding="utf-8"))
+    # S3c keys the counter `family|parser|dialect`, writing `-` for a part the failure omits.
+    assert coverage["emission"]["failures"] == {f"{FIXTURE_FAMILY}|-|-": 1}
+    assert json.loads((expected / "failures.json").read_text(encoding="utf-8")) == [
+        {"family": FIXTURE_FAMILY, "parser": None, "count": 1}
+    ]
