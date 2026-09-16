@@ -405,4 +405,12 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   ="always"`), so a negative fixture that mangles a copy passes for the wrong reason; answer another
   record instead. Each parity world needs its own origin repository. CD9 at N=8 and the Neo4j
   parity of `test_connector_local.py` and `test_connector_git.py` are the orchestrator's.
+- **R79 — S4a-fix as landed (merged at `8ce4544`).** `failures.json` rows are `{family, parser,
+  count}` from the emission coverage (no record ids reach coverage; the dialect is folded into the
+  key), which narrows R75(4) and the S4a-fix brief's wording. `validate_package(update_golden=True)`
+  rewrites the registry lock, so S6 owns two one-line follow-ups outside its file list: the
+  `hippo connector validate` message names the lock beside the goldens (`cli.py`, the one line) and
+  `docs/spec/cdk-guide.md` section 7 says `--update-golden` rewrites the goldens and the lock. The
+  committed fixture lock's trailing newline is normalised the next time that file is legitimately
+  regenerated, never on its own.
 

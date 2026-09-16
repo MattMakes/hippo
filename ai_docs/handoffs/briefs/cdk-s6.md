@@ -72,4 +72,6 @@ question the plan, the rulings and the reviews do not answer.
 - R75: the exemplar's fixture includes one malformed record so `failures.json` and the per-parser counts are exercised; if the exemplar reads over HTTP it commits an `http/` recording, else it states that it reads files only.
 - R77: the exemplar declares `descriptor` as a class attribute; every list, sync, enable and route test seeds one signed-in user because open mode refuses provider connector rows; S4a-fix (before you) makes `failures.json` fill and re-goldening rewrite the lock.
 - R78: never build a negative fixture by `model_copy(update=...)` on a kit record (it re-validates); answer another record instead, as S4a's `_fetch_that_answers_another_ref` does.
+- R79: two granted one-liners outside your file list: the `hippo connector validate` message in `src/hippo/cli.py` names the registry lock beside the goldens, and `docs/spec/cdk-guide.md` section 7 says `--update-golden` rewrites the goldens and the lock (keep the guide's fenced examples byte-identical to the marked regions).
+- Base your worktree on the HEAD named in the spawn message, which includes S4a-fix, S4b and S5b.
 
