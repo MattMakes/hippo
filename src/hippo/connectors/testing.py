@@ -2168,14 +2168,24 @@ def validate_package(
                 descriptor.name, descriptor.version, "capture", diff, (), tuple(violations)
             )
 
-        try:
-            assert_registry_lock(
-                descriptor.extension,
-                version=descriptor.version,
-                lock_path=package_dir / "fixtures" / "registry.lock.json",
+        lock_path = package_dir / "fixtures" / "registry.lock.json"
+        if update_golden:
+            # The lock is the eighth file a re-goldening owns. A package whose goldens were
+            # recomputed under a moved vocabulary and whose lock still holds the old digests
+            # satisfies `registry_version_bump` vacuously from then on (R77 finding 2), so the
+            # update run writes the lock rather than comparing against the one it replaces.
+            from ..knowledge.identity import canonical_json
+
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path.write_text(
+                canonical_json(extension_lock(descriptor.extension, version=descriptor.version)),
+                encoding="utf-8",
             )
-        except ContractViolation as violation:
-            violations.append(violation)
+        else:
+            try:
+                assert_registry_lock(descriptor.extension, version=descriptor.version, lock_path=lock_path)
+            except ContractViolation as violation:
+                violations.append(violation)
 
         for case_dir in cases:
             case = load_case(case_dir)

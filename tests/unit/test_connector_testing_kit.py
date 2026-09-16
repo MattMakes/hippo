@@ -43,6 +43,7 @@ from tests.fakes.fixture_connector.types import (
     FIXTURE_LINKS,
     FIXTURE_NOTE_KIND,
     fixture_extension,
+    fixture_links_predicate,
     fixture_note_kind,
 )
 
@@ -281,20 +282,27 @@ def _copied_case(case, tmp_path: Path):
     return kit.load_case(target)
 
 
-def _copied_package(tmp_path: Path, *, derivation=None, connector_kinds=None) -> Path:
+def _copied_package(tmp_path: Path, *, derivation=None, connector_kinds=None, verb_phrase=None) -> Path:
     """A writable copy of the fixture connector package, imported by file location."""
     target = tmp_path / "copied_connector"
     shutil.copytree(PACKAGE_DIR, target)
-    if derivation is None and connector_kinds is None:
+    if derivation is None and connector_kinds is None and verb_phrase is None:
         return target
     updates = []
     if derivation is not None:
         updates.append(f'"capabilities": _D.capabilities.model_copy(update={{"derivation": {derivation!r}}})')
     if connector_kinds is not None:
         updates.append(f'"extension": fixture_extension(connector_kinds={connector_kinds!r})')
+    if verb_phrase is not None:
+        # One vocabulary change under the same descriptor version: what a developer who edits
+        # `types.py` and reruns `--update-golden` has, and what makes the committed lock stale.
+        updates.append(
+            '"extension": fixture_extension('
+            f"predicates=(fixture_links_predicate(verb_phrase={verb_phrase!r}),))"
+        )
     (target / "kit_patch.py").write_text(
         "from .connector import DESCRIPTOR as _D, FixtureConnector as _Base\n"
-        "from .types import fixture_extension\n\n"
+        "from .types import fixture_extension, fixture_links_predicate\n\n"
         f"PATCHED = _D.model_copy(update={{{', '.join(updates)}}})\n\n\n"
         "class Connector(_Base):\n"
         "    def __init__(self, *args, **kwargs):\n"
@@ -1247,3 +1255,29 @@ def test_a_malformed_record_fills_failures_json(tmp_path):
     assert json.loads((expected / "failures.json").read_text(encoding="utf-8")) == [
         {"family": FIXTURE_FAMILY, "parser": None, "count": 1}
     ]
+
+
+def test_update_golden_rewrites_a_stale_registry_lock(tmp_path):
+    """R77 finding 2: a re-goldened package never keeps a lock its vocabulary has moved past.
+
+    `assert_registry_lock` only ever read the lock, so `--update-golden` recomputed the seven
+    goldens and left the eighth committed file stale. It is written from `extension_lock` on the
+    update run instead of asserted, which is what `render_package` already did for itself.
+    """
+    moved = fixture_extension(predicates=(fixture_links_predicate(verb_phrase="links onward to"),))
+    package = _copied_package(tmp_path, verb_phrase="links onward to")
+    lock_path = package / "fixtures" / "registry.lock.json"
+    stale = lock_path.read_text(encoding="utf-8")
+    with pytest.raises(ContractViolation) as refusal:
+        kit.assert_registry_lock(moved, version=DESCRIPTOR.version, lock_path=lock_path)
+    assert refusal.value.assertion == "registry_version_bump"
+    assert refusal.value.record == f"predicate:{FIXTURE_LINKS}@{DESCRIPTOR.version}"
+
+    report = kit.validate_package(package, update_golden=True)
+
+    assert report.error is None, report.error
+    assert [violation.message for violation in report.violations] == []
+    rewritten = lock_path.read_text(encoding="utf-8")
+    assert rewritten != stale
+    assert rewritten == canonical_json(kit.extension_lock(moved, version=DESCRIPTOR.version))
+    kit.assert_registry_lock(moved, version=DESCRIPTOR.version, lock_path=lock_path)
