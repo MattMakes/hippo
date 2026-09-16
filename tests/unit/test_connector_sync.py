@@ -801,10 +801,43 @@ def _m10b(world):
 
 
 def _m11(world):
+    """A revision-level emit failure is counted, and R37's DV1 decides what happens to its records.
+
+    Review CK7 finding F14: the design read "the previous revision's records stay", which DV1 - every
+    member revision re-emitted, nothing carried forward - contradicts. A clean generation comes
+    first, so the failing revision has records to lose; the second sync is provoked by a change to a
+    *different* note, so n2 itself is unchanged and is re-emitted only because DV1 says so. Its
+    records are absent from the new generation, and it is the previous *generation* that stays
+    queryable, records and all.
+    """
+    clean = world.sync(connector=_FailingEmitConnector(world.connector_impl, "never-matches"))
+    assert clean.outcome == "published"
+    assert clean.coverage["emit_failed"] == {}
+    before = _unit_texts(world, clean.generation_id)
+    assert any("/n2" in text for text in before)
+
+    # The change is to the *other* note, so n2 is unchanged and is re-emitted only because DV1
+    # re-emits every member revision. Its emit is what fails.
+    world.provider.put_note(_note(body="A change to the other note.", updated="2026-09-22T09:00:00Z"))
     failing = _FailingEmitConnector(world.connector_impl, "n2")
-    receipt = world.sync(connector=failing)
-    assert receipt.outcome == "published"
-    assert receipt.coverage["emit_failed"]
+    second = world.sync(connector=failing)
+    assert second.outcome == "published"
+    assert second.coverage["emit_failed"] == {FIXTURE_FAMILY: 1}
+
+    # DV1: n2 is still a member of the new generation, and holds no record in it.
+    members = {
+        row.artifact_revision_id for row in world.rows("GenerationMember", generation_id=second.generation_id)
+    }
+    n2_revision = _revision_of(world, "n2")
+    assert n2_revision in members
+    assert not any("/n2" in text for text in _unit_texts(world, second.generation_id))
+
+    # The previous generation is what stays queryable, with every record it was published with.
+    assert _unit_texts(world, clean.generation_id) == before
+    assert world.store.collect_generation(clean.generation_id).blocked_reason in (
+        None,
+        "snapshot_reference",
+    )
 
 
 def _m11b(world):
@@ -1062,6 +1095,17 @@ def _raise_at(label: str):
             raise _Injected(label)
 
     return hook
+
+
+def _unit_texts(world, generation_id) -> list[str]:
+    return sorted(unit.text for unit in world.rows("Unit", generation_id=generation_id))
+
+
+def _revision_of(world, external_id: str) -> str:
+    artifact = world.artifact_of(external_id)
+    revisions = [row for row in world.rows("ArtifactRevision") if row.artifact_id == artifact.id]
+    assert len(revisions) == 1, revisions
+    return revisions[0].id
 
 
 def _note(*, body: str, updated: str, note_id: str = "n1", links=("n2",)) -> dict:
