@@ -413,4 +413,12 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   `docs/spec/cdk-guide.md` section 7 says `--update-golden` rewrites the goldens and the lock. The
   committed fixture lock's trailing newline is normalised the next time that file is legitimately
   regenerated, never on its own.
+- **R80 — S6 as landed (exemplar and surfaces merged at `972f269`).** The ten overrides in
+  `evidence-s6.md` are ratified, including the absence of a `fixtures/update/` case: a standalone
+  case has no parent generation, so the withdrawal proof drives the real connector over a rewritten
+  export with `SyncOptions(reconcile=True)` and asserts the deletion, the complete inventory and
+  the reader's view. The probe sample bound (ten records) and the validate route's 404 for an
+  installed-but-broken package are Task 15's to refine; `GET /api/connectors` shows the broken
+  package with its error. Neo4j parity of the two S6 files is root-owned and run beside the S5
+  parity files.
 
