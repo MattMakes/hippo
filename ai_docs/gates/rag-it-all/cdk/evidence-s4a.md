@@ -14,7 +14,8 @@ Where a ruling and the plan differ, the ruling wins; every such case is under "O
 | # | Hash | Subject | Files |
 | --- | --- | --- | --- |
 | 1 | `c707974` | Add the connector test kit: contract, purity, capture, runtime and registry assertions (CDK S4a) | `connectors/testing.py` (new), `connectors/loader.py` (the R64 lines), `tests/unit/test_connector_testing_kit.py` (new), `tests/unit/test_connector_loader.py` (one test), `tests/unit/test_import_order.py` (one line), `tests/unit/test_connector_sync.py` (two granted edits), `tests/fakes/fake_ollama.py` (the `embed_text` body), `tests/fakes/fixture_connector/__init__.py`, `tests/fakes/fixture_connector/fixtures/registry.lock.json` (new), `tests/fakes/fixture_connector/fixtures/basic/changes.json`, `tests/fakes/fixture_connector/fixtures/basic/expected/*.json` (new), this file |
-| 2 | (filled below) | Check the fixture connector's committed goldens in the positive fixture (CDK S4a) | `tests/unit/test_connector_testing_kit.py` |
+| 2 | `d35c9af` | Record the S4a commit hash in its evidence | this file |
+| 3 | `0d25665` | Check the fixture connector's committed goldens in the positive fixture (CDK S4a) | `tests/unit/test_connector_testing_kit.py`, this file |
 
 ### Grants beyond the brief's "own" list
 
