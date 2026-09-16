@@ -51,10 +51,14 @@ OBJECT_KINDS = frozenset(
 ALL = " ".join(sorted(OBJECT_KINDS))
 CATALOG = "service api system domain resource repository"
 SCHEMA = "database schema table column view constraint index routine"
-DECLARED = "metadata rule reviewed"
-PARSED = "parser metadata rule reviewed"
-DISCUSSED = "metadata reviewed"
-MENTIONED = "parser metadata reviewed"
+# Review CK7 finding F2: `reviewed` is the reconciliation queue's source (spec 4.3) and derives
+# `human_verified`, so no built-in admits it and no connector can claim the class. It stays a
+# registered evidence source, and `EVIDENCE_CLASS_DERIVATION` keeps both of its rows, because the
+# acceptance path writes them through `update_knowledge` rather than through the binder.
+DECLARED = "metadata rule"
+PARSED = "parser metadata rule"
+DISCUSSED = "metadata"
+MENTIONED = "parser metadata"
 EVERY_FAMILY = " ".join((*SPEC_FAMILIES, CUSTOM_FAMILY))
 
 
@@ -175,7 +179,7 @@ BUILTIN_PREDICATES = (
         "",
         "",
         EVERY_FAMILY,
-        "rule reviewed",
+        "rule",  # F2: an accepted alias is written by the acceptance path, not emitted
         "is the same object as",
         traversal=False,
         identity=True,
