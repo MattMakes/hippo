@@ -44,6 +44,7 @@ class FixtureConfig(BaseModel):
     partition: str = DEFAULT_PARTITION
 
 
+# cdk-guide: begin descriptor
 DESCRIPTOR = base.ConnectorDescriptor(
     name=FIXTURE_CONNECTOR_KIND,
     version="1",
@@ -58,6 +59,7 @@ DESCRIPTOR = base.ConnectorDescriptor(
     parsers=(),
     extension=FIXTURE_EXTENSION,
 )
+# cdk-guide: end descriptor
 
 
 def _instant(spelling: str | None) -> datetime | None:
@@ -105,6 +107,7 @@ class FixtureConnector:
 
     # ------------------------------------------------------------------ the sync half
 
+    # cdk-guide: begin sync_half
     def probe(self, config: BaseModel, clock) -> base.Classification:
         """Sample through this connector's own `list_changes` and `fetch` (ruling R60)."""
         items, cursor = [], None
@@ -166,8 +169,11 @@ class FixtureConnector:
         payload = json.loads(body.decode("utf-8")) | {"ref": ref.model_dump(mode="json")}
         return base.PolicyObservation.model_validate_json(json.dumps(payload))
 
+    # cdk-guide: end sync_half
+
     # ------------------------------------------------------------------ the pure half
 
+    # cdk-guide: begin emit
     def emit(self, revision: base.RevisionInput, mapping: base.TypeMapping) -> base.EmissionBatch:
         note = json.loads(revision.data.decode("utf-8"))
         if "body" not in note:
@@ -251,3 +257,5 @@ class FixtureConnector:
             source="metadata",
             metadata_origin="catalog",
         )
+
+    # cdk-guide: end emit
