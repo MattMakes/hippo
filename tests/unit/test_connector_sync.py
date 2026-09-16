@@ -800,6 +800,21 @@ def _m10b(world):
         assert world.rows("Generation") == before
 
 
+def _m10c(world):
+    """CK7 confirmation N1: swallowing the refusal and then failing for another reason still refuses.
+
+    The connector's own `ValueError` used to reach `sync._emit`'s broad handler, be counted as
+    `emit_failed`, and let the run publish. The one model request it made was refused before it ran.
+    """
+    swallowing = _SwallowThenRaiseConnector(world.connector_impl, "n2")
+    before = world.rows("Generation")
+    with pytest.raises(sync.ConnectorContractViolation, match=r"Ollama\.embed;"):
+        world.sync(connector=swallowing)
+    assert world.rows("Generation") == before
+    assert swallowing.refused == ["EmitSideEffect"]
+    assert swallowing.requests == []
+
+
 def _m11(world):
     """A revision-level emit failure is counted, and R37's DV1 decides what happens to its records.
 
@@ -1033,6 +1048,7 @@ _MATRIX = {
     "M9": _m9,
     "M10": _m10,
     "M10b": _m10b,
+    "M10c": _m10c,
     "M11": _m11,
     "M11b": _m11b,
     "M12": _m12,
@@ -1337,6 +1353,37 @@ class _SwallowingConnector(_Delegating):
         self.reached_the_second_call = True
         time.time()
         return self._inner.emit(revision, mapping)
+
+
+class _SwallowThenRaiseConnector(_Delegating):
+    """CK7 confirmation N1: one revision's `emit` swallows the refused model call, then fails.
+
+    The model sits on its own recording transport, so the row can show the request never ran.
+    """
+
+    def __init__(self, inner, external_id):
+        super().__init__(inner)
+        self._external_id = external_id
+        self.refused: list[str] = []
+        self.requests: list[str] = []
+        transport = httpx.MockTransport(
+            lambda request: self.requests.append(str(request.url)) or httpx.Response(200, json={})
+        )
+        self._ollama = Ollama(
+            "http://guard.invalid",
+            "chat:latest",
+            "embed:latest",
+            client=httpx.Client(base_url="http://guard.invalid", transport=transport),
+        )
+
+    def emit(self, revision, mapping):
+        if revision.artifact.external_id != self._external_id:
+            return self._inner.emit(revision, mapping)
+        try:
+            self._ollama.embed([revision.artifact.external_id])
+        except BaseException as error:  # noqa: BLE001 - a connector determined to swallow the refusal
+            self.refused.append(type(error).__name__)
+        raise ValueError("this revision cannot be parsed")
 
 
 def test_the_record_bundle_stages_alias_candidates(store):

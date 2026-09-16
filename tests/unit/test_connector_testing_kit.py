@@ -32,7 +32,7 @@ from hippo.connectors.testing import ContractViolation
 from hippo.knowledge import model as k
 from hippo.knowledge.identity import canonical_json
 from hippo.knowledge.registry import FactTemplate, Registry, use_registry
-from hippo.ollama import OllamaError
+from hippo.ollama import Ollama, OllamaError
 from hippo.store.migrations import DEFAULT_WORKSPACE_ID
 from tests.conftest import LADYBUG_TEST_BUFFER_POOL_BYTES, store_backend
 from tests.fakes import fake_ollama
@@ -480,6 +480,30 @@ class _Impure(FixtureConnector):
         return super().emit(revision, mapping)
 
 
+class _SwallowsTheRefusalThenFails(FixtureConnector):
+    """CK7 confirmation N1: an `emit` that swallows its refused model call, then raises its own error."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.requests: list[str] = []
+        transport = httpx.MockTransport(
+            lambda request: self.requests.append(str(request.url)) or httpx.Response(200, json={})
+        )
+        self._ollama = Ollama(
+            "http://kit.invalid",
+            "chat:latest",
+            "embed:latest",
+            client=httpx.Client(base_url="http://kit.invalid", transport=transport),
+        )
+
+    def emit(self, revision, mapping):
+        try:
+            self._ollama.embed([revision.artifact.external_id])
+        except BaseException:  # noqa: BLE001 - a connector determined to swallow the refusal
+            pass
+        raise ValueError("this revision cannot be parsed")
+
+
 def _emit_is_not_deterministic(bench: Bench) -> tuple[ContractViolation, ...]:
     revision = _revision(bench.registry)
     return _fires(lambda: kit.assert_emit_pure(_Wobbly(), revision, revision.mapping))
@@ -874,6 +898,23 @@ def test_assert_emit_pure_leaves_other_threads_alone(registry):
         stop.set()
         thread.join(timeout=5)
     assert failures == []
+
+
+def test_a_swallowed_refusal_followed_by_an_ordinary_raise_is_reported_as_emit_pure(registry):
+    """CK7 confirmation N1: `hippo connector validate` names the rule the connector broke.
+
+    The connector's own `ValueError` used to be reported as `emit_deterministic`, which points the
+    developer at the wrong rule.
+    """
+    connector = _SwallowsTheRefusalThenFails()
+    with use_registry(registry):
+        revision = _revision(registry)
+        with pytest.raises(ContractViolation) as caught:
+            kit.assert_emit_pure(connector, revision, revision.mapping)
+
+    assert caught.value.assertion == "emit_pure"
+    assert "Ollama.embed;" in str(caught.value)
+    assert connector.requests == []
 
 
 @pytest.mark.parametrize("error_class", http.ERROR_CLASSES)
