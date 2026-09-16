@@ -504,3 +504,11 @@ N=8 running (`/tmp/hippo-orch-cd9-n8.log`). Running: S6 (`wp/s6`, brief `cdk-s6.
 through R79). Next: merge S6; run the gate checker over CK1–CK7 (CK7 after the review); spawn the
 CK7 review with `ai_docs/handoffs/briefs/review-cdk-code.md`; close or assign its findings; final
 report to the user. Rulings through R79.
+
+**CDK gates (2026-09-16, midday).** Every slice merged (S6 at `972f269`); the gate checker passed
+CK1–CK7 CHECK lines at `2cff093` (ledger status line is the revision of record; one CHECK line per
+gate, LadybugDB joined with `&&`). Neo4j parity for CK1, CK3, CK5, CK6 and the CD9 acceptance at N=8
+recorded. Pending: the CK7 independent review (`architect-reviewer-3`, brief
+`ai_docs/handoffs/briefs/review-cdk-code.md`, report `ai_docs/reports/2026-09-16-cdk-code-review.md`),
+then closing or assigning its findings, the final report to the user, and the user's stack decision
+(design §14). Rulings R1–R80.
