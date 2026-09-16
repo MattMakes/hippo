@@ -1,0 +1,54 @@
+"""The vocabulary the `incidents_ndjson` connector registers.
+
+Nothing here registers itself. `hippo connector validate` registers this extension into a scratch
+registry, and `hippo serve` registers it once an operator has enabled an instance of this kind
+with `hippo connector enable incidents_ndjson <instance_url>`.
+
+`connector_kinds` is load-bearing: it is the kind an operator's `Connector` row carries, and it
+must equal this package's name and the descriptor's.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict
+
+from hippo.knowledge.registry import ObjectKindDefinition, TypeExtension
+
+from .templates import SUMMARY
+
+CONNECTOR_KIND = "incidents_ndjson"
+FAMILY = "incident"
+KINDS = ("incident",)
+PRIMARY_KIND = "incident"
+
+
+class RecordAttributes(BaseModel):
+    """One record's typed attributes.
+
+    `extra="forbid"` is required of every extension kind: an attribute nobody declared is a
+    mapping mistake, not a free-form field.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    title: str
+
+
+def object_kind(name: str) -> ObjectKindDefinition:
+    return ObjectKindDefinition(
+        name=name,
+        family=FAMILY,
+        # `instance` is filled by the kit from the connector row and is never emitted (M16),
+        # so one provider's `id` cannot collide with another instance's.
+        key_template=("instance", "id"),
+        key_prefix="inci",
+        attrs_model=RecordAttributes,
+        label_template="{title}",
+        fact_templates=(SUMMARY,),
+    )
+
+
+EXTENSION = TypeExtension(
+    object_kinds=tuple(object_kind(name) for name in KINDS),
+    connector_kinds=(CONNECTOR_KIND,),
+)
