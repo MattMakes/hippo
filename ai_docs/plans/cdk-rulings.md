@@ -302,4 +302,17 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   needs S1a, S1b, S2a and S4c, all merged; its only S4a dependency is the `check_capture` test, so
   the local connector's and the git connector's `check_capture` tests both land in S5b, which
   already follows S4a. S5a runs beside S2b, S3b and S3c. R38's order is amended accordingly.
+- **R68 — S3b's questions (staged writer merged at `fd9e840`).** (1) `RecordBundle.aliases:
+  tuple[Alias, ...] = ()` is S3c's addition (one group, one `scoped` entry, one inventory line),
+  because alias candidates are part of the emission batch (design §7 step 7). (2)
+  `PLANNED_POLICY_SCOPES` is one tuple shared across source kinds, as plan §7.3 asks; the review of
+  CK3 notes it. (3) `unit_id` on an `AssertionVersion` is exempt from the store's reference checks
+  (`_references` in `store/generations.py` and any collection-time check), never cleared, because a
+  tombstoned version outlives its generation's units (R66 ii); S3c owns those lines in
+  `store/generations.py` under this grant, with a test that collecting a connector generation
+  leaves its published versions readable and checksummable. (4) R66(i) stands: the registry is
+  loaded before any lifecycle write; S3c pins it. S3b's gotchas (a)–(h) in `evidence-s3b.md` bind
+  S3c's fixtures: ordered batch writes, the `unit` probe flavour, an instance per fixture from a
+  counter, one user for an enabled provider connector, `_write_batches` for unsealed generations,
+  `verified_at` well before `expires_at` for a lapsed policy.
 

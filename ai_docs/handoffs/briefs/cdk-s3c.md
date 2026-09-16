@@ -78,4 +78,7 @@ question the plan, the rulings and the reviews do not answer.
 - Base your worktree on the HEAD named in the spawn message, which includes S1b-fix, S2b, S3a and S3b.
 - R66: the registry is loaded before any lifecycle write (pin it with the two tests R66 names), and
   a tombstoned version's `unit_id` may dangle after collection (document it in `sync.py`).
+- R68: add `RecordBundle.aliases`; exempt `unit_id` from the store's reference checks (the granted
+  lines in `src/hippo/store/generations.py`, with the collection test R68 names); follow
+  `evidence-s3b.md`'s gotchas (a)–(h) when building fixtures.
 
