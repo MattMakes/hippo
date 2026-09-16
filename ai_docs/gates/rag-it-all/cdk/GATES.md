@@ -1,7 +1,7 @@
 # Connector Developer Kit gates
 
-**Status:** OPEN. Design of record `docs/spec/connector-developer-kit.md` (2026-09-15); implementation
-plans `ai_docs/plans/cdk-*.md`. No gate has run. CHECK lines name the test files each slice's plan
+**Status:** CK1–CK7 CHECK lines MET by the gate checker's pass on 2026-09-16 at source revision `2cff093` (`rag-it-all-tibs`, every CDK slice merged; log `/tmp/hippo-orch-ck-gates-2.log`; the checker's EVIDENCE lines carry no git revision, so this line is the revision of record). CK7's CRITERIA (the independent SPEC and QUALITY review) are PENDING `ai_docs/reports/2026-09-16-cdk-code-review.md`; its tick below records the lint line only until that review passes. Root-owned evidence: Neo4j parity for CK1, CK3, CK5 and CK6 in `neo4j-parity.md`, the CD9 acceptance at N=8 in `root-evidence.md`. Rulings `ai_docs/plans/cdk-rulings.md` R1–R80 bind the plans. Design of record `docs/spec/connector-developer-kit.md` (2026-09-15); implementation
+plans `ai_docs/plans/cdk-*.md`. CHECK lines name the test files each slice's plan
 must create; a plan may replace a CHECK line by naming the replacement in its "ledger lines" section,
 and the orchestrator applies it. The checker's EVIDENCE lines carry no git revision, so this Status
 line is the revision of record once gates pass.
