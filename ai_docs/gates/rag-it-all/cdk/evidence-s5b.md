@@ -11,7 +11,9 @@ m9 — and by `ai_docs/gates/rag-it-all/cdk/evidence-s5a.md`. Gate: CK5.
 | # | Hash | Subject | Files |
 | --- | --- | --- | --- |
 | 1 | `17d2d64` | Dispatch the managed code build through the local and git connectors and the coordinator lane (CDK S5b) | `src/hippo/connectors/git/{__init__,connector,types}.py`, `tests/unit/test_connector_git.py` (new); `src/hippo/connectors/local/connector.py`, `src/hippo/ingest/code_generation.py`, `src/hippo/ingest/managed_activation.py`, `tests/fakes/connector_parity.py`, `tests/unit/test_connector_local.py`, `tests/unit/test_import_order.py`, `tests/unit/test_connector_loader.py`, `tests/unit/test_layering.py` (modified) |
-| 2 | (this commit) | Record the S5b evidence | this file (new) |
+| 2 | `643eab2` | Record the S5b evidence | this file (new) |
+| 3 | `9649928` | Make the two check_capture negative fixtures answer another record, not a mangled one (CDK S5b) | `tests/unit/test_connector_git.py`, `tests/unit/test_connector_local.py`, `src/hippo/connectors/git/connector.py` (a docstring anchor) |
+| 4 | (this commit) | Correct the S5b evidence after the negative-fixture fix | this file |
 
 `tests/unit/test_layering.py` is outside the brief's "own" list; the orchestrator granted the
 one-line `PORTED` append during implementation (see Override 2). Every other file is on the brief's
@@ -42,8 +44,10 @@ exactly `the runtime path published without the registry fingerprint`.
 
 ## GREEN
 
-Every figure below was measured on the committed tree, after the Ruff formatting pass and after the
-descriptor narrowing of Override 3, so no figure is from an earlier working tree.
+Every figure below was re-measured on the final committed tree, after the Ruff formatting pass,
+after the descriptor narrowing of Override 3 and after the negative fixtures were corrected (see
+"A correction made after the first pass"), so no figure is from an earlier working tree. The one
+exception is named in its own row.
 
 | Line | Log | Result |
 | --- | --- | --- |
@@ -52,7 +56,7 @@ descriptor narrowing of Override 3, so no figure is from an earlier working tree
 | The CD1 line verbatim (`task-5-code-capture/GATES.md:18`) | `/tmp/hippo-cdk-s5b-cd1.log` | exit 0, 133 passed |
 | The CD2 line verbatim (`GATES.md:24`) | `/tmp/hippo-cdk-s5b-cd2.log` | exit 0, 169 passed, 2 skipped |
 | The CD8 line verbatim (`GATES.md:60`) | `/tmp/hippo-cdk-s5b-cd8.log` | exit 0, 399 passed, 3 skipped |
-| Section 9's S5b LadybugDB line: `test_connector_local.py test_connector_git.py` | `/tmp/hippo-cdk-s5b-ladybug-parity.log` | exit 0, 54 passed |
+| Section 9's S5b LadybugDB line: `test_connector_local.py test_connector_git.py` | `/tmp/hippo-cdk-s5b-ladybug-parity.log` | exit 0, 54 passed — **the one figure not from the final tree**: it ran on the narrowed, Ruff-formatted source but before the two negative fixtures were corrected. The correction is test-only and backend-independent (it changes which `RawFetch` a deliberately broken subclass answers with, in a case that opens no store), and both corrected cases pass on Fake |
 | Ruff `check` then `format --check` over every file this branch touches | `/tmp/hippo-s5b-ruff.log` | exit 0 and exit 0 |
 
 Counts per backend: **Fake** 325 passed / 3 skipped on the CK5 line (298 baseline + 27 new), 133 on
@@ -67,8 +71,11 @@ warning was suppressed. No ini-wide `filterwarnings` was added.
 
 `tests/unit/test_prose_generation.py`, `tests/unit/test_code_generation.py`,
 `tests/unit/test_managed_pipeline_activation.py`, `tests/unit/test_managed_code_activation.py` and
-`tests/unit/test_code_capture_acceptance.py` pass **unchanged** — none is modified in this branch,
-and `git show --stat` proves it.
+`tests/unit/test_code_capture_acceptance.py` pass **unchanged** — none is modified in this branch.
+`git diff --name-only 2710262 HEAD` also carries none of the files the brief and plan section 10 put
+out of reach: `src/hippo/connectors/lanes.py`, `src/hippo/ingest/prose_generation.py`,
+`src/hippo/connectors/sync.py`, and nothing under `src/hippo/knowledge/`, `src/hippo/store/` or
+`src/hippo/ingest/pipeline.py`.
 
 `HIPPO_CODE_ACCEPTANCE_FILES_PER_LANGUAGE` was never set by this worker on any line. The runtime
 parity of the acceptance fixture's shape is pinned at N=2 inside
@@ -196,6 +203,21 @@ the generation's member `ObjectObservation`s name, per S4a override 6):
 | `archive` | `file`, `repository`, `symbol` | `file`, `manifest`, `repository` | `field`, `file_lines` |
 | code `file` | `file`, `repository`, `symbol` | `file`, `manifest`, `repository` | `field`, `file_lines` |
 | `text` (prose) | none | `file`, `manifest` | `file_lines` |
+
+## A correction made after the first pass
+
+The first version of both `check_capture` negative fixtures mangled a `RawFetch` with
+`model_copy(update={"external_id": ...})` and claimed in a comment that the copy does not
+revalidate. **That comment was wrong.** `Contract.model_config` sets
+`revalidate_instances="always"`, so the copy raises `pydantic.ValidationError` inside `fetch` —
+which `testing.check_capture:846-847` catches and records as `fetch_matches_ref` anyway. The
+assertion held for the wrong reason, and neither fixture proved the kit was reading a mismatched
+fetch rather than a refusal.
+
+Both now take S4a's own `_fetch_that_answers_another_ref` shape: the broken subclass answers a
+perfectly valid `RawFetch` for a *different* walked member, so nothing refuses it before the kit's
+rule does. Measured directly: `RawFetch(...).model_copy(update={"external_id": "never/seen.py"})`
+raises `ValidationError: RawFetch.external_id must equal the requested ref`.
 
 ## Overrides and deviations
 
