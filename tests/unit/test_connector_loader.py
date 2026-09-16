@@ -564,3 +564,26 @@ def test_an_evidence_source_that_changed_under_its_name_is_not_already_registere
     assert loader._already_registered(registry, registered)
     assert not loader._already_registered(registry, _source_extension("declared"))
     assert registry.evidence_source("pager_feed") == "pager_feed", "the name alone cannot tell them apart"
+
+
+def test_the_fixture_connector_loads_through_an_entry_point(packages, monkeypatch) -> None:
+    """R77 finding 3: a connector publishes `descriptor` on the class, because that is where
+    `_imported` reads it — before anything is constructed.
+
+    `tests/fakes/fixture_connector` set it in `__init__` only, so it was the one package in the
+    repository the loader could not load: the entry point answered with `AttributeError` and the
+    kind was listed as broken. S4b's scaffold already emits a class attribute and S5b's `git` and
+    S6's exemplar carry one; the fixture connector is the package every slice loads.
+    """
+    from tests.fakes.fixture_connector import DESCRIPTOR, FixtureConnector
+
+    point = entry_point(DESCRIPTOR.name, FixtureConnector)
+    install_entry_points(monkeypatch, point)
+
+    entries = [e for e in loader.discover_connectors(allowlist=frozenset({DESCRIPTOR.name})) if e.trusted]
+
+    assert [(e.name, e.origin, e.error) for e in entries] == [(DESCRIPTOR.name, "entry point", None)]
+    assert entries[0].connector_class is FixtureConnector
+    assert entries[0].connector_class.descriptor.name == DESCRIPTOR.name
+    assert point.loads == 1
+    assert FixtureConnector().descriptor is DESCRIPTOR, "the instance keeps the descriptor it had"
