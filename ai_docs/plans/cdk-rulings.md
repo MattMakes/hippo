@@ -346,4 +346,19 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   superset both lanes write and S5a pins only coverage of the prose subset, so S5b extends the pin
   to the archive and code worlds and may narrow the declaration; `tests/fakes/connector_parity.py`
   is S5b's to extend (its Neo4j branch is written but unexercised, root-owned).
+- **R73 — S3c as landed (runtime merged at `94c891f`).** The store's reference check keeps refusing
+  a NEW `AssertionVersion` that names a missing `Unit` (S1b's write order depends on it) and no
+  longer re-checks an already stored version, which is what R66(ii) needs; the "unconditional
+  exemption" wording of R68(3) is narrowed to that. `Generation.coverage_json` carries a top-level
+  `excluded_vocabulary` key, `{}` for a connector generation by construction. `fetch_policy`
+  errors: `ProviderForbiddenError` and `ProviderNotFoundError` become `PolicyObservation
+  (state="unknown")` (deny); any other provider error fails the page. `ensure_connector` writes
+  `enabled` from its argument on an existing row, so S4b's `enable` and S6's routes pass
+  `enabled=` deliberately, never relying on R51's default for a re-ensure. `SyncReceipt`'s
+  `already_current` is unreachable for a connector partition and stays for S4's reader.
+  `RecordBundle.aliases` is structural until Task 12 writes `Alias` rows. For S4a: the strict
+  contract models never accept a dict (`ChangePage`, `PolicyObservation`, `Classification`
+  round-trip through `model_validate_json`); a rerun reuses the stored manifest artifact and
+  revision whole; each fixture world needs its own instance URL; `emit` cannot log under the
+  guard.
 

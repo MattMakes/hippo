@@ -58,3 +58,8 @@ log paths, the negative-fixture table, overrides and open questions.
 
 REPORT: `horch note` after each step; `horch tell orchestrator "[<role>] BLOCKED: ..."` only for a
 question the plan, the rulings and the reviews do not answer.
+
+## Amendments (rulings after the brief was written)
+
+- R73: the strict contract models never accept a dict (round-trip through `model_validate_json`); a rerun reuses the stored manifest artifact and revision whole; each fixture world needs its own instance URL; `emit` cannot log under the guard; read `evidence-s3c.md`'s gotchas and its matrix before writing `run_case`.
+- Base your worktree on the HEAD named in the spawn message, which includes S3c, S5a and S2b-fix.

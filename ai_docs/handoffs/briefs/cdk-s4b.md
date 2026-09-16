@@ -54,3 +54,7 @@ the commit, counts, log paths, overrides and open questions.
 
 REPORT: `horch note` after each step; `horch tell orchestrator "[<role>] BLOCKED: ..."` only for a
 question the plan, the rulings and the reviews do not answer.
+
+## Amendments (rulings after the brief was written)
+
+- R73: `hippo connector enable` passes `enabled=True` deliberately on every `ensure_connector` call, including a re-ensure of an existing row.

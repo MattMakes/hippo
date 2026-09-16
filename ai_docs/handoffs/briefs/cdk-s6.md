@@ -68,4 +68,4 @@ question the plan, the rulings and the reviews do not answer.
   `instance=<catalog_instance>` and `label="checkout"`; the binder stores the label and the edge
   statement reads "… affects service checkout". A label anywhere else is ignored (R71).
 - Base your worktree on the HEAD named in the spawn message, which includes S2b-fix.
-
+- R73: the routes pass `enabled=` deliberately on any `ensure_connector` call; `fetch_policy` maps forbidden and not-found to `unknown` (deny).
