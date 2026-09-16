@@ -11,7 +11,8 @@ R38, R39, R47/B1 and review finding m10 (`ai_docs/handoffs/briefs/cdk-s3b.md`).
 | --- | --- | --- | --- |
 | 1 | `7941635` | Add the generic staged writer, the connector generation profile and connector build authority (CDK S3b) | `knowledge/staged_records.py` (new), `knowledge/staged_code.py`, `knowledge/generation_profiles.py`, `knowledge/build_authority.py`, `ingest/build_run.py`, `ingest/code_generation.py`, `tests/unit/test_staged_records.py` (new), `tests/unit/test_generation_profiles.py`, `tests/unit/test_build_authority.py`, `tests/unit/test_build_run.py` |
 | 2 | `76b5d25` | Record the S3b evidence: logs, counts, the promoted names and four overrides | this file |
-| 3 | `36a0ab5` | Prove the connectors boundary in a fresh interpreter | `tests/unit/test_staged_records.py`, `knowledge/build_authority.py`, this file |
+| 3 | `febca18` | Prove the connectors boundary in a fresh interpreter | `tests/unit/test_staged_records.py`, `knowledge/build_authority.py`, this file |
+| 4 | this commit | Correct commit 3's hash in this table | this file |
 
 ## Baseline (at `89ff6ac`, before any change)
 
