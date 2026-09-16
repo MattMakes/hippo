@@ -454,3 +454,13 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   (guard, `[M10c]`, kit `emit_pure`). Nested guards stay as they are (the report's note 1). The
   confirmation's eight CLOSED rulings stand; CK3 and CK4 rerun after the merge, and CK3's Neo4j
   parity with them.
+
+- **R83 (2026-09-16, after the n1-fix confirmation `ai_docs/reports/2026-09-16-cdk-n1-confirmation.md`).**
+  N1 is CLOSED at `0a248b5` (verdict of architect-reviewer-5, the fix undone in-process fails exactly
+  the three new tests on Fake and the `[M10c]` row on LadybugDB). The confirmer's two notes are
+  test-coverage items, not defects, and go to the next slice that touches `connectors/guard.py`:
+  (a) no test pins the `KeyboardInterrupt`/`SystemExit` exclusion of `forbid_effects`; (b) the
+  existing `test_a_propagating_violation_is_not_raised_a_second_time_on_the_way_out` does not pin the
+  `EmitSideEffect` exclusion (asserting `caught.value.__cause__ is None` would). The fixer's note that
+  a retry after a swallowed refusal runs unguarded and reaches the provider is F1's known gap and
+  stands as recorded in the two confirmation reports; no CDK slice reopens it.
