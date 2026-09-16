@@ -384,4 +384,15 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   `connectors/sync.py`: lane connectors have no `Connector` row in v1 (R5), so `hippo connector
   sync` never targets them and `managed_activation` is their only dispatcher. S5b appends
   `connectors/git/connector.py` to the `PORTED` pin in `tests/unit/test_layering.py` (granted).
+- **R77 — S4b's findings (scaffold, commands and guide merged at `833feed`).** Three kit defects go
+  to a small S4a-fix before S6: `testing._parse_failures` reads `coverage["failures"]` where S3c
+  writes `coverage["emission"]["failures"]` (so `failures.json` never fills; R75(4) stands once
+  fixed); `validate_package(update_golden=True)` also rewrites `fixtures/registry.lock.json` from
+  `extension_lock`; and the fixture connector declares `descriptor` as a class attribute so the
+  loader (which reads it off the class) can load it through an entry point, a rule every connector
+  follows (the scaffold already emits it; S5b's `git` and S6's exemplar do the same). Open mode
+  refuses a provider `Connector` row even with `enabled=False`, so every list, sync and enable test
+  seeds one user. R59's `BuildActor.trusted_local()` for `enable` is satisfied by the
+  `manage_sources` check, because none of `ensure_connector`, `probe` or `store_classification`
+  takes an actor; the actor appears on the non-dry-run `sync`.
 
