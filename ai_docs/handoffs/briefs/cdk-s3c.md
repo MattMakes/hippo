@@ -81,4 +81,10 @@ question the plan, the rulings and the reviews do not answer.
 - R68: add `RecordBundle.aliases`; exempt `unit_id` from the store's reference checks (the granted
   lines in `src/hippo/store/generations.py`, with the collection test R68 names); follow
   `evidence-s3b.md`'s gotchas (a)–(h) when building fixtures.
+- R70(2): extend `connectors/__init__.py`'s module list and the fresh-interpreter import
+  parametrization in `tests/unit/test_connector_contract.py` (one granted line) with every module
+  that now exists, including `sync`.
+- Import-cycle note from S2b's evidence: `emit.py` defines `BindRefused` above its `from . import
+  keys, render` line and `render.py` imports `CanonicalKey` under `TYPE_CHECKING` only; do not
+  reorder either.
 

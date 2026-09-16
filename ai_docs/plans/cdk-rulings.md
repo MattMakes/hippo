@@ -321,4 +321,13 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   makes that edit in `connectors/loader.py` with a loader test (granted), S4c's existing assertion
   stands, and S5b's `connectors/git/` relies on the same rule. The status surface (S6) lists them
   as built-in, never as unregistered.
+- **R70 — S2b's questions (binder merged at `6f90f96`).** (1) An identity-only foreign endpoint
+  may carry an emitted label: `NodeRef` gains `label: Text | None = None`, the minimal observation
+  stores it in `attributes_json`, and `edge_statement` uses it when present, else the readable
+  canonical key (so the statement stays re-derivable from stored records). This is a small
+  S2b-fix (`base.py`, `emit.py`, their tests) to run before S6, whose exemplar's `AFFECTS`
+  statement wants "service checkout". (2) `connectors/__init__.py`'s module list and the
+  fresh-interpreter import parametrization in `tests/unit/test_connector_contract.py` gain
+  `render`, `emit`, `guard`, `http`, `credentials` and `sync`; S3c owns both edits (granted). (3)
+  Workers' commit trailers carry their own herdr session ids; that is acceptable.
 
