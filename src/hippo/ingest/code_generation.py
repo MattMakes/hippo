@@ -621,7 +621,7 @@ def _prior_receipt(run, gen, captured, operation_id):
 # ----------------------------------------------------------------- install, write, publish
 
 
-def _install(run, bundle, accepted, operation_id, coverage_json):
+def _install(run, bundle, accepted, operation_id, coverage_json, registry_fingerprint=None):
     """Callback-free; caller owns the source lock and admits intentional setup changes.
 
     Bootstrap and refresh share this window. The one difference a *bootstrap* makes is
@@ -651,7 +651,17 @@ def _install(run, bundle, accepted, operation_id, coverage_json):
         # converting source in the legacy lane for every transaction of the bootstrap
         # (`context.legacy_lane`, ruling 14). Coverage is written once, here: on a
         # resume the persisted row already carries it plus the store's own keys.
-        store.put_knowledge(gen.replace(coverage_json=coverage_json))
+        #
+        # The registry this build read is recorded once, here, for the same reason
+        # (plan section 3.2). It is outside `Generation.identity_fields`, so it moves no
+        # generation id; it is never hashed, because `generation_checksums` skips the
+        # `Generation` row. A reclaim takes the other branch and writes nothing, so a
+        # rebuild under a different process registry adopts what was stored rather than
+        # rewriting an immutable record - which is the adoption plan section 3.2 asks for,
+        # and why `staged_code._local` normalizes the field away on both sides (ruling R47).
+        store.put_knowledge(
+            gen.replace(coverage_json=coverage_json, registry_fingerprint=registry_fingerprint)
+        )
     store.begin_managed_source(gen.source_id)
     expiry = store._now() + timedelta(seconds=run.options.lease_duration_seconds)
     if existing is None:
@@ -808,6 +818,7 @@ def build_code_source(
     should_stop,
     on_progress=None,
     embedding_cache: EmbeddingCache | None = None,
+    registry_fingerprint: str | None = None,
 ) -> BuildReceipt:
     """Convert, refresh or resume one repository, archive or code file.
 
@@ -815,7 +826,15 @@ def build_code_source(
     a resumed bootstrap has `managed=True` and no pointer, so the prose lane's "managed
     source needs explicit recovery" check would refuse exactly the case this lane
     exists to support.
+
+    `registry_fingerprint` is the frozen registry the runtime lane read (gate CK5, plan
+    section 3.2). It defaults to `None`, so every reviewed caller of this coordinator is
+    unchanged and the pre-kit path records nothing new.
     """
+    if registry_fingerprint is not None and (
+        type(registry_fingerprint) is not str or not registry_fingerprint
+    ):
+        raise ValueError("A registry fingerprint is an explicit nonempty string, or omitted")
     if (
         type(actor) is not BuildActor
         or type(options) is not CodeBuildOptions
@@ -912,7 +931,9 @@ def build_code_source(
         run.check()
         with run.store.transaction():
             run.store._lock_source(source_id)
-            job, fresh = _install(run, merged, accepted, operation_id, merged.coverage_json)
+            job, fresh = _install(
+                run, merged, accepted, operation_id, merged.coverage_json, registry_fingerprint
+            )
         run.job = job
         run.adopt(fresh)
         installed = True

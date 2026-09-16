@@ -69,7 +69,7 @@ INGEST_IMPORT = re.compile(
     re.MULTILINE,
 )
 # The kit modules the port adds. S5b appends `connectors/git/connector.py`.
-PORTED = ("connectors/lanes.py", "connectors/local/connector.py")
+PORTED = ("connectors/lanes.py", "connectors/local/connector.py", "connectors/git/connector.py")
 
 
 def test_only_managed_activation_imports_the_connector_kit() -> None:

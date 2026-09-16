@@ -15,10 +15,13 @@ Failures reach the Source row as a bounded generic code. Source text, raw
 bytes, absolute paths, clone URLs, tokens, prompts, provider bodies, model
 output and the text of an unknown exception never do.
 
-Since gate CK5 the prose hand-off goes through the kit: the `local` connector
-answers the inventory and `connectors.lanes.run_coordinator_lane` calls
-`build_plain_source` with the frozen registry's fingerprint. The coordinator's
-arguments, its capture and its output are unchanged - the fingerprint is the
+Since gate CK5 both hand-offs go through the kit. The `local` connector answers
+the inventory for a pasted text, an uploaded prose file, an archive and a code
+file; the `git` connector clones a repository into this build's own checkout,
+reads its head and answers the walk. In each case
+`connectors.lanes.run_coordinator_lane` calls `build_plain_source` or
+`build_code_source` with the frozen registry's fingerprint. The coordinators'
+arguments, their capture and their output are unchanged - the fingerprint is the
 one field a runtime build records that the pre-kit path did not. This module is
 the only one in `hippo.ingest` that may import `hippo.connectors` (ruling R54),
 and the kit never imports back.
@@ -37,6 +40,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from ..connectors.base import ChangePage, current_registry
+from ..connectors.git.connector import GitConnector, GitSourceConfig
 from ..connectors.lanes import CoordinatorLane, run_coordinator_lane
 from ..connectors.local.connector import LocalConnector, LocalSourceConfig
 from ..knowledge.access import AuthorizationChanged
@@ -722,26 +726,87 @@ def _run_code_build(
     source_id = source["id"]
     options = code_build_options(ctx)
     spec = embedding_spec(ctx.ollama)
+    walk = dict(
+        exclusions=options.exclusions,
+        max_files=options.max_files,
+        max_file_bytes=options.max_file_bytes,
+    )
     if source.get("kind") != "repo":
         saved = ingress_file(ctx, source_id, stored_name=_recorded_name(source))
-        tree = CodeTreeInput(root=saved, kind=source["kind"])
+
+        def build(page: ChangePage, registry_fingerprint: str) -> BuildReceipt:
+            """The lane's derivation half: the reviewed code coordinator, unchanged (ruling R1).
+
+            The connector's inventory is the walk the coordinator's own capture makes over the
+            same saved bytes, so `page` names nothing the capture does not already read.
+            """
+            tree = CodeTreeInput(root=saved, kind=source["kind"])
+            return _build_code(
+                ctx,
+                source_id,
+                actor,
+                operation_id,
+                job_key,
+                refresh,
+                tree,
+                options,
+                spec,
+                registry_fingerprint=registry_fingerprint,
+            )
+
         present(ctx, source_id, **_starting_fields(refresh))
-        return _build_code(ctx, source_id, actor, operation_id, job_key, refresh, tree, options, spec)
+        config = LocalSourceConfig(source_id=source_id, kind=source["kind"], root=str(saved), **walk)
+        return run_coordinator_lane(
+            LocalConnector(), config, CoordinatorLane("code", build), registry=current_registry()
+        )
 
     url = _clone_url(source)
+    # Kept here as well as inside `GitConnector.list_changes`: a URL carrying a token must refuse
+    # at exactly the point it refused before the port, which is before any presentation moves.
     descriptor = repository_descriptor(url)
     checkout = checkout_directory(ctx, source_id, operation_id)
     present(ctx, source_id, **_starting_fields(refresh))
     discard_checkout(ctx, source_id, operation_id)  # what a crashed attempt of this operation left
     try:
-        repos.clone_repo(url, checkout, depth=clone_depth(options))
-        tree = CodeTreeInput(
-            root=checkout.resolve(),
-            kind="repo",
-            repository=descriptor,
-            head_revision=repos.head_revision(checkout, timeout=options.git_timeout_seconds),
+
+        def build(page: ChangePage, registry_fingerprint: str) -> BuildReceipt:
+            """The code coordinator, over the checkout the connector's inventory just cloned.
+
+            The head is read here rather than taken from the page, so the tree the coordinator
+            hashes into generation identity is the expression `_run_code_build` built before the
+            port. History stays the coordinator's: it is a `git` subprocess that needs the
+            extracted symbols, which no connector method may run (plan section 4.2).
+            """
+            tree = CodeTreeInput(
+                root=checkout.resolve(),
+                kind="repo",
+                repository=descriptor,
+                head_revision=repos.head_revision(checkout, timeout=options.git_timeout_seconds),
+            )
+            return _build_code(
+                ctx,
+                source_id,
+                actor,
+                operation_id,
+                job_key,
+                refresh,
+                tree,
+                options,
+                spec,
+                registry_fingerprint=registry_fingerprint,
+            )
+
+        config = GitSourceConfig(
+            source_id=source_id,
+            url=url,
+            checkout=str(checkout),
+            depth=clone_depth(options),
+            git_timeout_seconds=options.git_timeout_seconds,
+            **walk,
         )
-        return _build_code(ctx, source_id, actor, operation_id, job_key, refresh, tree, options, spec)
+        return run_coordinator_lane(
+            GitConnector(), config, CoordinatorLane("code", build), registry=current_registry()
+        )
     finally:
         discard_checkout(ctx, source_id, operation_id)
 
@@ -756,6 +821,8 @@ def _build_code(
     tree: CodeTreeInput,
     options: CodeBuildOptions,
     spec: EmbeddingSpec,
+    *,
+    registry_fingerprint: str | None = None,
 ) -> BuildReceipt:
     # Every raw object is a captured file or the manifest, both bounded by the capture's own
     # limits before anything is written, so the store's per-object cap is the larger of the two.
@@ -776,4 +843,5 @@ def _build_code(
         should_stop=lambda: ctx.jobs.is_cancelled(job_key),
         on_progress=lambda progress: _present_progress(ctx, source_id, progress, refresh=refresh),
         embedding_cache=cache,
+        registry_fingerprint=registry_fingerprint,
     )

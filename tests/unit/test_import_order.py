@@ -31,6 +31,7 @@ MODULES = [
     # and they import only leaves, so every order must still load in a fresh interpreter.
     "hippo.connectors.lanes",
     "hippo.connectors.local.connector",
+    "hippo.connectors.git.connector",
     "hippo.connectors.emit",
     "hippo.connectors.sync",
     "hippo.knowledge.staged_records",
