@@ -346,7 +346,8 @@ Identity is the kit's, not the connector's. `connectors/keys.py` provides one bu
 kind, generated from its `key_template` and `key_prefix`, producing the canonical key array that
 `knowledge/identity.py` hashes. The readable prefixes of spec §4.1 (`repo`, `file`, `fn`, `pr`,
 `commit`, `tbl`, `col`, `proc`, `view`, `coll`, `wi`, `sprint`, `svc`, `team`, `eng`, `inc`, `alert`,
-`doc`, `sec`, `term`) are the built-in kinds' prefixes. The earlier plan's scoping rules apply
+`doc`, `sec`, `term`) are reserved for the connectors that register those kinds; the built-ins are the thirty kinds of
+`knowledge/builtin_types.py` (R13). The earlier plan's scoping rules apply
 unchanged: workspace and provider instance are always the first parts; provider-instance hostnames
 are ASCII or explicit punycode; database identifiers keep their dialect-aware parts; a Jira key is an
 alias, the immutable issue id is the identity.
@@ -405,7 +406,8 @@ and `ingest/code_generation.build_code_source` do today for their two fixed inpu
 5. **Emit.** For each new revision call `emit` in a worker pool, with the stored `TypeMapping` and a
    frozen registry; the runtime forbids network, model and clock access inside the call (§8). Failures
    are `ParseFailure` rows in the batch and become `Generation.coverage_json` counts per family and
-   parser; the previous revision's records stay.
+   parser; the failed revision drops out of the new generation and the previous generation stays
+    queryable (every member revision is re-emitted each run, nothing is carried forward; R37).
 6. **Bind.** Convert the batch to knowledge records (§4): compute identities, verify every span
    against the revision bytes, derive evidence classes, check predicates against the registry, reject
    reverse-direction edges, record the registry fingerprint on the generation and the connector's

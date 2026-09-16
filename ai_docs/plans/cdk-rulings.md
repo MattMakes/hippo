@@ -422,3 +422,24 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   package with its error. Neo4j parity of the two S6 files is root-owned and run beside the S5
   parity files.
 
+## After the CK7 review (`ai_docs/reports/2026-09-15-cdk-code-review.md`, committed at `2095f43`: PASS WITH CHANGES, 0 blockers, 2 majors, 13 minors)
+
+- **R81 — Owners of the fifteen findings.** One fixer slice, `cdk-r7-fix` (brief
+  `ai_docs/handoffs/briefs/cdk-r7-fix.md`), closes F1 (the guard records the violation in
+  thread-local state and `forbid_effects` raises it on exit when the connector swallowed it), F2
+  (`reviewed` leaves every built-in `sources_allowed`, so a connector cannot emit
+  `source="reviewed"`; `human_verified` is reachable only through the review path), F3 (the
+  misnamed guard test, with F1's real test), F5 (`ensure_connector(enabled: bool | None = None)`:
+  `None` creates disabled and leaves an existing row alone; callers updated), F10 (`None` joins
+  `KeyValue` with one key test), F11 (`hippo connector new --family` required), F14's test half
+  (`_m11` runs a second sync), F15 (the failure count's family comes from the revision's
+  classification, else `unknown`, pinned by a two-family fixture). The orchestrator applied F6 and
+  F14's design wording, F7 and F8 (CK6's LadybugDB run joined into its CHECK line; its Neo4j entry
+  exists). F4 (a timeout on the probe route) and F12 (workspace-scoped connector readers and
+  pagination) are Task 15's by name. F9 (unifying the three staged writers) belongs to the slice
+  that retires the pre-kit writers, after the specification's section 5 connectors exist (design
+  §11). F13 (three built-in predicate names that disagree with spec §6's table and that an
+  extension cannot repair) is Task 11's, where the `ticket` and `incident` built-ins arrive;
+  recorded, not changed now, because widening a built-in's endpoint kinds is a vocabulary change
+  the CK1 tests pin.
+
