@@ -2,7 +2,8 @@
 
 Plan `ai_docs/plans/cdk-s3-runtime.md` sections 4.1 and 10.1, with ruling B3/R49 (this is the ONE
 guard; `testing.purity_guard` is this function and nothing patches the process) and review minor m20
-(the forbidden set also names `time.clock_gettime`, `time.clock_gettime_ns`, `time.process_time`,
+(the forbidden set also names `time.clock_gettime`, `time.clock_gettime_ns`, the process and thread
+clocks in both spellings (ruling R65),
 `time.sleep`, thread start, `os.fork`, `os.posix_spawn`, `time.localtime`, `sys.setprofile` and
 `threading.setprofile`).
 
@@ -34,8 +35,9 @@ from hippo.ollama import Ollama
 _INSTANCE = "http://provider.invalid"
 _REFUSAL = "emit must not touch the network, a model, a subprocess, a thread or the clock"
 
-# The whole contract, in one table. Plan section 10.1's set plus m20's names, and nothing else:
-# `time.process_time_ns` and `time.thread_time` are deliberately absent (see the S3a evidence).
+# The whole contract, in one table. Plan section 10.1's set plus m20's names, and nothing else.
+# Ruling R65 closed the S3a evidence's question 1 by reading m20 as "the process and thread
+# clocks", so `time.process_time_ns`, `time.thread_time` and `time.thread_time_ns` are named too.
 EXPECTED_FORBIDDEN_CALLS = (
     "_posixsubprocess.fork_exec",
     "_thread.start_new_thread",
@@ -78,7 +80,10 @@ EXPECTED_FORBIDDEN_CALLS = (
     "time.perf_counter",
     "time.perf_counter_ns",
     "time.process_time",
+    "time.process_time_ns",
     "time.sleep",
+    "time.thread_time",
+    "time.thread_time_ns",
     "time.time",
     "time.time_ns",
 )
@@ -222,6 +227,10 @@ EFFECTS = {
         ("time.clock_gettime_ns",),
     ),
     "process_time": (lambda stack: time.process_time, ("time.process_time",)),
+    # Ruling R65: the process and thread clocks in both spellings.
+    "process_time_ns": (lambda stack: time.process_time_ns, ("time.process_time_ns",)),
+    "thread_time": (lambda stack: time.thread_time, ("time.thread_time",)),
+    "thread_time_ns": (lambda stack: time.thread_time_ns, ("time.thread_time_ns",)),
     "localtime": (lambda stack: time.localtime, ("time.localtime",)),
     "datetime_now": (lambda stack: datetime.datetime.now, ("datetime.now",)),
     "datetime_utcnow": (lambda stack: datetime.datetime.utcnow, ("datetime.utcnow",)),

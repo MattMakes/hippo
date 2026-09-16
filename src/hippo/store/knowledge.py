@@ -589,10 +589,16 @@ class KnowledgeQueries:
             )
 
     def _references(self, record):
+        # Ruling R68(3), with R66(ii): `AssertionVersion.unit_id` is informational, never a
+        # foreign key. Collection deletes a generation's `Unit` rows while a superseded or
+        # retracted version still names one, so treating it as a reference would refuse that
+        # version's next lifecycle write, its checksum and its collection. Every other reference
+        # of every other record is unchanged.
+        exempt = "unit_id" if isinstance(record, k.AssertionVersion) else None
         refs = [
             (target, getattr(record, field))
             for field, target in REFERENCES.get(type(record).__name__, {}).items()
-            if getattr(record, field) is not None
+            if field != exempt and getattr(record, field) is not None
         ]
         refs += [
             (target, value)
@@ -685,6 +691,17 @@ class KnowledgeQueries:
             if reference is None:
                 raise ValueError(f"Missing {name} reference")
             refs.append(reference)
+        # Ruling R68(3) exempts `AssertionVersion.unit_id` from `_references` so that a collected
+        # generation's deleted `Unit` never blocks a later write, checksum or collection of a
+        # version that outlived it. A *new* version must still name a live unit, which is the
+        # guarantee S1b's write order exists for; only a stored version is exempt.
+        if (
+            isinstance(record, k.AssertionVersion)
+            and record.unit_id is not None
+            and self._knowledge_get("AssertionVersion", record.id) is None
+            and self._knowledge_get("Unit", record.unit_id) is None
+        ):
+            raise ValueError("Missing Unit reference")
         workspaces = self._workspaces(record)
         for reference in refs:
             if not isinstance(reference, dict) or "username" not in reference:

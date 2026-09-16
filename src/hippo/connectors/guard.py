@@ -73,7 +73,10 @@ FORBIDDEN_CALLS: tuple[str, ...] = (
     "time.perf_counter",
     "time.perf_counter_ns",
     "time.process_time",
+    "time.process_time_ns",
     "time.sleep",
+    "time.thread_time",
+    "time.thread_time_ns",
     "time.time",
     "time.time_ns",
 )
