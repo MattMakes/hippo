@@ -35,7 +35,7 @@ import httpx
 import pytest
 
 from hippo.access import Principal
-from hippo.connectors import base, emit, guard, sync
+from hippo.connectors import base, emit, sync
 from hippo.connectors import http as provider_http
 from hippo.knowledge import model as k
 from hippo.knowledge import staged_records
@@ -781,6 +781,23 @@ def _m10(world):
         assert world.rows("Generation") == before
 
 
+def _m10b(world):
+    """CK7 F1: neither way of swallowing the refusal lets the sync publish.
+
+    `except Exception` no longer catches an `EmitSideEffect` at all, so the first forbidden call
+    fails the sync where it stands. `except BaseException` still catches it, the rest of that emit
+    runs unguarded, and the guard raises the refusal it recorded on the way out. Either way the
+    violation reported is the *first* forbidden call, not the second.
+    """
+    for catching, reaches_the_second_call in ((Exception, False), (BaseException, True)):
+        swallowing = _SwallowingConnector(world.connector_impl, catching)
+        before = world.rows("Generation")
+        with pytest.raises(sync.ConnectorContractViolation, match="Ollama.embed_one"):
+            world.sync(connector=swallowing)
+        assert swallowing.reached_the_second_call is reaches_the_second_call
+        assert world.rows("Generation") == before
+
+
 def _m11(world):
     failing = _FailingEmitConnector(world.connector_impl, "n2")
     receipt = world.sync(connector=failing)
@@ -971,6 +988,7 @@ _MATRIX = {
     "M8b": _m8b,
     "M9": _m9,
     "M10": _m10,
+    "M10b": _m10b,
     "M11": _m11,
     "M12": _m12,
     "M13": _m13,
@@ -1225,12 +1243,26 @@ class _ViolatingConnector(_Delegating):
         return self._inner.emit(revision, mapping)
 
 
-def test_the_guard_reports_one_violation_per_emit_call(world):
-    """Ruling R65: after a violation CPython unsets the profiler for that thread."""
-    assert issubclass(guard.EmitSideEffect, RuntimeError)
-    assert "time.process_time_ns" in guard.FORBIDDEN_CALLS
-    assert "time.thread_time" in guard.FORBIDDEN_CALLS
-    assert "time.thread_time_ns" in guard.FORBIDDEN_CALLS
+class _SwallowingConnector(_Delegating):
+    """CK7 F1: an `emit` carrying the ordinary broad `except` a third-party connector may well have.
+
+    It makes a second forbidden call after the first was refused, which CPython leaves unguarded
+    because it unset the profiler when the hook raised.
+    """
+
+    def __init__(self, inner, catching):
+        super().__init__(inner)
+        self._catching = catching
+        self.reached_the_second_call = False
+
+    def emit(self, revision, mapping):
+        try:
+            _IDLE_OLLAMA.embed_one("text")
+        except self._catching:  # the connector's own retry
+            pass
+        self.reached_the_second_call = True
+        time.time()
+        return self._inner.emit(revision, mapping)
 
 
 def test_the_record_bundle_stages_alias_candidates(store):

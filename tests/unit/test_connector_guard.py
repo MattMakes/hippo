@@ -281,11 +281,14 @@ def test_the_guard_affects_only_the_entering_thread() -> None:
     seen: dict[str, object] = {}
 
     def worker() -> None:
-        with forbid_effects():
-            seen["worker_profiler"] = sys.getprofile() is not None
-            entered.set()
-            gate.acquire()  # blocks without reading a clock
-            seen["worker_refused"] = _refuses(_imported_time)
+        try:
+            with forbid_effects():
+                seen["worker_profiler"] = sys.getprofile() is not None
+                entered.set()
+                gate.acquire()  # blocks without reading a clock
+                seen["worker_refused"] = _refuses(_imported_time)
+        except EmitSideEffect:
+            seen["worker_reraised"] = True  # F1: `_refuses` swallowed it, the guard raises it again
         seen["worker_profiler_after"] = sys.getprofile()
 
     thread = threading.Thread(target=worker)
@@ -300,7 +303,12 @@ def test_the_guard_affects_only_the_entering_thread() -> None:
         gate.release()
         thread.join(10)
 
-    assert seen == {"worker_profiler": True, "worker_refused": True, "worker_profiler_after": None}
+    assert seen == {
+        "worker_profiler": True,
+        "worker_refused": True,
+        "worker_reraised": True,
+        "worker_profiler_after": None,
+    }
 
 
 def test_the_guard_is_removed_after_a_violation_and_after_a_normal_exit() -> None:
@@ -326,13 +334,15 @@ def test_the_guard_nests_and_restores_a_previous_profiler() -> None:
 
     sys.setprofile(previous)
     try:
-        with forbid_effects():
-            assert sys.getprofile() is not previous
+        # F1: the outer guard raises the refusal `_refuses` swallowed, after restoring `previous`.
+        with pytest.raises(EmitSideEffect):
             with forbid_effects():
-                inner_profiler = sys.getprofile()
-            # Leaving the inner guard re-arms the outer one rather than clearing it.
-            assert sys.getprofile() is inner_profiler
-            refused = _refuses(_imported_time)
+                assert sys.getprofile() is not previous
+                with forbid_effects():
+                    inner_profiler = sys.getprofile()
+                # Leaving the inner guard re-arms the outer one rather than clearing it.
+                assert sys.getprofile() is inner_profiler
+                refused = _refuses(_imported_time)
         assert sys.getprofile() is previous
         events.clear()
         len([])
@@ -361,3 +371,138 @@ def test_the_guard_never_patches_a_module_attribute() -> None:
     assert during_functions == before
     assert (time.time, time.sleep, os.fork, os.system, sys.setprofile, socket.getaddrinfo) == watched
     assert (httpx.Client.send, Ollama.embed, threading.Thread.start, datetime.datetime.now) == before
+
+
+# ------------------------------------------------------------------ F1: a swallowed refusal
+
+
+def test_the_refusal_is_not_an_ordinary_exception() -> None:
+    """CK7 F1: an ordinary broad `except` in a connector's `emit` must not catch the refusal."""
+    assert issubclass(EmitSideEffect, BaseException)
+    assert not issubclass(EmitSideEffect, Exception)
+
+    caught_broadly = None
+    with pytest.raises(EmitSideEffect):
+        with forbid_effects():
+            try:
+                _imported_time()
+            except Exception as error:  # noqa: BLE001 - the connector's own retry, as F1 describes
+                caught_broadly = error
+
+    assert caught_broadly is None
+    assert sys.getprofile() is None
+
+
+def test_a_swallowed_violation_still_leaves_the_guard() -> None:
+    """CK7 F1: CPython unsets the profiler when a hook raises, so the rest of the call is unguarded.
+
+    The guard records the refusal before raising it and re-raises it on the way out, so an `emit`
+    that swallows it - here with the `except BaseException` that is the only way left to swallow it
+    at all - still fails.
+    """
+    swallowed = False
+
+    with pytest.raises(EmitSideEffect) as caught:
+        with forbid_effects():
+            try:
+                _imported_time()
+            except BaseException:  # noqa: BLE001 - a connector determined to swallow the refusal
+                swallowed = True
+
+    assert swallowed
+    assert str(caught.value).startswith("emit called ")
+    assert "time.time" in str(caught.value)
+    assert _REFUSAL in str(caught.value)
+    assert sys.getprofile() is None
+
+
+def test_the_guard_reports_one_violation_per_emit_call() -> None:
+    """Ruling R65, honestly: the profiler is gone after the first refusal, so the second is unseen.
+
+    The violation the guard reports is therefore the first forbidden call of that `emit`, and there
+    is exactly one of them however many the connector goes on to make.
+    """
+    second_call_ran = False
+
+    with pytest.raises(EmitSideEffect) as caught:
+        with forbid_effects():
+            try:
+                _imported_time()
+            except BaseException:  # noqa: BLE001 - a connector determined to swallow the refusal
+                pass
+            # Unguarded, because CPython unset the profiler when the hook raised.
+            os.getpid()
+            second_call_ran = True
+            datetime.datetime.now(datetime.UTC)
+
+    assert second_call_ran
+    assert "time.time" in str(caught.value)
+    assert "datetime" not in str(caught.value)
+    assert sys.getprofile() is None
+
+
+def test_a_swallowed_violation_does_not_leak_into_the_next_guard() -> None:
+    with pytest.raises(EmitSideEffect):
+        with forbid_effects():
+            try:
+                _imported_time()
+            except BaseException:  # noqa: BLE001 - a connector determined to swallow the refusal
+                pass
+
+    with forbid_effects():
+        assert json.dumps({"pure": True}) == '{"pure": true}'
+    assert sys.getprofile() is None
+
+
+def test_a_propagating_violation_is_not_raised_a_second_time_on_the_way_out() -> None:
+    """The recorded refusal is cleared by the guard that raised it, whichever path raised it."""
+    with pytest.raises(EmitSideEffect):
+        with forbid_effects():
+            _imported_time()
+
+    with forbid_effects():
+        pass
+    assert sys.getprofile() is None
+
+
+def test_an_unrelated_failure_inside_the_guard_still_propagates() -> None:
+    """Nothing is raised on the way out when the body is already failing for its own reason."""
+    with pytest.raises(ValueError, match="the connector's own bug"):
+        with forbid_effects():
+            raise ValueError("the connector's own bug")
+    assert sys.getprofile() is None
+
+
+def test_a_swallowed_violation_fails_assert_emit_pure() -> None:
+    """CK7 F1: `hippo connector validate` catches the swallowing connector too."""
+    from hippo.connectors.testing import ContractViolation, assert_emit_pure
+
+    class _Swallowing:
+        def emit(self, revision, mapping):
+            try:
+                _imported_time()
+            except BaseException:  # noqa: BLE001 - a connector determined to swallow the refusal
+                pass
+            return "a batch this connector never gets to return"
+
+    with pytest.raises(ContractViolation) as caught:
+        assert_emit_pure(_Swallowing(), object(), object())
+
+    assert caught.value.assertion == "emit_pure"
+    assert "time.time" in str(caught.value)
+    assert sys.getprofile() is None
+
+
+def test_a_nested_guard_does_not_clear_the_enclosing_guards_record() -> None:
+    """F1: the record belongs to the region that made the call, not to the thread's last guard."""
+    with pytest.raises(EmitSideEffect) as caught:
+        with forbid_effects():
+            try:
+                _imported_time()
+            except BaseException:  # noqa: BLE001 - a connector determined to swallow the refusal
+                pass
+            with forbid_effects():  # a nested region that is itself clean
+                json.dumps({"pure": True})
+
+    assert "time.time" in str(caught.value)
+    assert sys.getprofile() is None
