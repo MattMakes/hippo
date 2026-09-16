@@ -335,4 +335,15 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   ref, or on a node of a family the connector owns, is accepted and ignored (`label_template` wins
   there), and the first emission of an object keeps its name. S6 puts the label on the foreign
   endpoint's `NodeEmission` (`NodeRef(kind="service", key=..., instance=..., label="checkout")`).
+- **R72 — S5a's findings (lane and local connector merged at `8f91969`).** `lanes.py` raises its
+  own `LaneRefused` (R54 over the plan's `ManagedDispatchError`); the local descriptor declares
+  `inventory=True`; the loader skips an in-repo directory named after a built-in kind (R69 as
+  landed). For S5b: the fingerprint-adoption branch in `_generation` is unfalsifiable on the prose
+  path (the row is written only when absent and the preparation compare cancels it), so S5b must
+  test it on the code lane where a reclaim may rewrite the row, and say so if it stays
+  unfalsifiable; a bare `Registry.with_builtins()` fingerprints identically to the process registry,
+  so a "different registry" test registers a probe kind first; the local descriptor declares the
+  superset both lanes write and S5a pins only coverage of the prose subset, so S5b extends the pin
+  to the archive and code worlds and may narrow the declaration; `tests/fakes/connector_parity.py`
+  is S5b's to extend (its Neo4j branch is written but unexercised, root-owned).
 

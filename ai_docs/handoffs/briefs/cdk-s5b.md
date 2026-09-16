@@ -50,3 +50,15 @@ line, log paths, the parity result, overrides and open questions.
 
 REPORT: `horch note` after each step; `horch tell orchestrator "[<role>] BLOCKED: ..."` only for a
 question the plan, the rulings and the review do not answer.
+
+## Amendments (rulings R69, R72; read `evidence-s5a.md` whole first)
+
+- Follow R72: falsify the fingerprint-adoption branch on the code lane (or record that it stays
+  unfalsifiable and why); register a probe kind before any "different registry" assertion; extend
+  the descriptor coverage pin to the archive and code worlds; extend `connector_parity.py` rather
+  than duplicating it; `LocalConnector.list_changes` and `_member` raise `NotImplementedError`
+  naming you for archives and code files, which you replace.
+- The loader keeps `git` as a built-in entry by the same rule as `local` (R69); add the git case
+  to that loader test (one granted line in `tests/unit/test_connector_loader.py`).
+- Base your worktree on the HEAD named in the spawn message, which includes S5a, S3b and S4a.
+

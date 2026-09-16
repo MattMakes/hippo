@@ -488,3 +488,11 @@ early under R67). Every implementer brief exists (`cdk-s2b.md`, `cdk-s3c.md`, `c
 after S3c; S4b after S4a; S5b after S5a, S3b and S4a; S6 after S4b and S5b; then the gate checker
 over CK1–CK7, the CD9 line at N=8 (root-owned, one process), Neo4j parity for CK3 and CK5, and the
 independent review (CK7). Rulings through R67.
+
+**CDK implementation state (2026-09-16, early).** Merged: S3b `fd9e840`, S2b `6f90f96`, S2b-fix
+`61757cb`, S5a `8f91969` (prose path byte-identical through the lane; fingerprint the only
+difference). Running: S3c (`wp/s3c`, brief `cdk-s3c.md` with amendments through R70). Next: S4a
+after S3c; S5b after S4a (brief amended through R72); S4b after S4a; S6 after S4b and S5b (brief
+amended through R71). Rulings through R72. Root-owned still to run: CD9 at N=8, Neo4j parity for
+CK3 and CK5, the gate checker over CK1–CK7, and the independent code review.
+
