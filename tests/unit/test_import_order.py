@@ -26,6 +26,9 @@ MODULES = [
     "hippo.mcp_server",
     "hippo.cli",
     "hippo.connectors.loader",
+    "hippo.connectors.emit",
+    "hippo.connectors.sync",
+    "hippo.knowledge.staged_records",
 ]
 
 

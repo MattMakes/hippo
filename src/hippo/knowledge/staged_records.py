@@ -122,6 +122,9 @@ class RecordBundle:
     versions: tuple[k.AssertionVersion, ...]
     supports: tuple[k.AssertionSupport, ...]
     evidence_members: tuple[k.GenerationEvidenceMember, ...]
+    # Ruling R68(1): alias candidates are part of an emission batch (design section 7 step 7), so
+    # the generic writer stages them. Additive and defaulted, because no writer fills it yet.
+    aliases: tuple[k.Alias, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.generation) is not k.Generation or type(self.configuration_json) is not str:
@@ -139,6 +142,7 @@ class RecordBundle:
             ("assertions", k.Assertion),
             ("versions", k.AssertionVersion),
             ("supports", k.AssertionSupport),
+            ("aliases", k.Alias),
             ("evidence_members", k.GenerationEvidenceMember),
         ):
             object.__setattr__(self, name, _typed(getattr(self, name), kind, f"Bundle {name}"))
@@ -158,6 +162,7 @@ class RecordBundle:
             *self.units,
             *self.versions,
             *self.supports,
+            *self.aliases,
         )
 
     def _closed(self) -> None:
@@ -206,6 +211,9 @@ class RecordBundle:
         for view in self.views:
             present("EvidenceSpan", view.span_id)
             present("DerivedRecord", view.derived_record_id)
+        for alias in self.aliases:
+            present("KnowledgeObject", alias.target_object_id)
+            present("EvidenceSpan", *alias.support_span_ids)
         for edge in self.derived_dependencies:
             present("DerivedRecord", edge.derived_record_id)
         revisions = {member.artifact_revision_id for member in self.revision_members}
@@ -325,6 +333,9 @@ def _groups(bundle):
                 records.extend(selected(support))
                 probes.append(exact(support))
         yield DependencyGroup(tuple(records), tuple(probes), (("Assertion", assertion),))
+    # An alias names an object and its support spans, so it follows both (ruling R68(1)).
+    for alias in bundle.aliases:
+        yield DependencyGroup(selected(alias), (exact(alias),))
 
 
 def _payload(record):

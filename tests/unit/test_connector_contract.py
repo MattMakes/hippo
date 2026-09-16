@@ -874,7 +874,19 @@ def test_knowledge_package_never_imports_connectors() -> None:
 
 @pytest.mark.parametrize(
     "module",
-    ["hippo.connectors", "hippo.connectors.base", "hippo.connectors.keys", "hippo.connectors.classify"],
+    [
+        "hippo.connectors",
+        "hippo.connectors.base",
+        "hippo.connectors.keys",
+        "hippo.connectors.classify",
+        "hippo.connectors.render",
+        "hippo.connectors.emit",
+        "hippo.connectors.guard",
+        "hippo.connectors.http",
+        "hippo.connectors.credentials",
+        "hippo.connectors.loader",
+        "hippo.connectors.sync",
+    ],
 )
 def test_connectors_modules_import_first_in_a_fresh_interpreter(module: str) -> None:
     result = subprocess.run(
