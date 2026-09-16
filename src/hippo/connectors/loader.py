@@ -275,14 +275,19 @@ def _already_registered(registry: Registry, extension: TypeExtension) -> bool:
     """Whether every name this extension declares is present in `registry`, and equal where it can be.
 
     The definition sections are compared whole, so a package that changed under a running process is
-    not reported as the vocabulary the process actually serves. Families, evidence sources and the
-    two name-only sections are compared by membership: `evidence_source` returns a name, and the
-    definition accessor ruling R62 gives S1b does not exist yet (re-review N13).
+    not reported as the vocabulary the process actually serves. Evidence sources are among them
+    (ruling R64): `evidence_source` returns only a name, so an extension source whose family or
+    evidence class changed under an unchanged name would have read as "already registered" and the
+    process would serve a class it never registered. `Registry.evidence_source_definition` (R62)
+    returns the registered definition unchanged, so the comparison is the same one the other three
+    sections make. Families and the two name-only sections stay membership comparisons, because
+    they are names and nothing else.
     """
     definitions = (
         (registry.object_kind, extension.object_kinds),
         (registry.predicate, extension.predicates),
         (registry.locator_kind, extension.locator_kinds),
+        (registry.evidence_source_definition, extension.evidence_sources),
     )
     for accessor, declared in definitions:
         for definition in declared:
@@ -293,7 +298,6 @@ def _already_registered(registry: Registry, extension: TypeExtension) -> bool:
                 return False
     memberships = (
         (registry.families(), extension.families),
-        (registry.evidence_sources(), tuple(source.name for source in extension.evidence_sources)),
         (registry.artifact_kinds(), extension.artifact_kinds),
         (registry.connector_kinds(), extension.connector_kinds),
     )
