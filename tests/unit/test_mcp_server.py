@@ -27,6 +27,7 @@ TOOL_NAMES = {
     "hippo_blast_radius",
     "hippo_exception_path",
     "hippo_history",
+    "hippo_connectors",
 }
 MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 

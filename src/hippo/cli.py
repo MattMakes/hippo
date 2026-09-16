@@ -959,7 +959,7 @@ def _connector_validate(args: argparse.Namespace) -> int:
     if args.update_golden:
         # The diff above is the point of the run, so it is not a failure: the developer asked for
         # the expected files to be rewritten and now reads what changed.
-        print(f"{report.connector} {report.version}: goldens written")
+        print(f"{report.connector} {report.version}: goldens and the registry lock written")
         return 0
     if report.passed:
         print(f"{report.connector} {report.version}: passed ({report.scope})")

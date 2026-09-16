@@ -402,8 +402,11 @@ produces the same bytes on every backend and in every run.
 hippo connector validate . --update-golden
 ```
 
-rewrites them and prints the diff. Read the diff before you commit it: that is the whole point of
-a golden. A change you cannot explain in one sentence is a bug you have just blessed.
+rewrites the goldens **and `fixtures/registry.lock.json`**, and prints the diff of the goldens. Read
+the diff before you commit it: that is the whole point of a golden. A change you cannot explain in
+one sentence is a bug you have just blessed. The lock is rewritten rather than compared on that run,
+because re-goldening is the act that resolves a stale lock; the next plain `validate` is what holds
+the new one to `registry_version_bump`.
 
 ## 8. `hippo connector validate`
 

@@ -3,7 +3,7 @@ The MCP server: lets an AI client (Claude Code, Claude Desktop, Cursor, ...)
 use hippo's memory as tools.
 
 MCP ("Model Context Protocol") is a small standard for "here are some tools
-you can call". We expose nine:
+you can call". We expose ten:
 
     hippo_search          rank passages for a question (no LLM answer)
     hippo_ask             search, then let the local LLM answer from the passages
@@ -14,12 +14,16 @@ you can call". We expose nine:
     hippo_blast_radius    who would feel a change to a symbol, level by level
     hippo_exception_path  how a function reaches an exception class
     hippo_history         the commits that touched a symbol, newest first
+    hippo_connectors      the installed connectors, one instance's probe result, or a validation
 
-The last four walk the code graph a repository source builds. They answer in
+`hippo_explain_path`, `hippo_blast_radius`, `hippo_exception_path` and
+`hippo_history` walk the code graph a repository source builds. They answer in
 the same shapes as `/api/code/*` (`web/routes/code.py` holds the builders both
 surfaces call), and a name that could mean several symbols comes back as a
 ToolError listing them, because a tool's error message is the only thing an MCP
-client is shown.
+client is shown. `hippo_connectors` is the same arrangement over
+`web/routes/connectors.py`: the operator answers of `/api/connectors`, behind
+the same `manage_sources` capability, and never a probe.
 
 Who is calling (hippo/access.py): every tool works on the caller's slice of
 the memory. Over HTTP the caller is identified by a session cookie or `Authorization: Bearer
@@ -95,6 +99,12 @@ from .web.routes.code import (
     history_payload,
     path_payload,
 )
+from .web.routes.connectors import (
+    ConnectorNotFound,
+    classification_payload,
+    connectors_payload,
+    validation_payload,
+)
 from .web.security import ANY_HOST
 
 log = logging.getLogger(__name__)
@@ -109,7 +119,8 @@ INSTRUCTIONS = (
     "hippo_remember to store new text, hippo_sources to see what is stored, "
     "and hippo_whoami to learn which part of the memory you may see. "
     "When the memory holds a code repository, hippo_explain_path, hippo_blast_radius, "
-    "hippo_exception_path and hippo_history walk its code graph directly."
+    "hippo_exception_path and hippo_history walk its code graph directly. "
+    "hippo_connectors reports which connectors are installed and whether they still validate."
 )
 TOKEN_ENV = "HIPPO_TOKEN"
 
@@ -227,7 +238,7 @@ class TransportBoundServer(MCPServer):
 
 
 def build_server(ctx: AppContext, *, transport: CredentialTransport = "http") -> MCPServer:
-    """Create the MCP server with the nine hippo tools bound to this AppContext."""
+    """Create the MCP server with the ten hippo tools bound to this AppContext."""
     server = TransportBoundServer(credential_transport=transport)
 
     @server.tool(
@@ -329,6 +340,23 @@ def build_server(ctx: AppContext, *, transport: CredentialTransport = "http") ->
         symbol: str, limit: int = DEFAULT_HISTORY_LIMIT, mcp_ctx: Context | None = None
     ) -> dict[str, Any]:
         return history_tool(ctx, symbol, limit, principal=caller(ctx, mcp_ctx, transport=transport))
+
+    @server.tool(
+        description=(
+            "hippo's connectors: with no argument, the list; with connector_id, that instance's "
+            "stored classification (the probe result); with validate, the contract validation of "
+            "that installed connector kind. Needs the manage_sources capability."
+        )
+    )
+    def hippo_connectors(
+        connector_id: str | None = None, validate: str | None = None, mcp_ctx: Context | None = None
+    ) -> dict[str, Any]:
+        return connectors_tool(
+            ctx,
+            connector_id=connector_id,
+            validate=validate,
+            principal=caller(ctx, mcp_ctx, transport=transport),
+        )
 
     return server
 
@@ -485,6 +513,35 @@ def history_tool(
 ) -> dict[str, Any]:
     with _answering(), _code_graph(ctx, principal) as (index, _theta):
         return _code_answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)
+
+
+def connectors_tool(
+    ctx: AppContext,
+    connector_id: str | None = None,
+    validate: str | None = None,
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    """The three read answers of `/api/connectors`, built by the route module's own builders.
+
+    Read-only apart from validation: this tool never runs `probe`, because an MCP client that could
+    make the server call a provider is Task 15's decision, not this slice's. Validation reads the
+    installed package's own fixtures and opens no store.
+    """
+    principal = principal or Principal.open()
+    if not principal.can("manage_sources"):
+        raise ToolError(f"your role ({principal.role_name}) may not do this: it needs 'manage_sources'")
+    with _answering():
+        if connector_id is not None and validate is not None:
+            raise ValueError("Choose connector_id or validate, not both")
+        try:
+            if connector_id is not None:
+                return {"classification": classification_payload(ctx, connector_id)}
+            if validate is not None:
+                return {"validation": validation_payload(validate)}
+            return {"connectors": connectors_payload(ctx)}
+        except ConnectorNotFound as exc:
+            # The caller's own name, and nothing that was read on the way to not finding it.
+            raise ToolError(str(exc)) from exc
 
 
 def remember_tool(

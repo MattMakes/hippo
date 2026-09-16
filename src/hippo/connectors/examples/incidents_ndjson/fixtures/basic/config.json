@@ -1,1 +1,11 @@
-{"export_dir": ".", "partition": "export"}
+{
+  "export_path": "export/incidents.ndjson",
+  "instance_url": "https://incidents.example",
+  "catalog_instance": "https://catalog.example",
+  "principal_map": {
+    "users": {
+      "pd-user-7": "u-restricted-reader"
+    },
+    "groups": {}
+  }
+}

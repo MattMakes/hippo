@@ -113,7 +113,7 @@ Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for all proje
 }
 ```
 
-Cursor lists the nine tools under Settings, MCP.
+Cursor lists the ten tools under Settings, MCP.
 
 ## stdio alternative: `hippo mcp`
 
@@ -131,11 +131,12 @@ Remember that this opens the database file itself, so stop `hippo serve` first
 Nothing may be printed to stdout in this mode (it is the protocol channel);
 hippo sends its logs to stderr.
 
-## The nine tools
+## The ten tools
 
-Five are about the memory as a whole. The other four answer structural questions about indexed
+Five are about the memory as a whole. Four answer structural questions about indexed
 source code, and only return anything once a repository has been indexed (see "Code" in the
-README). All nine work on the part of the memory the caller may see.
+README). The tenth is for operators: it reports which connectors are installed. All ten work on
+the part of the memory the caller may see.
 
 ### `hippo_search(question, top_k=5)`
 
@@ -458,3 +459,65 @@ therefore only takes effect on the next index of that source. A commit is attrib
 when its diff touched the symbol's lines *as they were at that commit*, so a function that has since
 moved is still credited correctly. Renames are the exception: history before a rename is not carried
 across.
+
+## The connector tool
+
+### `hippo_connectors(connector_id=None, validate=None)`
+
+What connectors this installation has, what one instance holds, and whether an installed kind still
+validates. It needs the **`manage_sources`** capability, because a connector names a provider
+instance and, once probed, the shape of somebody's tracker. The three modes are the three read
+answers of `/api/connectors`, built by the same functions the HTTP routes call, so the two surfaces
+cannot drift apart.
+
+With no argument, the list:
+
+```json
+{"name": "hippo_connectors", "arguments": {}}
+```
+
+```json
+{
+  "connectors": [
+    {"name": "incidents_ndjson", "version": "1", "families": ["incident"], "origin": "in-repo",
+     "enabled": true, "error": null,
+     "instances": [{"id": "connector-5b0a...", "enabled": true,
+                    "partitions": [{"partition": "incidents", "family": "incident"}]}]}
+  ]
+}
+```
+
+`origin` is `built-in`, `in-repo` or `entry point`, and rows are keyed on both together: an entry
+point may legitimately share a name with a package it shadows, and both are listed. `error` is the
+reason a discovered connector is not registered — an exception class name, `not allowlisted`,
+`NameMismatch`, `DuplicateName`, or `frozen`, which means the kind was enabled after this process
+started and will register at the next restart.
+
+With `connector_id`, that instance's stored classification — the result of the last probe, not a new
+one. This tool never runs a probe: making the server call a provider is an operator action, and it
+lives on `POST /api/connectors/{id}/probe` and `hippo connector probe`.
+
+```json
+{"name": "hippo_connectors", "arguments": {"connector_id": "connector-5b0a..."}}
+```
+
+With `validate`, the contract validation of an installed **kind** (not an instance):
+
+```json
+{"name": "hippo_connectors", "arguments": {"validate": "incidents_ndjson"}}
+```
+
+```json
+{
+  "connector": "incidents_ndjson", "version": "1", "scope": "contract", "passed": true,
+  "registry_diff": ["+ kind incident", "+ predicate AFFECTS"],
+  "error": null, "violations": [], "cases": []
+}
+```
+
+`scope` is always `contract`: registration, the registry lock, the capture assertions and the
+emission contract over every fixture case. It deliberately stops short of the golden run, which
+rebuilds each case into a scratch database and belongs in `hippo connector validate`, not in a
+request. `cases` is therefore empty here and full there.
+
+Passing both `connector_id` and `validate` is refused: they are two different questions.
