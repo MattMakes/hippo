@@ -12,8 +12,12 @@ process-wide patch would break the coordinator that installed it; and `datetime.
 attribute of an immutable C type that cannot be patched at all.
 
 CPython reports a call before it runs it, so a refused call never happens. It also unsets the
-profiler for the thread when a profile hook raises, which is why a violation ends the guarded region
-in practice: the `EmitSideEffect` propagates to the `emit` call and the runtime fails the sync.
+profiler for the thread when a profile hook raises, so the rest of that call is unguarded. Review
+CK7 finding F1 closed the two ways a connector could live in that gap: the hook records the refusal
+on the thread's state before raising and `forbid_effects` raises the record on the way out, so a
+swallowed refusal still fails the sync; and `EmitSideEffect` is a `BaseException`, so an ordinary
+broad `except` never catches it in the first place. The refusal a guard reports is therefore the
+*first* forbidden call of that region, exactly one per `emit` call.
 """
 
 from __future__ import annotations
@@ -99,8 +103,14 @@ _OWNER_MATCHED = frozenset(
 )
 
 
-class EmitSideEffect(RuntimeError):
-    """emit touched the network, a model, a subprocess, a thread or the clock."""
+class EmitSideEffect(BaseException):
+    """emit touched the network, a model, a subprocess, a thread or the clock.
+
+    Review CK7 finding F1: a `BaseException` rather than a `RuntimeError`, so the ordinary broad
+    `except Exception` a third-party `emit` may well carry cannot catch the refusal. The two call
+    sites that must see it name the class (`sync._emit`, `testing.assert_emit_pure`) and both name
+    it before their broad handlers.
+    """
 
 
 def _resolve(dotted: str) -> object:
@@ -178,7 +188,11 @@ def _hook(frame, event, arg):
     else:
         return None
     if refused is not None:
-        raise EmitSideEffect(f"emit called {refused}; {REFUSAL}")
+        # F1: recorded before it is raised, because CPython unsets the profiler for this thread as
+        # soon as this hook raises. Whatever the connector does with the exception, `forbid_effects`
+        # finds the record on the way out.
+        _state.violation = f"emit called {refused}; {REFUSAL}"
+        raise EmitSideEffect(_state.violation)
     return None
 
 
@@ -190,14 +204,26 @@ def forbid_effects() -> Iterator[None]:
     installed before the outermost guard is put back untouched. `armed` brackets the two
     `sys.setprofile` calls because `sys.setprofile` is itself forbidden (m20): without it, leaving
     the guard would trip the guard.
+
+    Review CK7 finding F1: a refusal the body swallowed is raised here instead, so a guarded region
+    that made a forbidden call fails however the body treated the exception. An enclosing guard's
+    record is saved and put back, so a nested guard cannot clear it.
     """
     previous = sys.getprofile()
+    enclosing = getattr(_state, "violation", None)
+    _state.violation = None
     _state.armed = False
     sys.setprofile(_hook)
     _state.armed = True
+    propagating = True
     try:
         yield
+        propagating = False
     finally:
         _state.armed = False
         sys.setprofile(previous)
         _state.armed = previous is _hook
+        swallowed = _state.violation
+        _state.violation = enclosing
+        if swallowed is not None and not propagating:
+            raise EmitSideEffect(swallowed)

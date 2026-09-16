@@ -254,6 +254,29 @@ def world(registry) -> World:
     return World(registry)
 
 
+@pytest.fixture
+def builtin_world(registry) -> World:
+    """A connector of the `service` family, so a built-in predicate of that family binds."""
+    return World(
+        registry,
+        descriptor=descriptor(families=("service",), kinds=("service",), predicates=("DEPENDS_ON",)),
+    )
+
+
+@pytest.fixture
+def reviewing_world() -> World:
+    """An extension that declares `reviewed` in its own `sources_allowed`, which it may."""
+    extension = fixture_extension()
+    widened = fixture_predicate(sources_allowed=frozenset({"metadata", "rule", "reviewed"}))
+    with extension_scope() as scoped:
+        scoped.register(
+            extension.model_copy(update={"predicates": (widened, extension.predicates[1])}),
+            declared_families=("incident",),
+        )
+        scoped.freeze()
+        yield World(scoped)
+
+
 # ------------------------------------------------------------------ emission helpers
 
 
@@ -1107,6 +1130,65 @@ def test_source_outside_sources_allowed_is_refused(world) -> None:
         )
     assert str(refused.value) == (
         "AFFECTS_FIXTURE does not accept source apm; allowed: ['metadata', 'pager_pull', 'rule']"
+    )
+
+
+def test_no_builtin_predicate_admits_the_reviewed_source() -> None:
+    """CK7 F2: `reviewed` is the reconciliation queue's source (spec 4.3), never a connector's.
+
+    `evidence_class(registry, family, "reviewed", None)` is `human_verified` for both families, so
+    any predicate that admitted the source let a connector store a human-verified edge that no
+    human verified. None of the thirty-three built-ins admits it now, the identity one included.
+    """
+    builtins = Registry.with_builtins()
+    names = sorted(builtins.predicates())
+    assert len(names) == 33
+    assert [name for name in names if "reviewed" in builtins.predicate(name).sources_allowed] == []
+    # The source stays registered and keeps both derivation rows: spec 4.3's acceptance path writes
+    # `human_verified` through `update_knowledge`, not through the binder (Task 12).
+    assert "reviewed" in builtins.evidence_sources()
+    assert EVIDENCE_CLASS_DERIVATION[("deterministic", "reviewed", None)] == "human_verified"
+    assert EVIDENCE_CLASS_DERIVATION[("probabilistic", "reviewed", None)] == "human_verified"
+    assert emit.evidence_class(builtins, "deterministic", "reviewed", None) == "human_verified"
+
+
+def test_a_builtin_edge_with_source_reviewed_is_refused_at_bind(builtin_world) -> None:
+    """The bind path, not only the table: a built-in predicate no longer accepts the source."""
+    other = service_emission(ref=service_ref("payments"), attrs={"name": "payments"})
+    depends_on = base.EdgeEmission(
+        subject=service_ref(),
+        predicate="DEPENDS_ON",
+        object=service_ref("payments"),
+        family="deterministic",
+        source="reviewed",
+        weight=1.0,
+        support=(base.SupportEmission(spans=(lines_span(3, 3),)),),
+    )
+    with pytest.raises(emit.BindRefused) as refused:
+        builtin_world.bind(
+            base.EmissionBatch(nodes=(service_emission(), other), edges=(depends_on,)),
+            mapping=base.TypeMapping(family="service"),
+        )
+    assert str(refused.value) == ("DEPENDS_ON does not accept source reviewed; allowed: ['metadata', 'rule']")
+
+
+def test_an_extension_predicate_that_declares_reviewed_is_refused_anyway(reviewing_world) -> None:
+    """CK7 F2's backstop: `sources_allowed` is the extension's to write, `reviewed` is not.
+
+    Dropping the source from the built-ins is not enough on its own - an extension predicate may
+    list any registered evidence source, and `reviewed` is registered so that the acceptance path
+    can write it. This refusal is what keeps the class out of the binder for good.
+    """
+    with pytest.raises(emit.BindRefused) as refused:
+        reviewing_world.bind(
+            base.EmissionBatch(
+                nodes=(node_emission(), service_emission()),
+                edges=(edge_emission(source="reviewed", metadata_origin=None),),
+            )
+        )
+    assert str(refused.value) == (
+        "AFFECTS_FIXTURE: reviewed is the reconciliation queue's source (spec 4.3); "
+        "emit the rule you derived the fact from"
     )
 
 

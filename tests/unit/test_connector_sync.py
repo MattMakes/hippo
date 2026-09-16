@@ -4,8 +4,9 @@ Plan `ai_docs/plans/cdk-s3-runtime.md` Task S3c (section 12), with sections 4.7,
 the contract. Rulings and review findings that bind this file: R48/B2 (a span keeps its first
 capture's policy, recorded in `ArtifactRevision.metadata_json["span_policy_id"]`; row M8b),
 R49/B4 (`connector_id` on the entry, the stored-classification refusal, `FAULT_POINTS`,
-`contextvars.copy_context()` per emit worker), R51/M5 (`ensure_connector` defaults to
-`enabled=False`; a disabled instance is refused), R52/M3 and M4 (a stored policy is refreshed only
+`contextvars.copy_context()` per emit worker), R51/M5 with review CK7 F5 (`ensure_connector`
+creates an instance disabled and `enabled=None` leaves an existing one alone; a disabled instance
+is refused), R52/M3 and M4 (a stored policy is refreshed only
 inside half its TTL, row M21; `no_changes` is decided after the candidate generation), M15
 (`fetch` of an absent id raises `ProviderNotFoundError`), R46/m7 (each registered definition equals
 `descriptor.extension`), R60/R-S3-7 (a no-argument `FixtureConnector`, `fixtures/basic` with two
@@ -30,12 +31,13 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from hippo.access import Principal
-from hippo.connectors import base, emit, guard, sync
+from hippo.connectors import base, emit, sync
 from hippo.connectors import http as provider_http
 from hippo.knowledge import model as k
 from hippo.knowledge import staged_records
@@ -52,7 +54,7 @@ from tests.fakes.fixture_connector import (
     FixtureConnector,
     FixtureProvider,
 )
-from tests.fakes.fixture_connector.types import FIXTURE_EXTENSION
+from tests.fakes.fixture_connector.types import FIXTURE_EXTENSION, FIXTURE_FAMILY
 
 PARTITION = "notes"
 CASE = Path(__file__).resolve().parents[1] / "fakes" / "fixture_connector" / "fixtures" / "basic"
@@ -781,11 +783,70 @@ def _m10(world):
         assert world.rows("Generation") == before
 
 
+def _m10b(world):
+    """CK7 F1: neither way of swallowing the refusal lets the sync publish.
+
+    `except Exception` no longer catches an `EmitSideEffect` at all, so the first forbidden call
+    fails the sync where it stands. `except BaseException` still catches it, the rest of that emit
+    runs unguarded, and the guard raises the refusal it recorded on the way out. Either way the
+    violation reported is the *first* forbidden call, not the second.
+    """
+    for catching, reaches_the_second_call in ((Exception, False), (BaseException, True)):
+        swallowing = _SwallowingConnector(world.connector_impl, catching)
+        before = world.rows("Generation")
+        with pytest.raises(sync.ConnectorContractViolation, match="Ollama.embed_one"):
+            world.sync(connector=swallowing)
+        assert swallowing.reached_the_second_call is reaches_the_second_call
+        assert world.rows("Generation") == before
+
+
 def _m11(world):
+    """A revision-level emit failure is counted, and R37's DV1 decides what happens to its records.
+
+    Review CK7 finding F14: the design read "the previous revision's records stay", which DV1 - every
+    member revision re-emitted, nothing carried forward - contradicts. A clean generation comes
+    first, so the failing revision has records to lose; the second sync is provoked by a change to a
+    *different* note, so n2 itself is unchanged and is re-emitted only because DV1 says so. Its
+    records are absent from the new generation, and it is the previous *generation* that stays
+    queryable, records and all.
+    """
+    clean = world.sync(connector=_FailingEmitConnector(world.connector_impl, "never-matches"))
+    assert clean.outcome == "published"
+    assert clean.coverage["emit_failed"] == {}
+    before = _unit_texts(world, clean.generation_id)
+    assert any("/n2" in text for text in before)
+
+    # The change is to the *other* note, so n2 is unchanged and is re-emitted only because DV1
+    # re-emits every member revision. Its emit is what fails.
+    world.provider.put_note(_note(body="A change to the other note.", updated="2026-09-22T09:00:00Z"))
     failing = _FailingEmitConnector(world.connector_impl, "n2")
+    second = world.sync(connector=failing)
+    assert second.outcome == "published"
+    assert second.coverage["emit_failed"] == {FIXTURE_FAMILY: 1}
+
+    # DV1: n2 is still a member of the new generation, and holds no record in it.
+    members = {
+        row.artifact_revision_id for row in world.rows("GenerationMember", generation_id=second.generation_id)
+    }
+    n2_revision = _revision_of(world, "n2")
+    assert n2_revision in members
+    assert not any("/n2" in text for text in _unit_texts(world, second.generation_id))
+
+    # The previous generation is what stays queryable, with every record it was published with.
+    assert _unit_texts(world, clean.generation_id) == before
+    assert world.store.collect_generation(clean.generation_id).blocked_reason in (
+        None,
+        "snapshot_reference",
+    )
+
+
+def _m11b(world):
+    """CK7 F15: the counted family is the revision's classification, not the first declared one."""
+    failing = _TwoFamilyFailingConnector(world.connector_impl, "n2")
+    assert failing.descriptor.families[0] == "service"
     receipt = world.sync(connector=failing)
     assert receipt.outcome == "published"
-    assert receipt.coverage["emit_failed"]
+    assert receipt.coverage["emit_failed"] == {FIXTURE_FAMILY: 1}
 
 
 def _m12(world, monkeypatch):
@@ -971,7 +1032,9 @@ _MATRIX = {
     "M8b": _m8b,
     "M9": _m9,
     "M10": _m10,
+    "M10b": _m10b,
     "M11": _m11,
+    "M11b": _m11b,
     "M12": _m12,
     "M13": _m13,
     "M14": _m14,
@@ -1032,6 +1095,17 @@ def _raise_at(label: str):
             raise _Injected(label)
 
     return hook
+
+
+def _unit_texts(world, generation_id) -> list[str]:
+    return sorted(unit.text for unit in world.rows("Unit", generation_id=generation_id))
+
+
+def _revision_of(world, external_id: str) -> str:
+    artifact = world.artifact_of(external_id)
+    revisions = [row for row in world.rows("ArtifactRevision") if row.artifact_id == artifact.id]
+    assert len(revisions) == 1, revisions
+    return revisions[0].id
 
 
 def _note(*, body: str, updated: str, note_id: str = "n1", links=("n2",)) -> dict:
@@ -1149,6 +1223,24 @@ class _DriftedConnector(_Delegating):
         self.descriptor = inner.descriptor.model_copy(update={"extension": drifted})
 
 
+class _TwoFamilyFailingConnector(_Delegating):
+    """CK7 F15: two declared families, the partition classified as the *second* of them.
+
+    The count of a revision-level emit failure used to land on `descriptor.families[0]`, which on
+    this connector is the family the failing revision has nothing to do with.
+    """
+
+    def __init__(self, inner, external_id):
+        super().__init__(inner)
+        self.descriptor = inner.descriptor.model_copy(update={"families": ("service", FIXTURE_FAMILY)})
+        self._external_id = external_id
+
+    def emit(self, revision, mapping):
+        if revision.artifact.external_id == self._external_id:
+            raise ValueError("this revision cannot be parsed")
+        return self._inner.emit(revision, mapping)
+
+
 class _FailingEmitConnector(_Delegating):
     def __init__(self, inner, external_id):
         super().__init__(inner)
@@ -1225,12 +1317,26 @@ class _ViolatingConnector(_Delegating):
         return self._inner.emit(revision, mapping)
 
 
-def test_the_guard_reports_one_violation_per_emit_call(world):
-    """Ruling R65: after a violation CPython unsets the profiler for that thread."""
-    assert issubclass(guard.EmitSideEffect, RuntimeError)
-    assert "time.process_time_ns" in guard.FORBIDDEN_CALLS
-    assert "time.thread_time" in guard.FORBIDDEN_CALLS
-    assert "time.thread_time_ns" in guard.FORBIDDEN_CALLS
+class _SwallowingConnector(_Delegating):
+    """CK7 F1: an `emit` carrying the ordinary broad `except` a third-party connector may well have.
+
+    It makes a second forbidden call after the first was refused, which CPython leaves unguarded
+    because it unset the profiler when the hook raised.
+    """
+
+    def __init__(self, inner, catching):
+        super().__init__(inner)
+        self._catching = catching
+        self.reached_the_second_call = False
+
+    def emit(self, revision, mapping):
+        try:
+            _IDLE_OLLAMA.embed_one("text")
+        except self._catching:  # the connector's own retry
+            pass
+        self.reached_the_second_call = True
+        time.time()
+        return self._inner.emit(revision, mapping)
 
 
 def test_the_record_bundle_stages_alias_candidates(store):
@@ -1295,3 +1401,61 @@ def test_the_documented_dangling_unit_note_is_present():
     """Ruling R66(ii): `sync.py` documents that a tombstoned version's unit may dangle."""
     source = Path(sync.__file__).read_text(encoding="utf-8")
     assert "unit_id" in source and "collect" in source
+
+
+# ------------------------------------------------------------------ F5: ensure_connector's enabled
+
+
+def test_re_ensuring_a_connector_leaves_its_enabled_flag_alone_unless_asked(world):
+    """CK7 F5: `enabled=False` as the default wrote a disable into every configuration change.
+
+    R51 is unchanged - a new instance is created disabled - but `None` now means "do not decide",
+    so re-ensuring an instance to change its configuration no longer silently turns it off. `True`
+    and `False` stay explicit.
+    """
+    fields = {
+        "workspace_id": world.row.workspace_id,
+        "kind": "fixture",
+        "instance_url": world.instance,
+    }
+    assert world.store._knowledge_get("Connector", world.row.id).enabled is True
+
+    # A configuration change with no opinion about enablement keeps the row enabled.
+    changed = FixtureConfig(instance_url=world.instance, partition="a-different-partition")
+    reensured = sync.ensure_connector(world.store, config=changed, **fields)
+    assert reensured.enabled is True
+    assert reensured.config_json == changed.model_dump_json()
+
+    # `False` is still a way to say it, and `None` then leaves the row disabled.
+    assert sync.ensure_connector(world.store, config=changed, enabled=False, **fields).enabled is False
+    assert sync.ensure_connector(world.store, config=changed, **fields).enabled is False
+    assert sync.ensure_connector(world.store, config=changed, enabled=True, **fields).enabled is True
+
+
+def test_a_new_connector_instance_is_created_disabled_whether_or_not_enabled_is_passed(world):
+    """R51/M5 unchanged: the default creates a disabled row, it just no longer disables an old one."""
+    fields = {"workspace_id": world.row.workspace_id, "kind": "fixture"}
+    config = FixtureConfig(instance_url="https://second.invalid", partition=world.partition)
+
+    defaulted = sync.ensure_connector(
+        world.store, instance_url="https://second.invalid", config=config, **fields
+    )
+    assert defaulted.enabled is False
+
+    third = FixtureConfig(instance_url="https://third.invalid", partition=world.partition)
+    explicit = sync.ensure_connector(
+        world.store, instance_url="https://third.invalid", config=third, enabled=False, **fields
+    )
+    assert explicit.enabled is False
+
+
+def test_a_failure_counted_without_a_classified_family_is_counted_as_unknown():
+    """CK7 F15's fallback: `unknown` rather than a family that did not fail.
+
+    Every target built by `sync_connector` carries a validated `TypeMapping`, so this is the answer
+    for a target that reached the counter without one - which is why it is a named string and not
+    `descriptor.families[0]`.
+    """
+    assert sync._failure_family(SimpleNamespace(mapping=None)) == "unknown"
+    assert sync._failure_family(SimpleNamespace(mapping=SimpleNamespace(family=""))) == "unknown"
+    assert sync._failure_family(SimpleNamespace(mapping=SimpleNamespace(family="db"))) == "db"

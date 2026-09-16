@@ -451,7 +451,7 @@ def test_builtin_predicates_carry_owner_families_sources_and_verb_phrases():
     assert same.identity and not same.traversal_permitted
     assert same.subject_kinds == same.object_kinds == frozenset()
     assert same.owner_families == FAMILIES
-    assert same.sources_allowed == {"rule", "reviewed"}
+    assert same.sources_allowed == {"rule"}  # F2: reviewed left every built-in
 
 
 def test_alias_of_is_owned_by_every_family_including_custom():

@@ -157,9 +157,9 @@ def _run(*argv: str) -> int:
     ("argv", "sub", "extra"),
     [
         (
-            ["connector", "new", "incidents"],
+            ["connector", "new", "incidents", "--family", "incident"],
             "new",
-            {"name": "incidents", "family": None, "kinds": [], "dest": None},
+            {"name": "incidents", "family": "incident", "kinds": [], "dest": None},
         ),
         (
             ["connector", "new", "incidents", "--family", "incident", "--kinds", "incident", "--dest", "/d"],
@@ -208,6 +208,18 @@ def test_connector_arguments_parse(argv, sub, extra):
     assert args.connector_command == sub
     for key, value in extra.items():
         assert getattr(args, key) == value, key
+
+
+def test_connector_new_requires_a_family():
+    """CK7 F11: design section 9 writes the command `new <name> --family <f> [--kinds ...]`.
+
+    `--family` defaulted to `custom`, and a `custom`-family connector owns no predicate in spec
+    section 6's table, so the first real edge it emitted was refused by
+    `check_direction_and_ownership` rather than at `new`, where the developer can still act on it.
+    """
+    with pytest.raises(SystemExit) as exit:
+        cli.build_parser().parse_args(["connector", "new", "incidents"])
+    assert exit.value.code == 2
 
 
 def test_the_connector_group_requires_a_subcommand():

@@ -1147,7 +1147,7 @@ def prepare_instance(
         kind=descriptor.name,
         instance_url=getattr(config, "instance_url", None) or KIT_INSTANCE_URL,
         config=config,
-        enabled=True,  # explicit, because R51 makes False the default (M5)
+        enabled=True,  # explicit: the kit enables the instance it prepares (R51/M5, F5)
     )
     classification = connector.probe(config, clock)
     row = sync.store_classification(store, connector=row, classification=classification)

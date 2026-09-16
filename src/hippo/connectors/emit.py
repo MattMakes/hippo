@@ -844,6 +844,14 @@ class _Binder:
                     f"{emission.predicate} does not accept source {emission.source}; "
                     f"allowed: {sorted(definition.sources_allowed)}"
                 )
+            if emission.source == "reviewed":
+                # Review CK7 finding F2. No built-in reaches this line any more, but an extension
+                # predicate writes its own `sources_allowed` and `reviewed` is a registered source,
+                # so this is the check that keeps `human_verified` out of the binder for good.
+                raise BindRefused(
+                    f"{emission.predicate}: reviewed is the reconciliation queue's source "
+                    "(spec 4.3); emit the rule you derived the fact from"
+                )
             if emission.valid_from is not None and not definition.windowed:
                 raise BindRefused(f"{emission.predicate} is not windowed; drop valid_from/valid_to")
             subject, target = self._endpoint(emission.subject), self._endpoint(emission.object)
