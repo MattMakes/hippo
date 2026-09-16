@@ -560,6 +560,11 @@ class NodeRef(Contract):
     # Ruling R53: an identity-only foreign endpoint carries the instance that minted its name, so a
     # cross-domain edge points at the node the owning connector writes.
     instance: ProviderURL | None = None
+    # Ruling R70: that endpoint may also name itself, so a statement about it reads as prose. It is
+    # read from the `NodeEmission` of an endpoint whose family this connector does not own, and
+    # nowhere else: an owned node's label comes from its `label_template`, and a label on an edge or
+    # an alias reference stores nothing, which would leave a statement no record can re-derive.
+    label: Text | None = None
 
     @model_validator(mode="before")
     @classmethod
