@@ -91,6 +91,11 @@ def _note_ref(external_id: str) -> base.NodeRef:
 class FixtureConnector:
     """The sync half over `FixtureProvider`, plus a pure `emit`."""
 
+    # `loader._imported` reads the descriptor off the class, before anything is constructed, so
+    # every connector publishes it here (ruling R77); `__init__` rebinds it on the instance when a
+    # test hands its own extension in.
+    descriptor = DESCRIPTOR
+
     def __init__(self, provider: FixtureProvider | None = None, *, case=None, descriptor_extension=None):
         if provider is None:
             provider = FixtureProvider.from_case(Path(case or BASIC_CASE))

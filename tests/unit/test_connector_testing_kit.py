@@ -43,6 +43,7 @@ from tests.fakes.fixture_connector.types import (
     FIXTURE_LINKS,
     FIXTURE_NOTE_KIND,
     fixture_extension,
+    fixture_links_predicate,
     fixture_note_kind,
 )
 
@@ -281,20 +282,27 @@ def _copied_case(case, tmp_path: Path):
     return kit.load_case(target)
 
 
-def _copied_package(tmp_path: Path, *, derivation=None, connector_kinds=None) -> Path:
+def _copied_package(tmp_path: Path, *, derivation=None, connector_kinds=None, verb_phrase=None) -> Path:
     """A writable copy of the fixture connector package, imported by file location."""
     target = tmp_path / "copied_connector"
     shutil.copytree(PACKAGE_DIR, target)
-    if derivation is None and connector_kinds is None:
+    if derivation is None and connector_kinds is None and verb_phrase is None:
         return target
     updates = []
     if derivation is not None:
         updates.append(f'"capabilities": _D.capabilities.model_copy(update={{"derivation": {derivation!r}}})')
     if connector_kinds is not None:
         updates.append(f'"extension": fixture_extension(connector_kinds={connector_kinds!r})')
+    if verb_phrase is not None:
+        # One vocabulary change under the same descriptor version: what a developer who edits
+        # `types.py` and reruns `--update-golden` has, and what makes the committed lock stale.
+        updates.append(
+            '"extension": fixture_extension('
+            f"predicates=(fixture_links_predicate(verb_phrase={verb_phrase!r}),))"
+        )
     (target / "kit_patch.py").write_text(
         "from .connector import DESCRIPTOR as _D, FixtureConnector as _Base\n"
-        "from .types import fixture_extension\n\n"
+        "from .types import fixture_extension, fixture_links_predicate\n\n"
         f"PATCHED = _D.model_copy(update={{{', '.join(updates)}}})\n\n\n"
         "class Connector(_Base):\n"
         "    def __init__(self, *args, **kwargs):\n"
@@ -308,6 +316,28 @@ def _copied_package(tmp_path: Path, *, derivation=None, connector_kinds=None) ->
         encoding="utf-8",
     )
     return target
+
+
+def _add_a_malformed_record(package: Path, external_id: str = "n3") -> None:
+    """One more upsert whose note carries no `body`, so `emit` counts a `ParseFailure`.
+
+    The shape S4b's scaffolded case has by design: a change in the page, a policy of its own, and
+    input bytes the connector can fetch but not parse.
+    """
+    case = package / "fixtures" / "basic"
+    note = {"id": external_id, "title": "Third note", "url": f"https://fixture.example/notes/{external_id}"}
+    (case / "inputs" / external_id).write_bytes(json.dumps(note).encode("utf-8"))
+    changes = json.loads((case / "changes.json").read_text(encoding="utf-8"))
+    changes["pages"][0]["changes"].append(
+        {
+            "ref": {"partition": PARTITION, "artifact_kind": "document", "external_id": external_id},
+            "operation": "upsert",
+        }
+    )
+    (case / "changes.json").write_text(json.dumps(changes, indent=2), encoding="utf-8")
+    policies = json.loads((case / "policies.json").read_text(encoding="utf-8"))
+    policies[external_id] = {"state": "known", "mode": "workspace"}
+    (case / "policies.json").write_text(json.dumps(policies, indent=2), encoding="utf-8")
 
 
 # =========================================================================== the negative table
@@ -1201,3 +1231,55 @@ def test_validate_package_names_a_connector_whose_extension_omits_its_kind(tmp_p
     report = kit.validate_package(package, runtime=False)
     assert report.passed is False
     assert DESCRIPTOR.name in (report.error or "")
+
+
+def test_a_malformed_record_fills_failures_json(tmp_path):
+    """R77 finding 1: S3c counts a `ParseFailure` under `coverage["emission"]["failures"]`.
+
+    The kit read `coverage["failures"]`, a key S3c never writes, so `failures.json` stayed `[]` for
+    a case that exercises a `ParseFailure` (S4b's scaffolded package, whose `record-2` is malformed
+    by design) and R75(4)'s "it fills once a fixture exercises one" could not hold.
+    """
+    package = _copied_package(tmp_path)
+    _add_a_malformed_record(package)
+
+    report = kit.validate_package(package, update_golden=True)
+
+    assert report.error is None, report.error
+    assert [violation.message for violation in report.violations] == []
+    assert [case.error for case in report.cases] == [None]
+    expected = package / "fixtures" / "basic" / "expected"
+    coverage = json.loads((expected / "coverage.json").read_text(encoding="utf-8"))
+    # S3c keys the counter `family|parser|dialect`, writing `-` for a part the failure omits.
+    assert coverage["emission"]["failures"] == {f"{FIXTURE_FAMILY}|-|-": 1}
+    assert json.loads((expected / "failures.json").read_text(encoding="utf-8")) == [
+        {"family": FIXTURE_FAMILY, "parser": None, "count": 1}
+    ]
+
+
+def test_update_golden_rewrites_a_stale_registry_lock(tmp_path):
+    """R77 finding 2: a re-goldened package never keeps a lock its vocabulary has moved past.
+
+    `assert_registry_lock` only ever read the lock, so `--update-golden` recomputed the seven
+    goldens and left the eighth committed file stale. It is written from `extension_lock` on the
+    update run instead of asserted, which is what `render_package` already did for itself.
+    """
+    moved = fixture_extension(predicates=(fixture_links_predicate(verb_phrase="links onward to"),))
+    package = _copied_package(tmp_path, verb_phrase="links onward to")
+    lock_path = package / "fixtures" / "registry.lock.json"
+    stale = lock_path.read_text(encoding="utf-8")
+    with pytest.raises(ContractViolation) as refusal:
+        kit.assert_registry_lock(moved, version=DESCRIPTOR.version, lock_path=lock_path)
+    assert refusal.value.assertion == "registry_version_bump"
+    assert refusal.value.record == f"predicate:{FIXTURE_LINKS}@{DESCRIPTOR.version}"
+
+    report = kit.validate_package(package, update_golden=True)
+
+    assert report.error is None, report.error
+    assert [violation.message for violation in report.violations] == []
+    assert [case.error for case in report.cases] == [None]
+    rewritten = lock_path.read_text(encoding="utf-8")
+    key = f"predicate:{FIXTURE_LINKS}@{DESCRIPTOR.version}"
+    assert json.loads(rewritten)[key] != json.loads(stale)[key], "the one moved digest moved"
+    assert rewritten == canonical_json(kit.extension_lock(moved, version=DESCRIPTOR.version))
+    kit.assert_registry_lock(moved, version=DESCRIPTOR.version, lock_path=lock_path)
