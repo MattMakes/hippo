@@ -361,4 +361,11 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   round-trip through `model_validate_json`); a rerun reuses the stored manifest artifact and
   revision whole; each fixture world needs its own instance URL; `emit` cannot log under the
   guard.
+- **R74 — The fixture connector takes the kit's documented layout (S4a question).** S4a rewrites
+  `tests/fakes/fixture_connector/fixtures/basic/changes.json` in `ChangePage` shape, exports
+  `Connector = FixtureConnector` from the package, commits the generated `fixtures/registry.lock.json`
+  and `fixtures/basic/expected/` once `--update-golden` reproduces them byte-identically on Fake and
+  LadybugDB, and adapts the one S3c test that iterated bare pages; S3c's CK3 lines stay green. The
+  guide (S4b) and the exemplar (S6) cite this package as the worked example. The loader stays
+  strict (no lenient spelling).
 
