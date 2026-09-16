@@ -32,6 +32,7 @@ from ..knowledge.identity import (
 )
 from ..knowledge.registry import ObjectKindDefinition, Registry, UnregisteredName
 from . import base
+from .emit import BindRefused
 
 KEY_RULE_VERSION = "cdk-keys-v1"
 INSTANCE_PARTS = frozenset({"instance", "provider_instance", "catalog_instance"})
@@ -49,8 +50,12 @@ _DATABASE_KINDS = {
 _INSTANCE_REFUSAL = "The connector instance must be a normalized ASCII HTTP(S) provider URL"
 
 
-class KeyPartsRefused(base.ContractError):
-    """A node reference the kit cannot key; the message names the fix (S2b re-parents it on BindRefused)."""
+class KeyPartsRefused(BindRefused):
+    """A node reference the kit cannot key; the message names the fix.
+
+    It is a `BindRefused` (plan section 10, Task S2b) so one `except` in a connector's tests, and in
+    `hippo connector validate`, catches every refusal `bind_batch` can raise.
+    """
 
 
 @dataclass(frozen=True, slots=True)
