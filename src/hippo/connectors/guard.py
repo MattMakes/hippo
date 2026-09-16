@@ -15,7 +15,8 @@ CPython reports a call before it runs it, so a refused call never happens. It al
 profiler for the thread when a profile hook raises, so the rest of that call is unguarded. Review
 CK7 finding F1 closed the two ways a connector could live in that gap: the hook records the refusal
 on the thread's state before raising and `forbid_effects` raises the record on the way out, so a
-swallowed refusal still fails the sync; and `EmitSideEffect` is a `BaseException`, so an ordinary
+swallowed refusal still fails the sync, even when the body goes on to raise an ordinary exception
+of its own (confirmation finding N1); and `EmitSideEffect` is a `BaseException`, so an ordinary
 broad `except` never catches it in the first place. The refusal a guard reports is therefore the
 *first* forbidden call of that region, exactly one per `emit` call.
 """
@@ -208,6 +209,11 @@ def forbid_effects() -> Iterator[None]:
     Review CK7 finding F1: a refusal the body swallowed is raised here instead, so a guarded region
     that made a forbidden call fails however the body treated the exception. An enclosing guard's
     record is saved and put back, so a nested guard cannot clear it.
+
+    Confirmation finding N1: the swallowed refusal also outranks an ordinary exception the body
+    raises afterwards, which becomes its `__cause__`; otherwise `sync._emit` would count that
+    exception as a parse failure and publish. Only the refusal itself and `KeyboardInterrupt` or
+    `SystemExit` propagate unchanged.
     """
     previous = sys.getprofile()
     enclosing = getattr(_state, "violation", None)
@@ -215,15 +221,19 @@ def forbid_effects() -> Iterator[None]:
     _state.armed = False
     sys.setprofile(_hook)
     _state.armed = True
-    propagating = True
+    in_flight: BaseException | None = None
     try:
         yield
-        propagating = False
+    except BaseException as error:
+        in_flight = error
+        raise
     finally:
         _state.armed = False
         sys.setprofile(previous)
         _state.armed = previous is _hook
         swallowed = _state.violation
         _state.violation = enclosing
-        if swallowed is not None and not propagating:
-            raise EmitSideEffect(swallowed)
+        if swallowed is not None and not isinstance(
+            in_flight, (EmitSideEffect, KeyboardInterrupt, SystemExit)
+        ):
+            raise EmitSideEffect(swallowed) from in_flight

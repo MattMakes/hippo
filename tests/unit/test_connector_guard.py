@@ -473,6 +473,26 @@ def test_an_unrelated_failure_inside_the_guard_still_propagates() -> None:
     assert sys.getprofile() is None
 
 
+def test_a_swallowed_refusal_outranks_a_later_ordinary_failure() -> None:
+    """CK7 confirmation N1: a body that swallowed the refusal and then fails still fails with it.
+
+    Without this, the ordinary exception reaches `sync._emit`'s broad handler as a parse failure,
+    is counted as `emit_failed`, and the run publishes. The ordinary exception is kept as the cause.
+    """
+    with pytest.raises(EmitSideEffect) as caught:
+        with forbid_effects():
+            try:
+                _imported_time()
+            except BaseException:  # noqa: BLE001 - a connector determined to swallow the refusal
+                pass
+            raise ValueError("the connector's own parse failure")
+
+    assert "time.time" in str(caught.value)
+    assert isinstance(caught.value.__cause__, ValueError)
+    assert str(caught.value.__cause__) == "the connector's own parse failure"
+    assert sys.getprofile() is None
+
+
 def test_a_swallowed_violation_fails_assert_emit_pure() -> None:
     """CK7 F1: `hippo connector validate` catches the swallowing connector too."""
     from hippo.connectors.testing import ContractViolation, assert_emit_pure
