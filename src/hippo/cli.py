@@ -1174,7 +1174,7 @@ def _connector_enable(args: argparse.Namespace) -> int:
                 kind=connector.descriptor.name,
                 instance_url=args.instance_url,
                 config=config,
-                enabled=True,  # R73: passed deliberately, including on a re-ensure
+                enabled=True,  # R73/F5: what this command means, said rather than defaulted
             )
             classification = connector.probe(config, _wall_clock())
             row = sync.store_classification(ctx.store, connector=row, classification=classification)

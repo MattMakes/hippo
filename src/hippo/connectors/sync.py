@@ -16,7 +16,8 @@ brief names. Where a ruling and the plan differ the ruling wins, and the deviati
   so a stored span is never re-minted under a different policy.
 * R49/B4 -- the entry takes `connector_id`; each emit worker enters the guard inside its own thread
   under `contextvars.copy_context().run(...)`.
-* R51/M5 -- `ensure_connector` defaults to `enabled=False` and a disabled instance is refused here.
+* R51/M5 -- `ensure_connector` creates an instance disabled and a disabled instance is refused here;
+  review CK7 F5 made the argument `bool | None`, so re-ensuring one does not disable it.
 * R52/M3 -- a stored policy is refreshed only when `expires_at - now < policy_ttl_seconds / 2`, so
   two syncs of unchanged content inside the window move no epoch.
 * R52/M4 -- `no_changes` is decided *after* the candidate generation is computed, by `manifest_hash`
@@ -207,13 +208,18 @@ def ensure_connector(
     instance_url: str,
     config: BaseModel,
     credential_ref: str | None = None,
-    enabled: bool = False,
+    enabled: bool | None = None,
 ) -> k.Connector:
     """Create or update one connector instance. Ruling R51: instances are disabled by default.
 
     A `Connector` write is an authorization record and bumps the authorization epoch
     (`store/authorization.py:113-114`), so operators create instances outside build windows
     (ruling R5/R35) and this is never called from inside a sync.
+
+    Review CK7 finding F5: `enabled` is three-valued. `None` means "do not decide" - a new instance
+    is created disabled (R51 unchanged) and an existing one keeps the flag it has - so re-ensuring
+    an instance to change its configuration no longer silently disables it. `True` and `False` are
+    the caller saying so.
     """
     if not isinstance(config, BaseModel):
         raise ConnectorSyncRefused("A connector instance stores its typed configuration")
@@ -226,13 +232,17 @@ def ensure_connector(
         instance_url=instance_url,
         config_json=config.model_dump_json(),
         credential_ref=credential_ref,
-        enabled=enabled,
+        enabled=bool(enabled),  # R51: a new instance is disabled unless the caller said otherwise
     )
     existing = store._knowledge_get("Connector", row.id)
     if existing is None:
         store.put_knowledge(row)
         return row
-    updated = existing.replace(config_json=row.config_json, credential_ref=credential_ref, enabled=enabled)
+    updated = existing.replace(
+        config_json=row.config_json,
+        credential_ref=credential_ref,
+        enabled=existing.enabled if enabled is None else enabled,
+    )
     if updated != existing:
         store.update_knowledge(updated)
     return updated

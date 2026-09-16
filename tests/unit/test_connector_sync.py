@@ -4,8 +4,9 @@ Plan `ai_docs/plans/cdk-s3-runtime.md` Task S3c (section 12), with sections 4.7,
 the contract. Rulings and review findings that bind this file: R48/B2 (a span keeps its first
 capture's policy, recorded in `ArtifactRevision.metadata_json["span_policy_id"]`; row M8b),
 R49/B4 (`connector_id` on the entry, the stored-classification refusal, `FAULT_POINTS`,
-`contextvars.copy_context()` per emit worker), R51/M5 (`ensure_connector` defaults to
-`enabled=False`; a disabled instance is refused), R52/M3 and M4 (a stored policy is refreshed only
+`contextvars.copy_context()` per emit worker), R51/M5 with review CK7 F5 (`ensure_connector`
+creates an instance disabled and `enabled=None` leaves an existing one alone; a disabled instance
+is refused), R52/M3 and M4 (a stored policy is refreshed only
 inside half its TTL, row M21; `no_changes` is decided after the candidate generation), M15
 (`fetch` of an absent id raises `ProviderNotFoundError`), R46/m7 (each registered definition equals
 `descriptor.extension`), R60/R-S3-7 (a no-argument `FixtureConnector`, `fixtures/basic` with two
@@ -1327,3 +1328,49 @@ def test_the_documented_dangling_unit_note_is_present():
     """Ruling R66(ii): `sync.py` documents that a tombstoned version's unit may dangle."""
     source = Path(sync.__file__).read_text(encoding="utf-8")
     assert "unit_id" in source and "collect" in source
+
+
+# ------------------------------------------------------------------ F5: ensure_connector's enabled
+
+
+def test_re_ensuring_a_connector_leaves_its_enabled_flag_alone_unless_asked(world):
+    """CK7 F5: `enabled=False` as the default wrote a disable into every configuration change.
+
+    R51 is unchanged - a new instance is created disabled - but `None` now means "do not decide",
+    so re-ensuring an instance to change its configuration no longer silently turns it off. `True`
+    and `False` stay explicit.
+    """
+    fields = {
+        "workspace_id": world.row.workspace_id,
+        "kind": "fixture",
+        "instance_url": world.instance,
+    }
+    assert world.store._knowledge_get("Connector", world.row.id).enabled is True
+
+    # A configuration change with no opinion about enablement keeps the row enabled.
+    changed = FixtureConfig(instance_url=world.instance, partition="a-different-partition")
+    reensured = sync.ensure_connector(world.store, config=changed, **fields)
+    assert reensured.enabled is True
+    assert reensured.config_json == changed.model_dump_json()
+
+    # `False` is still a way to say it, and `None` then leaves the row disabled.
+    assert sync.ensure_connector(world.store, config=changed, enabled=False, **fields).enabled is False
+    assert sync.ensure_connector(world.store, config=changed, **fields).enabled is False
+    assert sync.ensure_connector(world.store, config=changed, enabled=True, **fields).enabled is True
+
+
+def test_a_new_connector_instance_is_created_disabled_whether_or_not_enabled_is_passed(world):
+    """R51/M5 unchanged: the default creates a disabled row, it just no longer disables an old one."""
+    fields = {"workspace_id": world.row.workspace_id, "kind": "fixture"}
+    config = FixtureConfig(instance_url="https://second.invalid", partition=world.partition)
+
+    defaulted = sync.ensure_connector(
+        world.store, instance_url="https://second.invalid", config=config, **fields
+    )
+    assert defaulted.enabled is False
+
+    third = FixtureConfig(instance_url="https://third.invalid", partition=world.partition)
+    explicit = sync.ensure_connector(
+        world.store, instance_url="https://third.invalid", config=third, enabled=False, **fields
+    )
+    assert explicit.enabled is False
