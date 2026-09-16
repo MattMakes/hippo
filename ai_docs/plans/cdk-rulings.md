@@ -443,3 +443,14 @@ rulings record the decisions and the amendments to earlier rulings. Earlier ruli
   recorded, not changed now, because widening a built-in's endpoint kinds is a vocabulary change
   the CK1 tests pin.
 
+
+- **R82 (2026-09-16, after the r7-fix confirmation `ai_docs/reports/2026-09-16-cdk-r7-confirmation.md`).**
+  Finding N1 (MINOR: `forbid_effects` raises the recorded refusal only when no exception is
+  propagating, so an `emit` that swallows the refusal and then raises an ordinary error is counted
+  as `emit_failed` and the run publishes) is closed now by the slice `n1-fix`
+  (brief `cdk-n1-fix.md`), adopting the reviewer's exact fix: the guard remembers the exception in
+  flight and raises `EmitSideEffect(swallowed) from in_flight` whenever a record exists and the
+  in-flight exception is not the refusal itself nor `KeyboardInterrupt`/`SystemExit`; three tests
+  (guard, `[M10c]`, kit `emit_pure`). Nested guards stay as they are (the report's note 1). The
+  confirmation's eight CLOSED rulings stand; CK3 and CK4 rerun after the merge, and CK3's Neo4j
+  parity with them.
