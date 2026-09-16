@@ -40,6 +40,7 @@ from ..knowledge.builtin_types import EVIDENCE_CLASS_DERIVATION
 from ..knowledge.derivations import dependency_version, view_fingerprint
 from ..knowledge.identity import canonical_json, make_identity, text_hash
 from ..knowledge.lifecycle import generation_passage_id
+from ..knowledge.predicates import SCHEMA as SCHEMA_KINDS
 from ..knowledge.predicates import validate_endpoints
 from ..knowledge.registry import (
     PredicateDefinition,
@@ -64,12 +65,13 @@ from .base import (
 BINDER_VERSION = "cdk-emit-v1"
 IDENTITY_PREDICATE = "SAME_OBJECT_AS"
 # Section 8.8: kind pairs an exact-identity rule cannot settle on its own, so the alias waits for
-# the reconciliation queue (Task 12) rather than joining two objects unreviewed.
+# the reconciliation queue (Task 12) rather than joining two objects unreviewed. The database pairs
+# are read from `predicates.SCHEMA` (`predicates.py:53`), so a kind added there is guarded too.
 GUARDED_ALIAS_PAIRS = frozenset(
     {
         frozenset({"service"}),
         frozenset({"service", "repository"}),
-        frozenset({"schema", "resource"}),
+        *(frozenset({kind, "resource"}) for kind in SCHEMA_KINDS.split()),
     }
 )
 

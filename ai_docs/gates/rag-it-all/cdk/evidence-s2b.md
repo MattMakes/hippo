@@ -15,10 +15,16 @@ unit back by id). Both are applied below.
 
 | # | Hash | Subject | Files |
 | --- | --- | --- | --- |
-| 1 | `ab4a7c7` | Bind connector emission batches to knowledge records (CDK S2b) | `connectors/render.py`, `connectors/emit.py`, `tests/unit/test_connector_render.py`, `tests/unit/test_connector_emit.py` (new); `connectors/keys.py` (the one granted line) |
-| 2 | (this commit) | Record the S2b evidence | this file (new) |
+| 1 | `ab4a7c7` | Bind connector emission batches to knowledge records (CDK S2b) | `connectors/render.py`, `connectors/emit.py`, `tests/unit/test_connector_render.py`, `tests/unit/test_connector_emit.py` (new); `connectors/keys.py` |
+| 2 | `c919b51` | Record the S2b evidence | this file (new) |
+| 3 | (this commit) | Read the guarded alias pairs from `predicates.SCHEMA`; make the m4 and R39 tests prove their claims | `connectors/emit.py`, `tests/unit/test_connector_emit.py`, this file |
 
-`git show --stat ab4a7c7` is exactly those five files. Nothing outside the brief's "own" list was
+The `keys.py` edit is three things, all required by the one granted change: `KeyPartsRefused` now
+subclasses `BindRefused`, the module imports that name from `emit`, and the class docstring drops
+the stale "(S2b re-parents it on BindRefused)" parenthetical and says why the re-parenting matters.
+No other line of that file, and no other S2a file, is touched.
+
+`git show --stat ab4a7c7` is exactly those five files, and commit 3 touches two of them plus this file. Nothing outside the brief's "own" list was
 touched: no other S2a file, no `docs/spec`, no gate ledger checkbox, no `connectors/__init__.py`
 (see "Left for S3c" below).
 
@@ -42,11 +48,11 @@ docstring that says the module uses none (it now parses the source and drops the
 
 | Line | Log | Result |
 | --- | --- | --- |
-| Plan step 2 / the CK2 CHECK line of `GATES.md`, verbatim, Fake | `/tmp/hippo-s2b-green.log` | exit 0, 277 passed |
+| Plan step 2 / the CK2 CHECK line of `GATES.md`, verbatim, Fake | `/tmp/hippo-s2b-green.log` | exit 0, 279 passed |
 | Plan step 3 regression: S2a's step 3 set plus `test_managed_input_binding.py` and `test_code_binding.py`, Fake | `/tmp/hippo-s2b-regress.log` | exit 0, 292 passed |
 | Plan step 4 / the CK7 Ruff line, less the two files no slice has created yet | `/tmp/hippo-s2b-ck7.log` | exit 0; "All checks passed!", "26 files already formatted" |
 
-Counts: 277 on the CK2 line, of which 172 are new (18 in `test_connector_render.py`, 154 in
+Counts: 279 on the CK2 line, of which 174 are new (18 in `test_connector_render.py`, 156 in
 `test_connector_emit.py`) and 105 are S2a's, which pass unchanged and match the 105 S2a recorded.
 292 regression, all pre-existing.
 
@@ -89,8 +95,9 @@ are split into one row each for the same reason. No mapping in the plan was drop
 | R61 / R44 / M9 | Section 8.9 does not mention the principal map | `policy_record` reads `config_json["principal_map"]` into `base.PrincipalMap` and applies `base.map_principals` before building the `AccessPolicy` |
 | R16, R39 | — | `bind_batch` refuses any registry but the frozen `current_registry()`, and `Registry.check_record` runs on every `EvidenceSpan`, `KnowledgeObject`, `ObjectObservation` and `Assertion` the binder builds |
 | R66 (ii) | — | `AssertionVersion.unit_id` is written from a batch-local handle resolved against the units this batch built. The binder never looks a unit up by id, so a collected unit dangling is not its problem |
-| m4 | — | `test_unregistered_or_undeclared_type_at_bind_is_refused` is parametrized over the 31 ids of S1's `REFUSALS`, imported from `tests/unit/test_registry.py` |
+| m4 | — | `test_unregistered_or_undeclared_type_at_bind_is_refused` is parametrized over S1's 31 `REFUSALS` triples, imported from `tests/unit/test_registry.py`. Each case runs the refused registration in a fresh `use_registry(Registry.with_builtins())`, then binds a batch naming `incident_fixture`, `AFFECTS_FIXTURE` and `pager_feed`, and asserts bind refuses **exactly when** one of those names is absent. Thirty cases take the refusal branch; `duplicate_name`, whose first registration succeeds, takes the binding branch, so both halves are exercised |
 | R6 | — | Every rendered fact and rendered edge gets one `Unit` and one derived `Passage` over the record span, as a `projection` view in `input_binding._view`'s shape; a foreign-family endpoint binds identity-only |
+| Section 8.8 | "any of `predicates.SCHEMA` (`predicates.py:65`) with `resource`" | `GUARDED_ALIAS_PAIRS` is built from `predicates.SCHEMA` (which is at `predicates.py:53`, not `:65`), so all eight database kinds are guarded with `resource`, not just `schema`. `test_the_guarded_pairs_are_the_schema_kinds_with_resource` pins it |
 
 ## Two decisions S2b took that the plan leaves open
 

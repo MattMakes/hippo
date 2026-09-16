@@ -33,10 +33,12 @@ from hippo.knowledge.registry import (
     LocatorKindDefinition,
     ObjectKindDefinition,
     PredicateDefinition,
+    RegistrationError,
     Registry,
     TypeExtension,
     UnregisteredName,
     extension_scope,
+    use_registry,
 )
 
 WORKSPACE = "workspace"
@@ -911,9 +913,92 @@ def test_bind_refuses_a_registry_other_than_the_frozen_current_registry(world) -
     )
 
 
-@pytest.mark.parametrize("case", [row.id for row in REFUSALS], ids=[row.id for row in REFUSALS])
-def test_unregistered_or_undeclared_type_at_bind_is_refused(world, case) -> None:
-    """m4: for every S1 registration refusal, the same vocabulary cannot reach emit."""
+# The vocabulary every `REFUSALS` extension carries, and where the binder would read each name.
+S1_FIXTURE_VOCABULARY = (
+    ("object_kinds", "incident_fixture"),
+    ("predicates", "AFFECTS_FIXTURE"),
+    ("evidence_sources", "pager_feed"),
+)
+
+
+def s1_fixture_batch() -> base.EmissionBatch:
+    """A batch naming every name of S1's `incident_extension`, so any absence refuses at bind."""
+    subject = base.NodeRef(kind="incident_fixture", key={"tool": "pager", "incident_id": "INC-1"})
+    return base.EmissionBatch(
+        nodes=(
+            base.NodeEmission(
+                ref=subject,
+                attrs={"title": "Checkout is down", "severity": "sev1"},
+                span=lines_span(),
+                source="pager_feed",
+            ),
+            service_emission(source="pager_feed", metadata_origin=None),
+        ),
+        edges=(
+            base.EdgeEmission(
+                subject=subject,
+                predicate="AFFECTS_FIXTURE",
+                object=service_ref(),
+                family="deterministic",
+                source="pager_feed",
+                weight=1.0,
+                support=(base.SupportEmission(spans=(lines_span(3, 3),)),),
+            ),
+        ),
+    )
+
+
+@pytest.mark.parametrize(("reason", "message", "action"), REFUSALS, ids=[row.id for row in REFUSALS])
+def test_unregistered_or_undeclared_type_at_bind_is_refused(reason, message, action) -> None:
+    """m4: for each of S1's registration refusals, the same input cannot reach emit (CK1).
+
+    A refused registration adds nothing, so the names its extension carried stay unregistered and
+    the binder refuses an emission that uses them. The one case that registers before it refuses
+    (`duplicate_name`, whose first call succeeds) is carried by the other half of the same
+    assertion: with the vocabulary present, the very same batch binds.
+    """
+    with use_registry(Registry.with_builtins()) as fresh:
+        before = {section: _names(fresh, section) for section, _ in S1_FIXTURE_VOCABULARY}
+        with pytest.raises(RegistrationError) as refused_registration:
+            action(fresh)
+        assert refused_registration.value.reason == reason
+        absent = [name for section, name in S1_FIXTURE_VOCABULARY if name not in _names(fresh, section)]
+        if not fresh.frozen:
+            fresh.freeze()
+        world = World(fresh)
+        outcome = _bind_outcome(world, s1_fixture_batch())
+        assert (outcome is not None) == bool(absent), (reason, absent, outcome)
+        if absent:
+            assert outcome == (
+                f"{_LABEL[absent[0]]} {absent[0]!r} is not registered; "
+                "register it with a TypeExtension before emitting"
+            )
+        else:
+            # `duplicate_name`: the first registration stands and the refusal added nothing to it.
+            assert {section: _names(fresh, section) for section, _ in S1_FIXTURE_VOCABULARY} != before
+
+
+_LABEL = {
+    "incident_fixture": "object kind",
+    "AFFECTS_FIXTURE": "predicate",
+    "pager_feed": "evidence source",
+}
+
+
+def _names(registry, section: str) -> frozenset[str]:
+    return getattr(registry, section)()
+
+
+def _bind_outcome(world: World, batch: base.EmissionBatch) -> str | None:
+    """The refusal message, or `None` when the batch binds."""
+    try:
+        world.bind(batch)
+    except emit.BindRefused as refused:
+        return str(refused)
+    return None
+
+
+def test_a_kind_nothing_registered_is_refused_before_any_record_is_built(world) -> None:
     unregistered = base.NodeRef(kind="never_registered_kind", key={"tool": "p", "incident_id": "1"})
     with pytest.raises(UnregisteredName):
         world.registry.object_kind("never_registered_kind")
@@ -932,19 +1017,23 @@ def test_an_undeclared_but_registered_type_is_refused(world) -> None:
     assert str(refused.value) == ("Connector pager emits object kind 'incident_fixture' it does not declare")
 
 
-def test_the_binder_checks_every_record_it_builds_against_the_registry(world) -> None:
+def test_the_binder_checks_every_record_it_builds_against_the_registry(world, monkeypatch) -> None:
     """Ruling R39: `Registry.check_record` is the one vocabulary check, and bind calls it."""
+    checked: list[str] = []
+    real = type(world.registry).check_record
+
+    def spy(self, record):
+        checked.append(type(record).__name__)
+        return real(self, record)
+
+    monkeypatch.setattr(type(world.registry), "check_record", spy)
     bound = world.bind(edge_batch())
-    for record in (*bound.objects, *bound.spans, *bound.assertions, *bound.versions):
-        world.registry.check_record(record)
-    # `check_record` validates a span's payload with its registered locator model, so a locator the
-    # kind's model refuses never reaches a record.
-    malformed = base.SpanRef(
-        locator_kind="file_lines",
-        locator={"kind": "file_lines", "path": "incidents/INC-1.txt", "start": 1},
-    )
-    with pytest.raises(emit.BindRefused):
-        world.bind(node_batch(span=malformed))
+    # Every record kind `check_record` has a vocabulary rule for is passed to it as it is built.
+    assert {"KnowledgeObject", "EvidenceSpan", "Assertion"} <= set(checked)
+    assert checked.count("KnowledgeObject") == len(bound.objects)
+    assert checked.count("EvidenceSpan") == len(bound.spans)
+    for record in (*bound.objects, *bound.spans, *bound.assertions):
+        real(world.registry, record)
 
 
 # ------------------------------------------------------------------ direction and ownership (8.5)
@@ -1114,6 +1203,17 @@ def test_guarded_alias_kind_pairs_stay_candidate(world) -> None:
     )
     assert one(world.bind(batch), "AssertionVersion").status == "candidate"
     assert one(alias_records(world)["bound"], "AssertionVersion").status == "active"
+
+
+def test_the_guarded_pairs_are_the_schema_kinds_with_resource(world) -> None:
+    """Section 8.8 reads "any of `predicates.SCHEMA` with `resource`", not one hand-picked pair."""
+    from hippo.knowledge.predicates import SCHEMA
+
+    for kind in SCHEMA.split():
+        assert frozenset({kind, "resource"}) in emit.GUARDED_ALIAS_PAIRS, kind
+    assert frozenset({"service"}) in emit.GUARDED_ALIAS_PAIRS
+    assert frozenset({"service", "repository"}) in emit.GUARDED_ALIAS_PAIRS
+    assert frozenset({"incident_fixture"}) not in emit.GUARDED_ALIAS_PAIRS
 
 
 def test_alias_version_is_rule_derived_with_rule_name_and_version(world) -> None:
