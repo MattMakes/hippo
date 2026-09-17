@@ -102,23 +102,43 @@ def validate_generation_derivations(store, generation_id):
 
 
 class _Inventory:
-    def __init__(self, store, generation_id):
+    def __init__(self, store, generation_id, *, _proof_reads=None):
+        if _proof_reads is not None and _proof_reads.store is not store:
+            raise ValueError("Proof reader belongs to another store")
         self.store = store
-        self.gen = store._generation(generation_id)
+        self._proof_reads = _proof_reads
+        if _proof_reads is None:
+            self.gen = store._generation(generation_id)
+        else:
+            self.gen = _proof_reads.by_id("Generation", {generation_id}).get(generation_id)
+            if self.gen is None:
+                raise ValueError("Unknown generation")
         if not derived_capability(self.gen):
             raise ValueError("Generation has no derived evidence capability")
         self.source = store.get_source(self.gen.source_id)
         if self.gen.status == "failed" or self.source is None:
             raise ValueError("Derived generation is unavailable")
+        if _proof_reads is None:
+            exact_members = store._knowledge_rows(
+                "GenerationEvidenceMember", generation_id=generation_id
+            )
+            revision_members = store._knowledge_rows("GenerationMember", generation_id=generation_id)
+        else:
+            exact_members = _proof_reads.scoped(
+                "GenerationEvidenceMember", "generation_id", {generation_id}
+            ).values()
+            revision_members = _proof_reads.scoped(
+                "GenerationMember", "generation_id", {generation_id}
+            ).values()
         # Scoped by generation. Unscoped, these walked every generation's members, and a batch
         # of rendered passages built one inventory per passage (see `GenerationViews`).
         self.exact = {
             (m.record_kind, m.record_id)
-            for m in store._knowledge_rows("GenerationEvidenceMember", generation_id=generation_id)
+            for m in exact_members
         }
         self.revisions = {
             m.artifact_revision_id
-            for m in store._knowledge_rows("GenerationMember", generation_id=generation_id)
+            for m in revision_members
         }
         self.visiting = set()
         # One immutable validation pass only; never share across proof builds or writes.
@@ -130,7 +150,11 @@ class _Inventory:
         if exact and key not in self.exact:
             raise ValueError("Derived input missing from exact generation membership")
         if key not in self.records:
-            self.records[key] = self.store._knowledge_get(kind, identity)
+            self.records[key] = (
+                self.store._knowledge_get(kind, identity)
+                if self._proof_reads is None
+                else self._proof_reads.by_id(kind, {identity}).get(identity)
+            )
         result = self.records[key]
         if result is None:
             raise ValueError("Derived input missing from exact generation membership")
@@ -154,7 +178,13 @@ class _Inventory:
             raise ValueError("Derived input requires ready workspace provenance")
         # Every dependency naming this record, members or not: one outside the exact membership must
         # still reach `record` below and refuse, so the key is the record and not the generation.
-        dependencies = self.store._knowledge_rows("DerivedDependency", where={"derived_record_id": identity})
+        dependencies = (
+            self.store._knowledge_rows("DerivedDependency", where={"derived_record_id": identity})
+            if self._proof_reads is None
+            else self._proof_reads.scoped(
+                "DerivedDependency", "derived_record_id", {identity}
+            ).values()
+        )
         closure = DerivationClosure(derived_record_ids=frozenset({identity}))
         tuples = []
         declared_revisions = set()
@@ -267,21 +297,30 @@ class GenerationViews:
     for one `native_write` call, one checksum pass, or one evidence proof build.
     """
 
-    def __init__(self, store, generation_id, *, inventory=None):
+    def __init__(self, store, generation_id, *, inventory=None, _proof_reads=None):
         if inventory is not None and inventory.gen.id != generation_id:
             raise ValueError("Derived inventory generation differs")
+        if _proof_reads is not None and _proof_reads.store is not store:
+            raise ValueError("Proof reader belongs to another store")
+        if inventory is not None and _proof_reads is not None:
+            raise ValueError("Derived inventory and proof reader cannot both be supplied")
         self.store = store
         self.generation_id = generation_id
         self._inventory = inventory
+        self._proof_reads = _proof_reads
 
     def validate(self, view) -> DerivationClosure:
         if self._inventory is None:
-            self._inventory = _Inventory(self.store, self.generation_id)
+            self._inventory = _Inventory(
+                self.store, self.generation_id, _proof_reads=self._proof_reads
+            )
         return self._inventory.view(view)
 
     def validate_prose(self, extraction, *, require_member=True) -> DerivationClosure:
         if self._inventory is None:
-            self._inventory = _Inventory(self.store, self.generation_id)
+            self._inventory = _Inventory(
+                self.store, self.generation_id, _proof_reads=self._proof_reads
+            )
         return _validate_prose(self._inventory, extraction, require_member=require_member)
 
 

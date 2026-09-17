@@ -36,7 +36,7 @@ def test_proof_shares_view_and_prose_inventory(store, monkeypatch):
     proof = w.engine.build(w.selection)
     assert proof.retrieval_view_ids == frozenset({w.view.id})
     assert proof.prose_extraction_ids == frozenset({w.prose.id})
-    assert counts["EvidenceSpan", w.spans[1].id] == 1
+    assert counts["EvidenceSpan", w.spans[1].id] == 0
 
 
 def test_cached_nonexact_record_still_requires_exact_membership(store):
@@ -77,3 +77,23 @@ def test_generation_views_rejects_mismatched_inventory(store):
     inventory = d._Inventory(store, w.gen.id)
     with pytest.raises(ValueError, match="generation"):
         d.GenerationViews(store, "another-generation", inventory=inventory).validate(w.view)
+
+
+def test_standalone_inventory_refuses_incapable_generation_before_membership_reads(
+    store, monkeypatch
+):
+    w = world(store)
+    stored = store._knowledge_get("Generation", w.gen.id)
+    store._write_knowledge(stored.replace(coverage_json="{}"))
+    membership_reads = []
+    original = store._knowledge_rows
+
+    def tracked(kind, *, generation_id=None, where=None, ids=None):
+        if kind in {"GenerationEvidenceMember", "GenerationMember"}:
+            membership_reads.append(kind)
+        return original(kind, generation_id=generation_id, where=where, ids=ids)
+
+    monkeypatch.setattr(store, "_knowledge_rows", tracked)
+    with pytest.raises(ValueError, match="derived evidence capability"):
+        d.validate_view(store, w.gen.id, w.view)
+    assert membership_reads == []
