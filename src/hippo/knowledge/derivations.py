@@ -119,9 +119,7 @@ class _Inventory:
         if self.gen.status == "failed" or self.source is None:
             raise ValueError("Derived generation is unavailable")
         if _proof_reads is None:
-            exact_members = store._knowledge_rows(
-                "GenerationEvidenceMember", generation_id=generation_id
-            )
+            exact_members = store._knowledge_rows("GenerationEvidenceMember", generation_id=generation_id)
             revision_members = store._knowledge_rows("GenerationMember", generation_id=generation_id)
         else:
             exact_members = _proof_reads.scoped(
@@ -132,14 +130,8 @@ class _Inventory:
             ).values()
         # Scoped by generation. Unscoped, these walked every generation's members, and a batch
         # of rendered passages built one inventory per passage (see `GenerationViews`).
-        self.exact = {
-            (m.record_kind, m.record_id)
-            for m in exact_members
-        }
-        self.revisions = {
-            m.artifact_revision_id
-            for m in revision_members
-        }
+        self.exact = {(m.record_kind, m.record_id) for m in exact_members}
+        self.revisions = {m.artifact_revision_id for m in revision_members}
         self.visiting = set()
         # One immutable validation pass only; never share across proof builds or writes.
         self.records = {}
@@ -181,9 +173,7 @@ class _Inventory:
         dependencies = (
             self.store._knowledge_rows("DerivedDependency", where={"derived_record_id": identity})
             if self._proof_reads is None
-            else self._proof_reads.scoped(
-                "DerivedDependency", "derived_record_id", {identity}
-            ).values()
+            else self._proof_reads.scoped("DerivedDependency", "derived_record_id", {identity}).values()
         )
         closure = DerivationClosure(derived_record_ids=frozenset({identity}))
         tuples = []
@@ -311,16 +301,12 @@ class GenerationViews:
 
     def validate(self, view) -> DerivationClosure:
         if self._inventory is None:
-            self._inventory = _Inventory(
-                self.store, self.generation_id, _proof_reads=self._proof_reads
-            )
+            self._inventory = _Inventory(self.store, self.generation_id, _proof_reads=self._proof_reads)
         return self._inventory.view(view)
 
     def validate_prose(self, extraction, *, require_member=True) -> DerivationClosure:
         if self._inventory is None:
-            self._inventory = _Inventory(
-                self.store, self.generation_id, _proof_reads=self._proof_reads
-            )
+            self._inventory = _Inventory(self.store, self.generation_id, _proof_reads=self._proof_reads)
         return _validate_prose(self._inventory, extraction, require_member=require_member)
 
 

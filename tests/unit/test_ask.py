@@ -205,8 +205,7 @@ def test_the_block_rides_in_as_a_pseudo_passage_and_is_never_cited(coded: AppCon
         ]
     )
     expected_extras = [
-        graph.node_ids[graph.defining_passages(graph.idx_of[identity])[0]]
-        for identity in [place, *callees]
+        graph.node_ids[graph.defining_passages(graph.idx_of[identity])[0]] for identity in [place, *callees]
     ]
     expected = [*base, *expected_extras]
     assert answer.retrieval_passage_ids == expected

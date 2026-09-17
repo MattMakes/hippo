@@ -79,9 +79,7 @@ def test_generation_views_rejects_mismatched_inventory(store):
         d.GenerationViews(store, "another-generation", inventory=inventory).validate(w.view)
 
 
-def test_standalone_inventory_refuses_incapable_generation_before_membership_reads(
-    store, monkeypatch
-):
+def test_standalone_inventory_refuses_incapable_generation_before_membership_reads(store, monkeypatch):
     w = world(store)
     stored = store._knowledge_get("Generation", w.gen.id)
     store._write_knowledge(stored.replace(coverage_json="{}"))

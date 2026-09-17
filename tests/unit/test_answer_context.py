@@ -147,9 +147,7 @@ def _with_lineage(
         )
         for index, (passage_id, originals) in enumerate(lineage)
     )
-    unique_originals = {
-        identity: text for _passage_id, originals in lineage for identity, text in originals
-    }
+    unique_originals = {identity: text for _passage_id, originals in lineage for identity, text in originals}
     graph.original_citations = tuple(
         OriginalCitation(
             id=identity,
@@ -198,7 +196,10 @@ def test_two_hop_callees_and_containing_type_initializer_are_selected_without_br
         "uncertain",
     ]
     nodes = [
-        _node(identity, code_kind="module" if identity == "module" else "class" if identity == "Service" else "method")
+        _node(
+            identity,
+            code_kind="module" if identity == "module" else "class" if identity == "Service" else "method",
+        )
         for identity in identities
     ]
     passages = [Passage("base", "Base", "ranked", "source", "", 0)] + [
@@ -232,9 +233,7 @@ def test_two_hop_callees_and_containing_type_initializer_are_selected_without_br
 def test_only_kept_unambiguous_lexical_symbol_seeds_add_context() -> None:
     nodes = [_node(name) for name in ("kept", "dense", "ambiguous", "dropped", "data")]
     nodes[-1] = replace(nodes[-1], kind="data", code_kind="table")
-    passages = [Passage("base", "Base", "ranked", "source", "", 0)] + [
-        _passage(node.id) for node in nodes
-    ]
+    passages = [Passage("base", "Base", "ranked", "source", "", 0)] + [_passage(node.id) for node in nodes]
     graph = _graph(nodes, passages)
     seeds = [
         _seed("kept", graph.idx_of["kept"]),
@@ -298,9 +297,7 @@ def test_symbol_visit_bound_and_passage_deduplication() -> None:
 
 def test_one_seed_cycle_terminates_and_sorts_outgoing_edges() -> None:
     nodes = [_node(identity) for identity in ("seed", "a-target", "b-target")]
-    passages = [Passage("base", "Base", "ranked", "source", "", 0)] + [
-        _passage(node.id) for node in nodes
-    ]
+    passages = [Passage("base", "Base", "ranked", "source", "", 0)] + [_passage(node.id) for node in nodes]
     graph = _graph(
         nodes,
         passages,

@@ -139,9 +139,7 @@ def select_answer_citations(graph: GraphIndex, trace: Trace) -> CitationBundle:
         extra_chars += novel_chars
 
     accepted_citations = {
-        identity: originals[identity]
-        for item in accepted_items
-        for identity in item.citation_ids
+        identity: originals[identity] for item in accepted_items for identity in item.citation_ids
     }
     return CitationBundle(tuple(accepted_items), tuple(accepted_citations.values()))
 

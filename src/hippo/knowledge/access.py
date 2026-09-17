@@ -278,18 +278,14 @@ def _authorized_derivations(store, reads, interpretation, selection, spans, revi
         if view is None:
             raise ValueError("Selected derived retrieval view is missing")
         if generation_id not in inventories:
-            inventories[generation_id] = GenerationViews(
-                store, generation_id, _proof_reads=reads
-            )
+            inventories[generation_id] = GenerationViews(store, generation_id, _proof_reads=reads)
         include(inventories[generation_id].validate(view))
     for generation_id, identity in sorted(selected_outputs["ProseExtraction"]):
         extraction = prose.get(identity)
         if extraction is None:
             raise ValueError("Selected prose extraction is missing")
         if generation_id not in inventories:
-            inventories[generation_id] = GenerationViews(
-                store, generation_id, _proof_reads=reads
-            )
+            inventories[generation_id] = GenerationViews(store, generation_id, _proof_reads=reads)
         if include(inventories[generation_id].validate_prose(extraction)):
             visible_prose.add(identity)
     return dict(

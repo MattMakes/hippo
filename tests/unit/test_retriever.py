@@ -963,8 +963,7 @@ def test_via_expand_passage_selected_as_full_text_evidence_is_cited(code_index, 
         ]
     )
     expected_extras = [
-        graph.node_ids[graph.defining_passages(graph.idx_of[identity])[0]]
-        for identity in [place, *callees]
+        graph.node_ids[graph.defining_passages(graph.idx_of[identity])[0]] for identity in [place, *callees]
     ]
     expected = [*base, *expected_extras]
     explicitly_selected = expanded & set(expected_extras)
