@@ -6,6 +6,7 @@ import pytest
 
 from hippo import prompts
 from hippo.ask import answer_from_trace, ask, search
+from hippo.codegraph.model import symbol_id
 from hippo.context import AppContext
 from hippo.hipporag.answerer import Answer
 from hippo.hipporag.indexer import Chunk, index_source
@@ -188,9 +189,32 @@ def test_the_block_rides_in_as_a_pseudo_passage_and_is_never_cited(coded: AppCon
     trace, answer = ask(coded, PLACE)
     last = fake_ollama.calls[-1]["messages"][-1]["content"]
     assert last.startswith("Title: Code graph\n" + prompts.CODE_GRAPH_HEADER)
-    # The block is not a passage: it has no id, so it cannot end up in the citation list.
-    assert answer.passage_ids == [p.passage_id for p in trace.passages][:5]
+    graph = coded.graph()
+    base = [p.passage_id for p in trace.passages if not p.via_expand][:5]
+    source_id = next(
+        node.source_id
+        for node in graph.code_nodes
+        if node.path == "pyapp/orders.py" and node.qualname == "OrderService.place"
+    )
+    place = symbol_id(source_id, "pyapp/orders.py", "OrderService.place", "method")
+    callees = sorted(
+        [
+            symbol_id(source_id, "pyapp/billing.py", "send_invoice", "function"),
+            symbol_id(source_id, "pyapp/billing.py", "total", "function"),
+            symbol_id(source_id, "pyapp/orders.py", "OrderService.log", "method"),
+        ]
+    )
+    expected_extras = [
+        graph.node_ids[graph.defining_passages(graph.idx_of[identity])[0]]
+        for identity in [place, *callees]
+    ]
+    expected = [*base, *expected_extras]
+    assert answer.retrieval_passage_ids == expected
+    assert answer.passage_ids == expected  # legacy fixture: each retrieval passage is its own original
     assert all(pid.startswith("passage-") for pid in answer.passage_ids)
+    assert all(graph.passage_by_id(pid).text in last for pid in expected)
+    # The graph summary is prompt context, not a source with a fabricated citation identity.
+    assert prompts.CODE_GRAPH_HEADER not in answer.passage_ids
 
 
 def test_there_is_no_block_when_the_question_named_no_code(coded: AppContext) -> None:

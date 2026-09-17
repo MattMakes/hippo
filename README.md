@@ -140,7 +140,9 @@ Step by step:
 3. **LLM filter.** The LLM looks at those candidates and keeps only the ones that really help answer the question (the paper calls this recognition memory). If it keeps none, hippo falls back to plain embedding search.
 4. **PPR.** The entities of the kept facts become seed nodes. Each seed's weight is the fact's similarity score, divided by how many passages mention that entity (a name that appears everywhere is a weak clue). Passages also get a tiny seed weight from their own similarity to the question. Personalized PageRank spreads that activation across the graph.
 5. **Passages.** Passages are ranked by their PageRank score.
-6. **Answer.** The LLM reads the top five and answers after a short "Thought:".
+6. **Answer.** By default the chat model reads the top five with the reference four-message
+   "Thought:" / "Answer:" protocol. An explicit `HIPPO_QA_MODEL` instead uses the one-call grounded
+   direct-answer profile described below; retrieval and extraction remain on the chat model.
 
 Every step is recorded in a trace, which is what the Analyze page shows.
 
@@ -319,7 +321,8 @@ Everything is an environment variable (see `.env.example`; `docker compose` read
 | `NEO4J_USER` | `neo4j` | (`HIPPO_STORE=neo4j`) Neo4j user. |
 | `NEO4J_PASSWORD` | `hippo-password` | (`HIPPO_STORE=neo4j`) Neo4j password. `./hippo up` writes a random one to `.env` on the first run; Neo4j keeps the password it was created with. |
 | `OLLAMA_URL` | `http://localhost:11434` | Where the models run. `./hippo up` sets this for you. |
-| `HIPPO_LLM_MODEL` | `qwen3:8b` | The chat model: extracts facts, filters facts, answers, judges. |
+| `HIPPO_LLM_MODEL` | `qwen3:8b` | The base chat model: extracts and filters facts, selects retrieval evidence, supplies default reference answers, and judges evaluations. |
+| `HIPPO_QA_MODEL` | *(empty)* | Optional model for final answers only. Empty preserves the default reference protocol and base 8B model. A nonempty value enables one direct, source-only call with a 4096-token cap, temperature 0, `top_p=0.95`, `top_k=20`, `min_p=0.0`, and seed 0. The tested opt-in 27.3B `qwen3.8:latest` profile passed 16/18 fixed production cases; one answer omitted three supplied names and another changed one accented Unicode value. These accepted limits are documented in the [final quality review](ai_docs/reports/2026-09-16-qa-profile-final-quality-review.md) and [performance report](ai_docs/reports/2026-09-16-performance-improvements.md). A larger model costs more memory and latency. |
 | `HIPPO_EMBED_MODEL` | `nomic-embed-text` | The embedding model. Changing it means re-indexing everything. |
 | `HIPPO_NUM_CTX` | `8192` | Context window asked of Ollama (qwen3's default 4k is too small). |
 | `HIPPO_LLM_TIMEOUT` | `600` | Seconds to wait for one LLM reply. |
@@ -347,7 +350,7 @@ These are **not** environment variables. They are stored in the graph itself and
 | `node_specificity` | on | Entities mentioned in many passages get a smaller starting weight (like IDF for search). |
 | `synonymy_threshold` | 0.8 | Embedding similarity above which two names get linked as synonyms (used while indexing). |
 | `retrieval_top_k` | 200 | How many passages a search returns and keeps in the trace. |
-| `qa_top_k` | 5 | How many passages the model reads before answering. |
+| `qa_top_k` | 5 | Size of the ranked base passage slice the model reads; qualifying code questions may add bounded source evidence below. |
 
 The code graph adds eleven more. All of them are inert on a memory with no code source, and setting the first four to `0 / 0 / 0 / off` makes a memory that *does* hold code rank a prose question exactly as if the code had never been indexed:
 
@@ -357,10 +360,10 @@ The code graph adds eleven more. All of them are inert on a memory with no code 
 | `code_seed_weight` | 1.0 | 0.0–10.0 | Anchor seed mass; 0 = ignore symbols named in the question. |
 | `code_dense_seeds` | 5 | 0–20 | Code passages similar to the question that also seed their symbol. |
 | `code_select` | on | on/off | The extra keep/drop/expand pass by the model, when code seeds fired. |
-| `code_theta` | 0.5 | 0.0–1.0 | Minimum confidence for the path tools and the answer block (never the graph search). |
+| `code_theta` | 0.5 | 0.0–1.0 | Minimum confidence for the path tools, answer block, and supplemental outgoing-call walk (never the graph search). |
 | `code_triples_chars` | 1500 | 0–8000 | Size cap of the Code graph block shown to the model. |
 | `code_community_boost` | 0.0 | 0.0–1.0 | Post-search score bonus for passages in a seed's subsystem. Off by default. |
-| `code_expand_max` | 10 | 0–20 | Neighbours fetched per "expand", confidence 0.75 and above. |
+| `code_expand_max` | 10 | 0–20 | Neighbours fetched per "expand" and cap on additional original source evidence (internally capped at 10); 0 disables both. |
 | `code_history_depth` | 200 | 0–2000 | First-parent commits read per repo source; 0 disables history. |
 | `code_git_timeout_s` | 10 | 1–120 | Per-commit `git show` budget; a timeout skips that commit. |
 | `code_history_total_s` | 120 | 10–3600 | Whole-pass budget for reading history; stops early and keeps what it read. |

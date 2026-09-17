@@ -13,6 +13,7 @@ actually proved.
 """
 
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import numpy as np
@@ -276,31 +277,47 @@ def test_hidden_wrong_profile_evidence_cannot_change_routing(ctx, tmp_path, monk
 # ------------------------------------------------ denial between owner and output
 
 
-def test_authorization_change_during_output_denies_and_keeps_its_own_response(ctx, monkeypatch):
+@pytest.mark.parametrize("configured_qa", [None, "same-base"], ids=["inherited", "explicit-same-base"])
+def test_authorization_change_during_output_denies_and_keeps_its_own_response(
+    ctx, monkeypatch, configured_qa
+):
     published(ctx.store, "managed", profile=ctx.ollama.embed_model, dimension=DIM)
+    expected_qa_model = ctx.config.llm_model if configured_qa == "same-base" else None
+    ctx.config = replace(ctx.config, qa_model=expected_qa_model)
+    ctx.ollama.qa_model = expected_qa_model
     original = ask_module._answer_from_trace
+    received_qa_models = []
 
-    def revoke(graph, model, trace):
+    def revoke(graph, model, trace, *, qa_model=None):
+        received_qa_models.append(qa_model)
         ctx.store._bump_authorization_epoch()
-        return original(graph, model, trace)
+        return original(graph, model, trace, qa_model=qa_model)
 
     monkeypatch.setattr(ask_module, "_answer_from_trace", revoke)
     with pytest.raises(AuthorizationChanged) as caught:
         ask_module.ask(ctx, QUESTION, access=EVERYTHING)
+    assert received_qa_models == [expected_qa_model]
     assert public_failure(caught.value) is None, "authorization keeps the existing permission response"
 
 
-def test_embedding_tag_change_during_output_denies_with_a_rebuild_code(ctx, monkeypatch):
+@pytest.mark.parametrize("configured_qa", [None, "same-base"], ids=["inherited", "explicit-same-base"])
+def test_embedding_tag_change_during_output_denies_with_a_rebuild_code(ctx, monkeypatch, configured_qa):
     published(ctx.store, "managed", profile=ctx.ollama.embed_model, dimension=DIM)
+    expected_qa_model = ctx.config.llm_model if configured_qa == "same-base" else None
+    ctx.config = replace(ctx.config, qa_model=expected_qa_model)
+    ctx.ollama.qa_model = expected_qa_model
     original = ask_module._answer_from_trace
+    received_qa_models = []
 
-    def retag(graph, model, trace):
+    def retag(graph, model, trace, *, qa_model=None):
+        received_qa_models.append(qa_model)
         ctx.ollama.embed_model = "some-other-tag"
-        return original(graph, model, trace)
+        return original(graph, model, trace, qa_model=qa_model)
 
     monkeypatch.setattr(ask_module, "_answer_from_trace", retag)
     with pytest.raises(EmbeddingProfileChanged) as caught:
         ask_module.ask(ctx, QUESTION, access=EVERYTHING)
+    assert received_qa_models == [expected_qa_model]
     failure = public_failure(caught.value)
     assert (failure.code, failure.http_status) == ("retrieval_rebuild_required", 409)
 

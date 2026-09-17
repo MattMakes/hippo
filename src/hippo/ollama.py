@@ -37,6 +37,8 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 CONNECT_TIMEOUT = 10.0  # seconds to reach Ollama at all; an unreachable host should fail fast
 PULL_READ_TIMEOUT = 300.0  # seconds without any download progress before a model pull is given up
+_COMPLETE_REQUEST_ERROR = "Ollama could not complete the answer"
+_COMPLETE_RESPONSE_ERROR = "Ollama returned an invalid complete-answer response"
 
 
 class OllamaError(RuntimeError):
@@ -50,12 +52,14 @@ class Ollama:
         llm_model: str,
         embed_model: str,
         *,
+        qa_model: str | None = None,
         num_ctx: int = 8192,
         timeout_seconds: float = 600.0,
         client: httpx.Client | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.llm_model = llm_model
+        self.qa_model = qa_model
         self.embed_model = embed_model
         self.num_ctx = num_ctx
         self.timeout_seconds = timeout_seconds
@@ -82,7 +86,11 @@ class Ollama:
         return _same_model(name, self.installed_models())
 
     def required_models(self) -> list[str]:
-        return [self.llm_model, self.embed_model]
+        required: list[str] = []
+        for model in (self.llm_model, self.embed_model, self.qa_model):
+            if model is not None and not any(_model_key(model) == _model_key(item) for item in required):
+                required.append(model)
+        return required
 
     def missing_models(self) -> list[str]:
         installed = self.installed_models()
@@ -129,11 +137,27 @@ class Ollama:
         *,
         max_tokens: int | None = None,
         temperature: float = 0.0,
+        model: str | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        min_p: float | None = None,
+        seed: int | None = None,
+        require_complete: bool = False,
         request_guard: Callable[[], None] | None = None,
     ) -> str:
         """Send a chat conversation and get the assistant's reply as plain text."""
         return self._chat(
-            messages, schema=None, max_tokens=max_tokens, temperature=temperature, request_guard=request_guard
+            messages,
+            schema=None,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            model=model,
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            seed=seed,
+            require_complete=require_complete,
+            request_guard=request_guard,
         )
 
     def chat_json(
@@ -161,9 +185,24 @@ class Ollama:
         )
         return parse_json_object(raw)
 
-    def _chat(self, messages, *, schema, max_tokens, temperature, request_guard=None) -> str:
+    def _chat(
+        self,
+        messages,
+        *,
+        schema,
+        max_tokens,
+        temperature,
+        model=None,
+        top_p=None,
+        top_k=None,
+        min_p=None,
+        seed=None,
+        require_complete=False,
+        request_guard=None,
+    ) -> str:
+        selected_model = model or self.llm_model
         body: dict[str, Any] = {
-            "model": self.llm_model,
+            "model": selected_model,
             "messages": messages,
             "stream": False,
             "keep_alive": "15m",
@@ -171,13 +210,43 @@ class Ollama:
         }
         if max_tokens:
             body["options"]["num_predict"] = max_tokens
+        for name, value in (("top_p", top_p), ("top_k", top_k), ("min_p", min_p), ("seed", seed)):
+            if value is not None:
+                body["options"][name] = value
         if schema is not None:
             body["format"] = schema
-        if "thinking" in self._model_capabilities(self.llm_model, request_guard=request_guard):
+        if "thinking" in self._model_capabilities(
+            selected_model,
+            request_guard=request_guard,
+            bounded_errors=require_complete,
+        ):
             body["think"] = False  # qwen3 & friends: skip the long "<think>" monologue, we want the answer
-        data = self._request("POST", "/api/chat", json=body, request_guard=request_guard).json()
+        response = self._request(
+            "POST",
+            "/api/chat",
+            json=body,
+            request_guard=request_guard,
+            bounded_errors=require_complete,
+        )
+        try:
+            data = response.json()
+        except ValueError as exc:
+            if require_complete:
+                raise OllamaError(_COMPLETE_RESPONSE_ERROR) from exc
+            raise
+        if require_complete:
+            if not isinstance(data, dict):
+                raise OllamaError("Ollama returned an invalid complete-answer response")
+            if data.get("done") is not True or data.get("done_reason") != "stop":
+                raise OllamaError("Ollama returned an incomplete answer")
+            message = data.get("message")
+            if not isinstance(message, dict) or not isinstance(message.get("content"), str):
+                raise OllamaError("Ollama returned an invalid complete-answer response")
         content = data.get("message", {}).get("content", "")
-        return _THINK_BLOCK.sub("", content).strip()
+        cleaned = _THINK_BLOCK.sub("", content).strip()
+        if require_complete and not cleaned:
+            raise OllamaError("Ollama returned an empty answer")
+        return cleaned
 
     # --------------------------------------------------------------- embeddings
 
@@ -264,17 +333,30 @@ class Ollama:
 
     # ----------------------------------------------------------------- helpers
 
-    def _model_capabilities(self, name: str, *, request_guard=None) -> set[str]:
+    def _model_capabilities(self, name: str, *, request_guard=None, bounded_errors: bool = False) -> set[str]:
         if name not in self._capabilities:
             try:
-                data = self._request(
-                    "POST", "/api/show", json={"model": name}, request_guard=request_guard
-                ).json()
-                self._capabilities[name] = set(data.get("capabilities", []))
+                response = self._request(
+                    "POST",
+                    "/api/show",
+                    json={"model": name},
+                    request_guard=request_guard,
+                    bounded_errors=bounded_errors,
+                )
             except OllamaError:
-                if request_guard is not None:
+                if bounded_errors or request_guard is not None:
                     raise  # Guard failures (including identity errors) must not become a capability miss.
                 self._capabilities[name] = set()
+            else:
+                try:
+                    data = response.json()
+                    if bounded_errors and not isinstance(data, dict):
+                        raise ValueError("expected capability object")
+                    self._capabilities[name] = set(data.get("capabilities", []))
+                except (AttributeError, ValueError) as exc:
+                    if bounded_errors:
+                        raise OllamaError(_COMPLETE_RESPONSE_ERROR) from exc
+                    raise
         return self._capabilities[name]
 
     def _request(
@@ -285,6 +367,7 @@ class Ollama:
         json: Any = None,
         attempts: int = 3,
         request_guard: Callable[[], None] | None = None,
+        bounded_errors: bool = False,
     ) -> httpx.Response:
         """
         One HTTP call with a little patience: network hiccups and 5xx replies are retried.
@@ -306,6 +389,8 @@ class Ollama:
                 if request_guard is not None:
                     request_guard()
             if isinstance(transport_error, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+                if bounded_errors:
+                    raise OllamaError(_COMPLETE_REQUEST_ERROR) from transport_error
                 raise OllamaError(
                     f"Ollama did not answer {method} {path} within {self.timeout_seconds:.0f}s; "
                     "raise HIPPO_LLM_TIMEOUT or use a smaller model"
@@ -323,16 +408,26 @@ class Ollama:
                 time.sleep(1.5 * (attempt + 1))
                 continue
             if resp.status_code == 404:
+                if bounded_errors:
+                    raise OllamaError(_COMPLETE_REQUEST_ERROR)
                 raise OllamaError(
                     f"Ollama says: {resp.text.strip()} (is the model installed? open Settings to pull it)"
                 )
             if resp.status_code >= 500:
-                last_error = OllamaError(f"Ollama returned HTTP {resp.status_code}: {resp.text[:300]}")
+                last_error = OllamaError(
+                    _COMPLETE_REQUEST_ERROR
+                    if bounded_errors
+                    else f"Ollama returned HTTP {resp.status_code}: {resp.text[:300]}"
+                )
                 time.sleep(1.5 * (attempt + 1))
                 continue
             if resp.status_code >= 400:
+                if bounded_errors:
+                    raise OllamaError(_COMPLETE_REQUEST_ERROR)
                 raise OllamaError(f"Ollama returned HTTP {resp.status_code}: {resp.text[:300]}")
             return resp
+        if bounded_errors:
+            raise OllamaError(_COMPLETE_REQUEST_ERROR) from last_error
         raise OllamaError(f"Ollama at {self.base_url} is not answering: {last_error}")
 
 
@@ -365,5 +460,9 @@ def _base_name(model: str) -> str:
 
 def _same_model(wanted: str, installed: list[str]) -> bool:
     """'qwen3:8b' matches 'qwen3:8b'; 'nomic-embed-text' matches 'nomic-embed-text:latest'."""
-    wanted_full = wanted if ":" in wanted else wanted + ":latest"
-    return any(name == wanted or name == wanted_full for name in installed)
+    wanted_full = _model_key(wanted)
+    return any(_model_key(name) == wanted_full for name in installed)
+
+
+def _model_key(model: str) -> str:
+    return model if ":" in model else model + ":latest"

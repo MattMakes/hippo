@@ -86,11 +86,22 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
 
 ### Reading (`answerer.py` vs `qa` + `prompts/templates/rag_qa_musique.py`)
 
-* The same `rag_qa` system prompt, the same "Thought:" / "Answer:" protocol and the
-  same one-shot demonstration (Neville A. Stanton, answer 1862).
-* The top `qa_top_k` passages, best first, followed by `Question: ...\nThought: `.
+* By default, the same system text, "Thought:" / "Answer:" protocol and one-shot demonstration
+  (Neville A. Stanton, answer 1862) are retained.
+* The top `qa_top_k` passages form the ranked base. A code question may append a bounded set of
+  resolved original source passages (adaptation 15), followed by `Question: ...\nThought: `.
 * The answer is the text after "Answer:"; the reference falls back to the whole
   reply when the marker is missing, and so do we.
+* `HIPPO_QA_MODEL` is an explicit adaptation: it replaces only that final request with a two-message,
+  source-only direct-answer profile and a 4096-token cap. It does not change retrieval, extraction,
+  citations, the bounded code evidence, or the base 8B model used elsewhere. The tested opt-in
+  27.3B `qwen3.8:latest` profile passed 16 of the fixed 18 production cases: Q8 omitted three names
+  present in its evidence, and S4 changed one accented Unicode value. The user accepted those known
+  limitations for retention; this is not an 18/18 or universal-quality claim. The profile also
+  requires a normal provider stop and a nonempty public answer after the preserved parser;
+  provider-truncated, malformed, or empty output is an error, never a draft or hidden thinking
+  fallback. A semantically incomplete normal-stopped answer can pass structural validation and
+  accounts for a known quality miss.
 
 ## Adaptations
 
@@ -242,12 +253,19 @@ implementation, `hipporag/HippoRAG.py`, `rerank.py`, `prompts/` and
       a drop inert, reordering the same list. A dropped passage sinks below the kept ones and the
       unjudged ones alike, but is never removed — a wrong drop should cost a position, not erase
       evidence — and an unparsable or failing reply keeps everything, mirroring the fact filter's
-      own fallback. Expanded neighbours are appended at score 0.0 and excluded from the `qa_top_k`
-      slice, so they are never cited.
-    * **A pseudo-passage of typed relations.** `rag_qa` is byte-identical: it formats
-      `(title, text)` pairs and assumes nothing about a passage, so the code block is prepended as
-      one more pair titled `Code graph`, inside `answer_question`. It never enters
-      `Answer.passage_ids`. Its body is a fixed grammar — `a -[KIND ω provenance]-> b`, then
+      own fallback. Expanded neighbours are appended at score 0.0 and excluded from the ranked
+      base; `via_expand` alone never makes one a citation.
+    * **Bounded original source for code answers.** From kept lexical symbols, hippo follows
+      qualifying outgoing calls for at most two hops (using `code_theta`) and considers their full
+      defining passages plus a containing type's initializer. It appends at most
+      `min(code_expand_max, 10)` novel resolved originals and 6,000 novel source characters,
+      accepting or skipping each dependency group whole. Thus a `via_expand` passage can still be
+      cited when this independent source walk selects it; setting `code_expand_max = 0` disables
+      the supplement. The ranked base is unchanged.
+    * **A pseudo-passage of typed relations.** The answer message still formats `(title, text)`
+      pairs, so the code block is prepended as one more pair titled `Code graph`, inside
+      `answer_question`. It has no fake source id and never enters `Answer.passage_ids`. Its body
+      is a fixed grammar — `a -[KIND ω provenance]-> b`, then
       `Tests:`, `Commits:`, `Subsystems:` — under a one-sentence legend, cut at
       `code_triples_chars` on a line boundary, with the most confident relations first so the cut
       drops the weakest evidence rather than an arbitrary tail.

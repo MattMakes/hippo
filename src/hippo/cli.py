@@ -625,6 +625,10 @@ def cmd_settings(args: argparse.Namespace) -> int:
         print(f"  server       = {remote.base_url} (running; the settings below come from it)")
     print(f"  ollama_url   = {config.ollama_url}")
     print(f"  llm_model    = {config.llm_model}")
+    if config.qa_model is None:
+        print(f"  qa_model     = inherited ({config.llm_model}; default reference protocol)")
+    else:
+        print(f"  qa_model     = {config.qa_model} (grounded final-answer profile)")
     print(f"  embed_model  = {config.embed_model}")
     print(f"  data_dir     = {config.data_dir}")
     print("\nRetrieval settings (change them on the Settings page):")

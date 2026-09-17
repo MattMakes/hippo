@@ -200,7 +200,12 @@ class FakeOllama:
             self.calls.append(body)
             reply = self.chat(body["messages"])
             return httpx.Response(
-                200, json={"message": {"role": "assistant", "content": reply}, "done_reason": "stop"}
+                200,
+                json={
+                    "message": {"role": "assistant", "content": reply},
+                    "done": True,
+                    "done_reason": "stop",
+                },
             )
         return httpx.Response(404, json={"error": f"unknown path {path}"})
 
@@ -221,7 +226,10 @@ class FakeOllama:
         if system.startswith("You are a critical component"):
             return json.dumps({"fact": self.filter_facts(user)})
         if system.startswith("As an advanced reading comprehension"):
-            return self.answer(user)
+            answer = self.answer(user)
+            if "Return a concise, complete final answer directly." in system:
+                return answer.rsplit("Answer:", 1)[-1].strip()
+            return answer
         if system.startswith("You write multi-hop evaluation questions"):
             return json.dumps(self.multihop_question(user))
         if system.startswith("You write evaluation questions"):

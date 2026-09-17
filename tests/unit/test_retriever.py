@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from hippo import prompts
-from hippo.ask import answer_from_trace
+from hippo.ask import _answer_from_trace, answer_from_trace
 from hippo.codegraph.model import symbol_id
 from hippo.hipporag.graph_index import CODE_KINDS, EdgeEdit, GraphIndex
 from hippo.hipporag.indexer import Chunk, index_source
@@ -929,19 +929,53 @@ def test_expand_appends_neighbours_after_the_kept_list_at_score_zero(code_retrie
     assert [p.rank for p in trace.passages] == list(range(1, len(trace.passages) + 1))
 
 
-def test_expanded_passages_are_never_part_of_what_the_model_reads(code_index) -> None:
-    # S2.14c: `answer_from_trace`'s slice *is* the citation list, so a neighbour fetched by
-    # "expand" must not enter it. It is summarised inside the Code graph block instead.
+def test_via_expand_passages_are_not_automatic_answer_evidence(code_index) -> None:
     ctx, _source_id = code_index
     retriever = Retriever(ctx.graph(), ctx.ollama)
     trace = retriever.retrieve(PLACE, settings(retrieval_top_k=8, qa_top_k=5), select_fn=expand_all)
     assert any(p.via_expand for p in trace.passages)
+    # Keep the expansion rows while disabling the separate full-text evidence walk.
+    trace.settings["code_expand_max"] = 0
 
     answer = answer_from_trace(ctx, trace)
     expanded = {p.passage_id for p in trace.passages if p.via_expand}
     assert set(answer.passage_ids).isdisjoint(expanded)
-    assert len(answer.passage_ids) == 5
+    expected = [p.passage_id for p in trace.passages if not p.via_expand][:5]
+    assert answer.retrieval_passage_ids == expected
+    assert answer.passage_ids == expected
     assert answer.context_block.startswith(prompts.CODE_GRAPH_HEADER)
+
+
+def test_via_expand_passage_selected_as_full_text_evidence_is_cited(code_index, fake_ollama) -> None:
+    ctx, source_id = code_index
+    graph = ctx.graph()
+    trace = Retriever(graph, ctx.ollama).retrieve(
+        PLACE, settings(retrieval_top_k=8, qa_top_k=5), select_fn=expand_all
+    )
+    expanded = {p.passage_id for p in trace.passages if p.via_expand}
+    base = [p.passage_id for p in trace.passages if not p.via_expand][:5]
+    place = symbol_id(source_id, "pyapp/orders.py", "OrderService.place", "method")
+    callees = sorted(
+        [
+            symbol_id(source_id, "pyapp/billing.py", "send_invoice", "function"),
+            symbol_id(source_id, "pyapp/billing.py", "total", "function"),
+            symbol_id(source_id, "pyapp/orders.py", "OrderService.log", "method"),
+        ]
+    )
+    expected_extras = [
+        graph.node_ids[graph.defining_passages(graph.idx_of[identity])[0]]
+        for identity in [place, *callees]
+    ]
+    expected = [*base, *expected_extras]
+    explicitly_selected = expanded & set(expected_extras)
+    assert explicitly_selected, "the lexical walk independently reaches a selector-expanded source"
+
+    answer = _answer_from_trace(graph, ctx.ollama, trace)
+    assert answer.retrieval_passage_ids == expected
+    assert answer.passage_ids == expected
+    assert explicitly_selected <= set(answer.passage_ids)
+    prompt = fake_ollama.calls[-1]["messages"][-1]["content"]
+    assert all(graph.passage_by_id(pid).text in prompt for pid in expected)
 
 
 def test_expand_max_zero_fetches_nothing(code_retriever: Retriever) -> None:

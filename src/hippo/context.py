@@ -121,11 +121,14 @@ class AppContext:
     @classmethod
     def from_env(cls, ollama: Ollama | None = None) -> AppContext:
         config = load_config()
+        if ollama is not None and ollama.qa_model != config.qa_model:
+            raise ValueError("Injected Ollama client QA model does not match HIPPO_QA_MODEL")
         store = open_store(config)
         ollama = ollama or Ollama(
             config.ollama_url,
             config.llm_model,
             config.embed_model,
+            qa_model=config.qa_model,
             num_ctx=config.num_ctx,
             timeout_seconds=config.llm_timeout_seconds,
         )

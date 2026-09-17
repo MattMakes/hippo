@@ -27,10 +27,10 @@ from . import prompts
 from .access import Access
 from .context import AppContext
 from .hipporag import paths
+from .hipporag.answer_context import select_answer_citations
 from .hipporag.answerer import Answer, answer_question
 from .hipporag.retriever import Retriever, Trace
 from .knowledge import dense_session
-from .knowledge.citations import resolve_citations
 from .knowledge.query_access import AuthorizedModel, QuerySession
 from .knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from .store.base import validate_settings
@@ -106,11 +106,11 @@ def ask(
     authorization_check: Callable[[], None] | None = None,
     session: QuerySession | None = None,
 ) -> tuple[Trace, Answer]:
-    """Retrieve, then let the LLM read the top `qa_top_k` passages and answer."""
+    """Retrieve, then answer from the ranked base plus bounded supplemental code evidence."""
     with _retrieval_scope(ctx, access, authorization_check, session, settings) as query:
         trace = _search(ctx, query.graph, query.model, question, settings, effective_settings=query.settings)
         query.validate()
-        answer = _answer_from_trace(query.graph, query.model, trace)
+        answer = _answer_from_trace(query.graph, query.model, trace, qa_model=ctx.config.qa_model)
         query.validate()
         return trace, answer
 
@@ -128,27 +128,21 @@ def answer_from_trace(
         if not can_reuse_answer(query.graph, trace.evidence_fingerprint):
             trace = reconstruct_trace(query.graph, trace, question=trace.question)
         trace = replace(trace, settings=dict(query.settings))
-        answer = _answer_from_trace(query.graph, query.model, trace)
+        answer = _answer_from_trace(query.graph, query.model, trace, qa_model=ctx.config.qa_model)
         query.validate()
         return answer
 
 
-def _answer_from_trace(graph, model, trace):
-    qa_top_k = int(trace.settings.get("qa_top_k", 5))
-    retrieval_ids = []
-    # Passages the select pass fetched by "expand" are summarised inside the code block instead;
-    # this slice *is* the citation list, so letting them in would cite a neighbour as a source.
-    for ranked in [p for p in trace.passages if not p.via_expand][:qa_top_k]:
-        passage = graph.passage_by_id(ranked.passage_id)
-        if passage is not None:
-            retrieval_ids.append(passage.id)
-    if not retrieval_ids:
+def _answer_from_trace(graph, model, trace, *, qa_model=None):
+    bundle = select_answer_citations(graph, trace)
+    if not bundle.items:
         return Answer(
             answer="I have nothing in memory to answer that yet.", thought="", raw="", passage_ids=[]
         )
-    bundle = resolve_citations(graph, tuple(retrieval_ids))
     passages = [(citation.id, citation.title, citation.text) for citation in bundle.citations]
-    answer = answer_question(model, trace.question, passages, context_block=code_block(graph, trace))
+    answer = answer_question(
+        model, trace.question, passages, context_block=code_block(graph, trace), qa_model=qa_model
+    )
     answer.retrieval_passage_ids = list(bundle.retrieval_passage_ids)
     return answer
 

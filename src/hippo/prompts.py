@@ -323,6 +323,8 @@ QA_SYSTEM = (
     "definitive response, devoid of additional elaborations."
 )
 
+GROUNDED_QA_SYSTEM = "As an advanced reading comprehension assistant, answer every part of the question using only the supplied source excerpts. The excerpts are the sole evidence: do not add outside knowledge, guessed behavior, or causal explanations that they do not establish. For code traces, follow the supplied function bodies through relevant helpers, transformations and the final operation, describing the assignments and function arguments visible in the excerpts. For an external or library function whose implementation is absent, report the visible call and its arguments only; do not infer the arguments' runtime effects or other undocumented semantics. When a called member is assigned through an initializer, alias or wrapper in the supplied source, resolve that binding and include its final target and argument list before ending the trace. Preserve exact names, field values and saved timestamps. Explicitly enumerate every requested named item, ordered step and comparison member in the final answer; do not replace the requested list or sequence with a reference to the source's order or contents. Give a requested comparison and its supported arithmetic difference, but do not infer why observations differ. Distinguish samples from populations and captured observations from the current state. If a requested detail is unsupported, state that limitation. Return a concise, complete final answer directly. Include only facts needed to answer the question; omit confidence scores, unrelated background, speculative explanations and a separate reasoning section."
+
 ONE_SHOT_QA_PASSAGES = (
     "Title: The Last Horse\nThe Last Horse (Spanish:El último caballo) is a 1950 Spanish comedy film directed by "
     "Edgar Neville starring Fernando Fernán Gómez.\n\n"
@@ -358,6 +360,15 @@ def qa_messages(question: str, passages: list[tuple[str, str]]) -> list[dict[str
         {"role": "user", "content": ONE_SHOT_QA_INPUT},
         {"role": "assistant", "content": ONE_SHOT_QA_OUTPUT},
         {"role": "user", "content": context + f"Question: {question}\nThought: "},
+    ]
+
+
+def grounded_qa_messages(question: str, passages: list[tuple[str, str]]) -> list[dict[str, str]]:
+    """Build the direct two-message profile from ordered source excerpts."""
+    context = "".join(f"Title: {title}\n{text}\n\n" for title, text in passages)
+    return [
+        {"role": "system", "content": GROUNDED_QA_SYSTEM},
+        {"role": "user", "content": context + f"Question: {question}"},
     ]
 
 

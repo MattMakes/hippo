@@ -14,9 +14,18 @@
       <tbody>
       {% for name, ok in status.models.items() %}
         {% set p = status.pulling.get(name) %}
+        {% set model_key = name[:-7] if name.endswith(':latest') else name %}
+        {% set llm_key = config.llm_model[:-7] if config.llm_model.endswith(':latest') else config.llm_model %}
+        {% set qa_key = (config.qa_model[:-7] if config.qa_model.endswith(':latest') else config.qa_model) if config.qa_model else none %}
+        {% set embed_key = config.embed_model[:-7] if config.embed_model.endswith(':latest') else config.embed_model %}
         <tr>
           <td><code>{{ name }}</code></td>
-          <td class="muted">{{ 'reading, extracting facts, filtering, answering, judging' if name == config.llm_model else 'embeddings (turning text into vectors)' }}</td>
+          <td class="muted">
+            {% if model_key == llm_key %}extracting facts, filtering, retrieval selection and judging; {% endif %}
+            {% if qa_key is none and model_key == llm_key %}default reference answers; {% endif %}
+            {% if qa_key is not none and model_key == qa_key %}grounded final answers; {% endif %}
+            {% if model_key == embed_key %}embeddings (turning text into vectors){% endif %}
+          </td>
           <td>
             {% if ok %}<span class="pill ok"><span class="dot"></span>installed</span>
             {% elif p and not p.done %}<span class="pill warn">⬇ {{ p.status }} {% if p.total %}{{ p.completed | pct(p.total) }}%{% endif %}</span>

@@ -1,8 +1,9 @@
 """
 Step 5 of HippoRAG: read the top passages and answer.
 
-The reference's `rag_qa` prompt asks the model to think out loud after
-"Thought:" and finish with a short line after "Answer:". We keep both parts.
+The default reference `rag_qa` prompt asks the model to think out loud after
+"Thought:" and finish with a short line after "Answer:". An explicit QA model
+uses the grounded direct-answer profile instead.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .. import prompts
-from ..ollama import Ollama
+from ..ollama import Ollama, OllamaError
 
 QA_MAX_TOKENS = 1024
 
@@ -29,10 +30,16 @@ class Answer:
 
 
 def answer_question(
-    ollama: Ollama, question: str, passages: list[tuple[str, str, str]], context_block: str = ""
+    ollama: Ollama,
+    question: str,
+    passages: list[tuple[str, str, str]],
+    context_block: str = "",
+    *,
+    qa_model: str | None = None,
 ) -> Answer:
     """
-    `passages` is a list of (passage_id, title, text), best first, already cut to qa_top_k.
+    `passages` is a list of (passage_id, title, text), with the ranked base first and any
+    bounded supplemental code evidence after it.
 
     `context_block` is the typed relations behind a code question. It is prepended *here*, inside
     the prompt, rather than by the caller pushing a synthetic passage onto the list: the list is
@@ -42,8 +49,23 @@ def answer_question(
     pairs = [(title, text) for _, title, text in passages]
     if context_block:
         pairs.insert(0, (CODE_GRAPH_TITLE, context_block))
-    raw = ollama.chat_text(prompts.qa_messages(question, pairs), max_tokens=QA_MAX_TOKENS)
+    if qa_model is None:
+        raw = ollama.chat_text(prompts.qa_messages(question, pairs), max_tokens=QA_MAX_TOKENS)
+    else:
+        raw = ollama.chat_text(
+            prompts.grounded_qa_messages(question, pairs),
+            model=qa_model,
+            max_tokens=4096,
+            temperature=0.0,
+            top_p=0.95,
+            top_k=20,
+            min_p=0.0,
+            seed=0,
+            require_complete=True,
+        )
     thought, answer = prompts.split_answer(raw)
+    if qa_model is not None and not answer:
+        raise OllamaError("Ollama returned an empty answer")
     return Answer(
         answer=answer,
         thought=thought,

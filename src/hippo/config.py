@@ -55,6 +55,7 @@ class Config:
     # Where the language model lives.
     ollama_url: str = "http://localhost:11434"
     llm_model: str = "qwen3:8b"  # extracts facts, filters facts, answers, judges
+    qa_model: str | None = None  # optional stronger model for the final grounded answer only
     embed_model: str = "nomic-embed-text"  # turns text into vectors
     num_ctx: int = 8192  # context window we ask Ollama for (qwen3 defaults to 4k, too small)
     llm_timeout_seconds: float = 600.0  # local 8B models on CPU can be slow; be patient
@@ -127,6 +128,7 @@ def load_config() -> Config:
     db_path = _env("HIPPO_DB_PATH", "")
     buffer_pool = _env("HIPPO_LADYBUG_BUFFER_POOL_BYTES", "")
     recycle = _env("HIPPO_LADYBUG_CONNECTION_RECYCLE_STATEMENTS", "")
+    qa_model = os.environ.get("HIPPO_QA_MODEL", "").strip() or None
     return Config(
         store_backend=parse_store_backend(_env("HIPPO_STORE", Config.store_backend)),
         db_path=Path(db_path) if db_path else None,
@@ -139,6 +141,7 @@ def load_config() -> Config:
         neo4j_password=_env("NEO4J_PASSWORD", Config.neo4j_password),
         ollama_url=_env("OLLAMA_URL", Config.ollama_url).rstrip("/"),
         llm_model=_env("HIPPO_LLM_MODEL", Config.llm_model),
+        qa_model=qa_model,
         embed_model=_env("HIPPO_EMBED_MODEL", Config.embed_model),
         num_ctx=int(_env("HIPPO_NUM_CTX", str(Config.num_ctx))),
         llm_timeout_seconds=float(_env("HIPPO_LLM_TIMEOUT", str(Config.llm_timeout_seconds))),
