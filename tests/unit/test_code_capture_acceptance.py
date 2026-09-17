@@ -38,6 +38,7 @@ import time
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from threading import local
 from types import SimpleNamespace
@@ -274,6 +275,22 @@ def phase(w, name):
     finally:
         w.phases.append((name, round(time.perf_counter() - start, 1)))
         note(w, f"phase {name} ended after {time.perf_counter() - start:.1f}s")
+
+
+@contextmanager
+def acceptance_query_lease(w, monkeypatch):
+    """Give CD9's query pins the same finite operational budget as its writer."""
+    from hippo.knowledge import snapshots
+
+    original = snapshots.acquire_query_snapshots
+
+    def acquire(*args, **kwargs):
+        kwargs.setdefault("lease_duration", timedelta(seconds=w.options.lease_duration_seconds))
+        return original(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(snapshots, "acquire_query_snapshots", acquire)
+        yield
 
 
 def reopen(w):
@@ -546,28 +563,32 @@ def assert_verified_dense_dispatch(w, generation_id):
     assert [path for path, _ in w.runtime.calls if path == "/api/chat"] == []
 
 
-def refresh_under_a_live_snapshot(w, first, before):
+def refresh_under_a_live_snapshot(w, first, before, monkeypatch):
     """A refresh retires G1 while a held query still reconstructs it exactly."""
     store = w.ctx.store
     changed = w.repo.refresh()
     tree = replace(w.tree, head_revision=changed.head)
-    with query_session(w.ctx, EVERYTHING, structural=True) as held:
-        second = build(w, operation="refresh", tree=tree)
-        held.validate()
-        assert store._knowledge_get("Generation", first).status == "retired"
-        assert store.get_source(w.source)["active_generation_id"] == second.generation_id
-        assert held.graph.selected_managed_generations == ((w.source, first),)
-        assert (
-            {node.id for node in held.graph.code_nodes},
-            {row.id for row in held.graph.passages},
-        ) == before
-        assert {arrow.extra["generation_id"] for arrow in code_arrows(held.graph)} == {first}
-        assert {row.generation_id for row in held.graph.structural_code_evidence} <= {first}
-    with query_session(w.ctx, EVERYTHING, structural=True) as current:
-        assert current.graph.selected_managed_generations == ((w.source, second.generation_id),)
-        assert {arrow.extra["generation_id"] for arrow in code_arrows(current.graph)} == {
-            second.generation_id
-        }
+    # CD9 proves capture/refresh/provenance, not a five-minute timing SLA. Production keeps its
+    # five-minute query default and dedicated expiry tests; only this slow acceptance refresh gives
+    # its query pins the same finite 3,600-second operational budget as its writer.
+    with acceptance_query_lease(w, monkeypatch):
+        with query_session(w.ctx, EVERYTHING, structural=True) as held:
+            second = build(w, operation="refresh", tree=tree)
+            held.validate()
+            assert store._knowledge_get("Generation", first).status == "retired"
+            assert store.get_source(w.source)["active_generation_id"] == second.generation_id
+            assert held.graph.selected_managed_generations == ((w.source, first),)
+            assert (
+                {node.id for node in held.graph.code_nodes},
+                {row.id for row in held.graph.passages},
+            ) == before
+            assert {arrow.extra["generation_id"] for arrow in code_arrows(held.graph)} == {first}
+            assert {row.generation_id for row in held.graph.structural_code_evidence} <= {first}
+        with query_session(w.ctx, EVERYTHING, structural=True) as current:
+            assert current.graph.selected_managed_generations == ((w.source, second.generation_id),)
+            assert {arrow.extra["generation_id"] for arrow in code_arrows(current.graph)} == {
+                second.generation_id
+            }
     return second, changed
 
 
@@ -732,7 +753,7 @@ def test_a_multi_hundred_file_repository_holds_every_cd9_guarantee(ctx, tmp_path
         with phase(w, "verified dense dispatch"):
             assert_verified_dense_dispatch(w, first.generation_id)
 
-        second, changed = refresh_under_a_live_snapshot(w, first.generation_id, before)
+        second, changed = refresh_under_a_live_snapshot(w, first.generation_id, before, monkeypatch)
         w.recording = False
 
         with phase(w, "reopen after refresh"):
