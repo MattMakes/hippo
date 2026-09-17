@@ -8,6 +8,7 @@ write validation uses private lookups and does not expose a bypass transport.
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -24,6 +25,37 @@ LOCAL_MAPPING_AUTHORITY = "local"
 
 CLOSABLE_RECORD_KINDS = ("AssertionVersion", "ObjectObservation")
 """The two bitemporal rows whose `recorded_to` an append-only correction may close."""
+
+_PROSE_DECODE_ENTRIES = 32
+_PROSE_DECODE_ROW_BYTES = 1024 * 1024
+_PROSE_DECODE_TOTAL_BYTES = 8 * 1024 * 1024
+
+
+def _prose_decode_key(row):
+    """Exact storage bytes, before normalization; unsupported or large rows stay uncached.
+
+    Prose rows have only string, integer, null and string-list columns. Restrict to
+    those exact Python types so JSON cannot collapse a malformed tuple/bool/custom
+    object into a previously validated row. Bound the complete serialized key,
+    including escaping, not merely the payload or its declared hash.
+    """
+    size = 0
+    for field, value in row.items():
+        if type(field) is not str:
+            return None
+        size += len(field)
+        if type(value) is str:
+            size += len(value)
+        elif type(value) is list and all(type(item) is str for item in value):
+            size += sum(len(item) + 1 for item in value)
+        elif value is None or type(value) is int:
+            size += len(str(value))
+        else:
+            return None
+        if size > _PROSE_DECODE_ROW_BYTES:
+            return None
+    key = canonical_json(row)
+    return key if len(key.encode("utf-8")) <= _PROSE_DECODE_ROW_BYTES else None
 
 
 @dataclass(frozen=True, eq=False)
@@ -503,22 +535,50 @@ class KnowledgeQueries:
         found = {record.id: record for record in self._knowledge_records(model, rows)}
         return [found[identity] for identity in wanted if identity in found]
 
-    @staticmethod
-    def _knowledge_records(model, rows) -> list[k.Record]:
+    def _knowledge_records(self, model, rows) -> list[k.Record]:
         """Backend rows of one kind as records: instants as ISO text and JSON columns decoded."""
         records = []
         for row in rows:
-            for field, value in row.items():
-                if isinstance(value, datetime):
-                    row[field] = (
-                        value.replace(tzinfo=UTC).isoformat() if value.tzinfo is None else value.isoformat()
-                    )
-                elif hasattr(value, "to_native"):
-                    row[field] = value.to_native().isoformat()
-                elif value is not None and _json_field(model, field):
-                    row[field] = json.loads(value)
-            records.append(model.model_validate_json(canonical_json(row)))
+            key = _prose_decode_key(row) if model is k.ProseExtraction else None
+            if key is None:
+                records.append(self._decode_knowledge_record(model, row))
+                continue
+            # This memoizes parsing, not storage or authorization: every caller has
+            # already fetched the current full row. Only deeply frozen prose records
+            # qualify. The store lock also serializes lazy creation and concurrent misses.
+            with self._lock:
+                cache = getattr(self, "_prose_decode_cache", None)
+                if cache is None:
+                    cache = self._prose_decode_cache = OrderedDict()
+                    self._prose_decode_cache_bytes = 0
+                if key not in cache:
+                    cache[key] = self._decode_knowledge_record(model, row)
+                    self._prose_decode_cache_bytes += len(key.encode("utf-8"))
+                    # This bounds serialized keys, not total RAM: decoded frozen
+                    # models and Python object overhead also occupy memory.
+                    while (
+                        len(cache) > _PROSE_DECODE_ENTRIES
+                        or self._prose_decode_cache_bytes > _PROSE_DECODE_TOTAL_BYTES
+                    ):
+                        removed, _ = cache.popitem(last=False)
+                        self._prose_decode_cache_bytes -= len(removed.encode("utf-8"))
+                cache.move_to_end(key)
+                records.append(cache[key])
         return records
+
+    @staticmethod
+    def _decode_knowledge_record(model, row):
+        decoded = dict(row)
+        for field, value in row.items():
+            if isinstance(value, datetime):
+                decoded[field] = (
+                    value.replace(tzinfo=UTC).isoformat() if value.tzinfo is None else value.isoformat()
+                )
+            elif hasattr(value, "to_native"):
+                decoded[field] = value.to_native().isoformat()
+            elif value is not None and _json_field(model, field):
+                decoded[field] = json.loads(value)
+        return model.model_validate_json(canonical_json(decoded))
 
     def _knowledge_get(self, name: str, record_id: str):
         # Internal-only reference lookups; public access never defaults to unrestricted.

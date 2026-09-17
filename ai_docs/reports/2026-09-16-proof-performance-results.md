@@ -21,7 +21,7 @@ Single replay per revision, not a statistically controlled benchmark. Baseline o
 - Ruff, compileall and diff whitespace checks passed.
 - Independent spec/authorization review: PASS. Independent quality review: no findings at confidence >=80.
 - Cross-store inventory injection with identical generation ID is not explicitly rejected; only production injection uses the inventory's own store. No reachable regression found.
-- Full fake-store unit suite is running, not yet passed. Neo4j parity has not been run for this slice.
+- Full fake-store unit suite completed with only eight unsuccessful MCP HTTP cases, each blocked at localhost socket bind by sandbox PermissionError. All other cases passed or skipped. Rerunning the entire MCP HTTP file with socket permission passed19tests in3.54s. No product assertion failure remained. This was not one all-green invocation; Neo4j parity has not been run for this slice.
 - Security-sweep setup could not complete because its installed package lacks referenced specialist agent definitions. See `ai_docs/security-sweep/runs/2026-09-17T03-05-31Z/INCOMPLETE.md`. Focused independent authorization review is not a full security audit.
 
 ## Remaining bottleneck
@@ -32,4 +32,4 @@ Next candidates: reuse already-loaded raw proof records for lineage validation; 
 
 ## Post-flight status
 
-G1/G2/G3 met for this bounded slice. Runtime equivalence verified in-process. Wiring, contracts, error checks, credentials and configuration unchanged. Full-suite verification remains pending; overall response-time/100%-evaluation-quality goal remains active. No full post-flight clearance or goal completion is claimed.
+G1/G2/G3 met for this bounded slice. Runtime equivalence verified in-process. Wiring, contracts, error checks, credentials and configuration unchanged. Full fake-suite plus permission-corrected HTTP verification found no product assertion failures. Overall response-time/100%-evaluation-quality goal remains active; no goal completion is claimed.

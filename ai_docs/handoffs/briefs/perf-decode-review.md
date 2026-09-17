@@ -1,0 +1,12 @@
+# Independent spec and correctness review: prose decode cache
+
+Fresh Codex Sol worker; root `/Users/mascott/projects/hippo`, branch `rag-it-all-tibs`, base HEAD `1ff6a37` plus uncommitted decoder patch. Use horch only; no Claude workers or nested agents. The implementation worker is done. A separate timing worker is running: do NOT run tests, benchmarks or model calls during this review. No source edits.
+
+Own only new `ai_docs/reports/2026-09-16-prose-decode-review.md`. Read the plan `ai_docs/plans/2026-09-16-prose-decode-plan.md` and source/test diff directly. Do not read the implementer's report until your spec verdict is written. Existing tests have been independently run by the orchestrator: Ladybug G1=19 and G2=101 passed; implementer additionally verified fake. Your task is a separate code review with spec first, then quality if spec passes.
+
+1. Extract each Task1 requirement, inspect actual code at `src/hippo/store/knowledge.py`, `tests/unit/test_prose_decode_cache.py`, immutable model contracts and callers. Write a numbered requirement table with file:line evidence, extras and PASS/FAIL. Missing or partial requirements mean FAIL, except the explicitly separately-owned G3 measured gate, whose pending status is recorded.
+2. Inspect current raw-row key collision possibilities, conversion semantics, deep immutability, missing/corrupt storage, cache memory/entry limits, lazy initialization and locks on all backends, current-read preservation, and whether any caller could now bypass an authorization boundary. Reject any ID/epoch-only reuse. Read the exact membership/proof lifetime tests as needed, but do not run them during timing.
+3. If spec passes, independently assess code quality: correctness risks, coupling, readability, test gaps and any reachable behavioral regression. State issues with severity and concrete scenario, or no findings. Do not invent speculative low-value changes.
+4. Write report, run only lightweight Ruff format check on the report and git diff --check. Report via `horch tell orchestrator` and record `horch done`, then close. If external ledger writes are denied by sandbox, use require_escalated with concise justification: user explicitly authorized fleet ledger updates. Do not trust optional hooks or change configuration.
+
+No commits, pushes, staging, other report edits, test mutations, package changes, production data or services. For a blocker, message orchestrator with exact evidence and wait. The orchestrator retains final integration judgment and runs G3.

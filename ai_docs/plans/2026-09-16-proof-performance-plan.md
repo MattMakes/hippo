@@ -22,7 +22,7 @@ Already verified by the completed baseline and instrumented replay. Use `.venv/b
 
 ## Task 1: Reuse immutable lineage reads within a proof
 
-- [ ] complete
+- [x] complete
 Gates: G1, G2, G3
 OWNS: src/hippo/knowledge/derivations.py, src/hippo/knowledge/access.py, tests/unit/test_derivation_read_reuse.py
 
