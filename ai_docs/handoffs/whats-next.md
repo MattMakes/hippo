@@ -1,3 +1,11 @@
+# Latest handoff: response-time improvement goal
+
+Read [2026-09-16-performance-goal.md](2026-09-16-performance-goal.md) first. It supersedes the historical task state below for the current user request. The active goal is not complete. A full fake-store suite is running in exec session 14400.
+
+---
+
+Historical handoff (preserved):
+
 <original_task>
 Implement the entire approved docs/rag_it_all.md on rag-it-all-tibs, preserving the isolated code-graph base. User explicitly authorized multiple agents and publishing reviewed commits to PUBLIC MattMakes/hippo on this branch. Do not ask again. User forbids prioritization/estimates based on time. Local-first Ladybug, Neo4j scale verification. Full task remains incomplete: Tasks0–4 done, Task5 OPEN, Tasks5A and6–16 remain. No goal tool was created. Continue implementation rather than treating a new status/continue message as a replacement task.
 </original_task>
