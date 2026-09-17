@@ -243,12 +243,30 @@ class Retriever:
         """
         if not ranked:
             return SelectResult()
+        local_ids = {str(position): passage.passage_id for position, passage in enumerate(ranked, 1)}
         reply = self.ollama.chat_json(
-            prompts.code_select_messages(question, [(p.passage_id, p.title, p.preview) for p in ranked]),
+            prompts.code_select_messages(
+                question,
+                [
+                    (str(position), passage.title, passage.preview)
+                    for position, passage in enumerate(ranked, 1)
+                ],
+            ),
             prompts.CODE_SELECT_SCHEMA,
             max_tokens=512,
         )
-        pick = lambda key: [str(x) for x in reply.get(key, []) if isinstance(x, str)]  # noqa: E731
+
+        def pick(key: str) -> list[str]:
+            values = reply.get(key, [])
+            if not isinstance(values, list):
+                return []
+            picked: list[str] = []
+            for value in values:
+                passage_id = local_ids.get(value) if isinstance(value, str) else None
+                if passage_id is not None and passage_id not in picked:
+                    picked.append(passage_id)
+            return picked
+
         return SelectResult(keep=pick("keep"), drop=pick("drop"), expand=pick("expand"), raw=str(reply))
 
     # ------------------------------------------------------------- retrieve
