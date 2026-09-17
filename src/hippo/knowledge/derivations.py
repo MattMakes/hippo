@@ -121,10 +121,18 @@ class _Inventory:
             for m in store._knowledge_rows("GenerationMember", generation_id=generation_id)
         }
         self.visiting = set()
+        # One immutable validation pass only; never share across proof builds or writes.
+        self.records = {}
 
     def record(self, kind, identity, *, exact=True):
-        result = self.store._knowledge_get(kind, identity)
-        if result is None or (exact and (kind, identity) not in self.exact):
+        key = (kind, identity)
+        # A prior non-exact read must never satisfy an exact membership requirement.
+        if exact and key not in self.exact:
+            raise ValueError("Derived input missing from exact generation membership")
+        if key not in self.records:
+            self.records[key] = self.store._knowledge_get(kind, identity)
+        result = self.records[key]
+        if result is None:
             raise ValueError("Derived input missing from exact generation membership")
         return result
 
@@ -256,10 +264,12 @@ class GenerationViews:
     for a batch of rendered passages. The inventory is built at the first view, exactly where
     `validate_view` would have built it, so a refusal raised while building it surfaces at the same
     row. It is a snapshot: reuse it only while no member of the generation is written, which holds
-    for one `native_write` call and for one checksum pass.
+    for one `native_write` call, one checksum pass, or one evidence proof build.
     """
 
     def __init__(self, store, generation_id, *, inventory=None):
+        if inventory is not None and inventory.gen.id != generation_id:
+            raise ValueError("Derived inventory generation differs")
         self.store = store
         self.generation_id = generation_id
         self._inventory = inventory
@@ -269,6 +279,11 @@ class GenerationViews:
             self._inventory = _Inventory(self.store, self.generation_id)
         return self._inventory.view(view)
 
+    def validate_prose(self, extraction, *, require_member=True) -> DerivationClosure:
+        if self._inventory is None:
+            self._inventory = _Inventory(self.store, self.generation_id)
+        return _validate_prose(self._inventory, extraction, require_member=require_member)
+
 
 def validate_view(store, generation_id, view) -> DerivationClosure:
     """Require complete exact lineage; caller must separately authorize every input."""
@@ -277,9 +292,12 @@ def validate_view(store, generation_id, view) -> DerivationClosure:
 
 def validate_prose(store, generation_id, extraction, *, require_member=True) -> DerivationClosure:
     """Validate persisted output or, for the fenced writer, a candidate before membership."""
-    inventory = _Inventory(store, generation_id)
+    return _validate_prose(_Inventory(store, generation_id), extraction, require_member=require_member)
+
+
+def _validate_prose(inventory, extraction, *, require_member):
     if (
-        extraction.generation_id != generation_id
+        extraction.generation_id != inventory.gen.id
         or extraction.embedding_profile != inventory.gen.embedding_profile
     ):
         raise ValueError("Prose extraction generation/profile differs")

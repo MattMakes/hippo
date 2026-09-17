@@ -26,7 +26,7 @@ Already verified by the completed baseline and instrumented replay. Use `.venv/b
 Gates: G1, G2, G3
 OWNS: src/hippo/knowledge/derivations.py, src/hippo/knowledge/access.py, tests/unit/test_derivation_read_reuse.py
 
-Spec: A single generation inventory loads a given record at most once. Exact membership remains checked on every record() call. Expose prose validation through GenerationViews so views and prose in one proof share the inventory; standalone entry points stay fresh. Reject generation mismatch. Do not memoize arbitrary authorization decisions, change prompts, or modify unrelated files.
+Spec: A single generation inventory's record() method loads a given record at most once. Direct native/support-passage reads outside record() remain unchanged in this slice. Exact membership remains checked on every record() call. Expose prose validation through GenerationViews so views and prose in one proof share the inventory; standalone entry points stay fresh. Reject generation mismatch. Do not memoize arbitrary authorization decisions, change prompts, or modify unrelated files.
 
 1. Read existing derivations/access implementation and fixtures. Add regression tests using real store fixture and existing world() builder. Instrument storage calls only for counting (no replacement data). Test reduced reads and fresh validation after corruption. Run new tests; capture expected failing assertion before production edits.
 2. Add a per-_Inventory record map keyed by (kind, identity); enforce exact membership separately on every call. Share the per-generation inventory for prose and view validation. Keep every existing validation/error path. Inventory lifetime must not outlive a no-write validation pass.

@@ -17,7 +17,7 @@ from typing import Literal
 
 from hippo.access import Access
 
-from .derivations import GenerationViews, derived_capability, validate_prose
+from .derivations import GenerationViews, derived_capability
 from .identity import canonical_json
 
 _DERIVED_KINDS = ("DerivedRecord", "DerivedDependency", "RetrievalView", "ProseExtraction")
@@ -242,8 +242,8 @@ def _interpretation_inventory(reads, selection, selected_revisions):
 def _authorized_derivations(store, reads, interpretation, selection, spans, revisions, bindings, suppressed):
     """Validate full trusted closures before applying all-input audience grants.
 
-    Every selected view of one generation validates against that generation's one inventory, so
-    a proof reads each generation's membership once rather than twice per view.
+    Every selected view and prose extraction validates against its generation's one inventory,
+    scoped to this proof build so later validation always reads current records.
     """
     exact = _derived_generations(reads, _exact_generations(reads, selection))
     views = interpretation("RetrievalView")
@@ -284,7 +284,9 @@ def _authorized_derivations(store, reads, interpretation, selection, spans, revi
         extraction = prose.get(identity)
         if extraction is None:
             raise ValueError("Selected prose extraction is missing")
-        if include(validate_prose(store, generation_id, extraction)):
+        if generation_id not in inventories:
+            inventories[generation_id] = GenerationViews(store, generation_id)
+        if include(inventories[generation_id].validate_prose(extraction)):
             visible_prose.add(identity)
     return dict(
         derived_record_ids=frozenset(visible_derived),
