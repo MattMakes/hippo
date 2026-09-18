@@ -116,7 +116,8 @@ rows, a managed row counted from the caller's graph, each with these keys (plan 
   domain_origin        'lane' | 'declared' | 'content' | 'name' | 'fallback' | 'user'
   domain_state         'auto' | 'confirmed' | 'corrected' | 'pending_rebuild'
   domain_allowed       list: `buildable_families`, the families a rebuild can build; one entry except for a connector whose
-                       descriptor declares several, and only where the descriptor families are known (the source page)
+                       descriptor declares several, and only where the descriptor families are known (the source page
+                       and the two domain routes)
   domain_fixed_reason  one sentence when domain_allowed has one entry ("Repositories are always built as code.", "This
                        process does not know the connector's declared domains.", ...), else None
   domain_confirmed_at, domain_confirmed_by   the Source columns
@@ -127,8 +128,9 @@ rows, a managed row counted from the caller's graph, each with these keys (plan 
   resync_command       connector rows with a Connector row: "hippo connector sync <connector id> --partition <partition>"
 The pass reads the Generation list the view already holds, plus `Connector` and `SyncState` once each by `ids=`, and only
 when a connector row is shown: the cost of a poll does not grow with the number of rows. `descriptor_families` (connector
-kind -> declared families) comes only from the source page's `app.state.connector_load`; without it a connector's domain
-reads as fixed. `SourceView.generations` maps each shown source to its generations, newest first (id, version =
+kind -> declared families) comes from `app.state.connector_load` through `descriptor_families(request)`, which the source
+page and the two domain routes call; the Library poll, the CLI and MCP never pass it, so there a connector's domain reads
+as fixed. `SourceView.generations` maps each shown source to its generations, newest first (id, version =
 parser_version, status, created_at, published_at, nodes_by_family for a connector generation); only the source page reads
 it, so neither the Library poll nor the API carries the history.
 Role rows: id, name, rank, description, capabilities (list), builtin, users (count), sources (count).
@@ -655,19 +657,30 @@ routes/sources.py  the Library (everything scoped to the caller; adding needs ad
                                        kind, id and partition; domain badge with its state, the fixed reason as the badge title;
                                        status+stage+progress, passages, facts, "visible to" with an inline tier picker for sources
                                        the caller may manage, owner; last sync with its label and any last error; created; the row
-                                       action cell includes `partials/domain_row_action.html` when that file exists); upload forms
+                                       action cell includes `partials/domain_row_action.html`, a Confirm button that posts to
+                                       /sources/{id}/domain and shows only while domain_state is 'auto' and the caller may manage
+                                       the source, disabled while that source is indexing); upload forms
                                        (file, zip, paste text, git URL, "Load the sample"), each with a "Visible to" picker
                                        defaulting to the caller's tier
     POST /sources/{id}/access          the tier pickers post here (visibility=<role id>|everyone, back=<path>)
+    POST /sources/{id}/domain          confirm or correct a source's domain; the Library row and the source page's Domain card post
+                                       here (family=<family>, empty means confirm; back=<path>); same rule and same refusals as
+                                       PUT /api/sources/{id}/domain below. 303 to `back` on success. Only the 400
+                                       `domain_not_allowed` redirects, to `back?error=...`, and nothing is written; a 404 (hidden,
+                                       missing or withheld source) and a 403 (caller may not manage it) are not caught here
     GET  /partials/sources             the sources table, polled while something is indexing (HTMX)
     GET  /sources/{id}                 Source detail: meta (for a repository, a code card: symbols, data objects, edges by kind,
                                        languages, files parsed/skipped, unresolved calls, commits, history_skipped), progress,
                                        passages (paged) with the entities/triples the LLM extracted, an "In the code graph"
                                        <details> under each symbol passage (signature, relations, tests, commits),
                                        "Make sample questions" button (-> generation job), question sets about this source, "Reindex", "Delete";
-                                       a read-only Domain card (family, state, origin, confirmed at/by, fixed reason, and for a
-                                       connector the last sync's nodes by family; it ends with `partials/domain_actions.html`
-                                       when that file exists) and a Sync card (last sync and label, last error, the resync
+                                       a Domain card (family, state, origin, confirmed at/by, fixed reason, and for a
+                                       connector the last sync's nodes by family; it ends with `partials/domain_actions.html`,
+                                       shown only to a caller who may manage the source: the question "Is this the right
+                                       domain?" with a "Yes, confirm" button, and "Change to" with a select of `domain_allowed`
+                                       plus Apply only when `domain_allowed` has more than one entry; a callout while
+                                       domain_state is 'pending_rebuild'; for a connector, the resync command while a change is
+                                       possible or pending) and a Sync card (last sync and label, last error, the resync
                                        command, generation history: version, status, created, published). This page alone
                                        passes `descriptor_families` from `app.state.connector_load`; a missing load or a
                                        `ConnectorLoadError` means the families are unknown
@@ -681,6 +694,19 @@ routes/sources.py  the Library (everything scoped to the caller; adding needs ad
     POST   /api/sources/reindex-all    -> {started: n}
     GET    /api/sources/{id}           one inventory row, for polling (404 when hidden from the caller)
     PUT    /api/sources/{id}/access {role_id|null|"everyone"}   change who may see it -> the source row
+    PUT    /api/sources/{id}/domain {family: str|null}   confirm (null) or correct a source's domain; needs ownership or
+                                       manage_sources -> 200 {source: <inventory row>, rebuild: {needed: bool, started: false,
+                                       command: str|null}}. `needed` is true, and `command` is the row's `resync_command`, only
+                                       while the row's domain_state is 'pending_rebuild'; the route never starts a build
+                                       (`started` is always false). Errors: 404 when the source is hidden, missing or withheld;
+                                       403 when the caller may not manage it; 400 {error, code: "domain_not_allowed"} when
+                                       `family` is not in the source's `domain_allowed` (the server checks its own connector
+                                       load, not the request), and nothing is written.
+                                       The write rule: a `family` equal to `domain_natural` writes no override and confirms, and
+                                       any other allowed family writes the override. Both stamp `domain_confirmed_at` and
+                                       `domain_confirmed_by` (a null user id in open mode). A null `family` confirms the family
+                                       the row shows when `domain_allowed` still holds it, and `domain_natural` otherwise, so a
+                                       confirm clears an override the connector no longer declares.
     DELETE /api/sources/{id}           -> {deleted}; 409 with {error} while another source is being indexed (pipeline.Busy)
     POST   /api/sources/{id}/reindex   -> {started: bool}; 409 as above
 routes/evals.py    question sets and runs (every route needs run_evals)

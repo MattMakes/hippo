@@ -268,6 +268,10 @@ to the graph, and when it last synced.
   `synced` (a connector's last successful sync), `published` (a managed
   build's publication) or `last activity` (a source built the older way).
 
+This tool is read-only; a source's domain is confirmed or corrected through
+the web routes `POST /sources/{id}/domain` and `PUT /api/sources/{id}/domain`
+(see [CONTRACTS.md](CONTRACTS.md)).
+
 Empty questions and empty texts come back as tool errors with a plain
 message; the client shows it verbatim.
 
