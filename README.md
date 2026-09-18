@@ -1,6 +1,6 @@
 # A Hipster HippoRAG Implementation
 
-![AHipsterHippo](./docs/assets/AHipsterHippo.jpeg)
+![AHipsterHippo](./docs/assets/AHipsterHippo.png)
 
 hippo (aka hipster-hipporag) is a memory system you can run on your own machine. You give it text (notes, documents, a whole git repository), it builds a small knowledge graph out of the facts in that text, and later you ask it questions in plain English. It answers from what it remembers and shows you *why*: which facts it matched, which parts of the graph lit up, and which passages it read. It is a portable implementation of [HippoRAG](https://github.com/OSU-NLP-Group/HippoRAG) (HippoRAG 2) that runs on one machine: an embedded graph database ([LadybugDB](https://ladybugdb.com), one file under `data/`), Ollama for the models, and a small web UI on top. It also speaks MCP, so Claude Code, Claude Desktop or Cursor can use it as a tool.
 
