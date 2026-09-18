@@ -165,6 +165,8 @@ def resolve_domain(
     else:
         family = natural
         state = "auto" if confirmed_at is None else "confirmed"
+        if state == "confirmed" and shape.kind == "connector" and _unbuilt(natural, active_generation):
+            state = "pending_rebuild"  # a cleared correction, until a sync builds the natural family
     return DomainDecision(
         family=family,
         natural=natural,
@@ -260,6 +262,16 @@ def _built(
         return MANAGED_PARSER_FAMILIES.get(parser) == override
     meta = source.get("meta") or {}
     return isinstance(meta, Mapping) and meta.get("domain") == override and source.get("status") == "ready"
+
+
+def _unbuilt(natural: Family, active_generation: Generation | None) -> bool:
+    """Whether the active connector build recorded a family other than the natural one (review N1).
+
+    The caller asks only for a confirmed row without an override, where this is the usual case of a
+    correction cleared after its build. A generation without the key tells nothing, as in `_built`.
+    """
+    family = _recorded_family(active_generation) if active_generation is not None else None
+    return family is not None and family != natural
 
 
 def _recorded_family(generation: Generation) -> Family | None:

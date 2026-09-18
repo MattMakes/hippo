@@ -114,7 +114,9 @@ rows, a managed row counted from the caller's graph, each with these keys (plan 
                        'custom' when a connector partition has no stored classification)
   domain_natural       the family automatic classification chose, ignoring any override (`DomainDecision.natural`)
   domain_origin        'lane' | 'declared' | 'content' | 'name' | 'fallback' | 'user'
-  domain_state         'auto' | 'confirmed' | 'corrected' | 'pending_rebuild'
+  domain_state         'auto' | 'confirmed' | 'corrected' | 'pending_rebuild'; a cleared correction is 'pending_rebuild'
+                       until a sync builds the natural family: a confirmed connector row without an override whose
+                       active build recorded another family (coverage_json "domain")
   domain_allowed       list: `buildable_families`, the families a rebuild can build; one entry except for a connector whose
                        descriptor declares several, and only where the descriptor families are known (the source page
                        and the two domain routes)
@@ -684,9 +686,9 @@ routes/sources.py  the Library (everything scoped to the caller; adding needs ad
                                        plus Apply only when `domain_allowed` has more than one entry; a callout while
                                        domain_state is 'pending_rebuild'; for a connector, the resync command while a change is
                                        possible or pending) and a Sync card (last sync and label, last error, the resync
-                                       command, generation history: version, status, created, published). This page alone
-                                       passes `descriptor_families` from `app.state.connector_load`; a missing load or a
-                                       `ConnectorLoadError` means the families are unknown
+                                       command, generation history: version, status, created, published). This page and the
+                                       two domain routes pass `descriptor_families` from `app.state.connector_load`; a
+                                       missing load or a `ConnectorLoadError` means the families are unknown
     GET  /partials/sources/{id}/status the progress block of the source page, polled while it is busy (HTMX)
     POST /sources/upload | /sources/text | /sources/repo | /sources/sample     the Library forms; redirect back to / (with ?error=)
     api (prefix /api/sources):
@@ -697,7 +699,7 @@ routes/sources.py  the Library (everything scoped to the caller; adding needs ad
     POST   /api/sources/reindex-all    -> {started: n}
     GET    /api/sources/{id}           one inventory row, for polling (404 when hidden from the caller)
     PUT    /api/sources/{id}/access {role_id|null|"everyone"}   change who may see it -> the source row
-    PUT    /api/sources/{id}/domain {family: str|null}   confirm (null) or correct a source's domain; needs ownership or
+    PUT    /api/sources/{id}/domain {family: str|null}   confirm (null or "") or correct a source's domain; needs ownership or
                                        manage_sources -> 200 {source: <inventory row>, rebuild: {needed: bool, started: false,
                                        command: str|null}}. `needed` is true, and `command` is the row's `resync_command`, only
                                        while the row's domain_state is 'pending_rebuild'; the route never starts a build
@@ -713,7 +715,7 @@ routes/sources.py  the Library (everything scoped to the caller; adding needs ad
                                        a correction keeps its `domain_confirmed_at` and its state. Otherwise a `family` equal to
                                        `domain_natural` writes no override and confirms, and any other allowed family writes the
                                        override. Both stamp `domain_confirmed_at` and `domain_confirmed_by` (a null user id in
-                                       open mode). A null `family` confirms the family the row shows when `domain_allowed` still
+                                       open mode). A null or empty `family` confirms the family the row shows when `domain_allowed` still
                                        holds it, and `domain_natural` otherwise, so a confirm clears an override the connector
                                        no longer declares. While a connector row's families are unknown, a null or empty
                                        `family` keeps its override and writes nothing: a confirm clears an override only when

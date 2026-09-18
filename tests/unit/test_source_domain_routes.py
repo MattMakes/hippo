@@ -220,10 +220,13 @@ def test_connector_correction_is_pending_until_sync(inventory):  # noqa: F811
     again = client.get(f"/api/sources/{inv.connector}").json()
     assert (again["domain"], again["domain_state"]) == ("service", "corrected")
 
-    # Naming the natural family again confirms it and clears the correction.
+    # Naming the natural family again clears the correction; the next sync builds it (review N1).
     back = client.put(f"/api/sources/{inv.connector}/domain", json={"family": "custom"})
     assert back.status_code == 200, back.text
-    assert (back.json()["source"]["domain"], back.json()["source"]["domain_state"]) == ("custom", "confirmed")
+    assert (back.json()["source"]["domain"], back.json()["source"]["domain_state"]) == (
+        "custom",
+        "pending_rebuild",
+    )
     assert _columns(inv.store, inv.connector)["domain_override"] is None
 
 
@@ -339,6 +342,61 @@ def test_a_generation_without_the_recorded_family_falls_back_to_the_time_rule(in
     again = client.put(f"/api/sources/{inv.connector}/domain", json={"family": "service"}).json()
     assert (again["source"]["domain"], again["source"]["domain_state"]) == ("service", "pending_rebuild")
     assert again["rebuild"]["needed"] is True
+
+
+@pytest.mark.filterwarnings(ANYIO)
+def test_a_change_back_to_the_natural_family_is_pending_until_a_sync_builds_it(inventory):  # noqa: F811
+    """Review N1: after a built correction, the active build still holds the corrected family."""
+    inv = inventory
+    client = _client(inv, connector_load=_load(_TwoFamilyConnector))
+    command = client.get(f"/api/sources/{inv.connector}").json()["resync_command"]
+    assert client.put(f"/api/sources/{inv.connector}/domain", json={"family": "service"}).status_code == 200
+    receipt = inv.world.sync(connector=_TwoFamilySpyConnector(inv.world.connector_impl, []))
+    assert receipt.outcome == "published"
+    assert client.get(f"/api/sources/{inv.connector}").json()["domain_state"] == "corrected"
+
+    response = client.put(f"/api/sources/{inv.connector}/domain", json={"family": "custom"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert (body["source"]["domain"], body["source"]["domain_origin"], body["source"]["domain_state"]) == (
+        "custom",
+        "declared",
+        "pending_rebuild",
+    )
+    assert body["rebuild"] == {"needed": True, "started": False, "command": command}
+    assert _columns(inv.store, inv.connector)["domain_override"] is None
+    page = f"/sources/{inv.connector}"
+    card = _card(client.get(page).text)
+    assert "The change to custom waits for a rebuild." in card and f"<code>{command}</code>" in card
+
+    # The sync without the override builds the natural family, so the confirmation stands.
+    receipt = inv.world.sync(connector=_TwoFamilySpyConnector(inv.world.connector_impl, []))
+    assert receipt.outcome == "published"
+    active = inv.store._knowledge_get(
+        "Generation", inv.store.get_source(inv.connector)["active_generation_id"]
+    )
+    assert json.loads(active.coverage_json)["domain"] == "custom"
+    built = client.get(f"/api/sources/{inv.connector}").json()
+    assert (built["domain"], built["domain_state"]) == ("custom", "confirmed")
+    assert "waits for a rebuild" not in _card(client.get(page).text)
+
+
+@pytest.mark.filterwarnings(ANYIO)
+def test_an_empty_family_is_a_confirm_on_the_json_route(inventory):  # noqa: F811
+    """Review N2: `""` means confirm, as `null` does, also where the families are known."""
+    inv = inventory
+    client = _client(inv, connector_load=_load(_TwoFamilyConnector))
+    for source_id, family in ((inv.repo, "code"), (inv.connector, "custom")):
+        response = client.put(f"/api/sources/{source_id}/domain", json={"family": ""})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert (body["source"]["domain"], body["source"]["domain_state"]) == (family, "confirmed")
+        assert body["rebuild"] == {"needed": False, "started": False, "command": None}
+        assert _columns(inv.store, source_id) == {
+            "domain_override": None,
+            "domain_confirmed_at": body["source"]["domain_confirmed_at"],
+            "domain_confirmed_by": inv.user,
+        }
 
 
 @pytest.mark.filterwarnings(ANYIO)

@@ -523,7 +523,10 @@ def write_domain(request: Request, source_id: str, family: str | None) -> dict[s
     neither restamps it nor moves its state. While a corrected connector's families are unknown,
     `allowed` cannot say whether the override still builds: a confirm keeps it, and any other
     family is a 400 that writes nothing.
+
+    An empty `family` is a confirm too, on both routes and before any rule reads it.
     """
+    family = family or None
     ctx = ctx_of(request)
     principal = principal_of(request)
     manageable_source(request, source_id)
@@ -547,7 +550,7 @@ def write_domain(request: Request, source_id: str, family: str | None) -> dict[s
             confirmed_by=principal.user_id,
         )
     fresh = domain_source(request, source_id, families)
-    # Only a connector correction waits for a rebuild, and only a sync, run from the CLI, makes it.
+    # Only a connector change waits for a rebuild, and only a sync, run from the CLI, makes it.
     pending = fresh["domain_state"] == "pending_rebuild"
     return {
         "source": fresh,

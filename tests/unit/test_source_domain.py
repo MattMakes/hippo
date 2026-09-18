@@ -350,12 +350,28 @@ def test_a_generation_without_a_recorded_family_falls_back_to_the_time_rule(cove
     assert decide(state(CONFIRMED_AT + timedelta(minutes=5))).state == "corrected"
 
 
-def test_without_an_override_the_recorded_family_does_not_change_the_state():
+def test_a_cleared_correction_is_pending_until_a_build_records_the_natural_family():
+    """Fix wave 2 (review N1): a change back to the natural family waits for the sync that builds it."""
     confirmed = connector_row(domain_confirmed_at=CONFIRMED)
-    decision = resolve_connector(
-        confirmed, descriptor_families=TWO_FAMILIES, active_generation=recorded("service")
+
+    def decide(source, active):
+        return resolve_connector(source, descriptor_families=TWO_FAMILIES, active_generation=active)
+
+    cleared = decide(confirmed, recorded("service"))
+    assert (cleared.family, cleared.origin, cleared.state, cleared.pending_rebuild) == (
+        "custom",
+        "name",
+        "pending_rebuild",
+        True,
     )
-    assert (decision.family, decision.state) == ("custom", "confirmed")
+    built = decide(confirmed, recorded("custom"))
+    assert (built.family, built.state, built.pending_rebuild) == ("custom", "confirmed", False)
+    # Without a confirmation the row was never corrected here, so a historical build stays auto.
+    auto = decide(connector_row(), recorded("service"))
+    assert (auto.family, auto.state, auto.pending_rebuild) == ("custom", "auto", False)
+    # Without a recorded family, or without an active build, the state is the one before the fix.
+    for active in (unrecorded(), None):
+        assert decide(confirmed, active).state == "confirmed"
 
 
 # ------------------------------------------------------------------ allowed and fixed reasons
