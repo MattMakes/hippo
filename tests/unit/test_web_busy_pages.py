@@ -24,8 +24,14 @@ def client(ctx, monkeypatch):
 
 
 def test_every_template_compiles():
+    compiled = set()
     for path in TEMPLATES_DIR.rglob("*.html"):
-        templates.env.get_template(str(path.relative_to(TEMPLATES_DIR)))
+        name = path.relative_to(TEMPLATES_DIR).as_posix()
+        templates.env.get_template(name)
+        compiled.add(name)
+    # The two domain partials are reached only through `ignore missing` includes, so a rename
+    # would drop them from the pages silently; the glob alone would still pass.
+    assert {"partials/domain_actions.html", "partials/domain_row_action.html"} <= compiled
 
 
 def test_pages_render_while_a_model_is_downloading(client, ctx, monkeypatch):

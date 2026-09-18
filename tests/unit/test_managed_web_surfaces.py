@@ -1354,6 +1354,35 @@ def test_a_partial_route_answers_a_fragment_when_a_mapped_failure_escapes(ctx, m
     assert page.status_code == 500 and "<html" in page.text.lower(), page.text
 
 
+def test_the_two_domain_routes_are_writes_and_join_neither_get_list(ctx):
+    """A14, invariant I6: the domain routes are a form POST and a JSON PUT, never a page or partial GET.
+
+    `OWNED_PAGE_ROUTES` and `PARTIAL_ROUTES` list GET routes only. A GET on either domain path would
+    need a row in one of them, so this fails first and names the route.
+    """
+    from hippo.web.routes import sources as source_routes
+
+    expected = {
+        "/sources/{source_id}/domain": {"POST"},
+        "/api/sources/{source_id}/domain": {"PUT"},
+    }
+    # FastAPI 0.141 nests an included router behind a private wrapper, so `app.routes` shows no
+    # page route at all. The OpenAPI paths are the public table of the assembled app, and the two
+    # module-level routers are where the routes are declared.
+    paths = create_app(ctx).openapi()["paths"]
+    assert "/" in paths and "/partials/sources" in paths, "the OpenAPI table lost the page routes"
+    assert {
+        path: {m.upper() for m in ops} for path, ops in paths.items() if path.endswith("/domain")
+    } == expected
+    declared: dict[str, set[str]] = {}
+    for router in (source_routes.router, source_routes.api):
+        for route in router.routes:
+            if route.path.endswith("/domain"):
+                declared.setdefault(route.path, set()).update(route.methods)
+    assert declared == expected
+    assert not [url for url in (*OWNED_PAGE_ROUTES, *PARTIAL_ROUTES) if url.endswith("/domain")]
+
+
 def test_the_api_routes_answer_json_even_to_a_browsers_accept_header(ctx, monkeypatch):
     """A browser's `Accept` must not turn an `/api` body into a page; the JS reads JSON."""
     unloadable(ctx, monkeypatch, ProjectionError)
