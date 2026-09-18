@@ -540,6 +540,9 @@ SOURCE_DEFAULTS: dict[str, Any] = {
     "build_fencing_token": 0,
     "access_role_id": None,
     "min_rank": 0,
+    "domain_override": None,
+    "domain_confirmed_at": None,
+    "domain_confirmed_by": None,
 }
 
 

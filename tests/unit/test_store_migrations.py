@@ -256,7 +256,7 @@ def test_migration_records_legacy_and_current_checksums(store):
     m = migrations()
     store.ensure_schema()
     history = store.schema_history()
-    assert {row["version"] for row in history} == {1, 2, 3, 4, 5, 6, 7, 8}
+    assert {row["version"] for row in history} == {1, 2, 3, 4, 5, 6, 7, 8, 9}
     assert {row["version"]: row["checksum"] for row in history} == m.SUPPORTED_CHECKSUMS
     assert all(row["state"] == "complete" for row in history)
 
@@ -290,7 +290,7 @@ def test_declared_complete_schema_is_checked_against_physical_shape(tmp_path):
         LadybugStore(path)
 
 
-@pytest.mark.parametrize("version", [2, 3, 4, 5, 8])
+@pytest.mark.parametrize("version", [2, 3, 4, 5, 8, 9])
 def test_recovery_after_each_declared_schema_step(store, version):
     if store.knowledge_backend == "fake":
         pytest.skip("Fake storage has no DDL; its data rollback is tested separately")
@@ -520,7 +520,7 @@ def test_v7_descriptor_and_indexes_are_frozen_at_their_published_values():
         ("knowledge_deriveddependency_derived_record_id", "DerivedDependency", "derived_record_id"),
         ("knowledge_generationevidencemember_record_id", "GenerationEvidenceMember", "record_id"),
     )
-    assert m.SUPPORTED_CHECKSUMS[8] == m.MIGRATION_CHECKSUM != m.V7_CHECKSUM
+    assert m.SUPPORTED_CHECKSUMS[8] == m.V8_CHECKSUM != m.V7_CHECKSUM
     columns = m.V7_DESCRIPTOR[1]
     assert "Unit" not in columns
     assert "family" not in columns["AssertionVersion"]
@@ -647,12 +647,13 @@ def test_populated_v7_ladybug_reopens_as_v8_without_reidentification(tmp_path, m
     reopened = LadybugStore(path)
     try:
         assert reopened.schema_history()[:7] == history
-        assert reopened.schema_version() == {
+        assert reopened.schema_history()[7] == {
             "version": 8,
-            "checksum": m.MIGRATION_CHECKSUM,
+            "checksum": m.V8_CHECKSUM,
             "state": "complete",
             "step": len(m.schema_steps(reopened, version=8)),
         }
+        assert reopened.schema_version()["version"] == m.CURRENT_SCHEMA_VERSION
         for row in rows:
             assert reopened._knowledge_get(type(row).__name__, row.id) == row
     finally:
@@ -679,3 +680,116 @@ def test_v8_backfills_connector_classification_on_existing_rows(store):
     with store.transaction():
         m._data_transform(store, version=8)
     assert store._knowledge_get("Connector", connector.id).classification_json == "{}"
+
+
+V8_PUBLISHED_CHECKSUM = "e8ae3bcf61b0617d906908ecfb8c9dc9bbd0db9b92c19f1057099618d047cc43"
+
+
+def test_v8_descriptor_is_frozen_at_its_published_value():
+    from hippo.knowledge.identity import canonical_json, text_hash
+
+    m = migrations()
+    assert m.V8_CHECKSUM == V8_PUBLISHED_CHECKSUM
+    assert text_hash(canonical_json(m._descriptor(8))) == m.V8_CHECKSUM
+    assert m.SUPPORTED_CHECKSUMS[9] == m.MIGRATION_CHECKSUM != m.V8_CHECKSUM
+    assert not set(m.V9_ADDED_SOURCE_COLUMNS) & set(m.V8_DESCRIPTOR[3])
+
+
+def test_v9_descriptor_adds_the_three_source_domain_columns_only():
+    from hippo.knowledge.identity import canonical_json
+
+    m = migrations()
+    v8, v9 = m._descriptor(8), m._descriptor(9)
+    assert v9[0] == 9
+    assert m.V9_ADDED_SOURCE_COLUMNS == ("domain_override", "domain_confirmed_at", "domain_confirmed_by")
+    assert list(v9[3]) == [*v8[3], *m.V9_ADDED_SOURCE_COLUMNS]
+    assert v9[3] == {**v8[3], **dict.fromkeys(m.V9_ADDED_SOURCE_COLUMNS, "STRING")}
+    # Knowledge tables, relationships, Passage and the native tables are untouched by v9.
+    assert canonical_json([v9[1], v9[2], *v9[4:]]) == canonical_json([v8[1], v8[2], *v8[4:]])
+
+
+def test_v8_schema_steps_still_read_the_live_column_order():
+    """The frozen literal keeps model order, so the Unit DDL a v7 store receives is unchanged."""
+    from types import SimpleNamespace
+
+    m = migrations()
+    assert list(m._descriptor(8)[1]["Unit"]) == list(m.KNOWLEDGE_COLUMNS["Unit"])
+    assert m.schema_steps(SimpleNamespace(knowledge_backend="ladybug"), version=8)[0].startswith(
+        "CREATE NODE TABLE IF NOT EXISTS Unit(id STRING PRIMARY KEY, identity_key STRING, "
+    )
+
+
+def test_v9_schema_steps_are_exact_per_backend():
+    from types import SimpleNamespace
+
+    m = migrations()
+    assert m.schema_steps(SimpleNamespace(knowledge_backend="ladybug"), version=9) == [
+        "ALTER TABLE Source ADD IF NOT EXISTS domain_override STRING",
+        "ALTER TABLE Source ADD IF NOT EXISTS domain_confirmed_at STRING",
+        "ALTER TABLE Source ADD IF NOT EXISTS domain_confirmed_by STRING",
+    ]
+    # Neo4j properties need no DDL, and v9 declares no index.
+    assert m.schema_steps(SimpleNamespace(knowledge_backend="neo4j"), version=9) == []
+
+
+def test_populated_v8_ladybug_reopens_as_v9_with_null_domain_columns(tmp_path, monkeypatch):
+    from hippo.store.ladybug import LadybugStore
+
+    m = migrations()
+    path = tmp_path / "version8.lbug"
+    with monkeypatch.context() as patch:
+        patch.setattr(m, "CURRENT_SCHEMA_VERSION", 8)
+        store = LadybugStore(path)
+        source = store.create_source("text", "legacy v8", {"origin": "before v9"})
+        store.update_source(source, status="ready", stage="done")
+        columns = {row["name"] for row in store.run("CALL table_info('Source') RETURN *")}
+        assert not columns & set(m.V9_ADDED_SOURCE_COLUMNS)
+        before = store.get_source(source)
+        history = store.schema_history()
+        assert [item["version"] for item in history] == list(range(1, 9))
+        store.close()
+    reopened = LadybugStore(path)
+    try:
+        assert reopened.schema_history()[:8] == history
+        assert reopened.schema_version() == {
+            "version": 9,
+            "checksum": m.MIGRATION_CHECKSUM,
+            "state": "complete",
+            "step": len(m.schema_steps(reopened, version=9)),
+        }
+        assert reopened.run_one(
+            "MATCH (s:Source {id:$id}) RETURN s.domain_override AS override, "
+            "s.domain_confirmed_at AS confirmed_at, s.domain_confirmed_by AS confirmed_by",
+            id=source,
+        ) == {"override": None, "confirmed_at": None, "confirmed_by": None}
+        # Invariant I5: v9 rewrites no data, so the row reads back exactly as before, `updated_at`
+        # included, and the three new keys are null.
+        after = reopened.get_source(source)
+        assert after == before
+        assert {column: after[column] for column in m.V9_ADDED_SOURCE_COLUMNS} == dict.fromkeys(
+            m.V9_ADDED_SOURCE_COLUMNS
+        )
+    finally:
+        reopened.close()
+
+
+def test_v9_transform_defaults_fake_rows_and_rewrites_nothing_elsewhere(store, monkeypatch):
+    m = migrations()
+    store.ensure_schema()
+    source = store.create_source("text", "pre-v9")
+    before = store.get_source(source)
+    if store.knowledge_backend == "fake":
+        for column in m.V9_ADDED_SOURCE_COLUMNS:
+            store.sources[source].pop(column, None)  # the shape a pre-v9 Fake row has
+        with store.transaction():
+            m._data_transform(store, version=9)
+        assert {column: store.sources[source][column] for column in m.V9_ADDED_SOURCE_COLUMNS} == (
+            dict.fromkeys(m.V9_ADDED_SOURCE_COLUMNS)
+        )
+    else:
+        statements = []
+        with monkeypatch.context() as patch:
+            patch.setattr(store, "run", lambda *args, **kwargs: statements.append(args))
+            m._data_transform(store, version=9)
+        assert statements == []  # null reads back as automatic; no row is touched
+    assert store.get_source(source) == before

@@ -125,7 +125,7 @@ def extraction(store, gen, span, row, *, payload=None):
 
 
 def test_schema5_freezes_v4_and_preserves_original_checksum_shape(store):
-    assert migrations.CURRENT_SCHEMA_VERSION == 8
+    assert migrations.CURRENT_SCHEMA_VERSION == 9
     assert (
         migrations.SUPPORTED_CHECKSUMS[4]
         == "af3234c2ffd6aa2a5c935b06352ad91c92b8c44f80926969a6c3a775a4d5dfd7"

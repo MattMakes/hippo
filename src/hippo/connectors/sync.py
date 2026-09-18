@@ -70,6 +70,7 @@ from ..knowledge.build_authority import (
     BuildActor,
     capture_build_authority,
 )
+from ..knowledge.domain import overridden_classification
 from ..knowledge.embedding_cache import EmbeddingCache
 from ..knowledge.embedding_profile import (
     EmbeddingSpec,
@@ -118,6 +119,7 @@ __all__ = [
     "SyncReceipt",
     "connector_source",
     "ensure_connector",
+    "find_connector_source",
     "load_classification",
     "reconcile_due",
     "store_classification",
@@ -258,16 +260,24 @@ def connector_source(
     access_role_id: str | None = None,
 ) -> str:
     """The `connector` Source of one (instance, partition), created once (plan decision 1)."""
+    existing = find_connector_source(store, connector_id=connector.id, partition=partition)
+    if existing is not None:
+        return existing["id"]
     meta = {"connector_id": connector.id, "partition": partition}
-    for source in store.list_sources():
-        if source.get("kind") != CONNECTOR_SOURCE_KIND:
-            continue
-        existing = source.get("meta") or {}
-        if (existing.get("connector_id"), existing.get("partition")) == (connector.id, partition):
-            return source["id"]
     return store.create_source(
         CONNECTOR_SOURCE_KIND, name, meta, owner_id=owner_id, access_role_id=access_role_id
     )
+
+
+def find_connector_source(store, *, connector_id: str, partition: str) -> dict | None:
+    """The `connector` Source row of one (instance, partition), or None; it creates nothing."""
+    for source in store.list_sources():
+        if source.get("kind") != CONNECTOR_SOURCE_KIND:
+            continue
+        meta = source.get("meta") or {}
+        if (meta.get("connector_id"), meta.get("partition")) == (connector_id, partition):
+            return source
+    return None
 
 
 def store_classification(store, *, connector: k.Connector, classification) -> k.Connector:
@@ -280,8 +290,13 @@ def store_classification(store, *, connector: k.Connector, classification) -> k.
     return updated
 
 
-def load_classification(connector: k.Connector, partition: str):
-    """One partition's stored probe result; `emit` never receives a fresh guess (design section 2)."""
+def load_classification(connector: k.Connector, partition: str, *, domain_override: str | None = None):
+    """One partition's stored probe result; `emit` never receives a fresh guess (design section 2).
+
+    A user's domain override (the partition Source's `domain_override`) becomes the partition's
+    family and its mapping's family, so `emit` sees it. The caller checks the override against the
+    descriptor's families first: the Connector row does not carry them.
+    """
     from .base import Classification
 
     stored = json.loads(connector.classification_json)
@@ -290,7 +305,7 @@ def load_classification(connector: k.Connector, partition: str):
         classification = Classification.model_validate_json(connector.classification_json)
         for entry in classification.partitions:
             if entry.partition == partition:
-                return entry
+                return overridden_classification(entry, domain_override)
     raise ConnectorSyncRefused(f"Probe the connector before syncing partition {partition}")
 
 
@@ -1479,7 +1494,15 @@ def sync_connector(
         should_stop=should_stop,
         row=row,
     )
-    classification = load_classification(row, partition)
+    # The override is read from an existing row only: the unprobed-partition refusal below still
+    # happens before any Source row exists, and a stale override is refused before any lease (OD7).
+    existing = find_connector_source(ctx.store, connector_id=row.id, partition=partition)
+    domain_override = existing.get("domain_override") if existing is not None else None
+    if domain_override is not None and domain_override not in descriptor.families:
+        raise ConnectorSyncRefused(
+            "The domain override is not a family this connector declares; change or confirm the domain first"
+        )
+    classification = load_classification(row, partition, domain_override=domain_override)
     mapping = classification.mapping
     mapping.validate_against(registry)
     source_id = connector_source(
