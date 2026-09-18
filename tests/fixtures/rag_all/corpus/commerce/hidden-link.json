@@ -1,0 +1,9 @@
+{
+  "id": "commerce-private-comment",
+  "parent": "commerce-100",
+  "visibility": {
+    "group": "operators"
+  },
+  "body": "Billing depends on Checkout.",
+  "revision": "3"
+}

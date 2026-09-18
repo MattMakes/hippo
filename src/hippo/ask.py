@@ -6,48 +6,183 @@ Search and ask: the two things every entry point (web, MCP, CLI) does with the m
 
 Both take an optional `access` (hippo/access.py): the search then runs on the
 part of the graph that user may see, so hidden passages can neither be ranked
-nor read by the model. None means unrestricted (open mode, the CLI, tests).
+nor read by the model. None means the open audience (open mode, the CLI,
+tests), which reads legacy sources unrestricted but cannot prove managed
+evidence, so a managed corpus needs a real reader.
+
+Every model path here runs over one held structural session dispatched by
+`retrieval_session`, which is what turns the view's provenance sidecars back
+into a scorable matrix. A caller may hand its own session in; it is dispatched
+in place, and never reacquired below this layer.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import contextmanager
+from dataclasses import replace
 from typing import Any
 
+from . import prompts
 from .access import Access
 from .context import AppContext
+from .hipporag import paths
+from .hipporag.answer_context import select_answer_citations
 from .hipporag.answerer import Answer, answer_question
 from .hipporag.retriever import Retriever, Trace
+from .knowledge import dense_session
+from .knowledge.query_access import AuthorizedModel, QuerySession
+from .knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from .store.base import validate_settings
 
 
 def search(
-    ctx: AppContext, question: str, settings: dict[str, Any] | None = None, access: Access | None = None
+    ctx: AppContext,
+    question: str,
+    settings: dict[str, Any] | None = None,
+    access: Access | None = None,
+    *,
+    authorization_check: Callable[[], None] | None = None,
+    session: QuerySession | None = None,
 ) -> Trace:
-    """Rank passages for a question using the graph `access` may see, and the current settings."""
-    merged = ctx.store.get_settings()
-    merged.update(validate_settings(settings or {}))  # raises ValueError on junk, before any model call
-    return Retriever(ctx.graph_for(access), ctx.ollama).retrieve(question, merged)
+    """Rank visible passages, retaining any saved-input guard at every model boundary."""
+    with _retrieval_scope(ctx, access, authorization_check, session, settings) as query:
+        trace = _search(ctx, query.graph, query.model, question, settings, effective_settings=query.settings)
+        query.validate()
+        return trace
+
+
+@contextmanager
+def _retrieval_scope(ctx, access, authorization_check, session, settings):
+    if authorization_check is not None:
+        authorization_check()
+    if session is not None:
+        overrides = validate_settings(settings or {})
+        if any(session.settings.get(key) != value for key, value in overrides.items()):
+            raise ValueError("Query settings do not match the active session")
+    # One structural owner, routed to the dense evidence this audience actually proved.
+    # `retrieval_session` owns the whole own/borrow/pass-through rule; a caller that holds
+    # a session has already proved its audience, and forwarding `access` beside it is what
+    # the dispatcher refuses, so only the owned branch passes one. Looked up on the module
+    # at call time, so one patch point observes every promoted caller.
+    with dense_session.retrieval_session(
+        ctx, None if session is not None else access, settings=settings, session=session
+    ) as query:
+
+        def validate():
+            if authorization_check is not None:
+                authorization_check()
+            query.validate()
+
+        validate()
+        try:
+            yield QuerySession(query.graph, AuthorizedModel(query.model, validate), validate, query.settings)
+        finally:
+            validate()
+
+
+def _search(ctx, graph, model, question, settings, *, effective_settings=None):
+    if effective_settings is None:
+        merged = ctx.store.get_settings()
+        merged.update(validate_settings(settings or {}))
+    else:
+        merged = dict(effective_settings)
+    retriever = Retriever(graph, model)
+    # The LLM keep/drop/expand pass is installed here rather than inside `retrieve`, so a unit test
+    # or a replayed simulation that calls `retrieve` directly never makes a second model call. It
+    # still only runs when the question named code (`code_select` and `used_code_seeds`).
+    trace = retriever.retrieve(question, merged, select_fn=retriever.llm_select)
+    trace.evidence_fingerprint = view_fingerprint(graph)
+    trace.snapshot_ids = tuple(getattr(graph, "snapshot_ids", ()))
+    return trace
 
 
 def ask(
-    ctx: AppContext, question: str, settings: dict[str, Any] | None = None, access: Access | None = None
+    ctx: AppContext,
+    question: str,
+    settings: dict[str, Any] | None = None,
+    access: Access | None = None,
+    *,
+    authorization_check: Callable[[], None] | None = None,
+    session: QuerySession | None = None,
 ) -> tuple[Trace, Answer]:
-    """Retrieve, then let the LLM read the top `qa_top_k` passages and answer."""
-    trace = search(ctx, question, settings, access)
-    return trace, answer_from_trace(ctx, trace, access)
+    """Retrieve, then answer from the ranked base plus bounded supplemental code evidence."""
+    with _retrieval_scope(ctx, access, authorization_check, session, settings) as query:
+        trace = _search(ctx, query.graph, query.model, question, settings, effective_settings=query.settings)
+        query.validate()
+        answer = _answer_from_trace(query.graph, query.model, trace, qa_model=ctx.config.qa_model)
+        query.validate()
+        return trace, answer
 
 
-def answer_from_trace(ctx: AppContext, trace: Trace, access: Access | None = None) -> Answer:
-    """Answer using the passages a trace already ranked (used by simulations to re-answer)."""
-    graph = ctx.graph_for(access)
-    qa_top_k = int(trace.settings.get("qa_top_k", 5))
-    passages = []
-    for ranked in trace.passages[:qa_top_k]:
-        passage = graph.passage_by_id(ranked.passage_id)
-        if passage is not None:
-            passages.append((passage.id, passage.title, passage.text))
-    if not passages:
+def answer_from_trace(
+    ctx: AppContext,
+    trace: Trace,
+    access: Access | None = None,
+    *,
+    authorization_check: Callable[[], None] | None = None,
+    session: QuerySession | None = None,
+) -> Answer:
+    """Answer from ranked passages while preserving the caller's saved-input authorization."""
+    with _retrieval_scope(ctx, access, authorization_check, session, trace.settings) as query:
+        if not can_reuse_answer(query.graph, trace.evidence_fingerprint):
+            trace = reconstruct_trace(query.graph, trace, question=trace.question)
+        trace = replace(trace, settings=dict(query.settings))
+        answer = _answer_from_trace(query.graph, query.model, trace, qa_model=ctx.config.qa_model)
+        query.validate()
+        return answer
+
+
+def _answer_from_trace(graph, model, trace, *, qa_model=None):
+    bundle = select_answer_citations(graph, trace)
+    if not bundle.items:
         return Answer(
             answer="I have nothing in memory to answer that yet.", thought="", raw="", passage_ids=[]
         )
-    return answer_question(ctx.ollama, trace.question, passages)
+    passages = [(citation.id, citation.title, citation.text) for citation in bundle.citations]
+    answer = answer_question(
+        model, trace.question, passages, context_block=code_block(graph, trace), qa_model=qa_model
+    )
+    answer.retrieval_passage_ids = list(bundle.retrieval_passage_ids)
+    return answer
+
+
+def code_fields(trace: Trace, block: str) -> dict[str, Any]:
+    """
+    What the question found in the code graph, as every surface reports it.
+
+    The MCP tools (`search_tool`, `ask_tool`) and the HTTP `/api/search` and `/api/ask` all spread
+    this dict into their answer, so the two cannot drift: a client that moves between them sees the
+    same five keys. They are always present, so nothing has to branch on whether the memory holds
+    code; on a prose question `paths`, `tests`, `history` and `code_graph` are all empty, which is
+    the same gate the answer block itself uses (`used_code_seeds`, Ruling 1a). `seed_symbols` is the
+    one that can still be non-empty there: a dense seed is recorded even though it never opens the
+    gate, which is exactly what makes "this named no code" readable in the trace.
+
+    The rows are the trace's own, so they match `/api/search`'s trace field for field.
+    """
+    return {
+        "seed_symbols": [vars(seed) for seed in trace.seed_symbols],
+        "paths": list(trace.paths),
+        "tests": list(trace.tests),
+        "history": list(trace.history),
+        "code_graph": block,
+    }
+
+
+def code_block(graph, trace: Trace) -> str:
+    """
+    The `Title: Code graph` pseudo-passage, or "" - gated on a *lexical* anchor having fired.
+
+    That gate is what keeps a prose question over a memory containing code identical to today's:
+    no block, no extra passage in the prompt, and no competition for `FakeOllama.answer`'s
+    word-overlap scoring in the tests.
+    """
+    if not trace.used_code_seeds:
+        return ""
+    return paths.render_block(
+        graph,
+        trace,
+        header=prompts.CODE_GRAPH_HEADER,
+        max_chars=int(trace.settings.get("code_triples_chars", 1500)),
+    )

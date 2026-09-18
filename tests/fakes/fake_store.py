@@ -10,6 +10,9 @@ step. If you add a query to the real store, add it here too.
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
+from copy import deepcopy
 from typing import Any
 
 from hippo.access import (
@@ -21,7 +24,37 @@ from hippo.access import (
     new_token,
     verify_password,
 )
+from hippo.store.authorization import metadata_mutation, permission_mutation
 from hippo.store.base import DEFAULT_SETTINGS, new_id, now_iso, validate_settings
+from hippo.store.code import (
+    BOOSTABLE_LABELS,
+    SPECIFICITY_KINDS,
+    SYNONYM_LABELS,
+    TUNED_LABELS,
+    _commit_row,
+    _data_object_row,
+    _json_field,
+    _symbol_row,
+    code_edge_write_rows,
+    commit_write_row,
+    data_object_write_row,
+    modifies_write_rows,
+    node_label,
+    refers_to_write_rows,
+    symbol_write_row,
+)
+from hippo.store.generations import (
+    INTERRUPTED_REFRESH_ERROR,
+    INTERRUPTED_REFRESH_STAGE,
+    REFRESHING_PREFIX,
+    GenerationQueries,
+    legacy_source_cleanup,
+    native_mutation,
+    native_write,
+)
+from hippo.store.knowledge import KnowledgeQueries
+from hippo.store.migrations import DEFAULT_WORKSPACE_ID
+from hippo.store.snapshots import SnapshotQueries
 from hippo.store.users import clean_capabilities, clean_rank, clean_username, slug
 
 
@@ -30,8 +63,19 @@ def _boost(entity: dict[str, Any]) -> float:
     return 1.0 if entity.get("boost") is None else float(entity["boost"])
 
 
-class FakeStore:
+class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
+    knowledge_backend = "fake"
+
     def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._knowledge_data = {}
+        self._schema_row = None
+        self._schema_history = {}
+        self._migration_blocked = False
+        self._migrating = False
+        self._transaction_depth = 0
+        self._transaction_failed = False
+        self._transaction_owner = None
         self.sources: dict[str, dict[str, Any]] = {}
         self.passages: dict[str, dict[str, Any]] = {}
         self.entities: dict[str, dict[str, Any]] = {}
@@ -40,6 +84,17 @@ class FakeStore:
         self.statements: set[tuple[str, str]] = set()  # (passage_id, fact_id)
         self.synonyms: dict[tuple[str, str], dict[str, Any]] = {}  # (a, b) a<b -> {score, manual}
         self.tuned: dict[tuple[str, str], float] = {}
+        # The code graph. Every dict here is pruned by hand in delete_source /
+        # delete_passages_for_source: Python dicts do not cascade the way DETACH DELETE does, and
+        # nothing but a test would notice a dangling key (R1 gotcha 5).
+        self.symbols: dict[str, dict[str, Any]] = {}
+        self.data_objects: dict[str, dict[str, Any]] = {}
+        self.commits: dict[str, dict[str, Any]] = {}
+        self.code_edges: dict[tuple[str, str, str], dict[str, Any]] = {}  # (a, b, kind) -> row
+        self.definitions: set[tuple[str, str]] = set()  # (node_id, passage_id)
+        self.modifies: dict[tuple[str, str], dict[str, Any]] = {}  # (commit_id, symbol_id) -> row
+        self.precedes: list[tuple[str, str]] = []
+        self.refers_to: dict[tuple[str, str], dict[str, Any]] = {}  # (passage_id, node_id) -> row
         self.settings: dict[str, Any] = dict(DEFAULT_SETTINGS)
         self.meta: dict[str, Any] = {}
         self._graph_version = 0
@@ -61,13 +116,79 @@ class FakeStore:
             self._bootstrapped = True
             self.ensure_schema()
             self.ensure_roles()
+            self.ensure_local_workspace_memberships()
             self.mark_interrupted_jobs()
         return True
 
     def ensure_schema(self) -> None:
-        pass
+        from hippo.store.migrations import migrate_store
+
+        migrate_store(self)
+
+    def in_ambient_transaction(self) -> bool:
+        """True only when the calling thread has an open transaction on this store."""
+        # Deliberately lock-free: the holder keeps `_lock` for its whole transaction body, so
+        # taking it here would block every other thread instead of answering them.
+        return self._transaction_owner == threading.get_ident()
+
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            if not getattr(self, "_schema_checked", False) and not self._migrating:
+                self.ensure_schema()
+            if self._migration_blocked and not self._migrating:
+                raise RuntimeError("Store migration is incomplete; transaction refused")
+            outer = self._transaction_depth == 0
+            transient = {
+                "_lock",
+                "_transaction_depth",
+                "_transaction_failed",
+                "_transaction_owner",
+                "_migrating",
+                "_migration_blocked",
+                "_schema_checked",
+                "_bootstrapped",
+            }
+            snapshot = (
+                {
+                    **deepcopy(
+                        {
+                            name: value
+                            for name, value in vars(self).items()
+                            if name not in transient and name != "_knowledge_data"
+                        }
+                    ),
+                    # Knowledge records are frozen models that a write replaces and never mutates,
+                    # so the snapshot shares them and copies only the per-kind dicts holding them.
+                    # Deep-copying the records was most of a large build's CPU on this double, once
+                    # per outer transaction (`test_knowledge_scoped_reads` proves the premise).
+                    "_knowledge_data": {kind: dict(rows) for kind, rows in self._knowledge_data.items()},
+                }
+                if outer
+                else None
+            )
+            if outer:
+                self._transaction_failed = False
+                self._transaction_owner = threading.get_ident()
+            self._transaction_depth += 1
+            try:
+                yield self
+                if outer and self._transaction_failed:
+                    raise RuntimeError("Nested transaction failed; outer transaction must roll back")
+            except BaseException:
+                self._transaction_failed = True
+                if snapshot is not None:
+                    for name, value in snapshot.items():
+                        setattr(self, name, value)
+                raise
+            finally:
+                self._transaction_depth -= 1
+                if outer:
+                    self._transaction_failed = False
+                    self._transaction_owner = None
 
     def get_settings(self) -> dict[str, Any]:
+        self._ensure_knowledge_ready()
         return {k: self.settings.get(k, d) for k, d in DEFAULT_SETTINGS.items()}
 
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
@@ -77,6 +198,7 @@ class FakeStore:
     def get_meta(self, key: str) -> Any:
         return self.meta.get(key)
 
+    @metadata_mutation
     def set_meta(self, key: str, value: Any) -> None:
         self.meta[key] = value
 
@@ -93,6 +215,10 @@ class FakeStore:
             "passages": len(self.passages),
             "entities": len(self.entities),
             "facts": len(self.facts),
+            "symbols": len(self.symbols),
+            "data_objects": len(self.data_objects),
+            "code_edges": len(self.code_edges),
+            "commits": len(self.commits),
             "synonym_edges": len(self.synonyms),
             "mention_edges": len(self.mentions),
             "question_sets": len(self.question_sets),
@@ -117,6 +243,12 @@ class FakeStore:
         self.sources[sid] = {
             "id": sid,
             "kind": kind,
+            "workspace_id": DEFAULT_WORKSPACE_ID,
+            "active_generation_id": None,
+            "generation_version": 0,
+            "managed": False,
+            "active_build_id": None,
+            "build_fencing_token": 0,
             "name": name,
             "status": "queued",
             "stage": "queued",
@@ -171,32 +303,52 @@ class FakeStore:
             if self._visible(s, access)
         ]
 
-    def delete_source(self, source_id: str) -> None:
+    def _drop_passages_and_code(self, source_id: str) -> None:
+        """What DETACH DELETE does for free on a real graph, spelled out: the source's passages and
+        code nodes, and every edge either end of which has just gone."""
+        gone = self.delete_code_nodes_for_source(source_id)
         pids = {pid for pid, p in self.passages.items() if p["source_id"] == source_id}
         for pid in pids:
             del self.passages[pid]
+        gone |= pids
         self.mentions = {m for m in self.mentions if m[0] not in pids}
         self.statements = {s for s in self.statements if s[0] not in pids}
-        self.tuned = {k: v for k, v in self.tuned.items() if k[0] not in pids and k[1] not in pids}
+        self.definitions = {d for d in self.definitions if d[0] not in gone and d[1] not in gone}
+        self.refers_to = {k: v for k, v in self.refers_to.items() if not (set(k) & gone)}
+        self.tuned = {k: v for k, v in self.tuned.items() if not (set(k) & gone)}
+        self.synonyms = {k: v for k, v in self.synonyms.items() if not (set(k) & gone)}
+
+    @permission_mutation
+    @legacy_source_cleanup
+    def delete_source(self, source_id: str) -> None:
+        self._drop_passages_and_code(source_id)
         self.sources.pop(source_id, None)
         self.remove_orphans()
 
+    @legacy_source_cleanup
     def delete_passages_for_source(self, source_id: str) -> None:
-        pids = {pid for pid, p in self.passages.items() if p["source_id"] == source_id}
-        for pid in pids:
-            del self.passages[pid]
-        self.mentions = {m for m in self.mentions if m[0] not in pids}
-        self.statements = {s for s in self.statements if s[0] not in pids}
-        self.tuned = {k: v for k, v in self.tuned.items() if k[0] not in pids and k[1] not in pids}
+        self._drop_passages_and_code(source_id)
         self.remove_orphans()
 
     def mark_interrupted_jobs(self) -> int:
         message = "interrupted by a restart; run it again"
         total = 0
+        interrupted = []
         for s in self.sources.values():
             if s["status"] in ("reading", "indexing"):
                 s.update(status="failed", error=message, updated_at=now_iso())
                 total += 1
+            elif s["status"] == "ready" and str(s.get("stage") or "").startswith(REFRESHING_PREFIX):
+                # A managed refresh never stopped serving: only its stage is retired.
+                s.update(
+                    stage=INTERRUPTED_REFRESH_STAGE, error=INTERRUPTED_REFRESH_ERROR, updated_at=now_iso()
+                )
+                interrupted.append(s["id"])
+                total += 1
+        for source_id in interrupted:
+            # The crash's build holder goes with the stage, or the reindex the new error
+            # asks for is refused until the abandoned lease expires.
+            self.release_interrupted_build(source_id)
         for r in self.runs.values():
             if r["status"] == "running":
                 r.update(status="failed", error=message, finished_at=now_iso())
@@ -218,6 +370,7 @@ class FakeStore:
             self.tuned = {k: v for k, v in self.tuned.items() if eid not in k}
 
     # --------------------------------------------------------- passages
+    @native_write("Passage")
     def add_passages(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
             if row["source_id"] not in self.sources:
@@ -233,6 +386,7 @@ class FakeStore:
                 "embedding": list(row["embedding"]),
             }
 
+    @native_mutation
     def save_extraction(
         self, passage_id: str, entities: list[str], triples: list[list[str]], error: str | None
     ) -> None:
@@ -290,6 +444,7 @@ class FakeStore:
     def existing_entity_ids(self, ids: list[str]) -> set[str]:
         return {i for i in ids if i in self.entities}
 
+    @native_mutation
     def add_entities(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
             e = self.entities.setdefault(
@@ -343,6 +498,7 @@ class FakeStore:
     def existing_fact_ids(self, ids: list[str]) -> set[str]:
         return {i for i in ids if i in self.facts}
 
+    @native_mutation
     def add_facts(self, rows: list[dict[str, Any]]) -> None:
         for row in rows:
             if row["subject_id"] not in self.entities or row["object_id"] not in self.entities:
@@ -383,25 +539,260 @@ class FakeStore:
         return rows
 
     # ------------------------------------------------------------ links
+    @native_mutation
     def link_passage_facts(self, pairs: list[tuple[str, str]]) -> None:
         for p, f in pairs:
             if p in self.passages and f in self.facts:
                 self.statements.add((p, f))
 
+    @native_mutation
     def link_passage_entities(self, pairs: list[tuple[str, str]]) -> None:
         for p, e in pairs:
             if p in self.passages and e in self.entities:
                 self.mentions.add((p, e))
 
+    def _synonym_node(self, node_id: str) -> bool:
+        """Entity, symbol or data object: the three kinds SYNONYM has endpoints for (S2.2)."""
+        return node_label(node_id, SYNONYM_LABELS) is not None and node_id in (
+            self.entities | self.symbols | self.data_objects
+        )
+
+    @native_mutation
     def add_synonyms(self, rows: list[tuple[str, str, float]], manual: bool = False) -> None:
         for a, b, score in rows:
-            if a == b or a not in self.entities or b not in self.entities:
+            if a == b or not self._synonym_node(a) or not self._synonym_node(b):
                 continue
             key = (min(a, b), max(a, b))
             current = self.synonyms.setdefault(key, {"score": None, "manual": False})
             if current["score"] is None or current["score"] < score:
                 current["score"] = float(score)
             current["manual"] = current["manual"] or manual
+
+    # ------------------------------------------------------- code graph
+    # Same names and row shapes as store/code.py (Neo4j) and store/ladybug.py.
+
+    def _add_code_nodes(self, table: dict[str, Any], rows: list[dict[str, Any]], shaper) -> None:
+        for row in rows:
+            shaped = shaper(row)
+            if shaped["source_id"] not in self.sources:
+                continue  # the real stores MATCH (s:Source) and skip the row
+            existing = table.get(shaped["id"], {})
+            embedding = shaped.pop("embedding", [])  # commits carry no vector
+            table[shaped["id"]] = {
+                **{"boost": None, "created_at": now_iso()},
+                **existing,
+                **shaped,
+                "embedding": list(embedding) if embedding else list(existing.get("embedding") or []),
+            }
+
+    @native_write("Symbol")
+    def add_symbols(self, rows: list[dict[str, Any]]) -> None:
+        self._add_code_nodes(self.symbols, rows, symbol_write_row)
+        for node in self.symbols.values():
+            node.setdefault("community", None)
+
+    @native_write("DataObject")
+    def add_data_objects(self, rows: list[dict[str, Any]]) -> None:
+        self._add_code_nodes(self.data_objects, rows, data_object_write_row)
+
+    @native_write("Commit")
+    def add_commits(self, rows: list[dict[str, Any]]) -> None:
+        self._add_code_nodes(self.commits, rows, commit_write_row)
+
+    @native_mutation
+    def add_code_edges(self, rows: list[dict[str, Any]]) -> None:
+        for row in code_edge_write_rows(rows):
+            if not self._code_node(row["a"]) or not self._code_node(row["b"]):
+                continue
+            key = (row["a"], row["b"], row["kind"])
+            current = self.code_edges.get(key)
+            if current is None or current["omega"] < row["omega"]:
+                self.code_edges[key] = {
+                    "a": row["a"],
+                    "b": row["b"],
+                    "kind": row["kind"],
+                    "omega": row["omega"],
+                    "provenance": row["provenance"],
+                    "extra": row["extra"],
+                }
+
+    def _code_node(self, node_id: str) -> dict[str, Any] | None:
+        for table in (self.symbols, self.data_objects, self.commits):
+            if node_id in table:
+                return table[node_id]
+        return None
+
+    @native_mutation
+    def link_definitions(self, pairs: list[tuple[str, str]]) -> None:
+        for node_id, passage_id in pairs:
+            if self._code_node(node_id) is not None and passage_id in self.passages:
+                self.definitions.add((node_id, passage_id))
+
+    @native_mutation
+    def add_modifies(self, rows: list[dict[str, Any]]) -> None:
+        for row in modifies_write_rows(rows):
+            if row["commit_id"] not in self.commits or row["symbol_id"] not in self.symbols:
+                continue
+            key = (row["commit_id"], row["symbol_id"])
+            current = self.modifies.get(key)
+            if current is None or current["omega"] < row["omega"]:
+                self.modifies[key] = dict(row)
+
+    @native_mutation
+    def add_precedes(self, pairs: list[tuple[str, str]]) -> None:
+        for a, b in pairs:
+            if a != b and a in self.commits and b in self.commits and (a, b) not in self.precedes:
+                self.precedes.append((a, b))
+
+    @native_mutation
+    def add_refers_to(self, rows: list[dict[str, Any]]) -> None:
+        for row in refers_to_write_rows(rows):
+            target = self.symbols.get(row["node_id"]) or self.data_objects.get(row["node_id"])
+            if target is None or row["passage_id"] not in self.passages:
+                continue
+            key = (row["passage_id"], row["node_id"])
+            current = self.refers_to.get(key)
+            if current is None or current["omega"] < row["omega"]:
+                self.refers_to[key] = {
+                    "passage_id": row["passage_id"],
+                    "node_id": row["node_id"],
+                    "omega": row["omega"],
+                    "token": row["token"],
+                }
+
+    @native_mutation
+    def set_symbol_communities(self, mapping: dict[str, int]) -> None:
+        for symbol_id, community in mapping.items():
+            if symbol_id in self.symbols:
+                self.symbols[symbol_id]["community"] = int(community)
+
+    # ------------------------------------------------------- reading code nodes
+
+    def _passage_ids_of(self, node_id: str) -> list[str]:
+        return [pid for nid, pid in self.definitions if nid == node_id]
+
+    def _code_visible(self, node: dict[str, Any], access: Access | None) -> bool:
+        source = self.sources.get(node.get("source_id") or "")
+        return source is not None and self._visible(source, access)
+
+    def _get_code_nodes(self, table, ids, access, shaper) -> list[dict[str, Any]]:
+        rows = []
+        for node_id in ids:
+            node = table.get(node_id)
+            if node is None or not self._code_visible(node, access):
+                continue
+            source = self.sources[node["source_id"]]
+            rows.append(
+                shaper(
+                    {
+                        **{k: v for k, v in node.items() if k != "embedding"},
+                        "source_name": source["name"],
+                        "passage_ids": self._passage_ids_of(node_id),
+                    }
+                )
+            )
+        return rows
+
+    def get_symbols(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        return self._get_code_nodes(self.symbols, ids, access, _symbol_row)
+
+    def get_data_objects(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        return self._get_code_nodes(self.data_objects, ids, access, _data_object_row)
+
+    def get_commits(self, ids: list[str], access: Access | None = None) -> list[dict[str, Any]]:
+        return self._get_code_nodes(self.commits, ids, access, _commit_row)
+
+    # ------------------------------------------------- loading the code graph
+
+    def _code_in_degrees(self) -> dict[str, int]:
+        degrees: dict[str, int] = {}
+        for row in self.code_edges.values():
+            if row["kind"] in SPECIFICITY_KINDS:
+                degrees[row["b"]] = degrees.get(row["b"], 0) + 1
+        return degrees
+
+    def _load_code_nodes(self, table, shaper) -> list[dict[str, Any]]:
+        degrees = self._code_in_degrees()
+        return [
+            shaper(
+                {
+                    **{k: v for k, v in node.items() if k != "embedding"},
+                    "source_name": self.sources[node["source_id"]]["name"],
+                    "in_degree": degrees.get(node["id"], 0),
+                }
+            )
+            for node in table.values()
+            if node["source_id"] in self.sources
+        ]
+
+    def load_symbols(self) -> list[dict[str, Any]]:
+        return self._load_code_nodes(self.symbols, _symbol_row)
+
+    def load_data_objects(self) -> list[dict[str, Any]]:
+        return self._load_code_nodes(self.data_objects, _data_object_row)
+
+    def load_commits(self) -> list[dict[str, Any]]:
+        return [
+            _commit_row(
+                {
+                    **{k: v for k, v in node.items() if k != "embedding"},
+                    "source_name": self.sources[node["source_id"]]["name"],
+                }
+            )
+            for node in self.commits.values()
+            if node["source_id"] in self.sources
+        ]
+
+    def load_code_edges(self) -> list[dict[str, Any]]:
+        return [{**row, "extra": _json_field(row["extra"])} for row in self.code_edges.values()]
+
+    def load_definitions(self) -> list[dict[str, Any]]:
+        return [{"node_id": nid, "passage_id": pid} for nid, pid in self.definitions]
+
+    def load_modifies(self) -> list[dict[str, Any]]:
+        return [{**row, "hunk": _json_field(row["hunk"])} for row in self.modifies.values()]
+
+    def load_precedes(self) -> list[dict[str, Any]]:
+        ordered = sorted(
+            self.precedes,
+            key=lambda pair: (
+                int(self.commits[pair[0]]["ordinal"] or 0),
+                int(self.commits[pair[1]]["ordinal"] or 0),
+            ),
+        )
+        return [{"a": a, "b": b} for a, b in ordered]
+
+    def load_refers_to(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.refers_to.values()]
+
+    def load_code_embeddings(self) -> tuple[list[str], list[list[float]]]:
+        ids: list[str] = []
+        vectors: list[list[float]] = []
+        for table in (self.symbols, self.data_objects):
+            for node in table.values():
+                # Untagged rows only, as every real backend reads them: `WHERE n.generation_id IS NULL`.
+                if node.get("embedding") and node.get("generation_id") is None:
+                    ids.append(node["id"])
+                    vectors.append(list(node["embedding"]))
+        return ids, vectors
+
+    @legacy_source_cleanup
+    def delete_code_nodes_for_source(self, source_id: str) -> set[str]:
+        """Every code node of one source, and every code edge touching one. Returns the ids dropped
+        so the caller can prune the edge dicts a real graph would cascade for it."""
+        gone: set[str] = set()
+        for table in (self.symbols, self.data_objects, self.commits):
+            for node_id in [i for i, n in table.items() if n.get("source_id") == source_id]:
+                del table[node_id]
+                gone.add(node_id)
+        self.code_edges = {k: v for k, v in self.code_edges.items() if not ({k[0], k[1]} & gone)}
+        self.modifies = {k: v for k, v in self.modifies.items() if not (set(k) & gone)}
+        self.precedes = [p for p in self.precedes if not (set(p) & gone)]
+        self.definitions = {d for d in self.definitions if d[0] not in gone}
+        self.refers_to = {k: v for k, v in self.refers_to.items() if not (set(k) & gone)}
+        self.synonyms = {k: v for k, v in self.synonyms.items() if not (set(k) & gone)}
+        self.tuned = {k: v for k, v in self.tuned.items() if not (set(k) & gone)}
+        return gone
 
     # ---------------------------------------------------------- roles
     def ensure_roles(self) -> None:
@@ -446,6 +837,7 @@ class FakeStore:
         }
         return role_id
 
+    @permission_mutation
     def update_role(self, role_id: str, **fields: Any) -> dict[str, Any]:
         allowed = {"name", "rank", "description", "capabilities"}
         bad = set(fields) - allowed
@@ -469,6 +861,7 @@ class FakeStore:
             role["capabilities"] = clean_capabilities(fields["capabilities"])
         return self._role_row(role)
 
+    @permission_mutation
     def delete_role(self, role_id: str) -> None:
         role = self.get_role(role_id)
         if role is None:
@@ -518,6 +911,7 @@ class FakeStore:
                 return self._user_row(u)
         return None
 
+    @permission_mutation
     def create_user(self, username: str, password: str, role_id: str, display_name: str = "") -> str:
         username = clean_username(username)
         if self.get_user_by_username(username) is not None:
@@ -537,6 +931,7 @@ class FakeStore:
         }
         return user_id
 
+    @permission_mutation
     def update_user(self, user_id: str, **fields: Any) -> dict[str, Any]:
         allowed = {"display_name", "role_id", "disabled", "password"}
         bad = set(fields) - allowed
@@ -563,6 +958,7 @@ class FakeStore:
             self.users[user_id]["token"] = token
         return token
 
+    @permission_mutation
     def delete_user(self, user_id: str) -> None:
         for s in self.sources.values():
             if s.get("owner_id") == user_id:
@@ -575,6 +971,7 @@ class FakeStore:
             return None
         return user if verify_password(password, user.get("password_hash")) else None
 
+    @permission_mutation
     def set_source_access(self, source_id: str, role_id: str | None, owner_id: str | None = ...) -> None:
         if role_id:
             role = self.roles.get(role_id)
@@ -613,6 +1010,8 @@ class FakeStore:
                 "embedding": p["embedding"],
                 "source_id": p["source_id"],
                 "source_name": self.sources[p["source_id"]]["name"],
+                "generation_id": p.get("generation_id"),
+                "retrieval_view_id": p.get("retrieval_view_id"),
             }
             for p in self.passages.values()
         ]
@@ -870,14 +1269,20 @@ class FakeStore:
     def mark_applied(self, changeset_id: str) -> None:
         self.changesets[changeset_id].update(status="applied", applied_at=now_iso())
 
+    @native_mutation
     def set_node_boost(self, entity_id: str, boost: float) -> None:
-        if entity_id in self.entities:
-            self.entities[entity_id]["boost"] = float(boost)
+        label = node_label(entity_id, BOOSTABLE_LABELS)
+        for table in (self.entities, self.symbols, self.data_objects):
+            if label is not None and entity_id in table:
+                table[entity_id]["boost"] = float(boost)
 
+    @native_mutation
     def set_edge_weight(self, a: str, b: str, weight: float) -> None:
-        known = set(self.entities) | set(self.passages)
-        if a in known and b in known:
+        known = set(self.entities) | set(self.passages) | set(self.symbols) | set(self.data_objects)
+        tunable = node_label(a, TUNED_LABELS) and node_label(b, TUNED_LABELS)
+        if tunable and a in known and b in known:
             self.tuned[(min(a, b), max(a, b))] = float(weight)
 
+    @native_mutation
     def clear_edge_weight(self, a: str, b: str) -> None:
         self.tuned.pop((min(a, b), max(a, b)), None)

@@ -11,12 +11,59 @@
   {% if answer.thought %}
   <details><summary>How the model reasoned</summary><p class="muted pre">{{ answer.thought }}</p></details>
   {% endif %}
+  {# Only a LEXICAL anchor counts here, the same gate as `used_code_seeds` (Ruling 1a): a dense
+     seed came from embedding similarity, not the question, and saying "N symbol seeds" over one
+     would overstate what the question actually anchored on. #}
+  {% set symbol_seed_count = trace.seed_symbols | selectattr('kept') | rejectattr('how', 'equalto', 'dense') | list | length %}
   <p class="meta muted">
     {% if trace.used_dpr_fallback %}Found by embedding similarity only ({{ trace.fallback_reason }}).{% else %}
-    Found through the graph: {{ trace.fact_candidates | selectattr('kept') | list | length }} fact(s) kept, {{ trace.seed_entities | selectattr('kept') | list | length }} seed entities, PPR damping {{ trace.settings.damping }}.{% endif %}
+    Found through the graph: {{ trace.fact_candidates | selectattr('kept') | list | length }} fact(s) kept, {{ trace.seed_entities | selectattr('kept') | list | length }} seed entities{% if symbol_seed_count %}, {{ symbol_seed_count }} symbol seed(s){% endif %}, PPR damping {{ trace.settings.damping }}.{% endif %}
     {{ (trace.timing_ms.total or 0) | round | int }} ms.
   </p>
 </section>
+
+{# `used_code_seeds` is the gate, not "there are seed symbols": a dense seed is admitted on any
+   question, prose included, and flips nothing (Ruling 1a). Without it every prose answer would
+   grow a Code graph card the moment a repository was indexed alongside. #}
+{% set seed_symbols = trace.seed_symbols | selectattr('kept') | list if trace.used_code_seeds else [] %}
+{# Two rows, because they are two different claims. Only a LEXICAL anchor is something the question
+   said; a dense seed came from a passage that scored well and the question may never have named it
+   (on a real traceback question, twelve of seventeen seeds were dense). #}
+{# One chip per token the question actually contains: `self.log` reaches three different `log`
+   symbols and printing it three times says nothing the count in the tooltip does not. `unique`
+   keeps the first, which is the heaviest - the list is in weight order. #}
+{% set named = seed_symbols | rejectattr('how', 'equalto', 'dense') | unique(attribute='token') | list %}
+{% set nearby = seed_symbols | selectattr('how', 'equalto', 'dense') | list %}
+{% if answer.context_block or seed_symbols %}
+<section class="card">
+  <h3>Code graph</h3>
+  {% if named %}
+  <p class="row wrap">
+    <span class="muted small">the question named</span>
+    {# The token is what the user actually typed. Two different symbols can share a display name -
+       `pyapp.store.Base.log` and `tsapp.models.base.Base.log` are both "Base.log" - so the chip
+       carries the token and puts the resolved name in the tooltip beside the weight and the count
+       of everything that token matched. #}
+    {% for s in named %}<span class="pill" title="{{ s.name }} · {{ s.how | replace('_', ' ') }} · weight {{ s.weight | fmt(3) }}{% if s.n_matches > 1 %} · {{ s.n_matches }} matches{% endif %}">{{ s.token or s.name }} <span class="muted">{{ s.how }}</span></span>{% endfor %}
+  </p>
+  {% endif %}
+  {% if nearby %}
+  <p class="row wrap">
+    <span class="muted small">also reached by similarity</span>
+    {% for s in nearby %}<span class="pill" title="{{ s.how }} · weight {{ s.weight | fmt(3) }}">{{ s.name }}</span>{% endfor %}
+  </p>
+  {% endif %}
+  {% if answer.context_block %}
+  {# The block the model read, byte for byte: `a -[KIND ω provenance]-> b`, then Tests, Commits
+     and Subsystems (S2.15). It is evidence, so it is shown exactly as it was sent - but it runs to
+     dozens of lines, so it folds away like the reasoning above rather than burying the passages. #}
+  <details>
+    <summary>The relations the model read</summary>
+    <p class="pre mono small">{{ answer.context_block }}</p>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
 
 {% set kept = trace.fact_candidates | selectattr('kept') | list %}
 {% if kept %}
@@ -33,10 +80,11 @@
   {% for p in passages %}
   <article class="passage">
     <header>
-      <span class="rank">#{{ p.ranked.rank }}</span>
-      <b>{{ p.ranked.title }}</b>
-      <span class="muted">{{ p.ranked.source_name }} · score {{ p.ranked.score | fmt(4) }} · embedding rank {{ p.ranked.dpr_rank }}</span>
+      <span class="rank">#{{ p.rank }}</span>
+      <b>{{ p.title }}</b>
+      <span class="muted">{{ p.source }} · score {{ p.score | fmt(4) }} · embedding rank {{ p.dpr_rank }}</span>
     </header>
+    {% if p.location %}<p class="muted small mono">{{ p.location }}</p>{% endif %}
     <p class="pre">{{ p.text }}</p>
   </article>
   {% endfor %}

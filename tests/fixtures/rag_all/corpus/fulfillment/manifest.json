@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "service": "shipping",
+  "owner": "Warehouse Operations",
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/shipping/allocations",
+      "handler": "route.create_allocation"
+    }
+  ],
+  "dependencies": [],
+  "effective_at": "2026-05-01",
+  "observed_at": "2026-05-12",
+  "release": {
+    "name": "v2",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

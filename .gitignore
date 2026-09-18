@@ -11,8 +11,13 @@ dist/
 # hippo runtime data (uploads, cloned repos, neo4j/ollama volumes)
 data/
 .env
+.rag-dev-data/
+.rag-eval/
 
 # editors / os
 .idea/
 .vscode/
 .DS_Store
+
+# git worktrees used by the herdr fleet
+.worktrees/

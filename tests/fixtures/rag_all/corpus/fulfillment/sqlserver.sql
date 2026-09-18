@@ -1,0 +1,2 @@
+CREATE TABLE warehouse.stock (warehouse_id UNIQUEIDENTIFIER NOT NULL, sku NVARCHAR(64) NOT NULL, reserved INT NOT NULL, PRIMARY KEY (warehouse_id, sku));
+CREATE TABLE warehouse.allocations (allocation_id UNIQUEIDENTIFIER PRIMARY KEY, warehouse_id UNIQUEIDENTIFIER NOT NULL, sku NVARCHAR(64) NOT NULL, quantity INT CHECK (quantity > 0), CONSTRAINT allocations_stock_fk FOREIGN KEY (warehouse_id, sku) REFERENCES warehouse.stock(warehouse_id, sku));

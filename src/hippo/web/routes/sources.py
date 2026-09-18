@@ -12,21 +12,52 @@ changing who may see a source need `manage_sources` or ownership.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from ...access import Principal, roles_at_or_below
+from ...hipporag import paths
 from ...ingest import pipeline
+from ...ingest.managed_activation import ManagedPreflightRefused
 from ...ingest.pipeline import Busy
 from ...ingest.repos import RepoError
-from ..auth import principal_of, require
-from ..render import STOP_POLLING, ctx_of, render
+from ...knowledge.access import AuthorizationChanged
+from ...knowledge.answer_evidence import retrieval_fields
+from ...knowledge.eval_access import EvalAccess
+from ...knowledge.public_errors import INVALID_SOURCE_TYPE
+from ...knowledge.query_access import QuerySession, query_session
+from ...status import source_view
+from ..auth import build_actor_of, principal_of, require
+from ..render import (
+    STOP_POLLING,
+    caller_error,
+    coded_response,
+    ctx_of,
+    public_failure_response,
+    render,
+    retrieval_failure,
+)
+from . import graph as graph_routes
 
 router = APIRouter()
+
+# Two stable codes these routes own. Neither is one of the closed retrieval codes --
+# nothing failed and nothing is stale -- so they live with the routes that answer them, like
+# `web/app.py`'s `authorization_changed`.
+#
+# `remote.py` reads `code` before anything else, so a body without one loses its own
+# sentence to the generic `operation_failed` fallback whatever its status says. That is why
+# the bounded messages below gain a code rather than being replaced by the closed table's.
+BULK_REFUSED = "bulk_refused"
+INDEXING_BUSY = "indexing_busy"
+# The plan's transport table assigns the closed input validators one code: the upload byte
+# cap, the unsupported type, the empty text and the malformed git URL are all this row.
+INVALID_SOURCE = INVALID_SOURCE_TYPE.code
 
 PASSAGES_PER_PAGE = 25
 BUSY_STATUSES = {"queued", "reading", "indexing"}  # a source in one of these still changes on its own
@@ -59,20 +90,24 @@ def with_manage_flags(sources: list[dict[str, Any]], principal: Principal) -> li
 def library(request: Request, error: str = ""):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    sources = ctx.store.list_sources(principal.access) if ctx.store.ping() else []
-    return render(
-        request,
-        "library.html",
-        nav="library",
-        sources=with_manage_flags(sources, principal),
-        error=error,
-        busy_ids=busy_source_ids(ctx),
-        principal=principal,
-        can_add=principal.can("add_sources"),
-        visibility_choices=visibility_choices(ctx, principal),
-        default_visibility=default_visibility(principal),
-        total_sources=len(ctx.store.list_sources()) if ctx.store.ping() and not principal.is_open else None,
-    )
+    with query_session(ctx, principal.access) if ctx.store.ping() else nullcontext(None) as session:
+        view = source_view(ctx, principal.access, session=session) if session is not None else None
+        sources = view.sources if view else []
+        return render(
+            request,
+            "library.html",
+            session=session,
+            nav="library",
+            sources=with_manage_flags(sources, principal),
+            error=error,
+            busy_ids=busy_source_ids(ctx, view),
+            principal=principal,
+            can_add=principal.can("add_sources"),
+            visibility_choices=visibility_choices(ctx, principal),
+            default_visibility=default_visibility(principal),
+            total_sources=len(sources),
+            authorization_check=view.validate if view else None,
+        )
 
 
 @router.get("/partials/sources")
@@ -80,27 +115,41 @@ def sources_partial(request: Request):
     """The sources table, polled by the Library page while something is being indexed."""
     ctx = ctx_of(request)
     principal = principal_of(request)
-    sources = ctx.store.list_sources(principal.access)
-    busy = any(s["status"] in BUSY_STATUSES for s in sources)
-    return render(
-        request,
-        "partials/source_rows.html",
-        sources=with_manage_flags(sources, principal),
-        busy_ids=busy_source_ids(ctx),
-        principal=principal,
-        visibility_choices=visibility_choices(ctx, principal),
-        status_code=200 if busy else STOP_POLLING,
-    )
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        sources = view.sources
+        busy = any(s["status"] in BUSY_STATUSES for s in sources)
+        return render(
+            request,
+            "partials/source_rows.html",
+            session=session,
+            sources=with_manage_flags(sources, principal),
+            busy_ids=busy_source_ids(ctx, view),
+            principal=principal,
+            visibility_choices=visibility_choices(ctx, principal),
+            status_code=200 if busy else STOP_POLLING,
+            authorization_check=view.validate,
+        )
 
 
-def busy_source_ids(ctx) -> set[str]:
-    """Ids of sources whose index job is running right now (their Delete/Reindex buttons are disabled)."""
-    return {key.split(":", 1)[1] for key in ctx.jobs.running_keys() if key.startswith("index:")}
+def busy_source_ids(ctx, view) -> set[str]:
+    """Only legacy source jobs have an audience-safe source-level status."""
+    ids = {key[6:] for key in ctx.jobs.running_keys() if key.startswith("index:")}
+    if view is None:
+        return set()
+    view.validate()
+    return ids & view.legacy_ids
 
 
-def visible_source(request: Request, source_id: str) -> dict[str, Any]:
+def visible_source(
+    request: Request, source_id: str, *, session: QuerySession | None = None
+) -> dict[str, Any]:
     """The source, if the caller may see it; a hidden source looks exactly like a missing one."""
-    source = ctx_of(request).store.get_source(source_id, principal_of(request).access)
+    if session is None:
+        with query_session(ctx_of(request), principal_of(request).access) as owned:
+            return visible_source(request, source_id, session=owned)
+    view = source_view(ctx_of(request), principal_of(request).access, session=session)
+    source = next((row for row in view.sources if row["id"] == source_id), None)
     if source is None:
         raise HTTPException(404, "no such source")
     return source
@@ -120,43 +169,172 @@ def manageable_source(request: Request, source_id: str) -> dict[str, Any]:
 def source_page(request: Request, source_id: str, page: int = 1):
     ctx = ctx_of(request)
     principal = principal_of(request)
-    source = visible_source(request, source_id)
-    page = max(1, page)
-    passages = ctx.store.passages_for_source(
-        source_id, limit=PASSAGES_PER_PAGE, offset=(page - 1) * PASSAGES_PER_PAGE, access=principal.access
-    )
-    question_sets = (
-        [qs for qs in ctx.store.list_question_sets() if qs.get("source_id") == source_id]
-        if principal.can("run_evals")
-        else []
-    )
-    pages = max(1, -(-source["passages"] // PASSAGES_PER_PAGE))
-    return render(
-        request,
-        "source.html",
-        nav="library",
-        source=with_manage_flags([source], principal)[0],
-        passages=passages,
-        question_sets=question_sets,
-        page=page,
-        pages=pages,
-        busy=ctx.jobs.is_running(f"index:{source_id}"),
-        principal=principal,
-        visibility_choices=visibility_choices(ctx, principal),
-        can_evals=principal.can("run_evals"),
-    )
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        source = next((row for row in view.sources if row["id"] == source_id), None)
+        if source is None:
+            raise HTTPException(404, "no such source")
+        page = max(1, page)
+        # The view's lane decides the page, never the `managed` flag, which the first staged row
+        # sets: a converting source keeps its legacy page, facts and entities included, until it
+        # publishes (CD2, ruling 14, R21-M7). The held graph serves exactly the lane's rows, which
+        # for a converting source are its untagged ones -- `passages_for_source` would add the
+        # staged generation's -- so the page is cut from that graph and hydrated from the store.
+        legacy = source_id in view.legacy_ids
+        if legacy:
+            shown = sorted(
+                (passage for passage in view.graph.passages if passage.source_id == source_id),
+                key=lambda passage: (passage.ordinal, passage.id),
+            )[(page - 1) * PASSAGES_PER_PAGE : page * PASSAGES_PER_PAGE]
+            passages = sorted(
+                ctx.store.get_passages([passage.id for passage in shown], access=principal.access),
+                key=lambda row: (row["ordinal"], row["id"]),
+            )
+        else:
+            passages = [
+                {
+                    "id": passage.id,
+                    "title": passage.title,
+                    "text": passage.text,
+                    "ordinal": passage.ordinal,
+                    "triples": [],
+                    "entities": [],
+                    "extraction_error": "",
+                }
+                for passage in view.graph.passages
+                if passage.source_id == source_id
+            ][(page - 1) * PASSAGES_PER_PAGE : page * PASSAGES_PER_PAGE]
+        passage_evidence = {}
+        if not legacy:
+            evidence = retrieval_fields(session.graph, [p["id"] for p in passages])
+            originals = {row["id"]: row for row in evidence["citations"]}
+            passage_evidence = {
+                item["passage_id"]: {
+                    "is_derived": item["is_derived"],
+                    "originals": [originals[identity] for identity in item["citation_ids"]],
+                }
+                for item in evidence["retrieval_evidence"]
+            }
+        question_sets = (
+            [
+                qs
+                for qs in EvalAccess(ctx, principal.access, session=session).list_question_sets()
+                if qs.get("source_id") == source_id
+            ]
+            if principal.can("run_evals")
+            else []
+        )
+        pages = max(1, -(-source["passages"] // PASSAGES_PER_PAGE))
+        code_details = code_details_for(ctx, principal, passages, session=session)
+        busy = source_id in busy_source_ids(ctx, view)
+        view.validate()
+        return render(
+            request,
+            "source.html",
+            session=session,
+            nav="library",
+            source=with_manage_flags([source], principal)[0],
+            passages=passages,
+            code_details=code_details,
+            passage_evidence=passage_evidence,
+            question_sets=question_sets,
+            page=page,
+            pages=pages,
+            busy=busy,
+            principal=principal,
+            visibility_choices=visibility_choices(ctx, principal),
+            can_evals=principal.can("run_evals"),
+            authorization_check=view.validate,
+        )
+
+
+CODE_COMMITS_SHOWN = 5
+
+
+def code_details_for(
+    ctx, principal: Principal, passages: list[dict[str, Any]], *, session: QuerySession | None = None
+) -> dict[str, Any]:
+    """
+    Per passage id: the symbols written down in it and their corner of the code graph.
+
+    A prose source has none of this and gets an empty dict, which the template checks. The
+    relations are rendered by `paths.render_triples`, so the page and the block the model reads
+    say the same thing in the same S2.15 grammar rather than in two hand-written formats.
+
+    `is_commit` and `touched` are for the one passage kind that is not code: a commit's own
+    passage, which the template introduces by what it changed rather than by what it "defines".
+    """
+    if session is None:
+        with query_session(ctx, principal.access) as owned:
+            return code_details_for(ctx, principal, passages, session=owned)
+    session.validate()
+    index = session.graph
+    if not index.code_nodes:
+        return {}
+    theta = float(session.settings["code_theta"])
+    out: dict[str, Any] = {}
+    for passage in passages:
+        vertex = index.idx_of.get(passage["id"])
+        if vertex is None:  # still indexing, or hidden from this caller
+            continue
+        symbols = sorted(index.symbols_defined_in(vertex), key=lambda v: paths.display_at(index, v))
+        if not symbols:
+            continue
+        edges = [e for v in symbols for e in index.out_edges(v) if e.dst != vertex]
+        commits: list = []
+        for v in symbols:
+            for commit in paths.history(index, v, limit=CODE_COMMITS_SHOWN):
+                if commit.id not in {c.id for c in commits}:
+                    commits.append(commit)
+        # `paths.history` is newest-first per symbol, but a passage can define several symbols and
+        # the loop above concatenates their histories in display-name order. Sort the merged list
+        # before the cut, or the newest commit of the second symbol lands under the oldest of the
+        # first - and, once the cut bites, drops off the page entirely. `ordinal` 0 is newest.
+        commits.sort(key=lambda c: (c.ordinal, c.sha))
+        nodes = [index.code_node_at(v) for v in symbols]
+        out[passage["id"]] = {
+            # A commit is DEFINED_IN its own passage too, so a commit passage arrives here with the
+            # commit as its only "symbol". Saying it *defines* a sha is nonsense; what a reader
+            # wants is what the commit touched, which is exactly its MODIFIES targets.
+            "is_commit": all(n is not None and n.kind == "commit" for n in nodes),
+            "touched": sorted({paths.display_at(index, e.dst) for e in edges if e.kind == "MODIFIES"}),
+            "symbols": [
+                {
+                    "id": index.node_ids[v],
+                    "name": paths.display_at(index, v),
+                    "node": index.code_node_at(v),
+                }
+                for v in symbols
+            ],
+            "relations": paths.render_triples(
+                paths.triple_rows(index, graph_routes.sorted_edges(index, edges))
+            ),
+            "tests": paths.test_rows(index, paths.tests_for(index, symbols, theta=theta)),
+            "commits": paths.history_rows(commits[:CODE_COMMITS_SHOWN]),
+        }
+    return out
 
 
 @router.get("/partials/sources/{source_id}/status")
 def source_status_partial(request: Request, source_id: str):
-    source = visible_source(request, source_id)
-    busy = source["status"] in BUSY_STATUSES
-    return render(
-        request, "partials/source_status.html", source=source, status_code=200 if busy else STOP_POLLING
-    )
+    ctx = ctx_of(request)
+    principal = principal_of(request)
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        source = next((row for row in view.sources if row["id"] == source_id), None)
+        if source is None:
+            raise HTTPException(404, "no such source")
+        busy = source["status"] in BUSY_STATUSES
+        return render(
+            request,
+            "partials/source_status.html",
+            session=session,
+            source=source,
+            status_code=200 if busy else STOP_POLLING,
+            authorization_check=view.validate,
+        )
 
-
-# ----------------------------------------------------------- page forms
+    # ----------------------------------------------------------- page forms
 
 
 def too_big(request: Request, ctx) -> str | None:
@@ -195,11 +373,27 @@ def new_source_access(request: Request, visibility: str | None) -> dict[str, Any
     return {"owner_id": principal.user_id, "access_role_id": role_id}
 
 
+def new_managed_source(request: Request, visibility: str | None) -> dict[str, Any]:
+    """
+    `new_source_access` plus the caller's own build actor, for the ingress families whose
+    pipeline entry point accepts one: pasted text, uploads and (since CC10) repositories.
+
+    The actor is the opt-in to the reviewed managed build. It is always the identity this
+    request already proved: an open or preview caller brings None and keeps the legacy lane,
+    and the pipeline, not this route, decides whether the saved source kind can use it at
+    all. Nothing here is captured by the background job except that immutable actor.
+    """
+    return {
+        **new_source_access(request, visibility),
+        "build_actor": build_actor_of(principal_of(request)),
+    }
+
+
 @router.post("/sources/upload")
 async def upload_form(request: Request, files: list[UploadFile] = File(...), visibility: str = Form(None)):
     ctx = ctx_of(request)
     try:
-        access = new_source_access(request, visibility)
+        access = new_managed_source(request, visibility)
     except HTTPException as exc:
         return RedirectResponse(f"/?error={quote(str(exc.detail))}", status_code=303)
     if message := too_big(request, ctx):
@@ -222,7 +416,7 @@ async def upload_form(request: Request, files: list[UploadFile] = File(...), vis
 @router.post("/sources/text")
 def text_form(request: Request, name: str = Form(""), text: str = Form(""), visibility: str = Form(None)):
     try:
-        access = new_source_access(request, visibility)
+        access = new_managed_source(request, visibility)
     except HTTPException as exc:
         return RedirectResponse(f"/?error={quote(str(exc.detail))}", status_code=303)
     if not text.strip():
@@ -234,12 +428,12 @@ def text_form(request: Request, name: str = Form(""), text: str = Form(""), visi
 @router.post("/sources/repo")
 def repo_form(request: Request, url: str = Form(""), visibility: str = Form(None)):
     try:
-        access = new_source_access(request, visibility)
+        access = new_managed_source(request, visibility)
         pipeline.add_repo(ctx_of(request), url.strip(), **access)
     except HTTPException as exc:
         return RedirectResponse(f"/?error={quote(str(exc.detail))}", status_code=303)
     except (RepoError, ValueError) as exc:
-        return RedirectResponse(f"/?error={exc}", status_code=303)
+        return RedirectResponse(f"/?error={quote(str(exc))}", status_code=303)
     return RedirectResponse("/", status_code=303)
 
 
@@ -289,37 +483,61 @@ class AccessBody(BaseModel):
 
 @api.get("")
 def list_sources(request: Request) -> list[dict[str, Any]]:
-    return ctx_of(request).store.list_sources(principal_of(request).access)
+    with query_session(ctx_of(request), principal_of(request).access) as session:
+        return source_view(ctx_of(request), principal_of(request).access, session=session).sources
 
 
 @api.post("/text")
 def add_text(request: Request, body: TextBody, visibility: str | None = None):
-    access = new_source_access(request, body.visibility if body.visibility is not None else visibility)
+    access = new_managed_source(request, body.visibility if body.visibility is not None else visibility)
     try:
         return {"source_id": pipeline.add_text(ctx_of(request), body.name, body.text, **access)}
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        # Exact type only: `ManagedDispatchError` is a `ValueError` too, and reporting one as
+        # a 400 would blame the caller in the managed lane's own words. Same rule as the
+        # other 4xx sites in the web layer (`render.caller_error`).
+        if not caller_error(exc):
+            raise
+        return coded_response(str(exc), INVALID_SOURCE, 400)
 
 
 @api.post("/upload")
 async def add_upload(request: Request, file: UploadFile = File(...), visibility: str = Form(None)):
-    access = new_source_access(request, visibility)
+    access = new_managed_source(request, visibility)
     if message := too_big(request, ctx_of(request)):
-        return JSONResponse({"error": message}, status_code=413)
+        return coded_response(message, INVALID_SOURCE, 413)
     data = await file.read()
     try:
         return {"source_id": pipeline.add_upload(ctx_of(request), file.filename or "upload", data, **access)}
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        if not caller_error(exc):
+            raise
+        return coded_response(str(exc), INVALID_SOURCE, 400)
 
 
 @api.post("/repo")
 def add_repo(request: Request, body: RepoBody):
-    access = new_source_access(request, body.visibility)
+    access = new_managed_source(request, body.visibility)
     try:
         return {"source_id": pipeline.add_repo(ctx_of(request), body.url, **access)}
-    except (RepoError, ValueError) as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    except RepoError as exc:
+        # Exact type only, the same rule `render.caller_error` applies one clause down.
+        # `pipeline.add_repo` raises `RepoError` for exactly one condition -- the URL does
+        # not look like a git URL -- and that sentence is fixed and quotes nothing the caller
+        # typed (R21-M10), which is the bounded validation text the plan's transport table
+        # protects. Cloning happens inside the background job, so `repos.clone_repo`'s
+        # errors reach the Source row through `_legacy_failure` and never this 400. A
+        # future subclass would carry something this route has not read, so it goes to the
+        # closed table instead of being printed. With the reader's actor, a clone URL that
+        # carries credentials is refused as `CaptureRefused`, which is not a `RepoError`
+        # and reaches that closed table too.
+        if type(exc) is not RepoError:
+            return public_failure_response(retrieval_failure(exc))
+        return coded_response(str(exc), INVALID_SOURCE, 400)
+    except ValueError as exc:
+        if not caller_error(exc):
+            raise
+        return coded_response(str(exc), INVALID_SOURCE, 400)
 
 
 @api.post("/sample")
@@ -331,11 +549,39 @@ def add_sample(request: Request, visibility: str | None = None):
 @api.post("/reindex-all")
 def reindex_all(request: Request):
     """Re-index every source with the current embedding model (the fix for a changed HIPPO_EMBED_MODEL)."""
-    require(request, "edit_graph")  # touches every source, including ones the caller may not see
-    try:
-        return {"started": pipeline.reindex_all(ctx_of(request))}
-    except Busy as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
+    principal = require(request, "edit_graph")  # retains the existing global operation permission
+    ctx = ctx_of(request)
+    # One owner spans the whole operation: the inventory this caller proved, the pipeline
+    # call, and the proof that nothing about their audience changed while it ran. The route
+    # used to validate a view it had already released and then acquire a second one.
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        try:
+            # `edit_graph` says this caller may run the operation; the actor says who each
+            # managed refresh inside it builds as. A bulk run never widens that.
+            pipeline.reindex_all(ctx, build_actor=build_actor_of(principal))
+        except Busy as exc:
+            # The same check the two branches below make, for the same reason: a caller whose
+            # audience was revoked while the pipeline ran is told that, not that the machine
+            # was busy with a library they may no longer see. `query_session` would catch it
+            # on release anyway, but only by discarding a response this branch had already
+            # built, and the view's own proof is not the session's.
+            view.validate()
+            return coded_response(str(exc), INDEXING_BUSY, 409)
+        except ManagedPreflightRefused:
+            # A refused preflight clears nothing and starts nothing, so `{"accepted": true}`
+            # would be untrue and the only other trace is a local log line. The refusal
+            # names no source and carries no count, and neither does this: the caller learns
+            # that the bulk did not run, not which lane stopped it.
+            view.validate()
+            return coded_response("Bulk reindex refused", BULK_REFUSED, 409)
+        # `ManagedActorRequired` is deliberately not caught: a managed operation this
+        # identity may not perform is a permission answer, and `web/app.py` already gives
+        # every route the same one.
+        view.validate()
+        # The pipeline reports only a global count, without per-source outcomes.
+        # Acknowledge acceptance without claiming which visible jobs started.
+        return {"accepted": True}
 
 
 @api.get("/{source_id}")
@@ -367,10 +613,17 @@ def set_access(request: Request, source_id: str, body: AccessBody):
 def delete_source(request: Request, source_id: str):
     ctx = ctx_of(request)
     manageable_source(request, source_id)
+    # The same principal `manageable_source` just authorized. A managed source is tombstoned
+    # as that reader or not at all: the lifecycle service rechecks the actor inside its own
+    # transaction, and an actorless call is refused before anything is suppressed.
     try:
-        pipeline.delete_source(ctx, source_id)
+        pipeline.delete_source(ctx, source_id, build_actor=build_actor_of(principal_of(request)))
     except Busy as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
+        return coded_response(str(exc), INDEXING_BUSY, 409)
+    except AuthorizationChanged as exc:
+        # A reader retrying their own delete must not learn that the source is still there,
+        # tombstoned: an unavailable source and a suppressed one answer the same way.
+        raise HTTPException(404, "no such source") from exc
     return {"deleted": source_id}
 
 
@@ -378,7 +631,9 @@ def delete_source(request: Request, source_id: str):
 def reindex(request: Request, source_id: str):
     ctx = ctx_of(request)
     manageable_source(request, source_id)
+    # The principal `manageable_source` just authorized is the one that rebuilds.
+    actor = build_actor_of(principal_of(request))
     try:
-        return {"started": pipeline.reindex(ctx, source_id)}
+        return {"started": pipeline.reindex(ctx, source_id, build_actor=actor)}
     except Busy as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
+        return coded_response(str(exc), INDEXING_BUSY, 409)

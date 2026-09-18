@@ -15,3 +15,17 @@
 {% if status.jobs %}
   <span class="pill info" title="{{ status.jobs | join(', ') if (me is none or me.access.unrestricted) else 'running in the background' }}">⏳ {{ status.jobs | length }} job{{ 's' if status.jobs | length != 1 }}</span>
 {% endif %}
+{% if status.code.symbols %}
+{% set code_lines = [
+  status.code.symbols ~ ' symbol' ~ ('s' if status.code.symbols != 1 else ''),
+  (status.code.data_objects ~ ' data object' ~ ('s' if status.code.data_objects != 1 else '')) if status.code.data_objects else None,
+  (status.code.code_edges ~ ' code edge' ~ ('s' if status.code.code_edges != 1 else '')) if status.code.code_edges else None,
+  (status.code.commits ~ ' commit' ~ ('s' if status.code.commits != 1 else '')) if status.code.commits else None,
+  (status.code.languages | join(', ')) if status.code.languages else None,
+  (status.code.unresolved_calls ~ ' unresolved call' ~ ('s' if status.code.unresolved_calls != 1 else '')) if status.code.unresolved_calls else None,
+  (status.code.history_skipped ~ ' commit' ~ ('s' if status.code.history_skipped != 1 else '') ~ ' skipped') if status.code.history_skipped else None,
+] | select('string') | list %}
+  <span class="pill info" title="{{ code_lines | join('\n') }}">
+    <span class="dot"></span> Code {{ status.code.symbols }} symbol{{ 's' if status.code.symbols != 1 }}
+  </span>
+{% endif %}

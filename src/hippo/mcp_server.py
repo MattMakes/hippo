@@ -3,20 +3,49 @@ The MCP server: lets an AI client (Claude Code, Claude Desktop, Cursor, ...)
 use hippo's memory as tools.
 
 MCP ("Model Context Protocol") is a small standard for "here are some tools
-you can call". We expose five:
+you can call". We expose ten:
 
-    hippo_search    rank passages for a question (no LLM answer)
-    hippo_ask       search, then let the local LLM answer from the passages
-    hippo_remember  add a text to the memory and index it in the background
-    hippo_sources   list what is in the memory and whether it is indexed
-    hippo_whoami    who the server thinks you are, and what you may see and do
+    hippo_search          rank passages for a question (no LLM answer)
+    hippo_ask             search, then let the local LLM answer from the passages
+    hippo_remember        add a text to the memory and index it in the background
+    hippo_sources         list what is in the memory and whether it is indexed
+    hippo_whoami          who the server thinks you are, and what you may see and do
+    hippo_explain_path    the relations that lead from one symbol to another
+    hippo_blast_radius    who would feel a change to a symbol, level by level
+    hippo_exception_path  how a function reaches an exception class
+    hippo_history         the commits that touched a symbol, newest first
+    hippo_connectors      the installed connectors, one instance's probe result, or a validation
+
+`hippo_explain_path`, `hippo_blast_radius`, `hippo_exception_path` and
+`hippo_history` walk the code graph a repository source builds. They answer in
+the same shapes as `/api/code/*` (`web/routes/code.py` holds the builders both
+surfaces call), and a name that could mean several symbols comes back as a
+ToolError listing them, because a tool's error message is the only thing an MCP
+client is shown. `hippo_connectors` is the same arrangement over
+`web/routes/connectors.py`: the operator answers of `/api/connectors`, behind
+the same `manage_sources` capability, and never a probe.
 
 Who is calling (hippo/access.py): every tool works on the caller's slice of
-the memory. Over HTTP the caller is identified by `Authorization: Bearer
+the memory. Over HTTP the caller is identified by a session cookie or `Authorization: Bearer
 <token>` (each user's token is on their Account page; the web app's gate
 already refused requests without one once users exist). Over stdio there are
 no headers, so the token comes from the HIPPO_TOKEN environment variable. Until
 the first user is created hippo is open and everything is visible.
+
+The two transports never borrow each other's credential: the HTTP path reads only
+the request, and `HIPPO_TOKEN` belongs to the stdio process alone. What a caller may
+*build* follows from the same identity - `hippo_remember` passes that principal's
+`BuildActor.reader`, and an open caller passes none, so it keeps writing legacy
+evidence. No tool ever manufactures a trusted-local actor.
+
+What a caller may *learn from a failure* is closed too: every tool answers with the
+stable code and bounded sentence in `knowledge/public_errors.py`, which is what the
+HTTP routes and the CLI print for the same condition. That covers the whole body of
+every tool, including acquiring and releasing the caller's view and the authorization
+re-checks around a code-graph answer, because a failure there can carry stored evidence
+just as readily as the answer itself can. A symbol name the caller supplied, and the
+candidates it could have meant, are the exceptions - they are the answer rather than a
+leak - and an authorization change outranks both.
 
 The same server can be reached two ways:
 
@@ -42,19 +71,40 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Iterable, Mapping
-from contextlib import asynccontextmanager
-from typing import Any
+from collections.abc import Callable, Iterable
+from contextlib import asynccontextmanager, contextmanager
+from typing import Any, Literal
 
 from fastapi import FastAPI
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.datastructures import Headers
 
-from .access import Principal
-from .ask import ask, search
+from .access import Access, Principal
+from .ask import ask, code_block, code_fields, search
 from .context import AppContext
-from .web.auth import StoreDown, principal_from_bearer
+from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
+from .knowledge.access import AuthorizationChanged
+from .knowledge.answer_evidence import answer_sources, retrieval_fields
+from .knowledge.build_authority import BuildActor
+from .knowledge.public_errors import OPERATION_FAILED, public_failure
+from .knowledge.query_access import query_session
+from .web.auth import StoreDown, principal_from_bearer, resolve_principal
+from .web.routes.code import (
+    DEFAULT_DEPTH,
+    DEFAULT_HISTORY_LIMIT,
+    blast_payload,
+    exception_payload,
+    history_payload,
+    path_payload,
+)
+from .web.routes.connectors import (
+    ConnectorNotFound,
+    classification_payload,
+    connectors_payload,
+    validation_payload,
+)
 from .web.security import ANY_HOST
 
 log = logging.getLogger(__name__)
@@ -67,7 +117,10 @@ INSTRUCTIONS = (
     "hippo is a long-term memory built on a knowledge graph (HippoRAG). "
     "Use hippo_search or hippo_ask to recall things that were stored, "
     "hippo_remember to store new text, hippo_sources to see what is stored, "
-    "and hippo_whoami to learn which part of the memory you may see."
+    "and hippo_whoami to learn which part of the memory you may see. "
+    "When the memory holds a code repository, hippo_explain_path, hippo_blast_radius, "
+    "hippo_exception_path and hippo_history walk its code graph directly. "
+    "hippo_connectors reports which connectors are installed and whether they still validate."
 )
 TOKEN_ENV = "HIPPO_TOKEN"
 
@@ -75,42 +128,118 @@ TOKEN_ENV = "HIPPO_TOKEN"
 # ---------------------------------------------------------- the caller
 
 
-def caller(ctx: AppContext, mcp_ctx: Context | None) -> Principal:
-    """
-    Who is calling, from the request's Authorization header (HTTP) or HIPPO_TOKEN (stdio).
-    Raises ToolError, which the client sees verbatim, when users exist and no valid token came.
-    """
-    headers: Mapping[str, str] | None = None
-    if mcp_ctx is not None:
-        try:
-            headers = mcp_ctx.headers
-        except ValueError:  # no request (stdio, or a direct call in tests)
-            headers = None
-    token = None
-    if headers is not None:
-        auth = headers.get("authorization") or headers.get("Authorization") or ""
-        if auth.lower().startswith("bearer "):
-            token = auth[7:].strip()
-    if not token:
-        token = os.environ.get(TOKEN_ENV) or None
+CredentialTransport = Literal["http", "stdio"]
+
+
+def caller(ctx: AppContext, mcp_ctx: Context | None, *, transport: CredentialTransport = "http") -> Principal:
+    """Resolve only credentials belonging to the explicitly selected transport."""
+    if transport not in ("http", "stdio"):
+        raise ValueError("Unknown credential transport")
     try:
-        principal = principal_from_bearer(ctx, token)
+        if not ctx.store.ping():
+            raise StoreDown()
+        if transport == "stdio":
+            principal = principal_from_bearer(ctx, os.environ.get(TOKEN_ENV) or None, require_online=True)
+        else:
+            headers = None
+            if mcp_ctx is not None:
+                try:
+                    headers = mcp_ctx.headers
+                except ValueError:  # No HTTP request; never substitute process credentials.
+                    pass
+            principal = resolve_principal(ctx, Headers(headers or {}), require_online=True)
     except StoreDown as exc:
-        raise ToolError("hippo cannot reach Neo4j, so nobody can be signed in right now") from exc
+        raise ToolError("hippo cannot reach its database, so nobody can be signed in right now") from exc
     if principal is None:
         raise ToolError(
-            "sign in required: users exist, so hippo needs your token. Over HTTP send "
-            "'Authorization: Bearer <token>'; over stdio set HIPPO_TOKEN. Your token is on the Account page."
+            "sign in required: HTTP needs your bearer token or session cookie; "
+            "stdio needs HIPPO_TOKEN. Your token is on the Account page."
         )
     return principal
+
+
+def reader_actor(principal: Principal) -> BuildActor | None:
+    """The build actor for a caller, or `None` when this identity may only build legacy evidence.
+
+    Open and preview identities cannot prove managed evidence, and no transport may
+    substitute `BuildActor.trusted_local()` for one: that actor is for explicit internal
+    and maintenance calls, never for an unauthenticated request. `cli.py` holds the same
+    three lines for the same reason, rather than importing this module and its web stack.
+    """
+    if principal.is_open or principal.access.unrestricted:
+        return None
+    return BuildActor.reader(principal)
+
+
+# ------------------------------------------------------------- safe failures
+# A ToolError's message is the only thing an MCP client is shown, so it is also the only
+# place a leak could reach one. Everything a tool raises passes through `tool_failure`,
+# which answers with the same closed code and bounded sentence the HTTP routes and the
+# CLI use for the same condition.
+
+# One denial, one wording, on every surface. `public_errors` maps an authorization change
+# to `None` on purpose, so it never becomes a fifth *public* code; but the managed lane has
+# always had its own stable name for the same event (`managed_activation.FAILURES`), and a
+# client that meets it over MCP, over the CLI and over the JSON API should not have to learn
+# three sentences for it. So the sentence is the web app's own 409 body (`web/app.py`) and
+# the code is the managed lane's. `cli.DENIED` and `cli.DENIED_CODE` hold the same two.
+DENIED = "Permissions changed; repeat the query"
+DENIED_CODE = "authorization_changed"
+
+
+def tool_failure(exc: Exception) -> ToolError:
+    """The one public rendering of a failure, in order of how much is known about it.
+
+    Never called for a `ToolError`, a `KeyboardInterrupt` or a `SystemExit`: the first
+    is already the public answer, and the other two are the operator stopping the
+    process, not hippo failing at something.
+    """
+    failure = public_failure(exc)
+    if failure is not None:
+        return ToolError(f"{failure.code}: {failure.message}")
+    if isinstance(exc, AuthorizationChanged):
+        return ToolError(f"{DENIED_CODE}: {DENIED}")
+    # Closed input validation the caller can act on, raised before any managed work and
+    # never interpolating stored text. Every managed exception is a *subclass* of
+    # ValueError (ReadError, ManagedDispatchError, ProjectionError), so the exact-type
+    # check is what keeps those out of here.
+    if type(exc) is ValueError:
+        return ToolError(str(exc))
+    return ToolError(f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message}")
+
+
+class TransportBoundServer(MCPServer):
+    """Prevent a server carrying process credentials from being served over HTTP."""
+
+    def __init__(self, *, credential_transport: CredentialTransport) -> None:
+        if credential_transport not in ("http", "stdio"):
+            raise ValueError("Unknown credential transport")
+        super().__init__(name="hippo", instructions=INSTRUCTIONS)
+        self._credential_transport = credential_transport
+
+    def _require_transport(self, expected: CredentialTransport) -> None:
+        if self._credential_transport != expected:
+            raise ValueError(f"Server credential transport must be {expected}")
+
+    def streamable_http_app(self, **kwargs):
+        self._require_transport("http")
+        return super().streamable_http_app(**kwargs)
+
+    def sse_app(self, **kwargs):
+        self._require_transport("http")
+        return super().sse_app(**kwargs)
+
+    async def run_stdio_async(self) -> None:
+        self._require_transport("stdio")
+        await super().run_stdio_async()
 
 
 # --------------------------------------------------------------- building
 
 
-def build_server(ctx: AppContext) -> MCPServer:
-    """Create the MCP server with the four hippo tools bound to this AppContext."""
-    server = MCPServer(name="hippo", instructions=INSTRUCTIONS)
+def build_server(ctx: AppContext, *, transport: CredentialTransport = "http") -> MCPServer:
+    """Create the MCP server with the ten hippo tools bound to this AppContext."""
+    server = TransportBoundServer(credential_transport=transport)
 
     @server.tool(
         description=(
@@ -123,7 +252,7 @@ def build_server(ctx: AppContext) -> MCPServer:
     def hippo_search(
         question: str, top_k: int = DEFAULT_TOP_K, mcp_ctx: Context | None = None
     ) -> dict[str, Any]:
-        return search_tool(ctx, question, top_k, principal=caller(ctx, mcp_ctx))
+        return search_tool(ctx, question, top_k, principal=caller(ctx, mcp_ctx, transport=transport))
 
     @server.tool(
         description=(
@@ -132,7 +261,7 @@ def build_server(ctx: AppContext) -> MCPServer:
         )
     )
     def hippo_ask(question: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
-        return ask_tool(ctx, question, principal=caller(ctx, mcp_ctx))
+        return ask_tool(ctx, question, principal=caller(ctx, mcp_ctx, transport=transport))
 
     @server.tool(
         description=(
@@ -145,7 +274,9 @@ def build_server(ctx: AppContext) -> MCPServer:
     def hippo_remember(
         name: str, text: str, visibility: str | None = None, mcp_ctx: Context | None = None
     ) -> dict[str, Any]:
-        return remember_tool(ctx, name, text, visibility=visibility, principal=caller(ctx, mcp_ctx))
+        return remember_tool(
+            ctx, name, text, visibility=visibility, principal=caller(ctx, mcp_ctx, transport=transport)
+        )
 
     @server.tool(
         description=(
@@ -154,7 +285,7 @@ def build_server(ctx: AppContext) -> MCPServer:
         )
     )
     def hippo_sources(mcp_ctx: Context | None = None) -> list[dict[str, Any]]:
-        return sources_tool(ctx, principal=caller(ctx, mcp_ctx))
+        return sources_tool(ctx, principal=caller(ctx, mcp_ctx, transport=transport))
 
     @server.tool(
         description=(
@@ -163,7 +294,69 @@ def build_server(ctx: AppContext) -> MCPServer:
         )
     )
     def hippo_whoami(mcp_ctx: Context | None = None) -> dict[str, Any]:
-        return whoami_tool(ctx, principal=caller(ctx, mcp_ctx))
+        return whoami_tool(ctx, principal=caller(ctx, mcp_ctx, transport=transport))
+
+    @server.tool(
+        description=(
+            "Explain how one symbol reaches another in an indexed repository: the fewest calls, "
+            "imports, inheritance or data-access relations that lead from `a` to `b`, each with its "
+            "confidence and why it was inferred. Names may be fully qualified "
+            "(pkg.module.Class.method), module-relative (Class.method) or bare when unambiguous."
+        )
+    )
+    def hippo_explain_path(a: str, b: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
+        return explain_path_tool(ctx, a, b, principal=caller(ctx, mcp_ctx, transport=transport))
+
+    @server.tool(
+        description=(
+            "What a change to this symbol could break: everything that depends on it, `depth` "
+            "levels of callers out (1-4, default 2), grouped by subsystem. Use before editing a "
+            "function to see who else is affected."
+        )
+    )
+    def hippo_blast_radius(
+        symbol: str, depth: int = DEFAULT_DEPTH, mcp_ctx: Context | None = None
+    ) -> dict[str, Any]:
+        return blast_radius_tool(ctx, symbol, depth, principal=caller(ctx, mcp_ctx, transport=transport))
+
+    @server.tool(
+        description=(
+            "How a function reaches an exception class: the RAISES relation itself, or the calls "
+            "that lead to one. Use to answer 'where does this error come from'."
+        )
+    )
+    def hippo_exception_path(symbol: str, exception: str, mcp_ctx: Context | None = None) -> dict[str, Any]:
+        return exception_path_tool(
+            ctx, symbol, exception, principal=caller(ctx, mcp_ctx, transport=transport)
+        )
+
+    @server.tool(
+        description=(
+            "The commits that touched this symbol, newest first: sha, date and subject. Needs a "
+            "repository source indexed with git history; otherwise the list is empty."
+        )
+    )
+    def hippo_history(
+        symbol: str, limit: int = DEFAULT_HISTORY_LIMIT, mcp_ctx: Context | None = None
+    ) -> dict[str, Any]:
+        return history_tool(ctx, symbol, limit, principal=caller(ctx, mcp_ctx, transport=transport))
+
+    @server.tool(
+        description=(
+            "hippo's connectors: with no argument, the list; with connector_id, that instance's "
+            "stored classification (the probe result); with validate, the contract validation of "
+            "that installed connector kind. Needs the manage_sources capability."
+        )
+    )
+    def hippo_connectors(
+        connector_id: str | None = None, validate: str | None = None, mcp_ctx: Context | None = None
+    ) -> dict[str, Any]:
+        return connectors_tool(
+            ctx,
+            connector_id=connector_id,
+            validate=validate,
+            principal=caller(ctx, mcp_ctx, transport=transport),
+        )
 
     return server
 
@@ -172,53 +365,183 @@ def build_server(ctx: AppContext) -> MCPServer:
 # Kept as plain functions so they are easy to unit test without the MCP plumbing.
 
 
+@contextmanager
+def _answering():
+    """Whatever goes wrong inside, the client is shown a closed public failure.
+
+    The model paths are where a provider response body, a prompt or a stored absolute
+    path could reach an exception message, so the whole body of each is wrapped rather
+    than the individual calls: one owner, one lifetime, one rendering.
+    """
+    try:
+        yield
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise tool_failure(exc) from exc
+
+
 def search_tool(
     ctx: AppContext, question: str, top_k: int = DEFAULT_TOP_K, principal: Principal | None = None
 ) -> dict[str, Any]:
     question = _clean_question(question)
     top_k = max(1, min(int(top_k), MAX_TOP_K))
     access = principal.access if principal else None
-    trace = search(ctx, question, access=access)
-    graph = ctx.graph_for(access)
-    passages = []
-    for ranked in trace.passages[:top_k]:
-        passage = graph.passage_by_id(ranked.passage_id)
-        passages.append(
-            {
-                "passage_id": ranked.passage_id,
-                "title": ranked.title,
-                "source": ranked.source_name,
-                "text": passage.text if passage else ranked.preview,
-                "score": round(ranked.score, 6),
-                "rank": ranked.rank,
-            }
-        )
-    kept_facts = [c.triple for c in trace.fact_candidates if c.kept]
-    return {
-        "question": question,
-        "passages": passages,
-        "kept_facts": kept_facts,
-        "used_dpr_fallback": trace.used_dpr_fallback,
-    }
+    with _answering(), query_session(ctx, access) as session:
+        trace = search(ctx, question, access=access, session=session)
+        passages = []
+        for ranked in trace.passages[:top_k]:
+            passage = session.graph.passage_by_id(ranked.passage_id)
+            if passage is None:
+                continue
+            passages.append(
+                {
+                    "passage_id": ranked.passage_id,
+                    "title": ranked.title,
+                    "source": ranked.source_name,
+                    "text": passage.text,
+                    "score": round(ranked.score, 6),
+                    "rank": ranked.rank,
+                }
+            )
+        evidence = retrieval_fields(session.graph, [row["passage_id"] for row in passages])
+        by_id = {item["passage_id"]: item for item in evidence["retrieval_evidence"]}
+        for row in passages:
+            item = by_id[row["passage_id"]]
+            row.update(is_derived=item["is_derived"], citation_ids=item["citation_ids"])
+        kept_facts = [c.triple for c in trace.fact_candidates if c.kept]
+        payload = {
+            "question": question,
+            "passages": passages,
+            **evidence,
+            "kept_facts": kept_facts,
+            "used_dpr_fallback": trace.used_dpr_fallback,
+            **code_fields(trace, code_block(session.graph, trace)),
+        }
+        session.validate()
+        return payload
 
 
 def ask_tool(ctx: AppContext, question: str, principal: Principal | None = None) -> dict[str, Any]:
     question = _clean_question(question)
-    trace, answer = ask(ctx, question, access=principal.access if principal else None)
-    # Only the passages the LLM actually read count as "sources" of the answer.
-    read = set(answer.passage_ids)
-    sources = [
-        {
-            "passage_id": p.passage_id,
-            "title": p.title,
-            "source": p.source_name,
-            "rank": p.rank,
-            "score": round(p.score, 6),
+    access = principal.access if principal else None
+    with _answering(), query_session(ctx, access) as session:
+        trace, answer = ask(ctx, question, access=access, session=session)
+        sources = answer_sources(session.graph, trace, answer)
+        payload = {
+            "answer": answer.answer,
+            "thought": answer.thought,
+            "sources": sources,
+            "passage_ids": answer.passage_ids,
+            "retrieval_passage_ids": answer.retrieval_passage_ids,
+            **code_fields(trace, answer.context_block),
         }
-        for p in trace.passages
-        if p.passage_id in read
-    ]
-    return {"answer": answer.answer, "thought": answer.thought, "sources": sources}
+        session.validate()
+        return payload
+
+
+# ------------------------------------------------------- the code graph tools
+# Thin over `web/routes/code.py`'s builders: the shapes MCP returns and the shapes /api/code
+# returns are the same objects, so a client can move between the two without relearning anything.
+
+
+@contextmanager
+def _code_graph(ctx: AppContext, principal: Principal | None):
+    access: Access | None = principal.access if principal else None
+    with query_session(ctx, access) as session:
+        yield session.graph, float(session.settings["code_theta"])
+
+
+def _code_answer(build: Callable[[], dict[str, Any]], validate: Callable[[], None]) -> dict[str, Any]:
+    """
+    ToolError is the one exception an MCP client is shown verbatim, so everything a caller could
+    act on has to be inside its message - the candidates of an ambiguous name above all.
+
+    A name is the caller's own input and its candidates are the answer, so those two keep
+    their text. Everything else here is a graph read that could carry stored evidence, and
+    goes out as the closed public failure instead.
+
+    Both `validate()` calls are inside the mapper, which is what the nesting is for. The
+    trailing one runs in a `finally`, and a `finally` that raises *replaces* whatever is
+    already in flight: outside the mapper it would hand the caller a raw
+    `AuthorizationChanged` (which mcp masks as a crash and logs with its traceback) and it
+    would swallow a `ToolError` the handlers had already built correctly. Inside it, a
+    denial mid-answer simply outranks a partly built answer, which is the right order.
+    """
+    try:
+        validate()
+        try:
+            return build()
+        except (AmbiguousSymbol, UnknownSymbol) as exc:
+            raise ToolError(str(exc)) from exc
+        finally:
+            validate()
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise tool_failure(exc) from exc
+
+
+def explain_path_tool(ctx: AppContext, a: str, b: str, principal: Principal | None = None) -> dict[str, Any]:
+    with _answering(), _code_graph(ctx, principal) as (index, theta):
+        return _code_answer(lambda: path_payload(index, a, b, theta=theta), index.validate_authorization)
+
+
+def blast_radius_tool(
+    ctx: AppContext, symbol: str, depth: int = DEFAULT_DEPTH, principal: Principal | None = None
+) -> dict[str, Any]:
+    with _answering(), _code_graph(ctx, principal) as (index, theta):
+        return _code_answer(
+            lambda: blast_payload(index, symbol, theta=theta, depth=depth), index.validate_authorization
+        )
+
+
+def exception_path_tool(
+    ctx: AppContext, symbol: str, exception: str, principal: Principal | None = None
+) -> dict[str, Any]:
+    with _answering(), _code_graph(ctx, principal) as (index, theta):
+        return _code_answer(
+            lambda: exception_payload(index, symbol, exception, theta=theta), index.validate_authorization
+        )
+
+
+def history_tool(
+    ctx: AppContext,
+    symbol: str,
+    limit: int = DEFAULT_HISTORY_LIMIT,
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    with _answering(), _code_graph(ctx, principal) as (index, _theta):
+        return _code_answer(lambda: history_payload(index, symbol, limit=limit), index.validate_authorization)
+
+
+def connectors_tool(
+    ctx: AppContext,
+    connector_id: str | None = None,
+    validate: str | None = None,
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    """The three read answers of `/api/connectors`, built by the route module's own builders.
+
+    Read-only apart from validation: this tool never runs `probe`, because an MCP client that could
+    make the server call a provider is Task 15's decision, not this slice's. Validation reads the
+    installed package's own fixtures and opens no store.
+    """
+    principal = principal or Principal.open()
+    if not principal.can("manage_sources"):
+        raise ToolError(f"your role ({principal.role_name}) may not do this: it needs 'manage_sources'")
+    with _answering():
+        if connector_id is not None and validate is not None:
+            raise ValueError("Choose connector_id or validate, not both")
+        try:
+            if connector_id is not None:
+                return {"classification": classification_payload(ctx, connector_id)}
+            if validate is not None:
+                return {"validation": validation_payload(validate)}
+            return {"connectors": connectors_payload(ctx)}
+        except ConnectorNotFound as exc:
+            # The caller's own name, and nothing that was read on the way to not finding it.
+            raise ToolError(exc.message) from exc
 
 
 def remember_tool(
@@ -244,9 +567,19 @@ def remember_tool(
                 raise ToolError(f"you cannot restrict text to '{role['name']}': that tier is above yours")
             role_id = role["id"]
     try:
-        source_id = pipeline.add_text(ctx, name, text, owner_id=principal.user_id, access_role_id=role_id)
-    except ValueError as exc:  # e.g. empty text: the client should see why, not a generic crash
-        raise ToolError(str(exc)) from exc
+        source_id = pipeline.add_text(
+            ctx,
+            name,
+            text,
+            owner_id=principal.user_id,
+            access_role_id=role_id,
+            build_actor=reader_actor(principal),
+        )
+    except ToolError:
+        raise
+    except Exception as exc:
+        # Empty text still says why; anything a managed build could carry does not.
+        raise tool_failure(exc) from exc
     source = ctx.store.get_source(source_id) or {}
     return {
         "source_id": source_id,
@@ -257,30 +590,41 @@ def remember_tool(
 
 
 def sources_tool(ctx: AppContext, principal: Principal | None = None) -> list[dict[str, Any]]:
-    return [
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "kind": row["kind"],
-            "status": row["status"],
-            "stage": row.get("stage"),
-            "progress_done": row.get("progress_done", 0),
-            "progress_total": row.get("progress_total", 0),
-            "passages": row.get("passages", 0),
-            "visible_to": row.get("access_role_name", "Everyone"),
-            "owner": row.get("owner_name") or None,
-            "error": row.get("error"),
-            "created_at": row.get("created_at"),
-        }
-        for row in ctx.store.list_sources(principal.access if principal else None)
-    ]
+    from .status import source_view
+
+    access = (principal or Principal.open()).access
+    with _answering(), query_session(ctx, access) as session:
+        view = source_view(ctx, access, session=session)
+        rows = [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "kind": row["kind"],
+                "status": row["status"],
+                "stage": row.get("stage"),
+                "progress_done": row.get("progress_done", 0),
+                "progress_total": row.get("progress_total", 0),
+                "passages": row.get("passages", 0),
+                "visible_to": row.get("access_role_name", "Everyone"),
+                "owner": row.get("owner_name") or None,
+                "error": row.get("error"),
+                "created_at": row.get("created_at"),
+            }
+            for row in view.sources
+        ]
+        # `_sources_locally` does the same, and for a reason the session's own exit check
+        # does not cover: `source_view` keeps its own `authorization_epoch` comparison
+        # (`status.py`), which nothing else runs.
+        view.validate()
+        return rows
 
 
 def whoami_tool(ctx: AppContext, principal: Principal | None = None) -> dict[str, Any]:
+    from .status import visible_source_count
+
     principal = principal or Principal.open()
     roles = ctx.store.list_roles()
-    visible = ctx.store.list_sources(principal.access)
-    total = len(ctx.store.list_sources()) if not principal.is_open else len(visible)
+    visible = visible_source_count(ctx, principal.access)
     return {
         "open_mode": principal.is_open,
         "user": None
@@ -292,8 +636,8 @@ def whoami_tool(ctx: AppContext, principal: Principal | None = None) -> dict[str
         },
         "role": {"id": principal.role_id, "name": principal.role_name, "rank": principal.rank},
         "can": sorted(c for c in principal.role.get("capabilities") or []),
-        "sources_visible": len(visible),
-        "sources_total": total,
+        "sources_visible": visible,
+        "sources_total": visible,
         "ladder": [{"id": r["id"], "name": r["name"], "rank": r["rank"]} for r in roles],
         "visibility_you_may_use": ["everyone"] + [r["id"] for r in roles if principal.may_assign_role(r)],
     }
@@ -373,4 +717,4 @@ def _wrap_lifespan(app: FastAPI, server: MCPServer) -> None:
 
 def run_stdio(ctx: AppContext) -> None:
     """Run the MCP server over stdin/stdout (for `hippo mcp`). Blocks until the client disconnects."""
-    build_server(ctx).run(transport="stdio")
+    build_server(ctx, transport="stdio").run(transport="stdio")

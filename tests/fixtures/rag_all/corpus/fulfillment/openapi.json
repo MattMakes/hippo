@@ -1,0 +1,34 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Shipping",
+    "version": "2"
+  },
+  "paths": {
+    "/shipping/allocations": {
+      "post": {
+        "operationId": "createOrder",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/Order"
+        }
+      }
+    }
+  },
+  "components": {
+    "requestBodies": {
+      "Order": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "warehouse_id",
+                "allocation_id"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -6,6 +6,10 @@ The `hippo` command line.
     hippo pull-models           download the Ollama models hippo needs, showing progress
     hippo index <path-or-url>   remember a file, a folder, or a public git repo, and wait for it
     hippo ask "<question>"      ask the memory a question
+    hippo path A B              how one symbol reaches another in an indexed repository
+    hippo blast SYMBOL          who would feel a change to it, level by level
+    hippo raises SYMBOL EXC     how a function reaches an exception class
+    hippo history SYMBOL        the commits that touched a symbol, newest first
     hippo sources               list what is in the memory
     hippo settings              show the retrieval settings and where things are
     hippo users                 list users and roles (the access ladder)
@@ -13,10 +17,24 @@ The `hippo` command line.
     hippo user token <name>     print a user's API/MCP token (or --new to issue another)
     hippo user role <name> <r>  move a user to another role
     hippo user remove <name>    delete a user
+    hippo connector new <name> --family <f>
+                                write a connector package that already validates
+    hippo connector list        the connectors this hippo can see, and their instances
+    hippo connector validate X  run the contract test kit over a package
+    hippo connector probe <n>   ask a connector what a provider holds
+    hippo connector sync <id>   sync one instance (--dry-run throws the result away)
+    hippo connector enable <k>  create or enable one instance, and probe it
 
-The CLI talks to Neo4j directly, so it is not gated by users: it is how you
-create the first admin from `docker exec` (see hippo/access.py). `hippo mcp`
-identifies its caller with the HIPPO_TOKEN environment variable.
+Who the CLI is. Administration is not gated by users: creating the first admin
+from `docker exec` is exactly what it is for (see hippo/access.py). Everything
+that reads or writes *evidence* is, and by the same rule the MCP server uses:
+once users exist, HIPPO_TOKEN names the reader, and `index`, `ask`, `sources`
+and the four code commands act as them - building as their `BuildActor.reader`,
+and seeing the slice of the memory they may see. A missing or unknown token
+refuses before anything is created. While no user exists the memory is open, so
+those commands use the open audience, which reads legacy evidence unrestricted
+but proves no managed generation. `hippo mcp` identifies its caller the same
+way, over stdio.
 
 Every command builds its `AppContext` from environment variables (see
 config.py and .env.example), exactly like the web app does, so the CLI and the
@@ -40,10 +58,37 @@ from typing import Any
 
 from .config import load_config
 from .context import AppContext
-from .remote import RemoteError, RemoteHippo
+from .remote import TOKEN_ENV, RemoteAmbiguous, RemoteError, RemoteHippo
 from .store import StoreLockedError
 
 WAIT_SECONDS = 3600.0  # a big repo on a slow CPU model really can take an hour
+
+# Commands that read or write evidence. They resolve a principal, and a failure inside
+# one is answered with the closed public code rather than whatever was raised - see
+# `_public_failure`. The rest are administration and keep their own messages.
+EVIDENCE_COMMANDS = frozenset({"index", "ask", "sources", "path", "blast", "raises", "history"})
+
+NO_TOKEN = (
+    f"this hippo has users, so it needs to know who you are: set {TOKEN_ENV} to your token "
+    "(Account page, /account) and run the command again"
+)
+STORE_DOWN = "hippo cannot reach its database, so nobody can be signed in right now"
+# The same two strings `mcp_server.DENIED` and `mcp_server.DENIED_CODE` hold, and the same
+# two the web app answers 409 with: one permission change, one wording, whichever surface
+# the caller reached hippo through. `public_errors` maps an authorization change to no
+# *public* code (it keeps the response it already had rather than becoming a fifth one),
+# but the managed lane has its own stable name for the event and this is it.
+DENIED = "Permissions changed; repeat the query"
+DENIED_CODE = "authorization_changed"
+
+# What a failed Source row may be printed as when its stored `error` is not already a
+# rendering. The row is not re-derivable from an exception hours later, so the id is all
+# a reader gets; the local log holds the rest.
+INDEXING_FAILED = "indexing failed; inspect local logs for source {source_id}"
+
+
+class Denied(RuntimeError):
+    """This command may not run as whoever is holding the terminal. The message is fit to print."""
 
 
 # ------------------------------------------------------------ arguments
@@ -71,6 +116,22 @@ def build_parser() -> argparse.ArgumentParser:
     ask = sub.add_parser("ask", help="ask the memory a question")
     ask.add_argument("question")
 
+    # The code graph. A name may be fully qualified (pkg.module.Class.method), module-relative
+    # (Class.method) or bare when only one symbol answers to it; the defaults repeat
+    # web/routes/code.py's so that argparse stays free of a web import.
+    path = sub.add_parser("path", help="how one symbol reaches another")
+    path.add_argument("a", help="the symbol the route starts at")
+    path.add_argument("b", help="the symbol it should reach")
+    blast = sub.add_parser("blast", help="what a change to a symbol could break")
+    blast.add_argument("symbol")
+    blast.add_argument("--depth", type=int, default=2, help="levels of callers to walk (1-4, default 2)")
+    raises = sub.add_parser("raises", help="how a function reaches an exception class")
+    raises.add_argument("symbol")
+    raises.add_argument("exception", help="the exception class, e.g. OrderError")
+    history = sub.add_parser("history", help="the commits that touched a symbol")
+    history.add_argument("symbol")
+    history.add_argument("--limit", type=int, default=3, help="how many commits to show (default 3)")
+
     sub.add_parser("sources", help="list the sources in the memory")
     sub.add_parser("settings", help="show the retrieval settings")
     sub.add_parser("users", help="list users and roles")
@@ -90,6 +151,41 @@ def build_parser() -> argparse.ArgumentParser:
     role.add_argument("role_id")
     remove = user_sub.add_parser("remove", help="delete a user (their sources stay, without an owner)")
     remove.add_argument("username")
+
+    # The connector group copies the `user` group's shape. Everything it reaches lives behind a
+    # function-local import, so `hippo --help` still loads neither the kit nor the serving stack.
+    connector = sub.add_parser("connector", help="write, check and run connectors")
+    connector_sub = connector.add_subparsers(dest="connector_command", required=True)
+    new = connector_sub.add_parser("new", help="write a new connector package that already validates")
+    new.add_argument("name", help="the package name, which is also its connector kind (lower case)")
+    # Review CK7 finding F11: required, as design section 9 writes it. A `custom`-family connector
+    # owns no predicate in spec section 6's table, so a defaulted family moved the refusal from
+    # `new` to the first real edge the developer emitted.
+    new.add_argument("--family", required=True, help="the family it writes into")
+    new.add_argument(
+        "--kinds", nargs="*", default=[], help="the object kinds it registers (default: the name)"
+    )
+    new.add_argument("--dest", default=None, help="where to write the package (default: here)")
+    connector_sub.add_parser("list", help="the connectors this hippo can see, and their instances")
+    validate = connector_sub.add_parser("validate", help="run the contract test kit over a package")
+    validate.add_argument("target", help="a package directory, or an installed connector name")
+    validate.add_argument(
+        "--update-golden", action="store_true", help="rewrite the expected files and print the diff"
+    )
+    probe = connector_sub.add_parser("probe", help="ask a connector what a provider holds")
+    probe.add_argument("name", help="an installed, trusted connector name")
+    probe.add_argument("--config", required=True, help="a JSON file of that connector's configuration")
+    connector_sync = connector_sub.add_parser("sync", help="sync one instance, or dry-run a connector")
+    connector_sync.add_argument("instance", help="a stored Connector id, or a connector name with --config")
+    connector_sync.add_argument("--config", default=None, help="a JSON configuration file (dry runs)")
+    connector_sync.add_argument("--partition", default=None, help="one partition (default: every one)")
+    connector_sync.add_argument(
+        "--dry-run", action="store_true", help="publish into a scratch workspace and throw it away"
+    )
+    enable = connector_sub.add_parser("enable", help="create or enable one instance, and probe it")
+    enable.add_argument("kind", help="the connector kind to enable")
+    enable.add_argument("instance_url", help="the provider instance this row points at")
+    enable.add_argument("--config", default=None, help="a JSON file of that connector's configuration")
     return parser
 
 
@@ -104,18 +200,119 @@ def main(argv: list[str] | None = None) -> int:
         "pull-models": cmd_pull_models,
         "index": cmd_index,
         "ask": cmd_ask,
+        "path": cmd_path,
+        "blast": cmd_blast,
+        "raises": cmd_raises,
+        "history": cmd_history,
         "sources": cmd_sources,
         "settings": cmd_settings,
         "users": cmd_users,
         "user": cmd_user,
+        "connector": cmd_connector,
     }
     try:
         return handlers[args.command](args)
-    except (StoreLockedError, RemoteError) as exc:
+    except CodeNameError as exc:
+        # A name hippo cannot act on: unknown, blank, or meaning several things. When it means
+        # several, listing them is the whole answer, so they go out under the message.
+        print(f"error: {exc}", file=sys.stderr)
+        for candidate in exc.candidates:
+            print(f"  {candidate}", file=sys.stderr)
+        return 2
+    except (StoreLockedError, RemoteError, Denied) as exc:
         # The embedded database belongs to one process at a time; usually `hippo serve` has it, and then
         # the command went to the server instead, which may have refused (no token, no permission).
+        # A remote refusal already carries the server's own stable code (remote.py).
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except Exception as exc:
+        # KeyboardInterrupt and SystemExit are not Exceptions and so pass straight
+        # through: Ctrl-C is the operator stopping the command, not hippo failing at it.
+        message = _refusal(exc, command=args.command)
+        if message is None:
+            raise
+        print(f"error: {message}", file=sys.stderr)
+        return 2
+
+
+def _refusal(exc: Exception, *, command: str) -> str | None:
+    """What this failure may be printed as, or `None` to let the exception through.
+
+    Same table as the HTTP routes and the MCP tools, so one condition reads the same
+    everywhere. An evidence command adds `or OPERATION_FAILED`, which is the caller rule
+    `knowledge/public_errors.py` documents: a pure mapper cannot tell where an exception
+    was raised, so the path that could have touched stored text says so itself. An
+    administrative command touches no managed evidence and keeps its own errors -- with
+    one deliberate exception, below.
+
+    The two modules order the same table differently: `mcp_server.tool_failure` asks
+    `public_failure` first, this asks about a permission change first. They agree only
+    because `AuthorizationChanged` is a bare `RuntimeError` and appears in no row of the
+    public table; if it ever gains one, these two have to be re-read together.
+    """
+    from .knowledge.access import AuthorizationChanged
+    from .knowledge.public_errors import OPERATION_FAILED, public_failure
+
+    if isinstance(exc, AuthorizationChanged):
+        # Mapped for *every* command, administrative ones included, and deliberately so:
+        # a permission change is the one condition that is about the caller rather than
+        # about the work, and no command should answer it with a traceback. Nothing
+        # administrative raises it today; `cmd_settings` growing a capability check is
+        # exactly the case this ordering is here for.
+        return f"{DENIED_CODE}: {DENIED}"
+    if command not in EVIDENCE_COMMANDS:
+        return None
+    failure = public_failure(exc)
+    if failure is not None:
+        return f"{failure.code}: {failure.message}"
+    # Closed input validation the caller can act on, raised before any managed work and
+    # never interpolating stored text: the same exact-type rule, for the same reason, as
+    # `mcp_server.tool_failure`. Every managed exception is a *subclass* of ValueError
+    # (ReadError, ManagedDispatchError, ProjectionError), so `isinstance` would let those
+    # out as `str(exc)`; the two surfaces have to agree on this or the same upload limit
+    # reads as its own sentence over MCP and as `operation_failed` here.
+    if type(exc) is ValueError:
+        return str(exc)
+    return f"{OPERATION_FAILED.code}: {OPERATION_FAILED.message}"
+
+
+def _principal(ctx: AppContext):
+    """Who is running this command: the HIPPO_TOKEN reader, or the open audience.
+
+    `principal_from_bearer` is the same resolver the stdio MCP server uses, so a token
+    that works for one works for the other. `require_online=True` matters: without it a
+    database hiccup on a process that has never seen a user answers `Principal.open()`,
+    which would hand the top role to a request that proved nothing.
+    """
+    import os
+
+    from .web.auth import StoreDown, principal_from_bearer
+
+    try:
+        principal = principal_from_bearer(ctx, os.environ.get(TOKEN_ENV) or None, require_online=True)
+    except StoreDown as exc:
+        raise Denied(STORE_DOWN) from exc
+    if principal is None:
+        raise Denied(NO_TOKEN)
+    return principal
+
+
+def _build_actor(principal):
+    """The actor this identity may build as, or `None` for legacy-only open mode.
+
+    `mcp_server.reader_actor` is the same three lines: this module stays out of the web
+    and MCP import graphs on purpose, so that `hippo ask` never pays for FastAPI.
+    """
+    from .knowledge.build_authority import BuildActor
+
+    if principal.is_open or principal.access.unrestricted:
+        return None
+    return BuildActor.reader(principal)
+
+
+def _require(principal, capability: str) -> None:
+    if not principal.can(capability):
+        raise Denied(f"your role ({principal.role_name}) may not {capability.replace('_', ' ')}")
 
 
 # ------------------------------------------------------------- commands
@@ -162,15 +359,35 @@ def cmd_index(args: argparse.Namespace) -> int:
     ctx, remote = _context_or_running_server()
     if remote is not None:
         return _index_remotely(remote, args)
+    # Before a Source row or a saved byte exists: an identity that may not add sources
+    # must not leave one behind.
+    principal = _principal(ctx)
+    _require(principal, "add_sources")
+    actor = _build_actor(principal)
+    # The identity this command just resolved decides who may see the result and who may
+    # manage it, exactly as it does for `hippo_remember` (`mcp_server.remember_tool`).
+    # Leaving these to their `None` defaults published a low tier's own file to every role
+    # and left its creator unable to rename or delete what they had made.
+    owner_id = principal.user_id
+    role_id = None if principal.is_open else principal.role_id
     target: str = args.target
     if repos.is_git_url(target):
-        source_id = pipeline.add_repo(ctx, target)
+        # The same actor the upload branch passes: a repository is a managed code source too.
+        source_id = pipeline.add_repo(
+            ctx, target, owner_id=owner_id, access_role_id=role_id, build_actor=actor
+        )
     else:
         path = Path(target)
         if not path.exists():
             print(f"{target} does not exist and is not a git URL", file=sys.stderr)
             return 1
-        source_id = pipeline.add_upload(ctx, *_upload_for_path(path))
+        source_id = pipeline.add_upload(
+            ctx,
+            *_upload_for_path(path),
+            owner_id=owner_id,
+            access_role_id=role_id,
+            build_actor=actor,
+        )
     if args.name:
         ctx.store.update_source(source_id, name=args.name)
 
@@ -179,13 +396,38 @@ def cmd_index(args: argparse.Namespace) -> int:
     source = ctx.store.get_source(source_id) or {}
     print(f"status: {source.get('status')} ({source.get('stage')}), passages: {source.get('passages', 0)}")
     if source.get("error"):
-        print(f"error: {source['error']}", file=sys.stderr)
+        print(f"error: {_stored_error(source_id, source)}", file=sys.stderr)
         return 1
     return 0
 
 
+def _stored_error(source_id: str, source: dict[str, Any]) -> str:
+    """What a Source row's stored `error` may be printed as.
+
+    The managed lane classifies a build failure once, where it happens, and stores its own
+    closed `code: message` on the row (`ingest/managed_activation.record_build_failure`).
+    That string *is* the public rendering, so it is printed unchanged - re-deriving it here
+    would be a second opinion about an event this process did not see.
+
+    The legacy lane stores `f"{type(err).__name__}: {err}"` instead, which is not a
+    rendering at all: an `OllamaError` carries 300 characters of the model's reply body by
+    construction, and a read error names the file it was reading. Open-mode `hippo index`
+    and `hippo index <git-url>` both still take that lane, so anything whose leading token
+    is not one of the closed codes is replaced rather than printed.
+    """
+    from .knowledge.public_errors import public_failure_for_code
+
+    stored = str(source.get("error") or "")
+    code, separator, message = stored.partition(": ")
+    closed = public_failure_for_code(code) is not None or code == DENIED_CODE
+    if separator and message and closed:
+        return stored
+    return INDEXING_FAILED.format(source_id=source_id)
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
     from .ask import ask
+    from .knowledge.query_access import query_session
 
     ctx, remote = _context_or_running_server()
     if remote is not None:
@@ -196,25 +438,144 @@ def cmd_ask(args: argparse.Namespace) -> int:
         answer, thought, trace = reply["answer"], reply.get("thought"), reply["trace"]
         passages = trace.get("passages", [])
         fallback = trace.get("used_dpr_fallback"), trace.get("fallback_reason")
+        print(_format_answer(answer, thought, passages, fallback))
     else:
-        trace_obj, answer_obj = ask(ctx, args.question)
-        answer, thought = answer_obj.answer, answer_obj.thought
-        passages = [vars(p) for p in trace_obj.passages]
-        fallback = trace_obj.used_dpr_fallback, trace_obj.fallback_reason
-    print(answer)
+        access = _principal(ctx).access
+        with query_session(ctx, access) as session:
+            trace_obj, answer_obj = ask(ctx, args.question, access=access, session=session)
+            output = _format_answer(
+                answer_obj.answer,
+                answer_obj.thought,
+                [vars(p) for p in trace_obj.passages],
+                (trace_obj.used_dpr_fallback, trace_obj.fallback_reason),
+            )
+            session.validate()
+            print(output)
+    return 0
+
+
+def _format_answer(answer, thought, passages, fallback) -> str:
+    lines = [answer]
     if thought:
-        print(f"\nThought: {thought}")
-    print("\nTop passages:")
+        lines.append(f"\nThought: {thought}")
+    lines.append("\nTop passages:")
     for p in passages[:5]:
-        print(f"  {p['rank']:>2}. {p['score']:.4f}  {p['title']}  [{p['source_name']}]")
+        lines.append(f"  {p['rank']:>2}. {p['score']:.4f}  {p['title']}  [{p['source_name']}]")
     if fallback[0]:
-        print(f"\n(no facts matched, fell back to embedding search: {fallback[1]})")
+        lines.append(f"\n(no facts matched, fell back to embedding search: {fallback[1]})")
+    return "\n".join(lines)
+
+
+# ----------------------------------------------------------- the code graph
+# Four commands, two ways to answer each. Locally they run web/routes/code.py's builders on this
+# process's graph; behind a running server they call the same builders over /api/code. Both sides
+# return the same dict and raise the same two errors, so only the plumbing below differs - which is
+# what keeps `hippo path` printing one thing rather than two.
+
+
+class CodeNameError(RuntimeError):
+    """A name hippo cannot act on. `candidates` is non-empty when the name meant several things."""
+
+    def __init__(self, message: str, candidates: list[str] | None = None):
+        super().__init__(message)
+        self.candidates = candidates or []
+
+
+def _code_locally(ctx: AppContext, build) -> dict[str, Any]:
+    """`build(code, index, theta)` over one held view, with the path tools' errors normalised.
+
+    The view is this caller's, not the whole graph: a walk that crossed into code they
+    may not see would be presentation of evidence they never proved. It is held through
+    the build and validated on the way out, so a permission change mid-answer denies
+    rather than prints.
+    """
+    from .hipporag.paths import AmbiguousSymbol, UnknownSymbol
+    from .knowledge.query_access import query_session
+    from .web.routes import code
+
+    with query_session(ctx, _principal(ctx).access) as session:
+        theta = float(session.settings["code_theta"])
+        try:
+            return build(code, session.graph, theta)
+        except AmbiguousSymbol as exc:
+            raise CodeNameError(str(exc), exc.candidates) from exc
+        except (UnknownSymbol, ValueError) as exc:
+            raise CodeNameError(str(exc)) from exc
+        finally:
+            session.validate()
+
+
+def _code_remotely(call) -> dict[str, Any]:
+    """The same answer from the running server; its 409 already carries the candidates."""
+    try:
+        return call()
+    except RemoteAmbiguous as exc:
+        raise CodeNameError(str(exc), exc.candidates) from exc
+
+
+def cmd_path(args: argparse.Namespace) -> int:
+    ctx, remote = _context_or_running_server()
+    data = (
+        _code_remotely(lambda: remote.code_path(args.a, args.b))
+        if remote is not None
+        else _code_locally(ctx, lambda c, i, t: c.path_payload(i, args.a, args.b, theta=t))
+    )
+    if not data["found"]:
+        print(f"No relations connect {data['a']} and {data['b']} (above the code_theta setting).")
+        return 0
+    print(f"How {data['a']} reaches {data['b']}:")
+    print("\n".join(data["lines"]))
+    return 0
+
+
+def cmd_blast(args: argparse.Namespace) -> int:
+    ctx, remote = _context_or_running_server()
+    data = (
+        _code_remotely(lambda: remote.code_blast_radius(args.symbol, args.depth))
+        if remote is not None
+        else _code_locally(ctx, lambda c, i, t: c.blast_payload(i, args.symbol, theta=t, depth=args.depth))
+    )
+    print(f"What depends on {data['symbol']} (depth {data['depth']}):")
+    print("\n".join(data["lines"]) if data["lines"] else "  nothing: no other symbol reaches it.")
+    return 0
+
+
+def cmd_raises(args: argparse.Namespace) -> int:
+    ctx, remote = _context_or_running_server()
+    data = (
+        _code_remotely(lambda: remote.code_exception_path(args.symbol, args.exception))
+        if remote is not None
+        else _code_locally(ctx, lambda c, i, t: c.exception_payload(i, args.symbol, args.exception, theta=t))
+    )
+    if not data["found"]:
+        print(f"{data['symbol']} does not reach {data['exception']}.")
+        return 0
+    print(f"How {data['symbol']} reaches {data['exception']}:")
+    print("\n".join(data["lines"]))
+    return 0
+
+
+def cmd_history(args: argparse.Namespace) -> int:
+    ctx, remote = _context_or_running_server()
+    data = (
+        _code_remotely(lambda: remote.code_history(args.symbol, args.limit))
+        if remote is not None
+        else _code_locally(ctx, lambda c, i, _t: c.history_payload(i, args.symbol, limit=args.limit))
+    )
+    if not data["lines"]:
+        print(
+            f"No commits touched {data['symbol']}. "
+            "History comes from a repo source; `hippo index <git-url>` reads it."
+        )
+        return 0
+    print(f"Commits that touched {data['symbol']}, newest first:")
+    print("\n".join(data["lines"]))
     return 0
 
 
 def cmd_sources(args: argparse.Namespace) -> int:
     ctx, remote = _context_or_running_server()
-    rows = remote.sources() if remote is not None else ctx.store.list_sources()
+    rows = remote.sources() if remote is not None else _sources_locally(ctx)
     if not rows:
         print("The memory is empty. Try: hippo index <file>")
         return 0
@@ -237,6 +598,24 @@ def cmd_sources(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sources_locally(ctx: AppContext) -> list[dict[str, Any]]:
+    """The caller's own library, from the same view the web app and MCP list.
+
+    `store.list_sources()` unrestricted would be a different answer to the same question
+    depending on which surface asked it, and would count a refreshed managed source's
+    passages twice over. `status.source_view` counts from the held graph's provenance.
+    """
+    from .knowledge.query_access import query_session
+    from .status import source_view
+
+    access = _principal(ctx).access
+    with query_session(ctx, access) as session:
+        view = source_view(ctx, access, session=session)
+        rows = list(view.sources)
+        view.validate()
+        return rows
+
+
 def cmd_settings(args: argparse.Namespace) -> int:
     ctx, remote = _context_or_running_server()
     config = load_config()
@@ -246,6 +625,10 @@ def cmd_settings(args: argparse.Namespace) -> int:
         print(f"  server       = {remote.base_url} (running; the settings below come from it)")
     print(f"  ollama_url   = {config.ollama_url}")
     print(f"  llm_model    = {config.llm_model}")
+    if config.qa_model is None:
+        print(f"  qa_model     = inherited ({config.llm_model}; default reference protocol)")
+    else:
+        print(f"  qa_model     = {config.qa_model} (grounded final-answer profile)")
     print(f"  embed_model  = {config.embed_model}")
     print(f"  data_dir     = {config.data_dir}")
     print("\nRetrieval settings (change them on the Settings page):")
@@ -297,7 +680,8 @@ def _index_remotely(remote: RemoteHippo, args: argparse.Namespace) -> int:
     source = remote.wait_for_source(source_id, WAIT_SECONDS)
     print(f"status: {source.get('status')} ({source.get('stage')}), passages: {source.get('passages', 0)}")
     if source.get("error"):
-        print(f"error: {source['error']}", file=sys.stderr)
+        # The server's Source row is the same row with the same two lanes in it.
+        print(f"error: {_stored_error(source_id, source)}", file=sys.stderr)
         return 1
     return 0
 
@@ -436,6 +820,418 @@ def _user_remotely(remote: RemoteHippo, args: argparse.Namespace) -> int:
         print(f"Removed {user['username']}. Their sources stay, without an owner.")
         return 0
     return 2
+
+
+# ------------------------------------------------------ connectors (CDK S4b)
+#
+# Six subcommands over `hippo.connectors`. Every import below is function-local, because
+# `test_import_order.py` requires `hippo --help` to load neither the kit nor the serving stack,
+# and the kit reaches the whole ingest lane.
+#
+# Only `list` forwards to a running server (plan deviation 4, ratified by R7): it is the one
+# command whose answer lives in the configured store. `new`, `validate` and `sync --dry-run` open
+# no configured store at all, `probe` keeps the caller's configuration file and credential
+# references on the caller's machine, and a non-dry-run `sync` refuses while `hippo serve` holds
+# the database, because the server-side sync route is Task 15's and does not exist yet.
+#
+# `connector` is not an `EVIDENCE_COMMANDS` member: its store reads are administration, gated by
+# `manage_sources` rather than by a reader's audience.
+
+
+def cmd_connector(args: argparse.Namespace) -> int:
+    handlers = {
+        "new": _connector_new,
+        "list": _connector_list,
+        "validate": _connector_validate,
+        "probe": _connector_probe,
+        "sync": _connector_sync,
+        "enable": _connector_enable,
+    }
+    return handlers[args.connector_command](args)
+
+
+def _connector_new(args: argparse.Namespace) -> int:
+    """Write a package whose `hippo connector validate` already passes (plan section 3.2)."""
+    from .connectors import scaffold
+
+    dest = Path(args.dest or ".")
+    request = scaffold.ScaffoldRequest(name=args.name, family=args.family, kinds=tuple(args.kinds))
+    try:
+        written = scaffold.render_package(request, dest)
+    except scaffold.ScaffoldError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    package = dest / args.name
+    print(f"Wrote {len(written)} files to {package}:")
+    for path in written:
+        print(f"  {path.relative_to(package)}")
+    print(f"\nIt already validates. Edit the provider half, then: hippo connector validate {package}")
+    return 0
+
+
+def _connector_list(args: argparse.Namespace) -> int:
+    """Every connector this process can see, with its instances (the `GET /api/connectors` shape)."""
+    ctx, remote = _context_or_running_server()
+    if remote is not None:
+        summaries = remote.connectors()
+    else:
+        _require(_principal(ctx), "manage_sources")
+        summaries = _connector_summaries(ctx)
+    print_table(
+        ["name", "version", "families", "origin", "enabled", "instances", "partitions", "error"],
+        [
+            [
+                row["name"],
+                row["version"],
+                ", ".join(row["families"]),
+                row["origin"],
+                "yes" if row["enabled"] else "no",
+                len(row["instances"]),
+                ", ".join(sorted(_partition_names(row))) or "-",
+                row["error"] or "",
+            ]
+            for row in summaries
+        ],
+    )
+    return 0
+
+
+def _partition_names(summary: dict[str, Any]) -> set[str]:
+    return {entry["partition"] for instance in summary["instances"] for entry in instance["partitions"]}
+
+
+def _connector_summaries(ctx: AppContext) -> list[dict[str, Any]]:
+    """The `ConnectorSummary` list of plan section 3.3, which S6's route builds the same way.
+
+    Rows are keyed on `(origin, name)`, not on `name`: an in-repo package and an entry point it
+    shadows legitimately share a name, and both are shown (ruling R64).
+    """
+    import json
+
+    from .connectors import loader
+
+    load = loader.load_connectors(ctx)
+    instances: dict[str, list[dict[str, Any]]] = {}
+    for row in ctx.store._knowledge_rows("Connector"):
+        stored = json.loads(row.classification_json or "{}")
+        instances.setdefault(row.kind, []).append(
+            {
+                "id": row.id,
+                "enabled": row.enabled,
+                "partitions": [
+                    {"partition": entry["partition"], "family": entry["family"]}
+                    for entry in stored.get("partitions", ())
+                ],
+            }
+        )
+    summaries = []
+    for entry in load.entries:
+        descriptor = getattr(entry.connector_class, "descriptor", None)
+        summaries.append(
+            {
+                "name": entry.name,
+                "version": getattr(descriptor, "version", ""),
+                "families": list(getattr(descriptor, "families", ())),
+                "origin": entry.origin,
+                "enabled": entry.enabled,
+                "error": entry.error,
+                "instances": instances.get(entry.name, []),
+            }
+        )
+    return summaries
+
+
+def _connector_validate(args: argparse.Namespace) -> int:
+    """0 passed, 1 a violation or a golden diff, 2 the package could not load (plan section 3.3)."""
+    from .connectors import loader, testing
+
+    report = testing.validate_package(
+        args.target, update_golden=args.update_golden, allowlist=loader.configured_allowlist()
+    )
+    if report.error is not None:
+        print(f"error: {report.error}", file=sys.stderr)
+        return 2
+    for line in report.registry_diff:
+        print(line)
+    for violation in report.violations:
+        print(_violation_line(violation))
+    for case in report.cases:
+        if case.error is not None:
+            print(f"{case.case}: {case.error}")
+        for violation in case.violations:
+            print(_violation_line(violation))
+        if case.diff:
+            print(case.diff)
+    if args.update_golden:
+        # The diff above is the point of the run, so it is not a failure: the developer asked for
+        # the expected files to be rewritten and now reads what changed.
+        print(f"{report.connector} {report.version}: goldens and the registry lock written")
+        return 0
+    if report.passed:
+        print(f"{report.connector} {report.version}: passed ({report.scope})")
+        return 0
+    return 1
+
+
+def _violation_line(violation) -> str:
+    record = f" [{violation.record}]" if violation.record else ""
+    return f"{violation.assertion}: {violation.message}{record}"
+
+
+def _connector_probe(args: argparse.Namespace) -> int:
+    """What a provider holds, read through the connector. No configured store is opened."""
+    from .connectors import base, testing
+
+    try:
+        connector = _resolve_connector(args.name)
+        config = _connector_config(connector.descriptor, args.config)
+    except (ConnectorRefused, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    registry = testing.kit_registry(connector.descriptor)
+    try:
+        with base.use_registry(registry):
+            classification = connector.probe(config, _wall_clock())
+    except base.RegistrationRequired as exc:
+        # Not a failure: the connector is asking for vocabulary nobody has registered yet, and the
+        # skeleton is the answer. Paste it into the package's `types.py` and probe again.
+        print(f"{exc}\n")
+        print(exc.skeleton)
+        return 1
+    print(f"registry fingerprint: {classification.registry_fingerprint}")
+    for entry in classification.partitions:
+        print(f"\npartition {entry.partition}")
+        print(f"  family: {entry.family}")
+        for mapped in entry.mapping.kinds:
+            print(f"  {mapped.provider_type} -> {mapped.kind or 'custom/unclassified'}")
+        print(f"  capabilities: {_capabilities(entry.capabilities)}")
+        print(f"  sampled: {entry.sample_count}")
+        for warning in entry.warnings:
+            print(f"  warning: {warning}")
+    return 0
+
+
+def _capabilities(capabilities) -> str:
+    named = [name for name, value in capabilities.model_dump().items() if value is True]
+    return ", ".join(named) or "none declared"
+
+
+def _connector_sync(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _connector_dry_run(args)
+    return _connector_sync_instance(args)
+
+
+def _connector_dry_run(args: argparse.Namespace) -> int:
+    """`testing.dry_run_sync`: the real provider, read-only, into a scratch workspace it throws away."""
+    from .connectors import testing
+
+    try:
+        connector = _resolve_connector(args.instance)
+        config = _connector_config(connector.descriptor, args.config)
+    except (ConnectorRefused, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    try:
+        receipts = testing.dry_run_sync(connector, config, partition=args.partition)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for receipt in receipts:
+        print(f"partition {receipt.partition}: {receipt.outcome}")
+        print(f"  pages {receipt.pages}, changes {receipt.changes}, deleted {receipt.deleted}")
+        print(f"  inventory: {receipt.inventory}")
+        for key, value in sorted(receipt.coverage.items()):
+            print(f"  {key}: {value}")
+    print("\nNothing was written: a dry run publishes into a temporary workspace and removes it.")
+    return 0
+
+
+def _connector_sync_instance(args: argparse.Namespace) -> int:
+    """The non-dry-run sync, in the order ruling m19 fixes. Every step can exit 2 by itself."""
+    from .connectors import sync
+    from .knowledge.build_authority import BuildActor
+    from .knowledge.raw_artifacts import RawArtifactStore
+    from .knowledge.registry import current_registry
+
+    try:
+        ctx = AppContext.from_env()
+    except StoreLockedError:
+        print(
+            "error: the database is open in hippo serve; stop it to sync, or use --dry-run",
+            file=sys.stderr,
+        )
+        return 2
+    _require(_principal(ctx), "manage_sources")
+
+    from .connectors import loader
+    from .ingest.managed_activation import embedding_spec, new_operation_id, raw_root
+
+    load = loader.load_connectors(ctx)
+    row = ctx.store._knowledge_get("Connector", args.instance)
+    if row is None:
+        print(f"error: no connector instance '{args.instance}'", file=sys.stderr)
+        return 2
+    try:
+        connector = load.connector_class(row.kind)()
+    except loader.ConnectorLoadError:
+        print(f"error: connector kind {row.kind} is not enabled", file=sys.stderr)
+        return 2
+    try:
+        config = connector.descriptor.config_model.model_validate_json(row.config_json)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    partitions = _sync_partitions(args, row)
+    if not partitions:
+        print(
+            f"error: connector instance {row.id} has no stored classification; probe it first",
+            file=sys.stderr,
+        )
+        return 2
+
+    raw_store = RawArtifactStore(raw_root(ctx), max_object_bytes=int(ctx.config.max_upload_bytes))
+    for partition in partitions:
+        try:
+            sync.connector_source(
+                ctx.store, connector=row, partition=partition, name=f"{row.kind} {partition}"
+            )
+            receipt = sync.sync_connector(
+                ctx,
+                connector,
+                connector_id=row.id,
+                config=config,
+                partition=partition,
+                # S3 refuses any other actor: the operator's authorization was the capability
+                # check above, and the build itself is local maintenance (S3 section 5.5).
+                actor=BuildActor.trusted_local(),
+                registry=current_registry(),
+                options=sync.SyncOptions(),
+                raw_store=raw_store,
+                embedding_spec=embedding_spec(ctx.ollama),
+                operation_id=new_operation_id(),
+                should_stop=lambda: False,
+            )
+        except sync.ConnectorSyncRefused as exc:
+            # A disabled instance (R51) and a partition with no stored classification both land
+            # here, and both are the operator's to fix rather than a failure of the run.
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"partition {partition}: {receipt.outcome} ({receipt.changes} changes)")
+    return 0
+
+
+def _sync_partitions(args: argparse.Namespace, row) -> tuple[str, ...]:
+    import json
+
+    if args.partition:
+        return (args.partition,)
+    stored = json.loads(row.classification_json or "{}")
+    return tuple(entry["partition"] for entry in stored.get("partitions", ()))
+
+
+def _connector_enable(args: argparse.Namespace) -> int:
+    """Ruling R59: create or re-enable one instance, probe it, and store its classification.
+
+    The three calls run under the connector's own scratch registry (re-review N5): a `Connector`
+    row is vocabulary-checked on the way into the store, and the process registry does not know
+    this kind yet — enabling it is what makes the next `hippo serve` load it.
+
+    There is no build window to stand outside of: `ensure_connector` is never called from inside a
+    sync, and this command is a shell invocation of its own. Ruling R59 also names
+    `BuildActor.trusted_local()`; none of the three calls below accepts an actor, so the actor
+    appears where S3 requires one, in the non-dry-run `sync` above.
+    """
+    from .connectors import base, sync, testing
+    from .store.migrations import DEFAULT_WORKSPACE_ID
+
+    try:
+        ctx = AppContext.from_env()
+    except StoreLockedError:
+        print(
+            "error: the database is open in hippo serve; stop it to enable a connector",
+            file=sys.stderr,
+        )
+        return 2
+    _require(_principal(ctx), "manage_sources")
+    try:
+        connector = _resolve_connector(args.kind)
+        config = _connector_config(connector.descriptor, args.config)
+    except (ConnectorRefused, ValueError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    declared = getattr(config, "instance_url", None)
+    if declared and declared != args.instance_url:
+        # S3's sync entry refuses a row whose instance URL disagrees with its configuration, so
+        # the disagreement is named here rather than at the first sync.
+        print(
+            f"error: the configuration names instance {declared}, not {args.instance_url}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        with base.use_registry(testing.kit_registry(connector.descriptor)):
+            row = sync.ensure_connector(
+                ctx.store,
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                kind=connector.descriptor.name,
+                instance_url=args.instance_url,
+                config=config,
+                enabled=True,  # R73/F5: what this command means, said rather than defaulted
+            )
+            classification = connector.probe(config, _wall_clock())
+            row = sync.store_classification(ctx.store, connector=row, classification=classification)
+    except ValueError as exc:
+        # Open mode refuses an enabled connector of any kind but `local`: "Provider connectors
+        # require a signed-in installation" (`store/knowledge.py`, ruling R64).
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"Enabled {row.kind} instance {row.id} at {row.instance_url}.")
+    for entry in classification.partitions:
+        print(f"  partition {entry.partition}: {entry.family} ({entry.sample_count} sampled)")
+    print(f"\nRestart hippo serve to register {row.kind}, then: hippo connector sync {row.id}")
+    return 0
+
+
+class ConnectorRefused(ValueError):
+    """A connector this command may not use, named with the reason the loader gave."""
+
+
+def _resolve_connector(name: str):
+    """One trusted connector by name: an in-repo package, or an allowlisted entry point.
+
+    Enablement is not checked here. `validate`, `probe` and `sync --dry-run` need a connector that
+    is *trusted*, not one an operator has turned on: they open no configured store (M5, R51).
+    """
+    from .connectors import loader
+
+    allowlist = loader.configured_allowlist()
+    for entry in loader.discover_connectors(allowlist=allowlist):
+        if entry.name != name:
+            continue
+        if entry.error is not None:
+            raise ConnectorRefused(f"connector '{name}' cannot be used: {entry.error}")
+        if entry.connector_class is None:
+            raise ConnectorRefused(f"'{name}' is a built-in connector kind with no package")
+        return entry.connector_class()
+    raise ConnectorRefused(f"no connector named '{name}' is installed and trusted")
+
+
+def _connector_config(descriptor, path: str | None):
+    """A connector's typed configuration, read from a file the caller's machine keeps."""
+    model = descriptor.config_model
+    if path is None:
+        return model()
+    return model.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def _wall_clock():
+    from datetime import UTC, datetime
+
+    return lambda: datetime.now(UTC)
 
 
 # -------------------------------------------------------------- helpers

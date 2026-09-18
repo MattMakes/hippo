@@ -1,0 +1,32 @@
+{
+  "id": "commerce-100",
+  "key": "BILLING-12",
+  "fields": {
+    "summary": "Require tenant-scoped order keys",
+    "customfield_10421": "accepted",
+    "description": "DEC-7 chose tenant-scoped keys to prevent cross-tenant joins."
+  },
+  "changelog": [
+    {
+      "id": "1",
+      "field": "status",
+      "from": "Draft",
+      "to": "Accepted"
+    },
+    {
+      "id": "2",
+      "field": "description",
+      "from": "single key",
+      "to": "tenant key"
+    }
+  ],
+  "comments": [
+    {
+      "id": "1",
+      "body": "Public review complete."
+    }
+  ],
+  "deleted_comment_ids": [
+    "2"
+  ]
+}

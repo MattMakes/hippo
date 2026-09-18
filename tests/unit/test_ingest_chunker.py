@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import pytest
+
+from hippo.codegraph import extract_code
 from hippo.hipporag.indexer import Chunk
 from hippo.ingest.chunker import (
     chunk_document,
@@ -13,8 +17,10 @@ from hippo.ingest.chunker import (
     split_sentences,
 )
 from hippo.ingest.readers import Document
+from tests.conftest import CODE_SAMPLE_PATH, code_sample_docs
 
 SAMPLE = Path(__file__).resolve().parents[2] / "samples" / "acme_robotics.md"
+FIXTURE_SOURCE = "fixture"
 
 
 def prose(text: str, title: str = "doc.md") -> Document:
@@ -203,3 +209,780 @@ def test_a_markdown_h1_names_the_document_and_a_file_without_one_keeps_its_file_
     without = Document(title="notes.md", text="## Part one\n\nText.", path="notes.md", is_code=False)
     assert document_title(without) == "notes.md"
     assert chunk_document(without, 1500, 100)[0].title == "notes.md › Part one"
+
+
+# ------------------------------------------------------ one passage per symbol
+#
+# With a `CodeGraph` in hand the chunker stops cutting a parsed file into line windows and
+# cuts it by symbol instead (PLAN 2.3). These tests pin the exact titles, the placeholder
+# lines a header keeps in place of its members, and the three-valued `extract_text` (S2.7).
+
+ORDERS = "pyapp/orders.py"
+
+
+@pytest.fixture(scope="module")
+def code_graph():
+    """The fixture tree's code graph. Extraction is pure, so one per module is plenty."""
+    return extract_code(code_sample_docs(), FIXTURE_SOURCE)
+
+
+def fixture_doc(path: str) -> Document:
+    return Document(title=path, text=(CODE_SAMPLE_PATH / path).read_text(), path=path, is_code=True)
+
+
+def chunks_of(path: str, code_graph, size: int = 1500) -> list[Chunk]:
+    return chunk_document(fixture_doc(path), size_chars=size, overlap_chars=150, code=code_graph)
+
+
+def test_a_parsed_file_becomes_one_passage_per_symbol_in_source_order(code_graph) -> None:
+    assert [c.title for c in chunks_of(ORDERS, code_graph)] == [
+        "pyapp/orders.py :: pyapp.orders (lines 1-8)",
+        "pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.log (lines 25-25)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.list_open (lines 27-28)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.save (lines 30-32)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)",
+        "pyapp/orders.py :: pyapp.orders.OrderService.run (lines 40-40)",
+    ]
+
+
+def test_the_module_header_keeps_its_own_lines_and_a_placeholder_for_each_member(code_graph) -> None:
+    header = chunks_of(ORDERS, code_graph)[0]
+    assert header.text.splitlines()[:4] == [
+        "import os",
+        "from . import billing",
+        "from .billing import send_invoice as invoice",
+        "from pyapp.store import Base, OrderError",
+    ]
+    assert 'DEFAULT_STATUS = "open"' in header.text
+    assert "class OrderService(Base): ...  # lines 9-40" in header.text
+    assert "def place" not in header.text  # the body lives in its own passage, not here
+
+
+def test_the_class_header_keeps_its_own_lines_and_a_placeholder_for_each_method(code_graph) -> None:
+    klass = chunks_of(ORDERS, code_graph)[1]
+    assert klass.text.startswith("class OrderService(Base):")
+    assert '__tablename__ = "orders"' in klass.text
+    assert "    def place(self, order): ...  # lines 16-23" in klass.text
+    assert "    def run(self, sql): ...  # lines 40-40" in klass.text
+    assert "billing.total(order)" not in klass.text
+
+
+def test_a_typescript_header_uses_a_line_comment_placeholder(code_graph) -> None:
+    module = chunks_of("tsapp/models/order.ts", code_graph)[0]
+    assert "class Order extends Base { ... }  // lines 7-11" in module.text
+    assert "OrderModel = mongoose.model" in module.text  # module-level code after the members
+
+
+# The same three rules over the Rust tree, where they are load-bearing rather than incidental: a
+# struct's methods are written in `impl` blocks outside it, and an inline `mod tests` is a
+# container of its own. The inline-source versions of these cases are the L3 section below; these
+# are the checked-in fixture, so the line numbers in the placeholders are the file's.
+
+RUST_ORDERS_FIXTURE = "rsapp/src/orders.rs"
+
+
+def test_the_rust_tree_is_one_passage_per_symbol_in_source_order(code_graph) -> None:
+    assert [c.title for c in chunks_of(RUST_ORDERS_FIXTURE, code_graph)] == [
+        "rsapp/src/orders.rs :: rsapp.src.orders (lines 1-42)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService (lines 7-9)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.log (lines 12-14)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.place (lines 19-24)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.list_open (lines 26-28)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.save (lines 30-33)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.archive (lines 35-37)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.tests (lines 44-52)",
+        "rsapp/src/orders.rs :: rsapp.src.orders.tests.place_totals (lines 48-51)",
+    ]
+
+
+def test_a_rust_struct_header_is_its_own_lines_and_a_placeholder_per_method(code_graph) -> None:
+    struct = chunks_of(RUST_ORDERS_FIXTURE, code_graph)[1]
+    assert struct.text.splitlines() == [
+        "pub struct OrderService {",
+        "    db: Db,",
+        "}",
+        # Both `impl` blocks are elsewhere in the file; the header still lists what they hold.
+        "    fn log(&self, message: &str) -> String { ... }  // lines 12-14",
+        "    pub fn place(&self, order: &Order) -> Result<i64, OrderError> { ... }  // lines 19-24",
+        "    pub fn list_open(&self) { ... }  // lines 26-28",
+        "    pub fn save(&self, order: &Order) -> Result<(), OrderError> { ... }  // lines 30-33",
+        "    pub fn archive(&self, order: &Order) { ... }  // lines 35-37",
+        "    pub fn graph(&self) { ... }  // lines 39-41",
+    ]
+    assert "let amount = total(order);" not in struct.text  # the body is its own passage
+    # The doc comment is not inside the struct's lines (it is a TS JSDoc, not a Python decorator),
+    # so the module header prints it -- and it still reaches OpenIE from here.
+    assert struct.extract_text.startswith("Keeps orders. The crate stores every order in Postgres")
+
+
+def test_the_rust_module_header_stands_in_for_the_struct_the_impls_and_the_inline_module(
+    code_graph,
+) -> None:
+    module = chunks_of(RUST_ORDERS_FIXTURE, code_graph)[0]
+    assert "pub struct OrderService { ... }  // lines 7-9" in module.text
+    # An `impl` block is not a symbol: its own line belongs to nobody else, so the module keeps it
+    # and stands in for the methods inside it wherever they are written.
+    assert "impl Base for OrderService {" in module.text
+    assert "impl OrderService {" in module.text
+    assert "    fn log(&self, message: &str) -> String { ... }  // lines 12-14" in module.text
+    assert (
+        "    pub fn place(&self, order: &Order) -> Result<i64, OrderError> { ... }  // lines 19-24"
+        in module.text
+    )
+    assert "mod tests { ... }  // lines 44-52" in module.text
+    assert "let amount = total(order);" not in module.text
+    assert "super::OrderService::new()" not in module.text
+
+
+def test_the_rust_inline_test_module_is_a_container_with_its_own_function_passage(code_graph) -> None:
+    chunks = chunks_of(RUST_ORDERS_FIXTURE, code_graph)
+    tests, place_totals = chunks[-2], chunks[-1]
+    assert tests.text.splitlines() == [
+        "#[cfg(test)]",
+        "mod tests {",
+        "    use super::*;",
+        "",
+        "    fn place_totals() { ... }  // lines 48-51",
+        "}",
+    ]
+    assert place_totals.text.startswith("    #[test]\n    fn place_totals() {")
+    assert "super::OrderService::new().place(&Order::default());" in place_totals.text
+
+
+def test_every_line_of_the_rust_fixture_file_is_printed_exactly_once(code_graph) -> None:
+    source = [
+        line for line in (CODE_SAMPLE_PATH / RUST_ORDERS_FIXTURE).read_text().splitlines() if line.strip()
+    ]
+    printed = printed_lines(chunks_of(RUST_ORDERS_FIXTURE, code_graph))
+    assert sorted(printed) == sorted(source)
+    assert len(printed) == len(source)
+
+
+# And over the Go tree, where a type's methods are top-level declarations rather than members of
+# an `impl` block. The rule reads the same from the other end: the type's header is exactly its own
+# lines, the module's stands in for every symbol range whoever owns it, and the placeholder is
+# spelled in the language's own comment.
+
+GO_SERVICE_FIXTURE = "goapp/orders/service.go"
+
+
+def test_the_go_tree_is_one_passage_per_symbol_in_source_order(code_graph) -> None:
+    assert [c.title for c in chunks_of(GO_SERVICE_FIXTURE, code_graph)] == [
+        "goapp/orders/service.go :: goapp.orders.service (lines 1-22)",
+        "goapp/orders/service.go :: goapp.orders.service.Service (lines 15-19)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Place (lines 23-28)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Log (lines 30-32)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.ListOpen (lines 34-36)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Save (lines 38-41)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Archive (lines 43-46)",
+        "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)",
+    ]
+
+
+def test_a_go_struct_header_is_its_own_lines_and_a_placeholder_per_method(code_graph) -> None:
+    struct = chunks_of(GO_SERVICE_FIXTURE, code_graph)[1]
+    assert struct.text.splitlines() == [
+        "type Service struct {",
+        "\tstore.Base",
+        "",
+        "\tdb *sql.DB",
+        "}",
+        # Every method is written below the type, at column zero; the header still lists them all.
+        "func (s *Service) Place(order Order) int { ... }  // lines 23-28",
+        "func (s *Service) Log(message string) string { ... }  // lines 30-32",
+        "func (s *Service) ListOpen() { ... }  // lines 34-36",
+        "func (s *Service) Save(order Order) error { ... }  // lines 38-41",
+        "func (s *Service) Archive(order Order) { ... }  // lines 43-46",
+        "func (s *Service) Graph() { ... }  // lines 48-50",
+    ]
+    assert "billing.Total(order)" not in struct.text  # the body is its own passage
+    # The doc comment sits above the `type` line, outside the symbol's range, so the module header
+    # is what prints it -- and `extract_text` still carries it to OpenIE from here.
+    assert struct.extract_text.startswith("Service keeps orders. Every order is totalled by")
+
+
+def test_the_go_module_header_stands_in_for_the_type_and_every_method(code_graph) -> None:
+    module = chunks_of(GO_SERVICE_FIXTURE, code_graph)[0]
+    assert module.text.startswith("// Package orders places, stores and archives customer orders.")
+    assert '\t"example.com/goapp/billing"' in module.text  # the import block is the module's own
+    assert "type Service struct { ... }  // lines 15-19" in module.text
+    # A method the module does not own still gets a placeholder here: its lines are the module's.
+    assert "func (s *Service) Place(order Order) int { ... }  // lines 23-28" in module.text
+    assert "func (s *Service) Graph() { ... }  // lines 48-50" in module.text
+    # Both doc comments live outside their symbol's lines, so this passage is where they are read.
+    assert "// Second paragraph, not part of the first." in module.text
+    assert "amount := billing.Total(order)" not in module.text
+
+
+def test_every_line_of_the_go_fixture_file_is_printed_exactly_once(code_graph) -> None:
+    source = [
+        line for line in (CODE_SAMPLE_PATH / GO_SERVICE_FIXTURE).read_text().splitlines() if line.strip()
+    ]
+    printed = printed_lines(chunks_of(GO_SERVICE_FIXTURE, code_graph))
+    assert sorted(printed) == sorted(source)
+    assert len(printed) == len(source)
+
+
+# And over the C# tree, where a type's methods are members again, as in Python and TypeScript.
+# The L3 rule reads the same from this end too, and the difference is visible in the titles: a
+# `class` that holds its methods has their lines inside its own, so its passage is titled with the
+# whole range and prints only the lines above the first member.
+
+CS_SERVICE_FIXTURE = "csapp/Orders/OrderService.cs"
+CS_BASE_FIXTURE = "csapp/Store/Base.cs"
+
+
+def test_the_csharp_tree_is_one_passage_per_symbol_in_source_order(code_graph) -> None:
+    assert [c.title for c in chunks_of(CS_SERVICE_FIXTURE, code_graph)] == [
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService (lines 1-9)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService (lines 10-57)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Place (lines 16-30)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Log (lines 32-35)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.ListOpen (lines 37-40)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Save (lines 42-46)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Archive (lines 48-51)",
+        "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)",
+    ]
+
+
+def test_a_csharp_class_header_is_its_own_lines_and_a_placeholder_per_method(code_graph) -> None:
+    cls = chunks_of(CS_SERVICE_FIXTURE, code_graph)[1]
+    assert cls.text.splitlines() == [
+        "public class OrderService : Base",
+        "{",
+        # `Place`'s XML doc sits above the member, outside its range, so the header keeps it.
+        "    /// <summary>",
+        "    /// Place totals an order with billing, sends its invoice and logs the route the order took",
+        "    /// before handing back the amount the customer owes.",
+        "    /// </summary>",
+        "    public int Place(Order order) { ... }  // lines 16-30",
+        "",
+        "    public string Log(string message) { ... }  // lines 32-35",
+        "",
+        "    public void ListOpen() { ... }  // lines 37-40",
+        "",
+        "    public void Save(Order order) { ... }  // lines 42-46",
+        "",
+        "    public void Archive(Order order) { ... }  // lines 48-51",
+        "",
+        "    public void Graph() { ... }  // lines 53-56",
+        "}",
+    ]
+    assert "Billing.Total(order)" not in cls.text  # the body is its own passage
+    # The class's own `<summary>` is above the `class` line, outside its range -- the module header
+    # is what prints it -- and `extract_text` still carries it to OpenIE from here.
+    assert cls.extract_text.startswith("Keeps orders. Every order is totalled by the billing")
+
+
+def test_the_csharp_module_header_stands_in_for_every_type_in_the_file(code_graph) -> None:
+    module = chunks_of(CS_BASE_FIXTURE, code_graph)[0]
+    assert module.text.splitlines() == [
+        "namespace CsApp.Store;",
+        "",
+        "/// <summary>A tiny base type every service derives from.</summary>",
+        "public class Base { ... }  // lines 4-11",
+        "",
+        # A second top-level type in one file gets a placeholder here, not a header of its own.
+        "/// <summary>OrderError is what an order throws when it will not save.</summary>",
+        "public class OrderError : Exception { ... }  // lines 14-16",
+    ]
+    assert "return message;" not in module.text
+
+
+def test_a_csharp_file_of_top_level_statements_is_one_module_passage(code_graph) -> None:
+    # `Program.cs` declares no type at all: the module owns the statements, so there is nothing
+    # to stand in for and the passage is the file.
+    (program,) = chunks_of("csapp/Program.cs", code_graph)
+    assert program.title == "csapp/Program.cs :: csapp.Program (lines 1-4)"
+    assert program.text.splitlines() == [
+        "using CsApp.Orders;",
+        "",
+        "var service = new OrderService();",
+        "service.Place(new Order());",
+    ]
+
+
+def test_every_line_of_the_csharp_fixture_file_is_printed_exactly_once(code_graph) -> None:
+    for path in (CS_SERVICE_FIXTURE, CS_BASE_FIXTURE):
+        source = [line for line in (CODE_SAMPLE_PATH / path).read_text().splitlines() if line.strip()]
+        printed = printed_lines(chunks_of(path, code_graph))
+        assert sorted(printed) == sorted(source)
+        assert len(printed) == len(source)
+
+
+def test_every_passage_defines_its_symbol_and_the_data_objects_it_names(code_graph) -> None:
+    from hippo.codegraph.model import data_id, symbol_id
+
+    defines = {c.title: c.defines for c in chunks_of(ORDERS, code_graph)}
+    orders_table = data_id(FIXTURE_SOURCE, "table", "orders")
+    assert defines["pyapp/orders.py :: pyapp.orders (lines 1-8)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "pyapp.orders", "module")
+    ]
+    # `__tablename__ = "orders"` sits on line 14, inside the class header, not inside a method.
+    assert defines["pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService", "class"),
+        orders_table,
+    ]
+    assert defines["pyapp/orders.py :: pyapp.orders.OrderService.list_open (lines 27-28)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.list_open", "method"),
+        orders_table,
+    ]
+    assert defines["pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.archive", "method"),
+        data_id(FIXTURE_SOURCE, "collection", "archive_orders"),
+    ]
+    # Data ids follow the symbol in a stable (kind, qualname) order, so a passage's `defines`
+    # never depends on the order the extractor happened to see the literals in.
+    assert defines["pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"] == [
+        symbol_id(FIXTURE_SOURCE, ORDERS, "OrderService.graph", "method"),
+        data_id(FIXTURE_SOURCE, "label", "Customer"),
+        data_id(FIXTURE_SOURCE, "label", "Order"),
+        data_id(FIXTURE_SOURCE, "rel_type", "PLACED_BY"),
+    ]
+
+
+def test_the_mention_index_dedupes_a_span_and_keeps_the_kind_qualname_order(code_graph) -> None:
+    """
+    AR1 fix 7. `_data_ids_in` used to rescan every data object, and every mention of each, for
+    every passage; it now looks a `(path, line)` index up. Same answer: one id per object however
+    many of the span's lines name it, still in the global `(kind, qualname)` order rather than the
+    order the span's lines happen to be in.
+    """
+    from hippo.codegraph.model import data_id
+    from hippo.ingest.chunker import _data_ids_in, _mention_index
+
+    mentions = _mention_index(code_graph)
+    orders = data_id(FIXTURE_SOURCE, "table", "orders")
+    named_on = sorted(
+        line for (path, line), ids in mentions.items() if path == ORDERS and orders in dict(ids).values()
+    )
+    assert len(named_on) > 1, "`orders` is named on several lines of pyapp/orders.py"
+    assert _data_ids_in(mentions, ORDERS, set(named_on)) == [orders]
+
+    # The graph method names one label on its first line and two more on its second; the ids come
+    # back sorted by (kind, qualname), not by the line that mentioned them.
+    assert _data_ids_in(mentions, ORDERS, set(range(37, 39))) == [
+        data_id(FIXTURE_SOURCE, "label", "Customer"),
+        data_id(FIXTURE_SOURCE, "label", "Order"),
+        data_id(FIXTURE_SOURCE, "rel_type", "PLACED_BY"),
+    ]
+    assert _data_ids_in(mentions, ORDERS, set()) == []
+    assert _data_ids_in(_mention_index(None), ORDERS, {1, 2, 3}) == []
+
+
+def test_extract_text_is_the_doc_when_it_is_long_enough_and_empty_otherwise(code_graph) -> None:
+    """S2.7: OpenIE never sees a function body. A short doc is '' (skip), never None (extract)."""
+    by_title = {c.title: c.extract_text for c in chunks_of(ORDERS, code_graph)}
+    klass = by_title["pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)"]
+    assert klass.startswith("Keeps orders. Acme Robotics is headquartered in Boulder.")
+    place = by_title["pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)"]
+    assert place.startswith("Place an order: total it with billing")
+    assert by_title["pyapp/orders.py :: pyapp.orders (lines 1-8)"] == ""  # no module docstring
+    assert by_title["pyapp/orders.py :: pyapp.orders.OrderService.save (lines 30-32)"] == ""
+    assert all(text is not None for text in by_title.values())
+
+
+def test_a_short_doc_comment_is_dropped_rather_than_shrunk(code_graph) -> None:
+    short = chunks_of("pyapp/billing.py", code_graph)[0]
+    assert short.title == "pyapp/billing.py :: pyapp.billing (lines 1-3)"
+    assert short.extract_text == ""  # "Billing helpers." is under MIN_OPENIE_DOC_CHARS
+
+
+def test_a_file_that_opens_with_a_class_has_no_header_passage(code_graph) -> None:
+    from hippo.codegraph.model import symbol_id
+
+    chunks = chunks_of("pyapp/store.py", code_graph)
+    assert [c.title for c in chunks] == [
+        "pyapp/store.py :: pyapp.store.Base (lines 1-3)",
+        "pyapp/store.py :: pyapp.store.Base.log (lines 4-5)",
+        "pyapp/store.py :: pyapp.store.OrderError (lines 8-9)",
+    ]
+    # The module symbol still needs a passage of its own: a code node no visible passage
+    # reaches is invisible to a scoped graph (S2.5). The top of the file is that passage.
+    assert chunks[0].defines == [
+        symbol_id(FIXTURE_SOURCE, "pyapp/store.py", "pyapp.store", "module"),
+        symbol_id(FIXTURE_SOURCE, "pyapp/store.py", "Base", "class"),
+    ]
+
+
+def test_a_sql_file_keeps_line_windows_but_defines_its_tables_and_skips_openie(code_graph) -> None:
+    from hippo.codegraph.model import data_id
+
+    (chunk,) = chunks_of("schema/orders.sql", code_graph)
+    assert chunk.title == "schema/orders.sql (lines 1-2)"
+    assert chunk.extract_text == ""  # never OpenIE over DDL
+    assert data_id(FIXTURE_SOURCE, "table", "orders") in chunk.defines
+    assert data_id(FIXTURE_SOURCE, "column", "orders.total") in chunk.defines
+    assert data_id(FIXTURE_SOURCE, "table", "customers") in chunk.defines
+
+
+def test_a_code_file_with_no_grammar_is_chunked_exactly_as_before(code_graph) -> None:
+    """Ruby has no grammar and no walker, so `tools/build.rb` keeps today's line windows.
+    `tools/build.go` used to play this part and is a parsed Go file now."""
+    (chunk,) = chunks_of("tools/build.rb", code_graph)
+    assert chunk.title == "tools/build.rb (lines 1-3)"
+    assert chunk.extract_text is None and chunk.defines == []  # OpenIE as today
+
+
+def test_an_oversized_body_splits_at_statement_starts_with_only_part_one_extracting() -> None:
+    doc = code(
+        'def big():\n    """'
+        + "Long docstring. " * 8
+        + '"""\n'
+        + "\n".join(f"    x{i} = {i}" for i in range(200))
+        + "\n",
+        title="big.py",
+    )
+    graph = extract_code([doc], FIXTURE_SOURCE)
+    chunks = chunk_document(doc, size_chars=500, overlap_chars=0, code=graph)
+
+    from hippo.codegraph.model import symbol_id
+
+    # `big.py` holding a `def big` is E2 defect 1's Python shape: the file's module symbol and
+    # its top-level function are two nodes with two ids now, not one node with one. Only the
+    # first part carries the module's own declaration line; the function is defined by all of
+    # them, which is what "DEFINED_IN from every part" was always about.
+    module = symbol_id(FIXTURE_SOURCE, "big.py", "big", "module")
+    function = symbol_id(FIXTURE_SOURCE, "big.py", "big", "function")
+    assert module != function
+
+    assert len(chunks) > 3
+    assert chunks[0].title.startswith("big.py :: big.big (lines 1-")
+    assert chunks[0].title.endswith("(part 1)")
+    assert [c.extract_text != "" for c in chunks] == [True] + [False] * (len(chunks) - 1)
+    assert chunks[0].defines == [module, function]
+    assert [c.defines for c in chunks[1:]] == [[function]] * (len(chunks) - 1)
+
+    covered: list[int] = []
+    for chunk in chunks:
+        first, last = chunk.title.split("(lines ")[1].split(")")[0].split("-")
+        covered.extend(range(int(first), int(last) + 1))
+    assert covered == list(range(1, 203))  # every line once, in order
+
+
+def test_chunk_document_without_a_code_graph_is_unchanged(code_graph) -> None:
+    doc = fixture_doc(ORDERS)
+    assert chunk_document(doc, 1500, 150) == chunk_document(doc, 1500, 150, code=None)
+    assert [c.title for c in chunk_document(doc, 1500, 150)] == ["pyapp/orders.py (lines 1-40)"]
+
+
+def test_chunk_documents_numbers_symbol_passages_continuously(code_graph) -> None:
+    docs = [fixture_doc(ORDERS), prose("Boulder is located in Colorado.", "notes.md")]
+    chunks = chunk_documents(docs, 1500, 150, code=code_graph)
+    assert [c.ordinal for c in chunks] == list(range(len(chunks)))
+    assert chunks[-1].title == "notes.md" and chunks[-1].extract_text is None
+
+
+# --------------------------------------- members written outside their type (L3)
+#
+# Rust writes a type's methods in `impl` blocks of their own and Go writes them as
+# `func (s *Service) Place()`, so a member's lines are nowhere near its type's. The type's
+# header is then exactly its own lines plus one placeholder per member, wherever that member
+# is written, and the *module* header stands in for every symbol range in the file, whatever
+# its kind and owner -- which is what keeps every line in exactly one passage. The rule is
+# language-agnostic: these cases are Rust because that walker is merged, and the Go shape
+# (`type Service struct` at the top, its methods further down) reaches the same code.
+
+RUST_ORDERS = """use crate::billing;
+
+/// Keeps orders for one customer.
+pub struct OrderService {
+    pub open: i64,
+}
+
+impl OrderService {
+    /// Place an order and return its identifier.
+    pub fn place(&self, order: &Order) -> i64 {
+        billing::total(order)
+    }
+}
+
+impl Base for OrderService {
+    fn log(&self, message: &str) {
+        println!("{}", message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn place_totals() {
+        let service = OrderService { open: 0 };
+        assert_eq!(service.place(&Order {}), 0);
+    }
+}
+"""
+
+# `sig { ... }  // lines a-b`: a placeholder stands in for a range, it does not print it.
+PLACEHOLDER_RE = re.compile(r"(?://|#) lines \d+-\d+$")
+
+
+def rust_chunks(text: str, title: str = "src/orders.rs", size: int = 1500) -> list[Chunk]:
+    doc = Document(title=title, text=text, path=title, is_code=True)
+    graph = extract_code([doc], FIXTURE_SOURCE)
+    return chunk_documents([doc], size_chars=size, overlap_chars=150, code=graph)
+
+
+def printed_lines(chunks: list[Chunk]) -> list[str]:
+    """Every source line the passages print, placeholders aside. Blank lines are boundaries."""
+    return [
+        line
+        for chunk in chunks
+        for line in chunk.text.splitlines()
+        if line.strip() and not PLACEHOLDER_RE.search(line)
+    ]
+
+
+def test_a_type_whose_methods_live_outside_it_gets_a_passage_per_symbol_in_order() -> None:
+    chunks = rust_chunks(RUST_ORDERS)
+    assert [c.title for c in chunks] == [
+        "src/orders.rs :: src.orders (lines 1-19)",
+        "src/orders.rs :: src.orders.OrderService (lines 4-6)",  # its own lines, not up to `place`
+        "src/orders.rs :: src.orders.OrderService.place (lines 10-12)",
+        "src/orders.rs :: src.orders.OrderService.log (lines 16-18)",
+        "src/orders.rs :: src.orders.tests (lines 21-30)",
+        "src/orders.rs :: src.orders.tests.place_totals (lines 25-29)",
+    ]
+    assert [c.ordinal for c in chunks] == list(range(6))
+
+
+def test_every_line_of_such_a_file_is_printed_exactly_once() -> None:
+    chunks = rust_chunks(RUST_ORDERS)
+    source = [line for line in RUST_ORDERS.splitlines() if line.strip()]
+    assert sorted(printed_lines(chunks)) == sorted(source)  # no line printed twice, none lost
+    assert len(printed_lines(chunks)) == len(source)
+
+
+def test_the_type_header_is_its_own_lines_and_a_placeholder_per_method_wherever_it_lives() -> None:
+    klass = rust_chunks(RUST_ORDERS)[1]
+    assert klass.text.splitlines() == [
+        "pub struct OrderService {",
+        "    pub open: i64,",
+        "}",
+        # Both impl blocks are elsewhere in the file; the header still lists what they hold.
+        "    pub fn place(&self, order: &Order) -> i64 { ... }  // lines 10-12",
+        "    fn log(&self, message: &str) { ... }  // lines 16-18",
+    ]
+    assert "billing::total(order)" not in klass.text  # the body lives in its own passage
+
+
+def test_the_module_header_stands_in_for_every_symbol_range_whatever_its_owner() -> None:
+    module = rust_chunks(RUST_ORDERS)[0]
+    assert "pub struct OrderService { ... }  // lines 4-6" in module.text
+    # A method the module does not own still gets a placeholder here: its lines are the
+    # module's own, and printing the body would repeat the passage that already holds it.
+    assert "    pub fn place(&self, order: &Order) -> i64 { ... }  // lines 10-12" in module.text
+    assert "    fn log(&self, message: &str) { ... }  // lines 16-18" in module.text
+    assert "mod tests { ... }  // lines 21-30" in module.text
+    assert "impl OrderService {" in module.text  # the impl's own lines belong to nobody else
+    assert "billing::total(order)" not in module.text
+    assert "assert_eq!" not in module.text
+
+
+def test_an_inline_module_is_a_container_and_its_functions_get_their_own_passages() -> None:
+    _, _, _, _, tests, place_totals = rust_chunks(RUST_ORDERS)
+    assert tests.text.splitlines() == [
+        "#[cfg(test)]",
+        "mod tests {",
+        "    use super::*;",
+        "",
+        "    fn place_totals() { ... }  // lines 25-29",
+        "}",
+    ]
+    assert place_totals.text.startswith("    #[test]\n    fn place_totals() {")
+    assert "assert_eq!(service.place(&Order {}), 0);" in place_totals.text
+
+
+# The same rule in Go, where it is the shape the language always has: `func (s *Service) Place()`
+# is a top-level declaration, so a type's members are never inside it. `GO_ORDERS` is the Rust case
+# above written in Go -- the placeholder is a `//` comment and the methods sit at column zero.
+
+GO_ORDERS = """package orders
+
+import "example.com/goapp/billing"
+
+// Service keeps orders for one customer.
+type Service struct {
+\tOpen int64
+}
+
+// Place an order and return its identifier.
+func (s *Service) Place(order Order) int64 {
+\treturn billing.Total(order)
+}
+
+func (s *Service) Log(message string) {
+\tprintln(message)
+}
+"""
+
+
+def go_chunks(text: str, title: str = "orders/service.go", size: int = 1500) -> list[Chunk]:
+    """`rust_chunks` by another name: the file's extension is what picks the walker."""
+    return rust_chunks(text, title=title, size=size)
+
+
+def test_a_go_type_whose_methods_live_outside_it_gets_a_passage_per_symbol_in_order() -> None:
+    chunks = go_chunks(GO_ORDERS)
+    assert [c.title for c in chunks] == [
+        "orders/service.go :: orders.service (lines 1-10)",
+        "orders/service.go :: orders.service.Service (lines 6-8)",  # its own lines, not up to `Place`
+        "orders/service.go :: orders.service.Service.Place (lines 11-13)",
+        "orders/service.go :: orders.service.Service.Log (lines 15-17)",
+    ]
+    assert [c.ordinal for c in chunks] == list(range(4))
+
+
+def test_every_line_of_such_a_go_file_is_printed_exactly_once() -> None:
+    chunks = go_chunks(GO_ORDERS)
+    source = [line for line in GO_ORDERS.splitlines() if line.strip()]
+    assert sorted(printed_lines(chunks)) == sorted(source)  # no line printed twice, none lost
+    assert len(printed_lines(chunks)) == len(source)
+
+
+def test_the_go_type_header_is_its_own_lines_and_a_placeholder_per_method() -> None:
+    klass = go_chunks(GO_ORDERS)[1]
+    assert klass.text.splitlines() == [
+        "type Service struct {",
+        "\tOpen int64",
+        "}",
+        # Both methods are written below the type; the header still lists what they are.
+        "func (s *Service) Place(order Order) int64 { ... }  // lines 11-13",
+        "func (s *Service) Log(message string) { ... }  // lines 15-17",
+    ]
+    assert "billing.Total(order)" not in klass.text  # the body lives in its own passage
+
+
+def test_the_go_module_header_stands_in_for_every_symbol_range_whatever_its_owner() -> None:
+    module = go_chunks(GO_ORDERS)[0]
+    assert "type Service struct { ... }  // lines 6-8" in module.text
+    # A method the module does not own still gets a placeholder here: its lines are the module's
+    # own, and printing the body would repeat the passage that already holds it. A Go doc comment
+    # is not part of the declaration it documents, so the module is where both of these are read.
+    assert "// Service keeps orders for one customer." in module.text
+    assert "// Place an order and return its identifier." in module.text
+    assert "func (s *Service) Place(order Order) int64 { ... }  // lines 11-13" in module.text
+    assert "func (s *Service) Log(message string) { ... }  // lines 15-17" in module.text
+    assert "billing.Total(order)" not in module.text
+
+
+def test_a_member_that_opens_on_its_containers_own_line_leaves_the_container_the_header() -> None:
+    """
+    `mod tests { fn t() {}` starts both symbols on line 1 and the member ends first, so the
+    two ranges are only ordered by width. The wider one stands in for the narrower -- the
+    other way round would print the container's closing brace twice, once here and once in
+    the member's own passage.
+    """
+    text = "mod tests { fn t() {}\n}\n"
+    chunks = rust_chunks(text, title="src/compact.rs")
+    assert [c.title for c in chunks] == [
+        "src/compact.rs :: src.compact.tests (lines 1-2)",
+        "src/compact.rs :: src.compact.tests.t (lines 1-1)",
+    ]
+    assert sorted(printed_lines(chunks)) == ["mod tests { fn t() {}", "}"]
+
+
+def test_a_method_whose_type_is_declared_in_another_file_still_gets_a_passage() -> None:
+    """
+    L0d: Rust may write `impl Base for OrderService` in a module that declares neither type,
+    so a member can have no owner in its own file. The module owns whatever nothing else
+    does -- a symbol with no passage would be invisible to a scoped graph (S2.5).
+    """
+    text = (
+        "use crate::orders::OrderService;\n\n"
+        "impl Base for OrderService {\n"
+        '    fn log(&self, message: &str) {\n        println!("{}", message);\n    }\n}\n'
+    )
+    chunks = rust_chunks(text, title="src/logging.rs")
+    assert [c.title for c in chunks] == [
+        "src/logging.rs :: src.logging (lines 1-7)",
+        "src/logging.rs :: src.logging.OrderService.log (lines 4-6)",
+    ]
+    assert sorted(printed_lines(chunks)) == sorted(line for line in text.splitlines() if line.strip())
+
+
+# ------------------------------------------------------- commit passages (WP2b)
+
+
+def commit_graph(code_graph, count: int = 2):
+    """The fixture's graph with a little history bolted on, as `read_history` would leave it."""
+    from dataclasses import replace
+
+    place = next(s for s in code_graph.symbols if s.qualname == "OrderService.place")
+    save = next(s for s in code_graph.symbols if s.qualname == "OrderService.save")
+    graph = replace(
+        code_graph,
+        commits=[
+            {
+                "id": f"commit-{i}",
+                "source_id": FIXTURE_SOURCE,
+                "sha": f"{i}" * 40,
+                "author": "Hippo Fixture",
+                "date": f"2024-01-0{i + 1}T09:00:00+00:00",
+                "message": f"Subject {i}\n\nA body paragraph for commit {i}.",
+                "ordinal": i,
+            }
+            for i in range(count)
+        ],
+        modifies=[
+            {"commit_id": "commit-0", "symbol_id": place.id, "omega": 1.0, "hunk": {}},
+            {"commit_id": "commit-0", "symbol_id": save.id, "omega": 1.0, "hunk": {}},
+        ],
+    )
+    return graph, place, save
+
+
+def test_each_commit_becomes_one_passage(code_graph) -> None:
+    graph, place, save = commit_graph(code_graph)
+    chunks = chunk_documents([fixture_doc(ORDERS)], 1500, 150, code=graph)
+    commits = [c for c in chunks if c.title.startswith("commit ")]
+
+    assert [c.title for c in commits] == [
+        "commit 0000000000: Subject 0",  # sha[:10] and the message's first line
+        "commit 1111111111: Subject 1",
+    ]
+    assert commits[0].defines == ["commit-0"]  # DEFINED_IN, so the commit node has a passage
+    # The whole message, then what it touched -- by fully-qualified display name, the same name
+    # the answer block and the path tools use, in the order MODIFIES came in.
+    assert commits[0].text == (
+        f"Subject 0\n\nA body paragraph for commit 0.\n\nTouched: {place.display}, {save.display}"
+    )
+    assert commits[1].text == "Subject 1\n\nA body paragraph for commit 1."  # touched nothing
+    # OpenIE sees the message only, never the "Touched:" line: those are identifiers, and the
+    # >= 80-char rule then skips a one-line commit message by itself (S2.7).
+    assert commits[0].extract_text == "Subject 0\n\nA body paragraph for commit 0."
+
+
+def test_commit_passages_come_after_the_files_and_keep_the_ordinal_run(code_graph) -> None:
+    graph, _, _ = commit_graph(code_graph)
+    chunks = chunk_documents(
+        [fixture_doc(ORDERS), prose("Boulder is in Colorado.", "n.md")], 1500, 150, code=graph
+    )
+    assert [c.ordinal for c in chunks] == list(range(len(chunks)))
+    assert [c.title.startswith("commit ") for c in chunks][-2:] == [True, True]
+
+
+def test_a_commit_that_touched_a_great_many_symbols_stays_one_readable_passage(code_graph) -> None:
+    graph, _, _ = commit_graph(code_graph)
+    graph.modifies = [
+        {"commit_id": "commit-0", "symbol_id": s.id, "omega": 1.0, "hunk": {}} for s in code_graph.symbols
+    ]
+    (commit,) = [
+        c for c in chunk_documents([], 300, 0, code=graph) if c.title == "commit 0000000000: Subject 0"
+    ]
+    assert len(commit.text) <= 300
+    assert commit.text.rstrip().endswith("more)")  # says how many names were cut, never lies by omission
+
+
+def test_a_graph_with_no_history_adds_no_commit_passages(code_graph) -> None:
+    assert not [
+        c
+        for c in chunk_documents([fixture_doc(ORDERS)], 1500, 150, code=code_graph)
+        if c.title.startswith("commit ")
+    ]

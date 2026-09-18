@@ -1,0 +1,5 @@
+{# The fragment a partial route answers when a mapped failure escapes it. htmx swaps a partial's
+   body into the page that polls it, so this carries no document frame: only the mapper's own
+   bounded sentence and its stable code, never the exception. `failure.html` is the page twin. #}
+<div class="callout warn">{{ error }}</div>
+<p class="muted">Quote <code>{{ failure_code }}</code> if you report this.</p>

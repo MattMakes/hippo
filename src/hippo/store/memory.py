@@ -19,7 +19,18 @@ import json
 from typing import Any
 
 from ..access import ACCESS_WHERE, Access, access_params
+from .authorization import permission_mutation
 from .base import Neo4jBase, new_id, now_iso, with_defaults
+from .code import SYNONYM_LABELS, grouped_by_labels
+from .generations import (
+    INTERRUPTED_REFRESH_ERROR,
+    INTERRUPTED_REFRESH_STAGE,
+    REFRESHING_PREFIX,
+    legacy_source_cleanup,
+    native_mutation,
+    native_write,
+)
+from .migrations import DEFAULT_WORKSPACE_ID
 
 BATCH = 200  # rows per write query; keeps transactions small and progress visible
 
@@ -63,6 +74,16 @@ class MemoryQueries(Neo4jBase):
             owner_id=owner_id,
             access_role_id=access_role_id,
         )
+        if getattr(self, "_schema_checked", False):
+            self.run(
+                "MATCH (s:Source {id:$id}) SET s.workspace_id=$workspace, s.generation_version=0",
+                id=source_id,
+                workspace=DEFAULT_WORKSPACE_ID,
+            )
+            if self.schema_version()["version"] >= 4:
+                self.run(
+                    "MATCH (s:Source {id:$id}) SET s.managed=false, s.build_fencing_token=0", id=source_id
+                )
         return source_id
 
     def update_source(self, source_id: str, **fields: Any) -> None:
@@ -104,8 +125,11 @@ class MemoryQueries(Neo4jBase):
         )
         return [_source_row(r) for r in rows]
 
+    @permission_mutation
+    @legacy_source_cleanup
     def delete_source(self, source_id: str) -> None:
         """Delete a source and its passages, then any entities/facts that nothing mentions any more."""
+        self.delete_code_nodes_for_source(source_id)  # CodeQueries; both are mixins of Store
         while True:
             row = self.run_one(
                 """
@@ -121,8 +145,10 @@ class MemoryQueries(Neo4jBase):
         self.run("MATCH (s:Source {id: $id}) DETACH DELETE s", id=source_id)
         self.remove_orphans()
 
+    @legacy_source_cleanup
     def delete_passages_for_source(self, source_id: str) -> None:
         """Forget a source's passages (and whatever only they supported) but keep the Source row, for re-indexing."""
+        self.delete_code_nodes_for_source(source_id)  # CodeQueries; both are mixins of Store
         while True:
             row = self.run_one(
                 """
@@ -141,6 +167,9 @@ class MemoryQueries(Neo4jBase):
         """
         After a restart, nothing is running any more: sources still 'reading'/'indexing', runs still
         'running' and question sets still 'generating' are marked failed so the UI does not wait forever.
+
+        A managed refresh is the one job that is not failed by this: it never stopped serving, so it
+        keeps its status, its active generation and its counts, and only its stage is retired.
         """
         message = "interrupted by a restart; run it again"
         now = now_iso()
@@ -170,7 +199,28 @@ class MemoryQueries(Neo4jBase):
             """,
             message=message,
         )
-        return sum(int((row or {}).get("n", 0)) for row in (sources, runs, sets))
+        # Read the ids before the rewrite: past it the predicate no longer matches, and the
+        # build holder each one is still carrying has to be released or the reindex the new
+        # error asks for is refused with `BuildBusy` until its lease expires.
+        refreshing = "s.status = 'ready' AND s.stage STARTS WITH $prefix"
+        interrupted = [
+            row["id"]
+            for row in self.run(
+                f"MATCH (s:Source) WHERE {refreshing} RETURN s.id AS id", prefix=REFRESHING_PREFIX
+            )
+        ]
+        if interrupted:
+            self.run(
+                f"MATCH (s:Source) WHERE {refreshing} "
+                "SET s.stage = $stage, s.error = $error, s.updated_at = $now",
+                prefix=REFRESHING_PREFIX,
+                stage=INTERRUPTED_REFRESH_STAGE,
+                error=INTERRUPTED_REFRESH_ERROR,
+                now=now,
+            )
+            for source_id in interrupted:
+                self.release_interrupted_build(source_id)
+        return len(interrupted) + sum(int((row or {}).get("n", 0)) for row in (sources, runs, sets))
 
     def remove_orphans(self) -> None:
         self.run("MATCH (f:Fact) WHERE NOT (f)<-[:STATES]-() DETACH DELETE f")
@@ -178,6 +228,7 @@ class MemoryQueries(Neo4jBase):
 
     # ============================================================= passages
 
+    @native_write("Passage")
     def add_passages(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, source_id, ordinal, title, text, embedding}."""
         for batch in _batches(rows):
@@ -194,6 +245,7 @@ class MemoryQueries(Neo4jBase):
                 rows=batch,
             )
 
+    @native_mutation
     def save_extraction(
         self, passage_id: str, entities: list[str], triples: list[list[str]], error: str | None
     ) -> None:
@@ -254,6 +306,7 @@ class MemoryQueries(Neo4jBase):
         rows = self.run("UNWIND $ids AS id MATCH (e:Entity {id: id}) RETURN e.id AS id", ids=ids)
         return {r["id"] for r in rows}
 
+    @native_mutation
     def add_entities(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, name, embedding}. Callers pass only new ids (see existing_entity_ids); re-adding is harmless."""
         for batch in _batches(rows):
@@ -314,6 +367,7 @@ class MemoryQueries(Neo4jBase):
         rows = self.run("UNWIND $ids AS id MATCH (f:Fact {id: id}) RETURN f.id AS id", ids=ids)
         return {r["id"] for r in rows}
 
+    @native_mutation
     def add_facts(self, rows: list[dict[str, Any]]) -> None:
         """rows: {id, subject, predicate, object, subject_id, object_id, embedding}. Callers pass only new ids."""
         for batch in _batches(rows):
@@ -352,6 +406,7 @@ class MemoryQueries(Neo4jBase):
 
     # ================================================================ links
 
+    @native_mutation
     def link_passage_facts(self, pairs: list[tuple[str, str]]) -> None:
         rows = [{"passage_id": p, "fact_id": f} for p, f in pairs]
         for batch in _batches(rows, 1000):
@@ -364,6 +419,7 @@ class MemoryQueries(Neo4jBase):
                 rows=batch,
             )
 
+    @native_mutation
     def link_passage_entities(self, pairs: list[tuple[str, str]]) -> None:
         rows = [{"passage_id": p, "entity_id": e} for p, e in pairs]
         for batch in _batches(rows, 1000):
@@ -376,23 +432,34 @@ class MemoryQueries(Neo4jBase):
                 rows=batch,
             )
 
+    @native_mutation
     def add_synonyms(self, rows: list[tuple[str, str, float]], manual: bool = False) -> None:
-        """rows: (entity_id_a, entity_id_b, score). Stored once per pair (a < b), keeping the best score."""
-        canonical = [
-            {"a": min(a, b), "b": max(a, b), "score": float(score)} for a, b, score in rows if a != b
-        ]
-        for batch in _batches(canonical, 1000):
-            self.run(
-                """
-                UNWIND $rows AS row
-                MATCH (a:Entity {id: row.a}), (b:Entity {id: row.b})
-                MERGE (a)-[s:SYNONYM]->(b)
-                SET s.score = CASE WHEN s.score IS NULL OR s.score < row.score THEN row.score ELSE s.score END,
-                    s.manual = coalesce(s.manual, false) OR $manual
-                """,
-                rows=batch,
-                manual=manual,
-            )
+        """
+        rows: (node_id_a, node_id_b, score). Stored once per pair (a < b), keeping the best score.
+
+        Either id may be an entity, a symbol or a data object. The label comes from the id prefix
+        (`label_of`, S2.2) so the write binds one concrete label pair here as it must on LadybugDB,
+        and the two backends stay one query apart rather than one dialect apart.
+        """
+        best: dict[tuple[str, str], float] = {}
+        for a, b, score in rows:
+            if a != b:
+                key = (min(a, b), max(a, b))
+                best[key] = max(best.get(key, 0.0), float(score))
+        for (label_a, label_b), group in grouped_by_labels(best, SYNONYM_LABELS).items():
+            for batch in _batches(group, 1000):
+                self.run(
+                    f"""
+                    UNWIND $rows AS row
+                    MATCH (a:{label_a} {{id: row.a}}), (b:{label_b} {{id: row.b}})
+                    MERGE (a)-[s:SYNONYM]->(b)
+                    SET s.score = CASE WHEN s.score IS NULL OR s.score < row.score
+                                       THEN row.score ELSE s.score END,
+                        s.manual = coalesce(s.manual, false) OR $manual
+                    """,
+                    rows=batch,
+                    manual=manual,
+                )
 
     # ====================================================== loading the graph
     # These feed hipporag/graph_index.py. Each returns plain lists so that file
@@ -411,7 +478,7 @@ class MemoryQueries(Neo4jBase):
         return self.run(
             """
             MATCH (p:Passage)-[:FROM]->(s:Source)
-            RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal, p.embedding AS embedding,
+            RETURN p.id AS id, p.title AS title, p.text AS text, p.ordinal AS ordinal, p.embedding AS embedding, p.generation_id AS generation_id, p.retrieval_view_id AS retrieval_view_id,
                    s.id AS source_id, s.name AS source_name
             """
         )
@@ -442,8 +509,10 @@ class MemoryQueries(Neo4jBase):
         )
 
     def load_synonyms(self) -> list[dict[str, Any]]:
+        # Unlabelled, like load_tuned_edges: SYNONYM now joins entities, symbols and data
+        # objects, and a labelled MATCH would silently drop every cross-kind row.
         return self.run(
-            "MATCH (a:Entity)-[s:SYNONYM]->(b:Entity) RETURN a.id AS a, b.id AS b, s.score AS score, coalesce(s.manual, false) AS manual"
+            "MATCH (a)-[s:SYNONYM]->(b) RETURN a.id AS a, b.id AS b, s.score AS score, coalesce(s.manual, false) AS manual"
         )
 
     def load_tuned_edges(self) -> list[dict[str, Any]]:
@@ -463,6 +532,12 @@ SOURCE_DEFAULTS: dict[str, Any] = {
     "created_at": "",
     "updated_at": "",
     "owner_id": None,
+    "workspace_id": DEFAULT_WORKSPACE_ID,
+    "active_generation_id": None,
+    "generation_version": 0,
+    "managed": False,
+    "active_build_id": None,
+    "build_fencing_token": 0,
     "access_role_id": None,
     "min_rank": 0,
 }

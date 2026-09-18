@@ -25,11 +25,13 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ...access import CAPABILITIES, Principal, top_role
+from ...knowledge.query_access import query_session
+from ...status import source_view
 from ..auth import principal_of, public_user, require, set_session_cookie
-from ..render import ctx_of, render
+from ..render import caller_error, ctx_of, render
 
 router = APIRouter()
 api = APIRouter(prefix="/api")
@@ -67,13 +69,30 @@ def check_user_manageable(principal: Principal, user: dict[str, Any], roles: lis
         raise HTTPException(403, f"'{user['username']}' ({user.get('role_name')}) does not rank below you")
 
 
-def ladder(ctx, principal: Principal) -> list[dict[str, Any]]:
-    """Roles top first, each with what that tier can see: every tier at or below it."""
-    roles = ctx.store.list_roles()
-    sources = ctx.store.list_sources()
+def _role_rows(ctx, sources) -> list[dict[str, Any]]:
+    return [
+        {**role, "sources": sum(source.get("access_role_id") == role["id"] for source in sources)}
+        for role in ctx.store.list_roles()
+    ]
+
+
+def _user_row(user, sources) -> dict[str, Any]:
+    row = public_user(user) or {}
+    row["sources"] = sum(source.get("owner_id") == row.get("id") for source in sources)
+    return row
+
+
+def ladder(ctx, principal: Principal, *, view=None) -> list[dict[str, Any]]:
+    """Tier estimates intersect the caller's inventory; managed ACLs cannot be inferred from a tier."""
+    if view is None:
+        with query_session(ctx, principal.access) as session:
+            return ladder(ctx, principal, view=source_view(ctx, principal.access, session=session))
+    roles = _role_rows(ctx, view.sources)
     rows = []
     for role in roles:
-        visible = [s for s in sources if int(s.get("min_rank") or 0) <= role["rank"]]
+        visible = [
+            s for s in view.sources if not s.get("managed") and int(s.get("min_rank") or 0) <= role["rank"]
+        ]
         rows.append(
             {
                 **role,
@@ -84,6 +103,7 @@ def ladder(ctx, principal: Principal) -> list[dict[str, Any]]:
                 "is_mine": role["id"] == principal.role_id,
             }
         )
+    view.validate()
     return rows
 
 
@@ -96,34 +116,42 @@ def users_page(request: Request, error: str = "", saved: str = "", show_token: s
     if not (principal.can("manage_users") or principal.can("manage_roles")):
         raise HTTPException(403, "your role may neither manage users nor roles")
     ctx = ctx_of(request)
-    roles = ctx.store.list_roles()
-    users = []
-    for user in ctx.store.list_users():
-        row = public_user(user) or {}
-        row["manageable"] = principal.user_id != user["id"] and may_touch_rank(principal, user["rank"], roles)
-        row["is_me"] = principal.user_id == user["id"]
-        if show_token == user["id"] and row["manageable"]:
-            row["token"] = user.get("token")
-        users.append(row)
-    total_sources = len(ctx.store.list_sources())
-    open_sources = sum(1 for s in ctx.store.list_sources() if not s.get("access_role_id"))
-    return render(
-        request,
-        "users.html",
-        nav="users",
-        ladder=ladder(ctx, principal),
-        users=users,
-        roles=roles,
-        assignable=assignable_roles(principal, roles),
-        capabilities=CAPABILITIES,
-        open_mode=principal.is_open,
-        can_users=principal.can("manage_users"),
-        can_roles=principal.can("manage_roles"),
-        total_sources=total_sources,
-        open_sources=open_sources,
-        error=error,
-        saved=saved,
-    )
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        roles = _role_rows(ctx, view.sources)
+        users = []
+        for user in ctx.store.list_users():
+            row = _user_row(user, view.sources)
+            row["manageable"] = principal.user_id != user["id"] and may_touch_rank(
+                principal, user["rank"], roles
+            )
+            row["is_me"] = principal.user_id == user["id"]
+            if show_token == user["id"] and row["manageable"]:
+                row["token"] = user.get("token")
+            users.append(row)
+        total_sources = len(view.sources)
+        open_sources = sum(not s.get("managed") and not s.get("access_role_id") for s in view.sources)
+        tier_rows = ladder(ctx, principal, view=view)
+        view.validate()
+        return render(
+            request,
+            "users.html",
+            session=session,
+            nav="users",
+            ladder=tier_rows,
+            users=users,
+            roles=roles,
+            assignable=assignable_roles(principal, roles),
+            capabilities=CAPABILITIES,
+            open_mode=principal.is_open,
+            can_users=principal.can("manage_users"),
+            can_roles=principal.can("manage_roles"),
+            total_sources=total_sources,
+            open_sources=open_sources,
+            error=error,
+            saved=saved,
+            authorization_check=view.validate,
+        )
 
 
 def _back(message: str = "", saved: str = "", **extra: str) -> RedirectResponse:
@@ -197,6 +225,14 @@ async def create_role_form(request: Request):
             ),
         )
     except (HTTPException, ValueError) as exc:
+        # Three things are the caller's own and are shown: the route's `HTTPException`
+        # detail, `ValidationError` from the model this form is parsed into (which is why
+        # it is built inside the try -- its message is the form's own fields and rules),
+        # and the exact `ValueError` a store validator raises. Every other `ValueError`
+        # subclass came from further down carrying whatever it was reading, and is
+        # re-raised to the mapper rather than printed in the form's error banner.
+        if isinstance(exc, ValueError) and not (caller_error(exc) or isinstance(exc, ValidationError)):
+            raise
         return _back(getattr(exc, "detail", str(exc)))
     return _back(saved="Role added")
 
@@ -219,6 +255,14 @@ async def update_role_form(request: Request, role_id: str):
             ),
         )
     except (HTTPException, ValueError) as exc:
+        # Three things are the caller's own and are shown: the route's `HTTPException`
+        # detail, `ValidationError` from the model this form is parsed into (which is why
+        # it is built inside the try -- its message is the form's own fields and rules),
+        # and the exact `ValueError` a store validator raises. Every other `ValueError`
+        # subclass came from further down carrying whatever it was reading, and is
+        # re-raised to the mapper rather than printed in the form's error banner.
+        if isinstance(exc, ValueError) and not (caller_error(exc) or isinstance(exc, ValidationError)):
+            raise
         return _back(getattr(exc, "detail", str(exc)))
     return _back(saved="Role saved")
 
@@ -256,14 +300,24 @@ class RolePatch(BaseModel):
 
 @api.get("/users")
 def list_users(request: Request):
-    require(request, "manage_users")
-    return [public_user(u) for u in ctx_of(request).store.list_users()]
+    principal = require(request, "manage_users")
+    ctx = ctx_of(request)
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        rows = [_user_row(user, view.sources) for user in ctx.store.list_users()]
+        view.validate()
+        return rows
 
 
 @api.get("/roles")
 def list_roles(request: Request):
-    principal_of(request)  # any signed-in user may read the ladder: it explains what they see
-    return ctx_of(request).store.list_roles()
+    principal = principal_of(request)
+    ctx = ctx_of(request)
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        rows = _role_rows(ctx, view.sources)
+        view.validate()
+        return rows
 
 
 @api.post("/users")
@@ -296,6 +350,11 @@ def _create_user(request: Request, body: UserBody) -> tuple[dict[str, Any], bool
     try:
         user_id = ctx.store.create_user(body.username, body.password, role["id"], body.display_name)
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
     return ctx.store.get_user(user_id) or {}, first
 
@@ -322,8 +381,17 @@ def patch_user(request: Request, user_id: str, body: UserPatch) -> dict[str, Any
     try:
         updated = ctx.store.update_user(user_id, **changes) if changes else user
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
-    return public_user(updated) or {}
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        row = _user_row(updated, view.sources)
+        view.validate()
+        return row
 
 
 @api.post("/users/{user_id}/token")
@@ -358,6 +426,11 @@ def create_role(request: Request, body: RoleBody) -> dict[str, Any]:
     try:
         role_id = ctx.store.create_role(body.name, body.rank, body.description, body.capabilities)
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
     return ctx.store.get_role(role_id) or {}
 
@@ -386,9 +459,20 @@ def patch_role(request: Request, role_id: str, body: RolePatch) -> dict[str, Any
             raise HTTPException(400, "you cannot take 'manage_roles' away from your own role")
         changes["capabilities"] = body.capabilities
     try:
-        return ctx.store.update_role(role_id, **changes) if changes else role
+        if changes:
+            ctx.store.update_role(role_id, **changes)
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        updated = next(row for row in _role_rows(ctx, view.sources) if row["id"] == role_id)
+        view.validate()
+        return updated
 
 
 @api.delete("/roles/{role_id}")
@@ -406,5 +490,10 @@ def delete_role(request: Request, role_id: str) -> dict[str, Any]:
     try:
         ctx.store.delete_role(role_id)
     except ValueError as exc:
+        # Exact type only: the store validator names the caller's own field, and every
+        # `ValueError` subclass reaching this line came from further down carrying whatever
+        # it was reading. The same rule the rest of the web layer applies.
+        if not caller_error(exc):
+            raise
         raise HTTPException(400, str(exc)) from exc
     return {"deleted": role_id}

@@ -1,0 +1,99 @@
+{
+  "pages": [
+    {
+      "partition": "incidents",
+      "changes": [
+        {
+          "ref": {
+            "partition": "incidents",
+            "artifact_kind": "incident_record",
+            "external_id": "P7Q2X1",
+            "provider_revision": "2026-09-14T04:10:00Z"
+          },
+          "operation": "upsert"
+        },
+        {
+          "ref": {
+            "partition": "incidents",
+            "artifact_kind": "incident_record",
+            "external_id": "P7Q2X2",
+            "provider_revision": "2026-09-14T12:00:00Z"
+          },
+          "operation": "upsert"
+        },
+        {
+          "ref": {
+            "partition": "incidents",
+            "artifact_kind": "incident_record",
+            "external_id": "P7Q2X3",
+            "provider_revision": "2026-09-15T07:10:00Z"
+          },
+          "operation": "upsert"
+        },
+        {
+          "ref": {
+            "partition": "incidents",
+            "artifact_kind": "incident_record",
+            "external_id": "line-sha256:cc472f0575360d677573a95b6c551e472cf87bdb3d4cf9d28986f2ab148e6387",
+            "provider_revision": null
+          },
+          "operation": "upsert"
+        }
+      ],
+      "next_cursor": null,
+      "complete": true,
+      "warnings": []
+    }
+  ],
+  "fetches": {
+    "P7Q2X1": {
+      "content_type": "application/x-ndjson",
+      "canonical_uri": "https://incidents.example/incidents/P7Q2X1",
+      "provider_revision": "2026-09-14T04:10:00Z",
+      "parser": {
+        "name": "json",
+        "version": "1"
+      },
+      "source_updated_at": "2026-09-14T04:10:00Z",
+      "source_timestamp_original": "2026-09-14T04:10:00Z",
+      "source_timezone": "UTC",
+      "source_precision": "second"
+    },
+    "P7Q2X2": {
+      "content_type": "application/x-ndjson",
+      "canonical_uri": "https://incidents.example/incidents/P7Q2X2",
+      "provider_revision": "2026-09-14T12:00:00Z",
+      "parser": {
+        "name": "json",
+        "version": "1"
+      },
+      "source_updated_at": "2026-09-14T12:00:00Z",
+      "source_timestamp_original": "2026-09-14T12:00:00Z",
+      "source_timezone": "UTC",
+      "source_precision": "second"
+    },
+    "P7Q2X3": {
+      "content_type": "application/x-ndjson",
+      "canonical_uri": "https://incidents.example/incidents/P7Q2X3",
+      "provider_revision": "2026-09-15T07:10:00Z",
+      "parser": {
+        "name": "json",
+        "version": "1"
+      },
+      "source_updated_at": "2026-09-15T07:10:00Z",
+      "source_timestamp_original": "2026-09-15T07:10:00Z",
+      "source_timezone": "UTC",
+      "source_precision": "second"
+    },
+    "line-sha256:cc472f0575360d677573a95b6c551e472cf87bdb3d4cf9d28986f2ab148e6387": {
+      "content_type": "application/x-ndjson",
+      "canonical_uri": "https://incidents.example/incidents/line-sha256:cc472f0575360d677573a95b6c551e472cf87bdb3d4cf9d28986f2ab148e6387",
+      "provider_revision": null,
+      "parser": {
+        "name": "json",
+        "version": "1"
+      },
+      "source_precision": "unknown"
+    }
+  }
+}

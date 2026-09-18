@@ -2,7 +2,10 @@
 {% if run.status == 'running' %}
 <div class="callout warn">Running… {{ run.progress_done }}/{{ run.progress_total }} questions answered. This page refreshes itself.</div>
 {% elif run.status == 'failed' %}
-<div class="callout bad">The run failed: {{ run.error }}</div>
+<div class="callout bad">The run failed: {{ public_reason(run.failure_code) }}</div>
+{% endif %}
+{% if run.summary and run.summary.error_codes %}
+<div class="callout bad">{{ run.summary.errors }} question(s) could not be answered: {% for code in run.summary.error_codes %}{{ public_reason(code) }}{% if not loop.last %}; {% endif %}{% endfor %}</div>
 {% endif %}
 
 <section class="card">
@@ -22,7 +25,7 @@
   {% else %}
   <dl class="stats">
     {% for key, label, help in cards %}
-    <div title="{{ help }}"><dt>{{ label }}</dt><dd>{{ run.summary[key] | fmt(2) if key not in ('dpr_fallbacks',) else run.summary[key] }}</dd></div>
+    <div title="{{ help }}"><dt>{{ label }}</dt><dd>{{ run.summary[key] | fmt(2) if key not in ('dpr_fallbacks', 'errors') else run.summary[key] }}</dd></div>
     {% endfor %}
     <div title="judge verdicts"><dt>correct / partial / wrong</dt><dd>{{ run.summary.correct }} / {{ run.summary.partial }} / {{ run.summary.incorrect }}</dd></div>
   </dl>
@@ -39,7 +42,7 @@
       <td class="muted">{{ res.ordinal + 1 }}</td>
       <td><a href="/analyze/{{ res.id }}">{{ res.question | short(90) }}</a> {% if res.kind == 'multihop' %}<span class="badge">multi-hop</span>{% endif %}</td>
       <td>{{ res.expected_answer | short(60) }}</td>
-      <td>{% if res.error %}<span class="pill bad" title="{{ res.error }}">error</span>{% else %}{{ res.answer | short(80) }}{% endif %}</td>
+      <td>{% if res.failure_code %}<span class="pill bad" title="{{ public_reason(res.failure_code) }}">{{ public_reason(res.failure_code) | short(40) }}</span>{% else %}{{ res.answer | short(80) }}{% endif %}</td>
       <td>{% if res.verdict %}<span class="pill {{ 'ok' if res.verdict == 'correct' else ('warn' if res.verdict == 'partially_correct' else 'bad') }}" title="{{ res.judge_reason }}">{{ res.verdict | replace('_', ' ') }}</span>{% endif %}</td>
       <td class="num">{{ res.exact_match | fmt(1) }}</td>
       <td class="num">{{ res.f1 | fmt(2) }}</td>

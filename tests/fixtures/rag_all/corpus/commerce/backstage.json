@@ -1,0 +1,23 @@
+{
+  "apiVersion": "backstage.io/v1alpha1",
+  "kind": "Component",
+  "metadata": {
+    "namespace": "default",
+    "name": "billing"
+  },
+  "spec": {
+    "type": "service",
+    "lifecycle": "production",
+    "owner": "group:default/payments",
+    "providesApis": [
+      "api:default/billing",
+      "api:default/missing"
+    ]
+  },
+  "relations": [
+    {
+      "type": "ownedBy",
+      "targetRef": "group:default/payments"
+    }
+  ]
+}

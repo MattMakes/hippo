@@ -1,0 +1,788 @@
+[
+  {
+    "id": "commerce-q01",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "exact_lookup",
+    "question": "Which route registers the billing order creation handler?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:endpoint:POST:/billing/orders"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-route"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "POST /billing/orders"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q02",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "exact_lookup",
+    "question": "Who owns Billing in the ownership document?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:service:billing"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-owners"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "Commerce Platform"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q03",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "schema_join",
+    "question": "Which PostgreSQL foreign-key columns join commerce.orders to commerce.customers?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:table:postgres:commerce.orders",
+      "commerce:table:postgres:commerce.customers",
+      "commerce:column:postgres:commerce.orders.tenant_id",
+      "commerce:column:postgres:commerce.orders.customer_id",
+      "commerce:column:postgres:commerce.customers.tenant_id",
+      "commerce:column:postgres:commerce.customers.customer_id"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-schema"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "tenant_id and customer_id"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [
+      "typed_constraints"
+    ],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q04",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "schema_join",
+    "question": "Which SQL Server columns preserve tenant-aware customer joins?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:table:sqlserver:dbo.orders",
+      "commerce:table:sqlserver:dbo.customers",
+      "commerce:column:sqlserver:dbo.orders.tenant_id",
+      "commerce:column:sqlserver:dbo.orders.customer_id",
+      "commerce:column:sqlserver:dbo.customers.tenant_id",
+      "commerce:column:sqlserver:dbo.customers.customer_id"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-sqlserver"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "tenant_id and customer_id"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [
+      "typed_constraints"
+    ],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q05",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "code_dependency",
+    "question": "What does create_order call in the billing source?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:function:create_order",
+      "commerce:function:save_order"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-call",
+        "e-commerce-storage"
+      ]
+    ],
+    "required_relation_paths": [
+      {
+        "subject": "commerce:function:create_order",
+        "predicate": "INVOKES",
+        "object": "commerce:function:save_order"
+      }
+    ],
+    "required_answer_facts": [
+      "save_order"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q06",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "code_dependency",
+    "question": "Which SQL statement does save_order construct?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:function:save_order"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-storage"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "INSERT INTO commerce.orders"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q07",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "requirements_rationale",
+    "question": "What accepted criterion prevents orders from crossing tenants?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:criterion:AC-1"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-prd"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "Every order belongs to a tenant"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q08",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "requirements_rationale",
+    "question": "Why did DEC-7 choose tenant-scoped keys?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:decision:DEC-7"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-decision"
+      ],
+      [
+        "e-commerce-jira"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "prevent cross-tenant joins"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q09",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "cross_source_impact",
+    "question": "Which implementation and accepted requirement are affected by dropping tenant_id?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:criterion:AC-1",
+      "commerce:function:save_order"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-prd",
+        "e-commerce-storage"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "tenant isolation",
+      "save_order"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q10",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "cross_source_impact",
+    "question": "Which visible evidence proves Billing depends on Checkout?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "commerce:service:billing"
+    ],
+    "alternative_evidence_sets": [],
+    "required_relation_paths": [],
+    "required_answer_facts": [],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality",
+      "Billing depends on Checkout"
+    ],
+    "expected_insufficiency": true,
+    "requires": [
+      "provider_acl",
+      "typed_links"
+    ],
+    "temporal": null
+  },
+  {
+    "id": "commerce-q11",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "temporal_conflict_insufficient",
+    "question": "At the before snapshot, is coupon_code present?",
+    "principal": "reader",
+    "snapshot": "before",
+    "query_mode": "as_of",
+    "required_object_ids": [
+      "commerce:column:postgres:commerce.orders.coupon_code"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-migration-before"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "coupon_code present"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [
+      "bitemporal"
+    ],
+    "temporal": {
+      "valid_at": "2026-05-01T00:00:00Z",
+      "known_at": "2026-05-10T00:00:00Z"
+    }
+  },
+  {
+    "id": "commerce-q12",
+    "split": "dev",
+    "artifact_group": "commerce",
+    "slice": "temporal_conflict_insufficient",
+    "question": "Who owned Billing as known on May 10 versus the May 12 correction?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "compare",
+    "required_object_ids": [
+      "commerce:service:billing"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-commerce-owners-before",
+        "e-commerce-manifest"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "Payments",
+      "Commerce Platform"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [
+      "bitemporal",
+      "conflict_resolution"
+    ],
+    "temporal": {
+      "left": {
+        "valid_at": "2026-05-01T00:00:00Z",
+        "known_at": "2026-05-10T00:00:00Z"
+      },
+      "right": {
+        "valid_at": "2026-05-01T00:00:00Z",
+        "known_at": "2026-05-12T00:00:00Z"
+      }
+    }
+  },
+  {
+    "id": "fulfillment-q01",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "exact_lookup",
+    "question": "Which operation registers allocate_shipment?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:endpoint:PUT:/shipping/allocations"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-route"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "PUT /shipping/allocations"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q02",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "exact_lookup",
+    "question": "Which team owns Shipping in the operations ownership document?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:service:shipping"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-owners"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "Warehouse Operations"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q03",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "schema_join",
+    "question": "How does an allocation identify stock within the selected warehouse in PostgreSQL?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:table:postgres:logistics.allocations",
+      "fulfillment:table:postgres:logistics.stock",
+      "fulfillment:column:postgres:logistics.allocations.warehouse_id",
+      "fulfillment:column:postgres:logistics.allocations.sku",
+      "fulfillment:column:postgres:logistics.stock.warehouse_id",
+      "fulfillment:column:postgres:logistics.stock.sku"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-schema"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "warehouse_id and sku"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [
+      "typed_constraints"
+    ],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q04",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "schema_join",
+    "question": "Which composite SQL Server foreign key keeps warehouse.allocations tied to warehouse.stock?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:table:sqlserver:warehouse.allocations",
+      "fulfillment:table:sqlserver:warehouse.stock",
+      "fulfillment:column:sqlserver:warehouse.allocations.warehouse_id",
+      "fulfillment:column:sqlserver:warehouse.allocations.sku",
+      "fulfillment:column:sqlserver:warehouse.stock.warehouse_id",
+      "fulfillment:column:sqlserver:warehouse.stock.sku"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-sqlserver"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "warehouse_id and sku"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [
+      "typed_constraints"
+    ],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q05",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "code_dependency",
+    "question": "Which function does allocate_shipment invoke to reserve inventory?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:function:allocate_shipment",
+      "fulfillment:function:reserve_stock"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-call",
+        "e-fulfillment-storage"
+      ]
+    ],
+    "required_relation_paths": [
+      {
+        "subject": "fulfillment:function:allocate_shipment",
+        "predicate": "INVOKES",
+        "object": "fulfillment:function:reserve_stock"
+      }
+    ],
+    "required_answer_facts": [
+      "reserve_stock"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q06",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "code_dependency",
+    "question": "Which fields constrain the stock update performed by reserve_stock?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:function:reserve_stock"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-storage"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "warehouse_id and sku"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q07",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "requirements_rationale",
+    "question": "Which accepted requirement forbids silently using inventory from another location?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:criterion:AC-A"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-prd"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "Reserve stock only in the requested warehouse"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q08",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "requirements_rationale",
+    "question": "What inventory failure motivated decision DEC-W?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:decision:DEC-W"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-decision"
+      ],
+      [
+        "e-fulfillment-jira"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "promising inventory held at another location"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q09",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "cross_source_impact",
+    "question": "Which reservation statement and approved criterion must change to support warehouse substitution?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:criterion:AC-A",
+      "fulfillment:function:reserve_stock"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-prd",
+        "e-fulfillment-storage"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "UPDATE logistics.stock",
+      "Reserve stock only in the requested warehouse"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q10",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "cross_source_impact",
+    "question": "Can a reader establish a Shipping-to-Tracking dependency from visible records?",
+    "principal": "reader",
+    "snapshot": "after",
+    "query_mode": "current",
+    "required_object_ids": [
+      "fulfillment:service:shipping"
+    ],
+    "alternative_evidence_sets": [],
+    "required_relation_paths": [],
+    "required_answer_facts": [],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality",
+      "Shipping depends on Tracking"
+    ],
+    "expected_insufficiency": true,
+    "requires": [
+      "provider_acl",
+      "typed_links"
+    ],
+    "temporal": null
+  },
+  {
+    "id": "fulfillment-q11",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "temporal_conflict_insufficient",
+    "question": "At the first recorded allocation snapshot, which migration establishes hold_reason?",
+    "principal": "reader",
+    "snapshot": "before",
+    "query_mode": "as_of",
+    "required_object_ids": [
+      "fulfillment:column:postgres:logistics.allocations.hold_reason"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-migration-before"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "hold_reason present"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [
+      "bitemporal"
+    ],
+    "temporal": {
+      "valid_at": "2026-05-01T00:00:00Z",
+      "known_at": "2026-05-10T00:00:00Z"
+    }
+  },
+  {
+    "id": "fulfillment-q12",
+    "split": "holdout",
+    "artifact_group": "fulfillment",
+    "slice": "temporal_conflict_insufficient",
+    "question": "How did recorded Shipping ownership change between the original observation and its correction?",
+    "principal": "operator",
+    "snapshot": "after",
+    "query_mode": "compare",
+    "required_object_ids": [
+      "fulfillment:service:shipping"
+    ],
+    "alternative_evidence_sets": [
+      [
+        "e-fulfillment-owners-before",
+        "e-fulfillment-manifest"
+      ]
+    ],
+    "required_relation_paths": [],
+    "required_answer_facts": [
+      "Logistics Legacy",
+      "Warehouse Operations"
+    ],
+    "forbidden_claims": [
+      "Bare orders identity merges commerce with analytics",
+      "A PPR association proves causality"
+    ],
+    "expected_insufficiency": false,
+    "requires": [
+      "bitemporal",
+      "conflict_resolution"
+    ],
+    "temporal": {
+      "left": {
+        "valid_at": "2026-05-01T00:00:00Z",
+        "known_at": "2026-05-10T00:00:00Z"
+      },
+      "right": {
+        "valid_at": "2026-05-01T00:00:00Z",
+        "known_at": "2026-05-12T00:00:00Z"
+      }
+    }
+  }
+]

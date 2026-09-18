@@ -323,6 +323,8 @@ QA_SYSTEM = (
     "definitive response, devoid of additional elaborations."
 )
 
+GROUNDED_QA_SYSTEM = "As an advanced reading comprehension assistant, answer every part of the question using only the supplied source excerpts. The excerpts are the sole evidence: do not add outside knowledge, guessed behavior, or causal explanations that they do not establish. For code traces, follow the supplied function bodies through relevant helpers, transformations and the final operation, describing the assignments and function arguments visible in the excerpts. For an external or library function whose implementation is absent, report the visible call and its arguments only; do not infer the arguments' runtime effects or other undocumented semantics. When a called member is assigned through an initializer, alias or wrapper in the supplied source, resolve that binding and include its final target and argument list before ending the trace. Preserve exact names, field values and saved timestamps. Explicitly enumerate every requested named item, ordered step and comparison member in the final answer; do not replace the requested list or sequence with a reference to the source's order or contents. Give a requested comparison and its supported arithmetic difference, but do not infer why observations differ. Distinguish samples from populations and captured observations from the current state. If a requested detail is unsupported, state that limitation. Return a concise, complete final answer directly. Include only facts needed to answer the question; omit confidence scores, unrelated background, speculative explanations and a separate reasoning section."
+
 ONE_SHOT_QA_PASSAGES = (
     "Title: The Last Horse\nThe Last Horse (Spanish:El último caballo) is a 1950 Spanish comedy film directed by "
     "Edgar Neville starring Fernando Fernán Gómez.\n\n"
@@ -361,12 +363,60 @@ def qa_messages(question: str, passages: list[tuple[str, str]]) -> list[dict[str
     ]
 
 
+def grounded_qa_messages(question: str, passages: list[tuple[str, str]]) -> list[dict[str, str]]:
+    """Build the direct two-message profile from ordered source excerpts."""
+    context = "".join(f"Title: {title}\n{text}\n\n" for title, text in passages)
+    return [
+        {"role": "system", "content": GROUNDED_QA_SYSTEM},
+        {"role": "user", "content": context + f"Question: {question}"},
+    ]
+
+
 def split_answer(response: str) -> tuple[str, str]:
     """Split a QA reply into (thought, answer). If the model forgot 'Answer:', the whole reply is the answer."""
     if "Answer:" in response:
         thought, answer = response.rsplit("Answer:", 1)
         return thought.strip(), answer.strip()
     return "", response.strip()
+
+
+# ================================================ 4b. The code graph (hippo's own)
+# Two things that only exist when a question named code. Neither touches `rag_qa` above: the block
+# rides in as one more `Title:`/text pair, which is why `qa_messages` stays byte-identical (D19).
+
+CODE_GRAPH_HEADER = (
+    "Relations read from the code graph, not from prose. INVOKES = calls, IMPORTS = imports, "
+    "INHERITS = subclasses, OVERRIDES = replaces, CONTAINS = defines, RAISES / CATCHES = throws or "
+    "handles, TESTED_BY = is covered by, READS / WRITES = uses or changes a table or collection. "
+    "The number in brackets is a confidence between 0 and 1."
+)
+
+CODE_SELECT_SYSTEM = (
+    "You are helping a code search tool decide what an engineer should read. You are given a "
+    "question and a numbered list of passages, each with an id, a title and the first lines of its "
+    'text. Return JSON with three lists of passage ids: "keep" for the passages that help answer '
+    'the question, "drop" for the ones that do not, and "expand" for a passage whose immediate '
+    "callees or subclasses would probably help too. Use only ids from the list. When in doubt, keep."
+)
+
+CODE_SELECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "keep": {"type": "array", "items": {"type": "string"}},
+        "drop": {"type": "array", "items": {"type": "string"}},
+        "expand": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["keep"],
+}
+
+
+def code_select_messages(question: str, passages: list[tuple[str, str, str]]) -> list[dict[str, str]]:
+    """`passages` is a list of (passage_id, title, preview), best first."""
+    listed = "".join(f"id: {pid}\nTitle: {title}\n{preview}\n\n" for pid, title, preview in passages)
+    return [
+        {"role": "system", "content": CODE_SELECT_SYSTEM},
+        {"role": "user", "content": f"Question: {question}\n\n{listed}Return the JSON."},
+    ]
 
 
 # ============================== 5. Making sample evaluation questions (hippo's own)

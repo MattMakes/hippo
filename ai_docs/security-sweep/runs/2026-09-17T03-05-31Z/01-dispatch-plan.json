@@ -1,0 +1,32 @@
+{
+  "run_id": "2026-09-17T03-05-31Z",
+  "auditors": {
+    "owasp-auditor": {
+      "run": true,
+      "reason": "server code present"
+    },
+    "secret-scanner": {
+      "run": true,
+      "reason": "always run"
+    },
+    "supply-chain-auditor": {
+      "run": true,
+      "reason": "manifests present"
+    },
+    "llm-security": {
+      "run": false,
+      "reason": "skipped — no LLM SDK"
+    },
+    "skill-supply-chain": {
+      "run": false,
+      "reason": "skipped — no skill files"
+    },
+    "stride-modeler": {
+      "run": true,
+      "reason": "always run when there is anything to model"
+    }
+  },
+  "flags": {
+    "scan_user_skills": false
+  }
+}

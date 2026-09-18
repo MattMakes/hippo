@@ -112,3 +112,78 @@ def gold_rank(gold_ids: Iterable[str], ranked_ids: Iterable[str]) -> int | None:
         if passage_id in gold:
             return position
     return None
+
+
+def evidence_set_metrics(
+    alternatives: Sequence[Sequence[str]], ranked_ids: Sequence[str], ks: Sequence[int] = (5, 10, 20)
+) -> dict[str, float]:
+    """Score sufficient OR sets containing AND evidence, at unique-evidence ranks.
+
+    Empty gold is unscorable ({}), not an automatic success or an abstention score.
+    Recall is the best fraction of any sufficient set. MRR and binary nDCG use the
+    union of relevant evidence; nDCG is a ranking diagnostic, not set sufficiency.
+    """
+    import math
+
+    if not alternatives:
+        return {}
+    sets = [set(group) for group in alternatives]
+    if any(not group for group in sets):
+        raise ValueError("alternative evidence sets must be nonempty")
+    if any(k <= 0 for k in ks):
+        raise ValueError("metric cutoffs must be positive")
+    gold = set().union(*sets)
+    ranked = list(dict.fromkeys(ranked_ids))
+    first = gold_rank(gold, ranked)
+    dcg = sum(1 / math.log2(i + 2) for i, item in enumerate(ranked[:10]) if item in gold)
+    ideal = sum(1 / math.log2(i + 2) for i in range(min(10, len(gold))))
+    scores = {"mrr": 1 / first if first else 0.0, "ndcg@10": dcg / ideal}
+    for k in ks:
+        retrieved = set(ranked[:k])
+        scores[f"any_hit@{k}"] = float(bool(retrieved & gold))
+        scores[f"evidence_recall@{k}"] = max(len(retrieved & group) / len(group) for group in sets)
+        scores[f"all_required_set_success@{k}"] = float(any(group <= retrieved for group in sets))
+    return scores
+
+
+def passage_evidence_metrics(
+    alternatives: Sequence[Sequence[str]],
+    ranked_candidates: Sequence[Sequence[str]],
+    *,
+    total_relevant_passages: int,
+    ks: Sequence[int] = (5, 10, 20),
+) -> dict[str, float]:
+    """Coverage and binary nDCG at original passage ranks, including distractors.
+
+    Each original passage occupies one slot, even when it contains several gold
+    units or repeats evidence from a different passage. IDCG uses the number of
+    relevant passages in the entire indexed universe, supplied independently of
+    the returned ranking. Set sufficiency remains a separate metric.
+    """
+    import math
+
+    if not alternatives:
+        return {}
+    groups = [set(group) for group in alternatives]
+    if any(not group for group in groups):
+        raise ValueError("alternative evidence sets must be nonempty")
+    if any(k <= 0 for k in ks):
+        raise ValueError("metric cutoffs must be positive")
+    relevant = set().union(*groups)
+    gains = [int(bool(set(candidate) & relevant)) for candidate in ranked_candidates]
+    if total_relevant_passages < sum(gains) or total_relevant_passages < 0:
+        raise ValueError("relevance universe smaller than retrieved relevant passages")
+    first = next((i for i, gain in enumerate(gains, 1) if gain), None)
+    dcg = sum(g / math.log2(i + 2) for i, g in enumerate(gains[:10]))
+    ideal = sum(1 / math.log2(i + 2) for i in range(min(10, total_relevant_passages)))
+    scores = {"mrr": 1 / first if first else 0.0}
+    if ideal:
+        scores["ndcg@10"] = dcg / ideal
+    # No indexed relevant passages means nDCG is undefined, while gold evidence
+    # recall still correctly scores zero: an extraction miss is not a coverage gap.
+    for k in ks:
+        retrieved = set().union(*(set(c) for c in ranked_candidates[:k]))
+        scores[f"any_hit@{k}"] = float(bool(retrieved & relevant))
+        scores[f"evidence_recall@{k}"] = max(len(retrieved & group) / len(group) for group in groups)
+        scores[f"all_required_set_success@{k}"] = float(any(group <= retrieved for group in groups))
+    return scores

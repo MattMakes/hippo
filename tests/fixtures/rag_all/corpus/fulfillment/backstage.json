@@ -1,0 +1,23 @@
+{
+  "apiVersion": "backstage.io/v1alpha1",
+  "kind": "Component",
+  "metadata": {
+    "namespace": "default",
+    "name": "shipping"
+  },
+  "spec": {
+    "type": "service",
+    "lifecycle": "production",
+    "owner": "group:default/payments",
+    "providesApis": [
+      "api:default/shipping",
+      "api:default/missing"
+    ]
+  },
+  "relations": [
+    {
+      "type": "ownedBy",
+      "targetRef": "group:default/payments"
+    }
+  ]
+}

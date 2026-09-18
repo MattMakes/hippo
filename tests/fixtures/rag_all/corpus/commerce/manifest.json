@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "service": "billing",
+  "owner": "Commerce Platform",
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/billing/orders",
+      "handler": "route.create_order"
+    }
+  ],
+  "dependencies": [],
+  "effective_at": "2026-05-01",
+  "observed_at": "2026-05-12",
+  "release": {
+    "name": "v2",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

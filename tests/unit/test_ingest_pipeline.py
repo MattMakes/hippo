@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import io
+import logging
+import subprocess
+import traceback
 import zipfile
 
 import pytest
@@ -10,6 +13,8 @@ import pytest
 from hippo.context import AppContext
 from hippo.ingest import pipeline
 from hippo.ingest.repos import RepoError
+from hippo.store.base import DEFAULT_SETTINGS
+from tests.conftest import CODE_CHECKOUT_SUBJECTS, git_env, make_code_checkout
 
 SETTLE_SECONDS = 60
 
@@ -135,7 +140,7 @@ def test_add_upload_zip_archive(ctx: AppContext) -> None:
     assert source["status"] == "ready", source["error"]
     assert source["meta"]["documents"] == 2
     titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
-    assert titles == ["docs/places.md", "src/tool.py (lines 1-2)"]
+    assert titles == ["docs/places.md", "src/tool.py :: src.tool.lift (lines 1-2)"]
 
 
 def test_add_upload_strips_directories_from_the_file_name(ctx: AppContext) -> None:
@@ -161,7 +166,10 @@ def test_a_source_with_no_text_fails_with_a_message(ctx: AppContext) -> None:
     wait(ctx)
     source = ctx.store.get_source(source_id)
     assert source["status"] == "failed"
-    assert "no readable text" in source["error"]
+    # `ReadError` is one of the closed input validators, so the plan's transport table keeps
+    # its own sentence on the row: what it says is what the user has to fix. A bare
+    # `ValueError` here would be bounded away to "indexing failed; inspect local logs".
+    assert source["error"] == "ReadError: no readable text was found in this source"
 
 
 # --------------------------------------------------------------- repos
@@ -175,6 +183,31 @@ def test_add_repo_rejects_bad_urls(ctx: AppContext) -> None:
     assert ctx.store.list_sources() == []
 
 
+TOKEN = "ghp_s3cr3tT0ken"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://robot:ghp_s3cr3tT0ken@gitserver/owner/private.git",
+        "git+https://robot:ghp_s3cr3tT0ken@git.example.com/owner/private.git",
+    ],
+)
+def test_add_repo_refuses_an_unrecognised_url_without_quoting_it(
+    ctx: AppContext, caplog: pytest.LogCaptureFixture, url: str
+) -> None:
+    """R21-M10: this message is the 400 body and the redirect, so it names nothing typed."""
+    with caplog.at_level(logging.DEBUG, logger="hippo"):
+        with pytest.raises(RepoError) as info:
+            pipeline.add_repo(ctx, url)
+    assert str(info.value) == (
+        "The address does not look like a git URL. Use https://host/owner/repo, "
+        "ssh://git@host/owner/repo or git@host:owner/repo."
+    )
+    assert TOKEN not in "".join(traceback.format_exception(info.value)) and TOKEN not in caplog.text
+    assert ctx.store.list_sources() == []
+
+
 def test_add_repo_records_clone_failures(ctx: AppContext) -> None:
     # An unreachable host: git fails at once (connection refused), and the source says why.
     source_id = pipeline.add_repo(ctx, "https://127.0.0.1:9/acme/robots.git")
@@ -183,13 +216,13 @@ def test_add_repo_records_clone_failures(ctx: AppContext) -> None:
     assert source["kind"] == "repo" and source["name"] == "acme/robots"
     assert source["meta"]["url"] == "https://127.0.0.1:9/acme/robots.git"
     assert source["status"] == "failed"
-    assert "could not clone" in source["error"]
+    assert source["error"] == "RepoError: indexing failed; inspect local logs"
 
 
 def test_add_repo_indexes_a_checkout(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
     """Stand in for `git clone` by writing files into the destination, then check the whole flow."""
 
-    def fake_clone(url: str, dest, timeout: int = 300):
+    def fake_clone(url: str, dest, timeout: int = 300, depth: int = 1):
         (dest / "src").mkdir(parents=True)
         (dest / "src" / "app.py").write_text("def lift():\n    return 12\n")
         (dest / "README.md").write_text("Acme Robotics builds robot arms.")
@@ -202,7 +235,7 @@ def test_add_repo_indexes_a_checkout(ctx: AppContext, monkeypatch: pytest.Monkey
     assert source["status"] == "ready", source["error"]
     assert source["meta"]["documents"] == 2
     titles = [p["title"] for p in ctx.store.passages_for_source(source_id)]
-    assert titles == ["README.md", "src/app.py (lines 1-2)"]
+    assert titles == ["README.md", "src/app.py :: src.app.lift (lines 1-2)"]
 
 
 # ------------------------------------------------------ delete, reindex
@@ -282,3 +315,377 @@ def test_reindex_all_clears_every_source_then_indexes_each_again(ctx: AppContext
     assert {s["status"] for s in ctx.store.list_sources()} == {"ready"}
     assert ctx.store.get_source(sample)["passages"] == 8
     assert ctx.store.get_source(note)["passages"] == 1
+
+
+# ------------------------------------------------------- a source with code
+
+
+def test_a_code_archive_is_parsed_chunked_by_symbol_and_recorded_in_meta(code_index) -> None:
+    ctx, source_id = code_index
+    source = ctx.store.get_source(source_id)
+    code = source["meta"]["code"]
+
+    assert (code["symbols"], code["data_objects"], code["edges"]) == (93, 12, 182)
+    assert code["edges_by_kind"] == {
+        "CATCHES": 2,
+        "CONTAINS": 72,
+        "IMPORTS": 25,
+        "INHERITS": 5,
+        "INVOKES": 31,
+        "OVERRIDES": 4,
+        "RAISES": 4,
+        "READS": 18,
+        "TESTED_BY": 13,
+        "WRITES": 8,
+    }
+    # six Python, three TypeScript, six Rust, six Go, five C#, one .sql
+    assert code["files_parsed"] == 27
+    assert code["files_skipped"] == {"parse_error": 0, "too_big": 0, "unsupported": 1}  # build.rb
+    assert code["truncated"] is False
+    # Calls that resolve to nothing in the repo -- builtins included -- are counted per file, so
+    # phase 2 has a baseline to work from (D15). Only parsed files can have any.
+    assert set(code["unresolved_calls"]) <= set(code_sample_paths())
+    assert code["unresolved_calls_total"] == sum(code["unresolved_calls"].values())
+    assert source["meta"]["counts"]["symbols"] == 93
+
+
+def test_a_code_archive_gets_symbol_titled_passages(code_index) -> None:
+    ctx, source_id = code_index
+    titles = [p["title"] for p in ctx.store.passages_for_source(source_id, limit=500)]
+    assert "pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)" in titles
+    # Rust writes a type's methods outside it, so the struct's own passage is its own lines (L3).
+    assert "rsapp/src/orders.rs :: rsapp.src.orders.OrderService (lines 7-9)" in titles
+    assert "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.place (lines 19-24)" in titles
+    assert "schema/orders.sql (lines 1-2)" in titles  # no symbols to cut by; windows as before
+    assert "tools/build.rb (lines 1-3)" in titles  # no grammar; windows as before
+    assert "tools/build.go :: tools.build.main (lines 3-3)" in titles  # Go parses now
+    # Go writes a type's methods outside it as well, so the struct's passage is its own lines (L3).
+    assert "goapp/orders/service.go :: goapp.orders.service.Service (lines 15-19)" in titles
+    # `go.mod` has no walker but is readable text, so it is one prose passage, not a skipped file.
+    assert "goapp/go.mod" in titles
+    assert not any(t == "pyapp/orders.py (lines 1-40)" for t in titles)
+
+
+def test_deleting_a_code_source_removes_its_symbols_and_data_objects(code_index) -> None:
+    ctx, source_id = code_index
+    assert len(ctx.store.load_symbols()) == 93
+
+    pipeline.delete_source(ctx, source_id)
+
+    assert ctx.store.load_symbols() == []
+    assert ctx.store.load_data_objects() == []
+    assert ctx.store.load_code_edges() == []
+
+
+def code_sample_paths() -> list[str]:
+    """Every file of the fixture tree, as the archive titles it."""
+    from tests.conftest import CODE_SAMPLE_PATH
+
+    return [
+        p.relative_to(CODE_SAMPLE_PATH).as_posix()
+        for p in CODE_SAMPLE_PATH.rglob("*")
+        if p.is_file() and p.name != "expected.json"
+    ]
+
+
+# ------------------------------------------------------ repo history (WP2b)
+
+
+def test_a_repo_source_indexes_its_git_history(git_index) -> None:
+    ctx, source_id, _ = git_index
+    code = ctx.store.get_source(source_id)["meta"]["code"]
+
+    assert (code["commits"], code["history_skipped"]) == (3, 0)
+    assert code["modifies"] > 0
+    assert ctx.store.stats()["commits"] == 3
+    # The whole point: a commit is reachable from the symbol it changed, on every backend.
+    commits = {c["id"]: c for c in ctx.store.load_commits()}
+    assert {c["ordinal"] for c in commits.values()} == {0, 1, 2}
+    symbols = {s["id"]: s for s in ctx.store.load_symbols()}
+    touched = {
+        (commits[m["commit_id"]]["ordinal"], symbols[m["symbol_id"]]["qualname"])
+        for m in ctx.store.load_modifies()
+    }
+    assert (1, "OrderService.place") in touched
+    assert (1, "OrderService") not in touched  # innermost only, S2.9
+    assert [(a["a"], a["b"]) for a in ctx.store.load_precedes()] == [
+        (o[0], o[1])
+        for o in zip(
+            [c["id"] for c in sorted(commits.values(), key=lambda c: c["ordinal"])],
+            [c["id"] for c in sorted(commits.values(), key=lambda c: c["ordinal"])][1:],
+            strict=False,
+        )
+    ]
+
+
+def test_a_commit_gets_a_passage_of_its_own(git_index) -> None:
+    ctx, source_id, _ = git_index
+    titles = [p["title"] for p in ctx.store.passages_for_source(source_id, limit=500)]
+    assert "commit " in "".join(titles)
+    subjects = sorted(t.split(": ", 1)[1] for t in titles if t.startswith("commit "))
+    assert subjects == sorted(CODE_CHECKOUT_SUBJECTS)
+    # DEFINED_IN: the commit node is reachable from its passage, like every other code node.
+    passage_ids = {
+        c["id"]: c["passage_ids"] for c in ctx.store.get_commits([c["id"] for c in ctx.store.load_commits()])
+    }
+    assert all(len(ids) == 1 for ids in passage_ids.values())
+
+
+def test_the_history_depth_setting_reaches_git_and_zero_disables_history(ctx, tmp_path, monkeypatch) -> None:
+    from hippo.ingest import pipeline, repos
+
+    checkout = make_code_checkout(tmp_path / "origin")
+    seen: list[int] = []
+
+    def clone_locally(url, dest, timeout=300, depth=1):
+        seen.append(depth)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", str(depth), "--single-branch", "--", url, str(dest)],
+            check=True,
+            env=git_env(),
+        )
+        return dest
+
+    monkeypatch.setattr(repos, "clone_repo", clone_locally)
+    ctx.store.update_settings({"code_history_depth": 0})
+    source_id = ctx.store.create_source("repo", "no history", {"url": f"file://{checkout}"})
+    pipeline.source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
+    pipeline.run_indexing(ctx, source_id)
+
+    code = ctx.store.get_source(source_id)["meta"]["code"]
+    assert (code["commits"], code["modifies"]) == (0, 0)
+    assert ctx.store.stats()["commits"] == 0
+    assert code["symbols"] > 0  # the code graph itself is unaffected
+    assert seen == [1]  # history off still clones, but only the tip
+
+
+def test_history_depth_clones_one_commit_deeper_than_it_reads(git_index) -> None:
+    # A shallow clone's oldest commit reports no parent, so its diff would be taken against the
+    # empty tree and it would look like the commit that added the whole repository. Fetching one
+    # extra commit puts that boundary outside the walk instead.
+    _, _, depths = git_index
+    assert depths == [DEFAULT_SETTINGS["code_history_depth"] + 1]
+
+
+def test_a_broken_history_read_does_not_fail_the_whole_index_job(
+    ctx: AppContext, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # E1F-a / Defect 1's defence in depth: whatever `read_history` raises -- not just
+    # `HistoryError` -- must degrade to a warning and an empty history, never a failed job
+    # with the code graph and passages already written thrown away.
+    from hippo.codegraph import git_history
+    from hippo.ingest import pipeline, repos
+
+    checkout = make_code_checkout(tmp_path / "origin")
+
+    def clone_locally(url, dest, timeout=300, depth=1):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", str(depth), "--single-branch", "--", url, str(dest)],
+            check=True,
+            env=git_env(),
+        )
+        return dest
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(repos, "clone_repo", clone_locally)
+    monkeypatch.setattr(git_history, "read_history", broken)
+    source_id = ctx.store.create_source("repo", "broken history", {"url": f"file://{checkout}"})
+    pipeline.source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
+    pipeline.run_indexing(ctx, source_id)
+
+    source = ctx.store.get_source(source_id)
+    assert source["status"] == "ready", source["error"]
+    code = source["meta"]["code"]
+    assert code["symbols"] > 0  # the code graph itself is unaffected
+    assert (code["commits"], code["modifies"], code["history_skipped"]) == (0, 0, 0)
+    assert ctx.store.stats()["commits"] == 0
+
+
+def test_a_broken_history_read_logs_its_class_and_not_the_checkout_or_gits_words(
+    ctx: AppContext, tmp_path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """R21-m20: `HistoryError` quotes the checkout path and git's stderr; the warning names neither."""
+    from hippo.codegraph import git_history
+    from hippo.ingest import pipeline, repos
+
+    checkout = make_code_checkout(tmp_path / "origin")
+
+    def clone_locally(url, dest, timeout=300, depth=1):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", str(depth), "--single-branch", "--", url, str(dest)],
+            check=True,
+            env=git_env(),
+        )
+        return dest
+
+    source_id = ctx.store.create_source("repo", "broken history", {"url": f"file://{checkout}"})
+    where = pipeline.source_dir(ctx, source_id) / pipeline.REPO_DIR
+
+    def broken(*args, **kwargs):
+        raise git_history.HistoryError(
+            f"could not read the git history of {where}. git said: fatal: unable to access "
+            f"'https://robot:{TOKEN}@git.example.com/owner/private.git/'"
+        )
+
+    monkeypatch.setattr(repos, "clone_repo", clone_locally)
+    monkeypatch.setattr(git_history, "read_history", broken)
+    pipeline.source_dir(ctx, source_id).mkdir(parents=True, exist_ok=True)
+    with caplog.at_level(logging.DEBUG, logger="hippo"):
+        pipeline.run_indexing(ctx, source_id)
+
+    assert ctx.store.get_source(source_id)["status"] == "ready"
+    assert f"No git history for source {source_id}: HistoryError" in caplog.text
+    assert str(where) not in caplog.text and "git said" not in caplog.text and TOKEN not in caplog.text
+
+
+def test_a_repo_source_still_links_its_prose_to_its_code(git_index) -> None:
+    # The README names `OrderService.place` in backticks and "the order service" in words. Both
+    # become REFERS_TO, at the two omegas the table gives -- a repo source is a code source and a
+    # prose source at once, and reading its history must not have cost it the prose half.
+    ctx, source_id, _ = git_index
+    symbols = {s["id"]: s["qualname"] for s in ctx.store.load_symbols()}
+    titles = {p["id"]: p["title"] for p in ctx.store.passages_for_source(source_id, limit=500)}
+    found = {
+        (titles[r["passage_id"]], symbols[r["node_id"]], r["omega"], r["token"])
+        for r in ctx.store.load_refers_to()
+        if r["node_id"] in symbols and r["passage_id"] in titles
+    }
+    assert ("Code sample", "OrderService.place", 0.85, "OrderService.place") in found
+    assert ("Code sample", "OrderService", 0.6, "order service") in found
+
+
+def test_a_commit_passage_is_scanned_for_the_symbols_its_message_names(git_index) -> None:
+    # `_is_prose` counts a commit passage as prose, so "Add the order service" is scanned exactly
+    # as the README is -- and reaches `OrderService` by the same split-token rule, at 0.60. That
+    # is the whole reason a commit becomes a passage rather than only a node.
+    ctx, source_id, _ = git_index
+    commit_ids = {c["id"] for c in ctx.store.load_commits()}
+    commit_passages = {
+        p["id"]: p["title"]
+        for p in ctx.store.passages_for_source(source_id, limit=500)
+        if p["title"].startswith("commit ")
+    }
+    assert len(commit_passages) == 3
+    assert commit_ids and all(
+        set(c["passage_ids"]) <= set(commit_passages) for c in ctx.store.get_commits(sorted(commit_ids))
+    )
+
+    symbols = {s["id"]: s["qualname"] for s in ctx.store.load_symbols()}
+    from_commits = {
+        (commit_passages[r["passage_id"]].split(": ", 1)[1], symbols[r["node_id"]], r["omega"], r["token"])
+        for r in ctx.store.load_refers_to()
+        if r["passage_id"] in commit_passages and r["node_id"] in symbols
+    }
+    assert ("Add the order service", "OrderService", 0.6, "order service") in from_commits
+    # And only from the message. The `Touched:` line is hippo's own writing, built from this
+    # source's MODIFIES edges: scanning it back out would invent a REFERS_TO for every pair
+    # MODIFIES already has, at a lower omega than the edge it was derived from.
+    assert not [row for row in from_commits if row[3].startswith("pyapp.")]
+
+
+def test_a_symbol_carries_the_commits_that_touched_it_all_the_way_to_an_answer(git_index) -> None:
+    """The whole chain on a real repository: git -> store -> GraphIndex -> the answer block.
+
+    WP3's three tests use `tests/fakes/code_fixture.write_commit_history`, a store-built stand-in
+    with seven-character shas. That is the cleaner test for the block's grammar, and it stays --
+    but nothing there would notice if a real 40-character sha reached the page whole, or if an
+    ISO date did. This is the test that would.
+    """
+    from hippo import ask
+
+    ctx, source_id, _ = git_index
+    # Fully qualified: `OrderService.place` is a qualname in `pyapp/orders.py` and in
+    # `rsapp/src/orders.rs`, and a dotted name is never split (S2.13), so the short form would
+    # seed both trees and fill the block with Rust relations before the commits were reached.
+    trace = ask.search(ctx, "What does pyapp.orders.OrderService.place do?")
+    assert trace.used_code_seeds
+    assert trace.history, "a seeded symbol with MODIFIES edges must carry its commits"
+    row = trace.history[0]
+    # The trace keeps the real, whole sha -- it is what a reader would paste into `git show`.
+    assert len(row["sha"]) == 40
+    assert row["date"] == "2024-01-02"  # the day, not the full ISO timestamp
+    assert row["subject"] == "Total, invoice and log in place"
+
+    answer = ask.answer_from_trace(ctx, trace)
+    line = next(ln for ln in answer.context_block.splitlines() if ln.startswith("Commits: "))
+    assert line == f"Commits: {row['sha'][:7]} 2024-01-02 Total, invoice and log in place"
+    assert row["sha"] not in answer.context_block  # shortened for the page, whole in the trace
+
+
+# ----------------------------------- 4e: a legacy failure is bounded on the row
+
+
+LEGACY_FAILURE = "indexing failed; inspect local logs"
+READING_PRIVATE = "/Users/someone/data/private/notes.md: 'Acme Robotics is in Boulder.'"
+
+
+class Unexpected(RuntimeError):
+    """Stands for every exception class that is not a closed input validator."""
+
+
+def test_an_unknown_legacy_failure_stores_its_class_and_a_fixed_sentence(
+    ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Source row is a public surface; an arbitrary exception's words are not bounded.
+
+    The message here carries both things the row must never show: an absolute path and a
+    sentence of the source's own text. The row keeps the class name, which is what an
+    operator greps the logs by, and a sentence saying where the rest of it is.
+    """
+
+    def refuse(*args, **kwargs):
+        raise Unexpected(READING_PRIVATE)
+
+    monkeypatch.setattr(pipeline, "_read_chunk_index", refuse)
+    source_id = pipeline.add_text(ctx, "Notes", "Some text to index.")
+    wait(ctx)
+    source = ctx.store.get_source(source_id)
+    assert source["status"] == "failed"
+    assert source["error"] == f"Unexpected: {LEGACY_FAILURE}"
+    assert "/Users/someone" not in source["error"]
+    assert "Acme Robotics" not in source["error"]
+
+
+def test_the_pipelines_closed_validator_tuple_is_the_public_tables_own_family() -> None:
+    """Wrap-up finding 6: `CLOSED_INPUT_VALIDATORS` is a copy, so something must compare it.
+
+    `pipeline.py` hand-lists the five classes whose message the Source row may keep, and its
+    comment says they are "exactly as `knowledge/public_errors.py` lists them". The evidence
+    claimed the two cannot drift; nothing checked it, so adding a sixth closed validator to
+    the public table would silently leave it unbounded on the row -- the one surface the
+    whole redaction rule exists for.
+
+    The public table's own definition of the family is the `invalid_source` code: both its
+    400 and its 413 sentence are what a limit-and-knob message is allowed to say. Comparing
+    against that, rather than against a second hand-written list, is what makes this a drift
+    guard instead of a third copy.
+    """
+    from hippo.knowledge import public_errors
+
+    invalid_source = public_errors.INVALID_SOURCE_TYPE.code
+    published = {kind for kind, failure in public_errors._ROWS if failure.code == invalid_source}
+    assert set(pipeline.CLOSED_INPUT_VALIDATORS) == published, (
+        "pipeline.CLOSED_INPUT_VALIDATORS and public_errors' `invalid_source` family disagree"
+    )
+
+
+def test_a_closed_input_validator_keeps_the_limit_it_names(
+    ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plan's own exception: a limit and the knob that raises it is the whole answer."""
+    from hippo.ingest.readers import TooLarge
+
+    def refuse(*args, **kwargs):
+        raise TooLarge("too large: more than 50 characters of text. Raise HIPPO_MAX_TEXT_CHARS.")
+
+    monkeypatch.setattr(pipeline, "_read_chunk_index", refuse)
+    source_id = pipeline.add_text(ctx, "Notes", "Some text to index.")
+    wait(ctx)
+    source = ctx.store.get_source(source_id)
+    assert source["status"] == "failed"
+    assert "HIPPO_MAX_TEXT_CHARS" in source["error"]

@@ -12,7 +12,6 @@ samples/acme_robotics.md. Nothing here is clever; it only has to be predictable.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from typing import Any
@@ -144,21 +143,15 @@ def content_words(text: str) -> set[str]:
 
 
 def embed_text(text: str) -> np.ndarray:
-    """Feature-hash words and character trigrams into a fixed-size unit vector."""
-    text = re.sub(r"^(search_query: |search_document: )", "", text).lower()
-    vec = np.zeros(DIM, dtype=np.float32)
-    words = re.findall(r"[a-z0-9]+", text)
-    features = list(words)
-    for word in words:
-        padded = f" {word} "
-        features.extend(padded[i : i + 3] for i in range(len(padded) - 2))
-    for feature in features:
-        digest = hashlib.md5(feature.encode()).digest()
-        index = int.from_bytes(digest[:4], "little") % DIM
-        sign = 1.0 if digest[4] % 2 == 0 else -1.0
-        vec[index] += sign * (2.0 if feature in words else 1.0)
-    norm = np.linalg.norm(vec)
-    return vec / norm if norm else vec
+    """Feature-hash words and character trigrams into a fixed-size unit vector.
+
+    The algorithm now lives in the shipped kit (ruling m17), so the fake and `hippo connector
+    validate` produce byte-identical vectors. The import is function-local, so importing this
+    fake at collection loads no kit module.
+    """
+    from hippo.connectors.testing import hashed_embedding
+
+    return hashed_embedding(text)
 
 
 class FakeOllama:
@@ -207,7 +200,12 @@ class FakeOllama:
             self.calls.append(body)
             reply = self.chat(body["messages"])
             return httpx.Response(
-                200, json={"message": {"role": "assistant", "content": reply}, "done_reason": "stop"}
+                200,
+                json={
+                    "message": {"role": "assistant", "content": reply},
+                    "done": True,
+                    "done_reason": "stop",
+                },
             )
         return httpx.Response(404, json={"error": f"unknown path {path}"})
 
@@ -228,7 +226,10 @@ class FakeOllama:
         if system.startswith("You are a critical component"):
             return json.dumps({"fact": self.filter_facts(user)})
         if system.startswith("As an advanced reading comprehension"):
-            return self.answer(user)
+            answer = self.answer(user)
+            if "Return a concise, complete final answer directly." in system:
+                return answer.rsplit("Answer:", 1)[-1].strip()
+            return answer
         if system.startswith("You write multi-hop evaluation questions"):
             return json.dumps(self.multihop_question(user))
         if system.startswith("You write evaluation questions"):

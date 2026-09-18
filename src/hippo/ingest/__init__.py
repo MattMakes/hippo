@@ -9,29 +9,50 @@ Getting text into hippo.
 
 The web routes, the MCP server and the CLI all call pipeline.add_* and never
 touch the store's Source rows directly.
+
+Every name below is bound on first use (PEP 562) rather than at import time, so
+`import hippo.ingest` -- which is what importing any module in this package does
+first -- costs nothing and reaches no other module. Importing the pipeline here
+eagerly is what made this package a cycle: a knowledge module importing
+`hippo.ingest.accepted_inputs` initialised this file, which pulled the pipeline
+and the managed lane, which import `hippo.knowledge` straight back. Nothing about
+the public surface changes: `from hippo.ingest import add_text` still works, and
+so does `hippo.ingest.add_text`.
 """
 
-from .chunker import chunk_document, chunk_documents
-from .pipeline import add_repo, add_sample, add_text, add_upload, delete_source, reindex, start_indexing
-from .readers import Document, is_supported, read_file, read_zip
-from .repos import RepoError, clone_repo, is_git_url, walk_repo
+from importlib import import_module
 
-__all__ = [
-    "Document",
-    "RepoError",
-    "add_repo",
-    "add_sample",
-    "add_text",
-    "add_upload",
-    "chunk_document",
-    "chunk_documents",
-    "clone_repo",
-    "delete_source",
-    "is_git_url",
-    "is_supported",
-    "read_file",
-    "read_zip",
-    "reindex",
-    "start_indexing",
-    "walk_repo",
-]
+# name -> the submodule that defines it. The single source for `__all__` and for
+# what `__getattr__` will import; nothing else in this file binds a public name.
+_EXPORTS = {
+    "Document": "readers",
+    "RepoError": "repos",
+    "add_repo": "pipeline",
+    "add_sample": "pipeline",
+    "add_text": "pipeline",
+    "add_upload": "pipeline",
+    "chunk_document": "chunker",
+    "chunk_documents": "chunker",
+    "clone_repo": "repos",
+    "delete_source": "pipeline",
+    "is_git_url": "repos",
+    "is_supported": "readers",
+    "read_file": "readers",
+    "read_zip": "readers",
+    "reindex": "pipeline",
+    "start_indexing": "pipeline",
+    "walk_repo": "repos",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str):
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(import_module(f".{module}", __name__), name)
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_EXPORTS})

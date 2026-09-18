@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Changesets{% endblock %}
 {% block content %}
+{% if error %}
+<div class="page-head"><h1>Changesets</h1></div>
+<div class="callout bad">{{ error }}</div>
+{% else %}
 <div class="page-head">
   <h1>Changesets</h1>
   <p class="muted">Edits you saved while analyzing a question. A draft does nothing until you apply it; applying writes the edits into the graph (settings, entity boosts, pinned edge weights, synonym links) and every search from then on uses them.</p>
@@ -22,4 +26,5 @@
   <details><summary class="small">Raw operations</summary><p class="pre mono small muted">{{ c.ops | tojson(indent=2) }}</p></details>
 </section>
 {% endfor %}
+{% endif %}
 {% endblock %}

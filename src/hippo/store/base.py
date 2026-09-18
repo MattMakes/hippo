@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import logging
+import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
+
+from .authorization import metadata_mutation
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +22,19 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "synonymy_threshold": 0.8,  # cosine similarity above which two entity names are linked as synonyms
     "retrieval_top_k": 200,  # how many passages a retrieval returns (and we keep in traces)
     "qa_top_k": 5,  # how many passages the LLM reads when answering
+    # The code graph. Every one of these is inert on a memory with no code source indexed, and
+    # `code_structural_scale = 0` (plus zero seed weights) turns code back off on one that has.
+    "code_seed_weight": 1.0,  # anchor seed mass; 0 = ignore symbols named in the question
+    "code_structural_scale": 1.0,  # multiplier on every code-touching weight term
+    "code_theta": 0.5,  # minimum omega for the path tools and the answer block (never PPR)
+    "code_dense_seeds": 5,  # code passages similar to the question that also seed their symbol
+    "code_triples_chars": 1500,  # size cap of the Code graph block
+    "code_community_boost": 0.0,  # post-PPR bonus for passages in a seed's community
+    "code_select": True,  # the LLM keep/drop/expand pass, when code seeds fired
+    "code_expand_max": 10,  # neighbours fetched per "expand"
+    "code_history_depth": 200,  # first-parent commits read per repo source; 0 disables history
+    "code_git_timeout_s": 10,  # per-commit `git show` budget
+    "code_history_total_s": 120,  # whole-pass budget for reading history
 }
 
 # Type and allowed range of every setting: (type, lowest, highest). None means "no bound".
@@ -29,6 +46,19 @@ SETTING_RULES: dict[str, tuple[type, float | None, float | None]] = {
     "synonymy_threshold": (float, 0.0, 1.0),
     "retrieval_top_k": (int, 1, 5000),
     "qa_top_k": (int, 1, 50),
+    "code_seed_weight": (float, 0.0, 10.0),
+    # Capped at 3.0 so a code edge can at most *tie* three facts, never outrank them: that is what
+    # keeps "prose behaves as it does today" literally true rather than true-below-some-value.
+    "code_structural_scale": (float, 0.0, 3.0),
+    "code_theta": (float, 0.0, 1.0),
+    "code_dense_seeds": (int, 0, 20),
+    "code_triples_chars": (int, 0, 8000),
+    "code_community_boost": (float, 0.0, 1.0),
+    "code_select": (bool, None, None),
+    "code_expand_max": (int, 0, 20),
+    "code_history_depth": (int, 0, 2000),
+    "code_git_timeout_s": (int, 1, 120),
+    "code_history_total_s": (int, 10, 3600),
 }
 
 
@@ -73,6 +103,25 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT question_id IF NOT EXISTS FOR (n:Question) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT eval_run_id IF NOT EXISTS FOR (n:EvalRun) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT eval_result_id IF NOT EXISTS FOR (n:EvalResult) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT symbol_id IF NOT EXISTS FOR (n:Symbol) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT data_object_id IF NOT EXISTS FOR (n:DataObject) REQUIRE n.id IS UNIQUE",
+    "CREATE CONSTRAINT commit_id IF NOT EXISTS FOR (n:Commit) REQUIRE n.id IS UNIQUE",
+    "CREATE INDEX symbol_source IF NOT EXISTS FOR (n:Symbol) ON (n.source_id)",
+    "CREATE INDEX data_object_source IF NOT EXISTS FOR (n:DataObject) ON (n.source_id)",
+    "CREATE INDEX commit_source IF NOT EXISTS FOR (n:Commit) ON (n.source_id)",
+    # A generation-scoped read of a native table is a label scan without these, so the query
+    # counter would report bounded work while the database did exactly as much as before. These
+    # reach a *new* store; `migrations.schema_steps`' v6 step is what reaches an existing one,
+    # because `migrate_store` returns before `_ensure_legacy_schema` once a store is current.
+    *(
+        f"CREATE INDEX {name}_generation IF NOT EXISTS FOR (n:{label}) ON (n.generation_id)"
+        for label, name in (
+            ("Symbol", "symbol"),
+            ("DataObject", "data_object"),
+            ("Commit", "commit"),
+            ("Passage", "passage"),
+        )
+    ),
     "CREATE CONSTRAINT changeset_id IF NOT EXISTS FOR (n:Changeset) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT settings_id IF NOT EXISTS FOR (n:Settings) REQUIRE n.id IS UNIQUE",
     "CREATE CONSTRAINT role_id IF NOT EXISTS FOR (n:Role) REQUIRE n.id IS UNIQUE",
@@ -105,7 +154,40 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
+def by_ids(label: str, variable: str = "n", *, param: str = "ids", bind: str = "wanted_id") -> str:
+    """The MATCH that selects the rows named by `$param`: one primary-key lookup per id.
+
+    Never `WHERE <variable>.id IN $param`. Probed on real_ladybug 0.15.3: when a node table
+    holds a deleted row *and* the wanted row was written inside the open transaction, that
+    predicate selects the right row but projects its STRING properties from a different one --
+    a foreign `title`, an `id` cut to another row's length, `*_json` bytes that are not UTF-8
+    and raise `UnicodeDecodeError` in the binding. The engine's own selection and `count()` stay
+    correct, so the read comes back *wrong* rather than empty or raised, which is why the rule
+    is a tripwire test (`test_no_query_builder_selects_node_rows_with_a_list_predicate`) and not
+    a comment. Driving the match from the primary key is correct on both Cypher backends, and on
+    Neo4j it is an index seek per id rather than a label scan carrying a list predicate -- which
+    is the form `memory.py` already used, so this is the Ladybug store rejoining it.
+
+    The defect is the list predicate, not the `id` column: `WHERE p.generation_id IN $gens`
+    answers from the wrong row in the same state, and `= $gen` answers correctly. Anything that
+    selects rows of a node table by a set of string values wants this shape, not `IN`.
+
+    Rows come back in the order of `$param` (with `IN` they came back in storage order), which
+    is what every caller that cares already re-imposes with `_in_asked_order`. The one thing the
+    caller owes this form is `unique_ids`: a repeated id is a repeated binding here where `IN`
+    collapsed it, and a query that aggregates over the match would count it twice.
+    """
+    return f"UNWIND ${param} AS {bind} MATCH ({variable}:{label} {{id: {bind}}})"
+
+
+def unique_ids(ids) -> list[str]:
+    """The ids a `by_ids` match binds once each, in the order they were asked for."""
+    return list(dict.fromkeys(ids))
+
+
 class Neo4jBase:
+    knowledge_backend = "neo4j"
+
     def __init__(self, uri: str, user: str, password: str, database: str = "neo4j"):
         try:
             from neo4j import GraphDatabase  # optional dependency: `pip install 'hippo[neo4j]'`
@@ -124,6 +206,12 @@ class Neo4jBase:
             notifications_min_severity="OFF",
         )
         self.database = database
+        self._lock = threading.RLock()
+        self._transaction = None
+        self._transaction_owner = None
+        self._schema_checked = False
+        self._migration_blocked = False
+        self._migrating = False
         self._bootstrapped = False  # schema created and interrupted jobs cleaned, once per process
 
     def close(self) -> None:
@@ -133,8 +221,21 @@ class Neo4jBase:
 
     def run(self, query: str, **params: Any) -> list[dict[str, Any]]:
         """Run one Cypher query in its own transaction and return the rows as dicts."""
-        result = self.driver.execute_query(query, parameters_=params, database_=self.database)
-        return [record.data() for record in result.records]
+        with self._lock:
+            if not self._schema_checked and not self._migrating:
+                self.ensure_schema()
+            if self._migration_blocked and not self._migrating:
+                raise RuntimeError("Store migration is incomplete; application access is disabled")
+            if self._transaction is not None:
+                if self._transaction_failed:
+                    raise RuntimeError("Transaction failed; roll back before issuing another statement")
+                try:
+                    return [record.data() for record in self._transaction.run(query, params)]
+                except BaseException:
+                    self._transaction_failed = True
+                    raise
+            result = self.driver.execute_query(query, parameters_=params, database_=self.database)
+            return [record.data() for record in result.records]
 
     def run_one(self, query: str, **params: Any) -> dict[str, Any] | None:
         rows = self.run(query, **params)
@@ -166,7 +267,53 @@ class Neo4jBase:
 
     # ------------------------------------------------------------- schema
 
+    def in_ambient_transaction(self) -> bool:
+        """True only when the calling thread has an open transaction on this store."""
+        # Deliberately lock-free: the holder keeps `_lock` for its whole transaction body, so
+        # taking it here would block every other thread instead of answering them.
+        return self._transaction_owner == threading.get_ident()
+
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            if not self._schema_checked and not self._migrating:
+                self.ensure_schema()
+            if self._migration_blocked and not self._migrating:
+                raise RuntimeError("Store migration is incomplete; transaction refused")
+            if self._transaction is not None:
+                try:
+                    yield self
+                except BaseException:
+                    self._transaction_failed = True
+                    raise
+                return
+            with self.driver.session(database=self.database) as session:
+                with session.begin_transaction() as transaction:
+                    self._transaction = transaction
+                    self._transaction_failed = False
+                    self._transaction_owner = threading.get_ident()
+                    try:
+                        yield self
+                        if self._transaction_failed:
+                            raise RuntimeError("Nested transaction failed; outer transaction must roll back")
+                        transaction.commit()
+                    except BaseException:
+                        try:
+                            transaction.rollback()
+                        except Exception:
+                            log.error("Neo4j rollback failed while handling a transaction error")
+                        raise
+                    finally:
+                        self._transaction = None
+                        self._transaction_failed = False
+                        self._transaction_owner = None
+
     def ensure_schema(self) -> None:
+        from .migrations import migrate_store
+
+        migrate_store(self)
+
+    def _ensure_legacy_schema(self) -> None:
         """Create constraints/indexes and the global Settings node. Safe to call on every start."""
         for statement in CONSTRAINTS:
             self.run(statement)
@@ -198,6 +345,7 @@ class Neo4jBase:
         row = self.run_one("MATCH (s:Settings {id: 'global'}) RETURN s[$key] AS value", key=key)
         return row["value"] if row else None
 
+    @metadata_mutation
     def set_meta(self, key: str, value: Any) -> None:
         # `SET s += $map` works on every Neo4j 5.x (the dynamic `s[$key] = ...` form needs 5.24+).
         self.run(
@@ -235,6 +383,10 @@ class Neo4jBase:
                    count { (:Passage) } AS passages,
                    count { (:Entity) } AS entities,
                    count { (:Fact) } AS facts,
+                   count { (:Symbol) } AS symbols,
+                   count { (:DataObject) } AS data_objects,
+                   count { ()-[:CODE_EDGE]->() } AS code_edges,
+                   count { (:Commit) } AS commits,
                    count { ()-[:SYNONYM]->() } AS synonym_edges,
                    count { ()-[:MENTIONS]->() } AS mention_edges,
                    count { (:QuestionSet) } AS question_sets,

@@ -1,0 +1,192 @@
+"""The `$name` connector: a directory of JSON records, ready to edit.
+
+A connector has two halves, and the split is the whole design:
+
+* **The sync half** (`probe`, `list_changes`, `fetch`, `fetch_policy`) talks to the provider. It
+  may call the network and read the clock. The kit replaces it with a replay of your fixture case,
+  so your tests never reach the provider.
+* **`emit` is pure.** Bytes in, records out. No network, no model, no store and no clock: the
+  runtime runs it inside a guard that refuses all four, so a second run of the same revision
+  produces byte-identical output and a rebuild can be trusted.
+
+Replace the provider half with real calls, keep `emit` pure, and run `hippo connector validate .`
+after every change.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
+
+from hippo.connectors import base, classify
+from hippo.connectors.base import current_registry
+
+from .types import EXTENSION, FAMILY, PRIMARY_KIND
+
+# How many records `probe` reads before it decides what this partition holds.
+PROBE_SAMPLE = 10
+
+
+class ExportConfig(BaseModel):
+    """One instance's configuration, stored as JSON on its `Connector` row.
+
+    `extra="forbid"` means a typo in a configuration file is refused rather than ignored. Never
+    put a secret here: name a credential in the descriptor and reference it instead.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    export_dir: str
+    partition: str = "export"
+
+
+DESCRIPTOR = base.ConnectorDescriptor(
+    name="$name",
+    version="1",
+    families=("$family",),
+    kinds=$kinds,
+    predicates=(),
+    artifact_kinds=("document",),
+    locator_kinds=("field",),
+    capabilities=base.ConnectorCapabilities(inventory=True),
+    config_model=ExportConfig,
+    credentials=(),
+    parsers=(),
+    extension=EXTENSION,
+)
+
+
+class $class_name:
+    """The `$name` connector. Construct it with no arguments: the kit does."""
+
+    # A class attribute, not an instance one: the loader reads `descriptor` off the class
+    # before it constructs anything (`hippo.connectors.loader`).
+    descriptor = DESCRIPTOR
+
+    # ------------------------------------------------------------ the sync half
+
+    def probe(self, config: ExportConfig, clock) -> base.Classification:
+        """What this partition holds, sampled through this connector's own methods.
+
+        Sampling through `list_changes` and `fetch` rather than through a private path is what
+        lets the kit replay a probe exactly. `probe` is a pure function of the descriptor, the
+        configuration and the sampled bytes: two calls an hour apart must be equal, so nothing
+        here reads `clock`.
+        """
+        items: list[classify.SampledItem] = []
+        cursor: base.SyncCursor | None = None
+        while len(items) < PROBE_SAMPLE:
+            page = self.list_changes(config, cursor)
+            for change in page.changes:
+                if change.operation != "upsert" or len(items) >= PROBE_SAMPLE:
+                    continue
+                fetched = self.fetch(config, change.ref)
+                items.append(
+                    classify.SampledItem(
+                        partition=change.ref.partition,
+                        path=change.ref.external_id,
+                        data=fetched.data,
+                        provider_type="record",
+                    )
+                )
+            cursor = page.next_cursor
+            if page.complete or cursor is None:
+                break
+        return classify.classify(
+            self.descriptor,
+            config,
+            items,
+            current_registry(),
+            spec=classify.classifier_spec(),
+            capabilities=self.descriptor.capabilities,
+            kinds=(base.KindMapping(provider_type="record", kind=PRIMARY_KIND),),
+        )
+
+    def list_changes(self, config: ExportConfig, cursor: base.SyncCursor | None) -> base.ChangePage:
+        """Every `*.json` file in the export directory, as one complete page.
+
+        `capabilities.inventory` is true, which promises that a walk from `cursor=None` sees the
+        whole partition. The runtime deletes what a *complete* walk did not return, so mark a
+        page complete only when that is true. A real provider pages here and returns a cursor.
+        """
+        changes = tuple(
+            base.Change(
+                ref=base.ExternalRef(
+                    partition=config.partition,
+                    artifact_kind="document",
+                    external_id=path.stem,
+                ),
+                operation="upsert",
+            )
+            for path in sorted(Path(config.export_dir).glob("*.json"))
+        )
+        return base.ChangePage(
+            partition=config.partition,
+            changes=changes,
+            next_cursor=None,
+            complete=True,
+        )
+
+    def fetch(self, config: ExportConfig, ref: base.ExternalRef) -> base.RawFetch:
+        """One record's bytes, exactly as the provider holds them.
+
+        Return the bytes unchanged: they are hashed, stored and re-parsed later, and a
+        normalisation here would make a rebuild differ from the first build.
+        """
+        path = Path(config.export_dir) / f"{ref.external_id}.json"
+        return base.RawFetch(
+            ref=ref,
+            data=path.read_bytes(),
+            content_type="application/json",
+            external_id=ref.external_id,
+            # Never a URL carrying a token or a password: this is stored and shown.
+            canonical_uri=path.resolve().as_uri(),
+        )
+
+    def fetch_policy(self, config: ExportConfig, ref: base.ExternalRef) -> base.PolicyObservation:
+        """Who may see this record. An export directory says nothing, so the answer is unknown.
+
+        Unknown is deny. The runtime stores an unknown observation as a policy nobody passes,
+        which is the safe default; report `state="known"` only when the provider actually told
+        you who may read the record.
+
+        `fixtures/basic/policies.json` records what a provider that *does* answer would say, so
+        the kit can replay a policy that narrows. Replace this body with the provider's real ACL
+        call and the fixture is already the shape you need.
+        """
+        return base.PolicyObservation(ref=ref, state="unknown")
+
+    # ------------------------------------------------------------ the pure half
+
+    def emit(self, revision: base.RevisionInput, mapping: base.TypeMapping) -> base.EmissionBatch:
+        """One record's bytes to one node. Pure: no clock, no network, no model, no store.
+
+        A record this connector cannot read becomes a counted `ParseFailure` rather than an
+        exception: one bad record must not fail a partition, and a failure nobody counted is a
+        silent gap in the memory.
+        """
+        try:
+            record = json.loads(revision.data.decode("utf-8"))
+            identifier = str(record["id"])
+            title = str(record["title"])
+        except (ValueError, KeyError, TypeError):
+            return base.EmissionBatch(failures=(base.ParseFailure(family=FAMILY, reason="invalid_record"),))
+        return base.EmissionBatch(
+            nodes=(
+                base.NodeEmission(
+                    # No `instance` key part: the kit fills it from the connector row, so the
+                    # same `id` on two instances stays two objects.
+                    ref=base.NodeRef(kind=PRIMARY_KIND, key={"id": identifier}),
+                    attrs={"title": title},
+                    span=base.SpanRef(
+                        locator_kind="field",
+                        locator={"kind": "field", "field_path": "title"},
+                        text=title,
+                    ),
+                    source="metadata",
+                    metadata_origin="catalog",
+                ),
+            )
+        )

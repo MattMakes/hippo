@@ -14,9 +14,18 @@
       <tbody>
       {% for name, ok in status.models.items() %}
         {% set p = status.pulling.get(name) %}
+        {% set model_key = name[:-7] if name.endswith(':latest') else name %}
+        {% set llm_key = config.llm_model[:-7] if config.llm_model.endswith(':latest') else config.llm_model %}
+        {% set qa_key = (config.qa_model[:-7] if config.qa_model.endswith(':latest') else config.qa_model) if config.qa_model else none %}
+        {% set embed_key = config.embed_model[:-7] if config.embed_model.endswith(':latest') else config.embed_model %}
         <tr>
           <td><code>{{ name }}</code></td>
-          <td class="muted">{{ 'reading, extracting facts, filtering, answering, judging' if name == config.llm_model else 'embeddings (turning text into vectors)' }}</td>
+          <td class="muted">
+            {% if model_key == llm_key %}extracting facts, filtering, retrieval selection and judging; {% endif %}
+            {% if qa_key is none and model_key == llm_key %}default reference answers; {% endif %}
+            {% if qa_key is not none and model_key == qa_key %}grounded final answers; {% endif %}
+            {% if model_key == embed_key %}embeddings (turning text into vectors){% endif %}
+          </td>
           <td>
             {% if ok %}<span class="pill ok"><span class="dot"></span>installed</span>
             {% elif p and not p.done %}<span class="pill warn">⬇ {{ p.status }} {% if p.total %}{{ p.completed | pct(p.total) }}%{% endif %}</span>
@@ -65,15 +74,19 @@
   <p class="muted">These are HippoRAG's knobs. The defaults are the paper's. Change one, then use the Analyze page to see what it did.</p>
   {% if not can_edit %}<div class="callout">These knobs change everyone's answers, so only roles with <code>edit_graph</code> may save them. Yours ({{ me.role_name if me else '' }}) can read them.</div>{% endif %}
   <form method="post" action="/settings" class="settings-form">
+    {# min/max come from SETTING_RULES, the same bounds validate_settings enforces. Hard-coding
+       max="1" here made every setting whose real ceiling is higher unsaveable from the browser. #}
     {% for key, value in settings.items() %}
+    {% set bounds = rules.get(key) %}
     <div class="field">
       <label for="s-{{ key }}"><code>{{ key }}</code></label>
       {% if value is sameas true or value is sameas false %}
         <input type="checkbox" id="s-{{ key }}" name="{{ key }}" {{ 'checked' if value }}>
-      {% elif value is integer %}
-        <input type="number" id="s-{{ key }}" name="{{ key }}" value="{{ value }}" min="0" step="1">
       {% else %}
-        <input type="number" id="s-{{ key }}" name="{{ key }}" value="{{ value }}" min="0" max="1" step="0.01">
+        <input type="number" id="s-{{ key }}" name="{{ key }}" value="{{ value }}"
+               {% if bounds and bounds[1] is not none %}min="{{ bounds[1] }}"{% endif %}
+               {% if bounds and bounds[2] is not none %}max="{{ bounds[2] }}"{% endif %}
+               step="{{ 1 if value is integer else 0.01 }}">
       {% endif %}
       <span class="help muted">{{ help[key] }}</span>
     </div>

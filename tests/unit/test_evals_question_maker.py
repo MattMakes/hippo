@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
+from hippo.evals import question_maker
 from hippo.evals.question_maker import generate_questions, shared_entity_pairs, start_generation_job
 from hippo.hipporag.indexer import Chunk, index_source
+from hippo.knowledge.embedding_profile import EmbeddingProfileMismatch
+from hippo.ollama import OllamaError
 
 
 def index_sample(ctx, sample_text: str) -> str:
@@ -99,3 +104,59 @@ def test_source_without_passages_fails_cleanly(ctx):
 def test_unknown_source_is_an_error(ctx):
     with pytest.raises(ValueError):
         generate_questions(ctx, "nope")
+
+
+def test_a_failing_generation_logs_the_source_and_set_but_not_the_exception(
+    ctx, source_id, monkeypatch, caplog
+):
+    """The generation-failure log line is bounded the same way as the runner's per-question one."""
+    poison = "sk-live-DEADBEEF 'Acme Robotics is headquartered in Boulder.'"
+
+    def exploding(*args, **kwargs):
+        raise EmbeddingProfileMismatch(poison)
+
+    monkeypatch.setattr(question_maker, "shared_entity_pairs", exploding)
+    with caplog.at_level(logging.DEBUG, logger="hippo.evals.question_maker"):
+        with pytest.raises(EmbeddingProfileMismatch):
+            generate_questions(ctx, source_id)
+
+    sets = ctx.store.list_question_sets()
+    assert len(sets) == 1 and sets[0]["status"] == "failed"
+    assert caplog.records, "a failed generation must not fail silently either"
+    assert source_id in caplog.text
+    assert sets[0]["id"] in caplog.text
+    assert "retrieval_rebuild_required" in caplog.text
+    assert "EmbeddingProfileMismatch" in caplog.text
+    assert poison not in caplog.text
+    assert not [record for record in caplog.records if record.exc_info]
+
+
+def test_a_skipped_passage_logs_its_id_and_code_but_never_the_models_reply(
+    ctx, source_id, monkeypatch, caplog
+):
+    """The two per-passage skips are bounded like the runner's per-question line.
+
+    `Ollama._request` puts 300 characters of the model's reply body into its message
+    (`knowledge/public_errors.py:12-13`), and that body is generated out of the corpus's
+    own passages, so interpolating the exception here republishes the corpus into the
+    operator's log. The passage id locates the skip and the closed code says what
+    happened; that is the whole of what 4f decision 3 allows.
+    """
+    poison = "sk-live-DEADBEEF 'Acme Robotics is headquartered in Boulder.' <passage text>"
+
+    def exploding(*args, **kwargs):
+        raise OllamaError(poison)
+
+    monkeypatch.setattr(ctx.ollama, "chat_json", exploding)
+    with caplog.at_level(logging.DEBUG, logger="hippo.evals.question_maker"):
+        set_id = generate_questions(ctx, source_id, max_single=3, max_multihop=2)
+
+    # Every passage was skipped, so the set is empty but the generation still finished.
+    assert ctx.store.list_questions(set_id) == []
+    skipped = [record for record in caplog.records if "skipped" in record.message]
+    assert skipped, "a skipped passage must still leave a bounded trace"
+    assert "retrieval_unavailable" in caplog.text
+    assert "OllamaError" in caplog.text
+    assert poison not in caplog.text
+    assert "sk-live-DEADBEEF" not in caplog.text
+    assert not [record for record in caplog.records if record.exc_info]

@@ -7,6 +7,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.115",
+    "pydantic>=2.11,<3",  # immutable versioned knowledge/query contracts
     "uvicorn[standard]>=0.30",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
@@ -19,6 +20,17 @@ dependencies = [
     "pypdf>=4.0",
     "python-docx>=1.1",
     "mcp>=2.0",
+    # The code graph: tree-sitter parses the five languages into symbols and calls,
+    # sqlglot reads the SQL literals we turn into READS/WRITES edges (codegraph/).
+    # Every grammar ships cp311/cp312 wheels for manylinux and macOS arm64, so the
+    # Dockerfile needs nothing; the pins are the ABI ranges tree-sitter 0.26 accepts.
+    "tree-sitter>=0.25,<0.27",
+    "tree-sitter-python>=0.23,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+    "tree-sitter-go>=0.23,<0.26",
+    "tree-sitter-c-sharp>=0.23,<0.24",
+    "tree-sitter-rust>=0.23,<0.25",
+    "sqlglot>=27,<31",
 ]
 
 [project.optional-dependencies]
@@ -44,10 +56,17 @@ packages = ["src/hippo"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# tests/fixtures/ holds checked-in source trees that the code-graph extractor parses. They are
+# fixture data, not our tests: code_sample/tests/test_orders.py must never be collected. This is
+# pytest's default list plus "fixtures" (setting the key replaces the default, it does not extend it).
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "fixtures"]
 
 [tool.ruff]
 line-length = 110
 target-version = "py311"
+# planning notes quote code verbatim, and tests/fixtures/ is a source tree whose exact bytes and
+# line numbers are the spec (one-line suites, undefined names on purpose); neither is ours to reformat.
+extend-exclude = ["docs/plans", "tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

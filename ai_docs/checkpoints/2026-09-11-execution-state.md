@@ -1,0 +1,525 @@
+# RAG implementation state
+
+Plan: `docs/rag_it_all.md`.
+
+Branch: `rag-it-all-tibs`, created from `code-graph` at `3ac02f30054fff3827ec25aa799147be99967692`.
+The original branch is unchanged. Plan carried in commit `0849471`; branch published to `origin/rag-it-all-tibs`.
+
+## Repository / PR state
+
+GitHub API inspection of `MattMakes/hippo` returned no PR whose head is `code-graph`.
+The repository's only PR was #1, `ladybugdb`, already merged. Nothing was closed or merged.
+
+## Execution
+
+- [x] New isolated branch, plan commit and remote publication.
+- [x] Pre-flight report: `ai_docs/reports/2026-09-11-pre-flight-report.md`; cleared the foundation tasks with downstream wiring requirements recorded in the plan.
+- [x] Task 0: isolated development smoke checker; independent spec and quality reviews passed.
+- [x] Task 1: cross-source fixture and deterministic retrieval baseline; spec and quality reviews passed.
+- [x] Task 2: immutable identities/evidence/lifecycle/query contracts; 119 tests and independent specification/quality reviews pass.
+- [ ] Tasks 3–16, including 5A/9A: pending integration/implementation.
+- [ ] Optional experiments E1–E5: not enabled.
+
+## Current verification evidence
+
+- Inherited Ruff check passed; inherited format check found 142 files formatted. After Task 0: full Ruff check passed and 147 files already formatted.
+- Full fake-store baseline with authorized loopback: **1,354 passed, 15 skipped**, exit 0. Log: `/tmp/hippo-rag-baseline-fake-loopback.log`. Existing deprecation warnings remain.
+- Full inherited Ladybug suite reached completion with exactly two setup errors, both `socket.bind` denied by the sandbox in `test_mcp_http.py`; all remaining cases passed or were backend-specific skips. Log: `/tmp/hippo-rag-baseline-ladybug.log`, exit 1. The two affected tests separately passed with authorized loopback, exit 0: `/tmp/hippo-rag-baseline-ladybug-mcp-loopback.log`. This is split verification, not a claim of one all-green full Ladybug invocation.
+- Task 0 tests: **49 passed**, independently rerun by root and spec reviewer. Gate checker executed G0 and passed.
+- Real CLI smoke against `http://127.0.0.1:8011`: exit 0; authenticated status/settings valid, Ladybug ready, Ollama ready and configured models installed. Anonymous protected settings returned 401. Retrieval, embedding and generation are explicitly outside this smoke check.
+- Development user created through the existing user form and Account page on the isolated store. Credentials exist only in ignored `.rag-dev-data/smoke-credentials.json`, mode 0600; never include its contents in logs or commits.
+
+## Environment evidence
+
+- macOS 26.5.1, arm64, Apple M5 Max, 128 GiB RAM.
+- Existing development virtual environment: Python 3.12.11. System Python: 3.12.8.
+- `uv pip check --python .venv/bin/python` with temporary cache: 64 packages compatible. The virtual environment does not install pip; no environment replacement was needed.
+- real_ladybug 0.15.3; fastapi 0.141.1; httpx 0.28.1; httpx2 2.12.0; mcp 2.1.1; numpy 2.5.3; igraph 1.0.0; pytest 9.1.1; ruff 0.16.6; sqlglot 30.18.0; tree-sitter 0.26.0.
+- Existing Ollama includes configured `qwen3:8b` and `nomic-embed-text:latest`; no model download was necessary.
+- Isolated server uses `HIPPO_DATA_DIR=$PWD/.rag-dev-data`, `HIPPO_DB_PATH=$PWD/.rag-dev-data/hippo.lbug`, `HIPPO_STORE=ladybug`, `HIPPO_PORT=8011`, and `OLLAMA_URL=http://127.0.0.1:11434`. Server log is `/tmp/hippo-rag-dev-server.log`.
+
+## Constraints
+
+No delivery estimates or timing-based prioritization. Architecture follows the documented capability/correctness requirements. Source chronology and runtime lifecycle safeguards remain functional requirements.
+
+Do not touch the existing `data/` store. Runtime fixtures and experiments use isolated directories or temporary databases. Do not run Neo4j tests against an existing/shared database: the inherited fixture deletes all nodes.
+
+## Disposable Neo4j preparation
+
+A newly created container `hippo-rag-test-b780ab5` runs the existing `neo4j:5.26-community` image (runtime 5.26.30), with no existing data mount. Bolt is bound only to `127.0.0.1:32774`. The 98 inherited store/code/eval/graph/row-shape tests passed against it, exit 0; log `/tmp/hippo-rag-baseline-neo4j-store.log`. This establishes the disposable backend before managed persistence work; it does not prove the future migration contracts.
+
+## Inherited CI portability fix
+
+Baseline CI run `34629977683` failed three history assertions because its Git renders ISO UTC as `Z`, while the checked-in expectations spell the same instants `+00:00`. The fix compares parsed aware timestamps in `test_git_history.py` and the history comparison helpers in `test_indexer.py`; application date text and golden fixtures remain unchanged. The affected two modules passed all 71 tests locally; independent review passed. CI must verify the runner-specific form after publication. Log: `/tmp/hippo-rag-git-date-fix.log`.
+
+## Persistence probe findings for Task 3
+
+Temporary-only probe `/tmp/hippo_rag_ladybug_probe.py` confirmed that Ladybug 0.15.3 rolls back node/relationship DDL, ALTER and multiple writes together, and supports catalog-first version guards and conditional-update CAS. Database errors can auto-abort: rollback cleanup must preserve the original exception when no transaction remains. Free-text lists require byte elements and `list_transform(CAST($names AS BLOB[]), x -> decode(x))`, including empty/null lists. Validate integer contracts before writing: FLOAT to INT64 otherwise truncates. No persistence implementation is claimed yet.
+
+CI run `34631555844` for commit `a21ea35` completed successfully: Ruff, fake and Ladybug suites on Python 3.11/3.12, and the complete real Neo4j unit suite. This confirms the inherited timestamp portability fix on the Linux runners and provides full backend baseline coverage beyond the earlier split local Ladybug run.
+
+Task 1 implementation reached independent review: root ran G1 (27 tests passed), 15 inherited metric tests, full Ruff lint/format, and two actual CLI development baseline runs with byte-identical output. Seven of twelve dev questions evaluated; five explicit capability gaps. The corpus has 24 questions across six slices. No Task 1 completion claim yet: spec/quality reviews remain in progress, and any fixes require fresh checks/capture.
+
+Task 1 independent spec re-review passed after four focused corrections: all-gold leakage/permission validation, strict aware temporal selectors and boolean insufficiency, temporal capability detection independent of labels, and metric-specific sample counts. Root's fresh G1 ran 51 tests successfully; 15 inherited metric tests and full Ruff also passed. Independent quality review passed and additionally confirmed identical results with different PYTHONHASHSEED values. Two small quality refinements (string-list validation and stable references for unlabeled candidates) are being completed before final baseline capture and commit.
+
+Task 1 final verification: G1 and G1R met; 56 focused tests and 15 inherited metric tests passed, full Ruff lint/format passed. Two final CLI reports are byte-identical (SHA-256 `e72d524e1eb883553740cd688282dc177f22bdf1b27a7e07697757cb4b395650`). Saved report `ai_docs/reports/2026-09-11-rag-legacy-dev.json` contains seven evaluated dev questions, five capability gaps, original candidate references, settings and per-metric sample counts. No holdout quality tuning or live-model quality claim. Optional live recipe is documented in the fixture README. Task 2 is in progress with /root/rag_task2; contracts/tests only, no persistence yet.
+
+Neo4j migration probe: the disposable 5.26.30 backend rejected mixed schema/data writes with Neo.ClientError.Transaction.ForbiddenDueToTransactionType; rollback left no probe constraint or node. Task 3 now explicitly requires guarded, journaled idempotent Neo4j schema steps plus atomic data/completion transactions. Ladybug retains a single transactional schema/data migration. Probe records were removed.
+
+Agent orchestration note: creating another new agent hit the thread limit after Task2 dispatch. Completed agents remain available through followup_task; reuse them with explicit new scopes if additional fresh threads remain unavailable. /root/rag_task2 owns only the new knowledge modules/tests and an explicit direct dependency declaration. /root/rag_contract_design is checking additional identity collision cases read-only. No Task3 implementation has started; its ledger is prepared.
+
+Task 1 is committed/published as `76d1448`. CI run `34633261255` completed successfully across Ruff, fake/Ladybug on Python 3.11 and 3.12, and real Neo4j. Task 2 initial RED established 34 expected missing-module/contract failures; implementation remains in progress. Identity preparation flagged semantic PostgreSQL equivalence, provider base-path/encoded-separator distinctions, module/member discriminators and API identity/version separation; implementer is incorporating those cases.
+
+Task 2 root G2 initially passed 104 focused tests; full Ruff passed with 159 formatted files. Independent specification review then found three additional defects: builtin IDNA merges distinct provider hosts, normalized locator defaults/paths were discarded before span hashing, and manifest knowledge cutoffs could contradict their embedded selectors. These are being fixed with new RED tests; Task 2 is not complete until re-review and quality review pass.
+
+Independent Task 3 capability preparation found no installed FTS/vector extensions in real_ladybug 0.15.3. No extension was installed or downloaded. Native-dependent correctness gates are unrun, not failed or passed; the documented filtered lexical/NumPy fallback remains selected. Disposable core FLOAT[3] and filtered exact cosine fixtures passed, including dimension rejection, visibility/generation/time filtering, hidden-record edit noninterference, validity closure and deletion. This does not establish application ACL or concurrent revocation correctness. Reproducers/reports live under `/tmp/hippo-ladybug-{capability,exact}-prep.*`. A permanent isolated capability script is being prepared independently of the pending contract corrections; no managed persistence is implemented yet.
+
+Task 2 final verification: all 119 focused tests pass, including new RED-tested Unicode-host collision, canonical locator/default and manifest-cutoff consistency cases. Root G2 reverify passed. Independent specification re-review passed all 12 requirements; subsequent code-quality review passed without blockers. Targeted Ruff lint/format and git diff whitespace checks pass. Full-repo lint also passed; the separately in-progress capability test file was still being formatted. All 35 required persisted records round-trip through strict version-1 envelopes. G2/G2R are met. Task 3 persistence may now begin; native capability implementation remains independently scoped.
+
+Task 2 commit: `be51619`. Automatic approval review initially rejected publication to the public remote and permitted a separate local commit. After read-only verification of `origin` (`git@github.com:MattMakes/hippo.git`, public, viewer ADMIN), the user explicitly answered: "Yes, publish reviewed commits to that branch." Publication then succeeded: `76d1448..be51619` on `origin/rag-it-all-tibs`. This authorization persists for reviewed implementation commits to that destination; do not ask again. Task 3 persistence is assigned to `/root/rag_task2`; `/root/adaptive_graph_papers` owns the isolated capability tool/tests. Root independently ran the initial 11 capability tests and actual command successfully; subsequent native-report integrity corrections remain under review.
+
+Task 3 initial persistence/publication slice passed 10 tests on fake and real Ladybug according to the implementer; root is independently running the same slice against the disposable Neo4j instance. Full legacy/auth preservation, migration recovery and all-record coverage are still in progress, so this is not a Task 3 completion claim. Root also clarified that preexisting v1 binaries lack a schema guard: downgrade requires an isolated pre-upgrade restore, not running an old binary on an upgraded store.
+
+Subagent execution later failed with a reported usage limit. `/root/rag_task2` stopped during Task 3, and `/root/adaptive_graph_papers` stopped before implementing Task 4 MCP transport changes. Root continued locally. Task 4 MCP has a prepared ledger but no implementation; the rest of Task 4 still depends on Task 3. Read-only preparation identified additional wiring in `web/render.py`, `web/routes/pages.py`, `web/adhoc.py`, `analysis/simulate.py` and `hipporag/graph_index.py`; the plan now includes these. HTTP credential mode must be explicit: the normal app's AuthGate can already block headerless requests, while low-role cookies combined with an ambient admin token remain a concrete identity-confusion regression to test.
+
+Capability subtask is complete and independently reviewed: 20 tests, actual CLI and Ruff pass. Saved report `ai_docs/reports/2026-09-11-store-capabilities.json`; G3C met, with native installed-extension behavior and application isolation guarantees explicitly unverified. Root corrected the isolation fixture to use the actual HIPPO_DB_PATH name. This does not complete Task 3.
+
+Root validated the interrupted persistence work: first 19 focused tests passed on fake and Ladybug. Expanded Neo4j revealed that a future-version test intentionally poisoned the shared disposable fixture; `tests/conftest.py` now resets through the raw test driver before application bootstrap, retaining the application's refusal behavior. Four new RED tests reproduced cross-source generation/snapshot binding, connector-provider mismatch, cross-revision sections and caught nested-transaction failure; fixes passed, followed by 121 tests on fake and Ladybug (new persistence plus inherited store suites) and all 23 focused tests on Neo4j. Logs: `/tmp/hippo-rag-task3-{fake,ladybug}-expanded.log`, `/tmp/hippo-rag-task3-neo4j-recheck.log`.
+
+Further root RED tests added migration history, strict version-number types and physical-schema verification. New migration helpers preserve v1/v2 checksum history and validate actual Ladybug tables/columns/relationship endpoints plus Neo4j constraint/index definitions. Additional recovery tests now inject failure after each declared DDL step, and prove an initial Ladybug migration rolls back newly created tables and added columns. These final changes still need complete backend reruns and independent review. Task 3 remains uncommitted/incomplete; do not publish it as reviewed work. Full Ruff currently passes (167 files formatted).
+
+Continuation: root proved concurrent immutable Neo4j insert conflict handling (initial RED overwrite, then GREEN with ON CREATE SET and winner comparison). All 29 then-current focused Neo4j tests passed; G3F/G3L passed through the gate checker. CI `34641466910` for published `c07d85f` completed successfully.
+
+Task 3 independent review resumed through `/root/rag_contract_design`. It reproduced a caught driver-error atomicity bug on Ladybug: a later write could autocommit after driver auto-abort. The agent now owns statement-error poisoning fixes in base/ladybug and migration tests; root must independently review/rerun. Root also reproduced and fixed remote Artifact.source_id mutation of historical source ownership, and scoped membership reads crashing on a User dict. A further review correction adds explicit workspace_id to LinkGeneration, HistoryManifest, DerivedRecord, IndexEvent and QuerySnapshot, including canonical identities, because empty collections cannot imply a workspace. Agent owns model/contracts tests; root owns store references/construction and persistence tests. Task 3 remains incomplete/uncommitted.
+
+Task 4 step 5 MCP transport separation is implemented by root and under independent review with `/root/adaptive_graph_papers`. HTTP only resolves request bearer/cookie; stdio explicitly resolves process HIPPO_TOKEN. TransportBoundServer prevents stdio credential servers from mounting HTTP/SSE and HTTP credential servers from running stdio. Initial store outage fails closed for MCP. Thirty-two tests passed on fake, including actual HTTP and existing web authentication; `/tmp/hippo-rag-mcp-green.log`. Existing Starlette/AnyIO deprecation warning remains. Actual headerless authentication denial is observed as HTTP401 via response hook because installed MCP2 wraps it in MCPError. No full Task4 completion claim.
+
+Task 3 final: independent specification and quality re-review PASS, root reviewed agent changes. Full root store regression set:142 collected on each backend; Fake137passed/5backend skips, Ladybug141passed/1Neo4j-only skip, Neo4j140passed/2Ladybug-only skips, all exit0. Logs /tmp/hippo-rag-task3-{fake,ladybug,neo4j}-reviewed.log. Contract G2 reverify124passed; full Ruff lint/format and diff whitespace pass. G3F/G3L/G3N/G3C/G3R met; Task3 marked complete. Nonblocking known concern: typed ID reads currently decode full record tables; optimize parameterized lookup before scaling. Existing managed schema is now v2; only isolated fixtures have been migrated locally, not data/ or the running dev-server store.
+
+MCP subtask final: independent reviewPASS after strict require_online auth resolution fixed ping-transition fail-open. Root gate checker G4M passes38tests, G4MRpasses. Committed/published d717779 on authorized branch. Full Task4 remains pending. /root/rag_contract_design is preparing the managed authorization interface read-only; /root/adaptive_graph_papers is implementing a narrowly scoped community-label privacy regression/fix in graph_index.py and test_access.py. Root owns remaining integration.
+
+Task 3 committed/published `4246f5e` after final checks. Last full format check at publication saw only the concurrently edited Task4 test_access.py unformatted; committed Task3 files were formatted and had passed the earlier full check. Task4 community agent subsequently formatted its files. Existing dev server remains pre-migration/no-reload on isolated port8011; do not claim it has loaded schema2/3.
+
+Task4 ongoing ownership: `/root/rag_contract_design` owns new knowledge/access.py, src/hippo/access.py audience_kind and test_evidence_access.py. Contract: EvidenceAccess(store, workspace_id, access, mapping_authorities=frozenset(), clock=utc_now, policy_max_age=None, epoch_reader=None). build(selection=None) -> immutable AuthorizedEvidence IDs/support groups/fingerprint/epoch/valid_until; validate_current checks epoch, expiry and live principal. It must inventory complete AND groups before audience filtering and independently authorize endpoint observations. `Access.unrestricted` cannot authorize managed data by itself; explicit internal/open/preview/reader distinction is being added.
+
+`/root/adaptive_graph_papers` completed one-line scoped community label correction plus regression in test_access.py. Root independently ran full23 tests on fake and Ladybug, both exit0. It now owns policy provenance compatibility: AccessPolicy.origin legacy_unknown(default)/local_curated/provider, scope_key optional only for legacy. Legacy keeps exact old IDs; explicit scope+origin participates in new IDs. Must introduce schema3 with frozen published v2 checksum f4419a33c505b28fc7239c6aa6ac323c9bbcb926159df457c2a3876f0bbc5b0f, preserve1/2/3history and guard/fault behavior. Agent owns model.py, migrations.py, new test_policy_migration.py and relevant contract/migration tests. Model edits are currently ahead of migration edits, so do not run Neo4j against partially edited schemas until agent says ready.
+
+Root Task4 edits: store/authorization.py durable global authorization_epoch (metadata onLadybug/Fake, atomicincrement Neo4jSettingsproperty); KnowledgeQueries exposes authorization_epoch/_bump and bumps once for changed managed put/update. permission_mutation decorator wraps legacy create/update/delete user, update/delete role, set_source_access and delete_source methods across Neo4j/Ladybug/Fake in a transaction with epoch bump. Ten tests/evidence_epochs.py cases pass Fake; Ladybug epoch+legacy store+access64casespass. Root also guards configured/enabled nonlocal connectors when zero users exist: inert disabled identity-only connector remains allowed; private credentials/config orenable is refused until installation is gated. Task4 full ledger prepared butpending. No new Task4 code committed beyond MCP.
+
+Remaining Task4 integration: hook core into public knowledge reads; validate policy provenance against artifact/connector; add managed-safe legacy graph projection, current epoch/expiry cache keys and checks before model/before return; scope status/jobs/cards/MCP whoami and sourcepages; reconstruct/withhold saved eval/analyze/adhoc/simulation/changeset replay from authorized evidence; run fake/Ladybug/Neo4j and independent reviews. AppContext.graph_for still uses legacy source-only scoping; no managed ingestion is enabled. Current store load_passages does NOT return new generation/span metadata, so projection needs a safe dedicated metadata read or explicit extended loader. Core returns bindingIDs only; never expose full native CodeNode doc/body/label fields solely because an endpoint survives. Adding a private support edge between public endpoints must not create a path.
+
+## Continuation: foundation published, integration active
+
+Published 82967598034f70cdcf0b820e004efb177316516e (8296759) on rag-it-all-tibs. Foundation ledger task-4-foundation/GATES.md complete; full Task4 open. CI34647130746 in_progress at last check; prior Task3/MCP CI succeeded. No main/PR changes.
+
+Foundation includes schema3 scoped policy origin/scope identities, frozen v2 checksum, strict journal continuity/state/steps and recovery preserving scoped policies; complete support-group evidence authorization; live reviewed membership and fresh upstream policy; epoch-bracketed typed reads; deny raw membership/control records; atomic durable revocation counters and permission writes; private connector/open-mode guards. has_had_users metadata persists in the permission transaction so last-user removal cannot revive stale reader identities. Reviewed mapping authority metadata mutation bumps epoch atomically.
+
+Root foundation validation: G4FA 138collected/132passed/6backend skips. Ladybug core/epochs/reads/persistence passed /tmp/hippo-rag-task4-foundation-ladybug-final.log, final marker checks also passed Ladybug. Neo4j 113passed /tmp/hippo-rag-task4-foundation-neo4j-final.log plus16finalepoch tests /tmp/hippo-rag-task4-marker-neo4j.log. Migration session75540 44passed/2Ladybug-onlyskips, including all70v2 schemafault/recovery positions; independent Ladybug migration review46passed. Policy/migration independent review rag_contract_design PASS; epoch/store-boundary reviews rag_task2 and adaptive_graph_papers PASS after membership and race fixes. Root reviewed marker/rollback and validated on actual Neo4j.
+
+Neo4j fixture now resets nodes AND constraints/indexes: retained managed schema without its deleted journal correctly refuses boot. Automatic review initially rejected full reset, then accepted after readonly Docker inspection proved owned disposable hippo-rag-test-b780ab5/no host binds/local32774. No remaining approval blocker. DB now free: root sessions84159 and87866 complete. Never run parallel Neo4j test processes or target other databases.
+
+Uncommitted root integration:
+- knowledge/query_access.py + ask.py model wrapper validates before and in finally after model calls, plus final output. current_access refreshes identity/rank, strips unrestricted, handles explicit internal/open/preview, rejects deleted/disabled readers and stale open mode. Agent fixed initial role-downgrade-before-epoch gap. web/app.py adds generic409 on AuthorizationChanged.
+- GraphIndex has validate_authorization callback. Context captures epoch before live identity and loading, validates before return. Artifact/Generation-owned sources excluded from legacy lane. Active-generation selections per workspace feed typed proofs; managed projections compose with legacy; cache keys include proof fingerprint/epoch. Root context/access/query51Fake tests passed /tmp/hippo-rag-context-reviewed.log. Positive actual managed-context/query test and final integration review still needed.
+- knowledge/replay.py reconstructs stored IDs using current labels/text/edges, drops model raw data and unsupported paths. Caller must authorize question ownership. Complete audience input fingerprint excludes global graph version. Trace has backward-compatible evidence_fingerprint; ask/search stamp original input. adhoc recall requires graph and owner; changed view reconstructs trace and withholds answer/thought. Both analyze recall callers updated.
+- Just wired answer_from_trace and analysis/simulate to sanitize mismatching old traces and use model/epoch guards. RED reproduced private saved paths entering model and hidden titles in simulation diffs. Rerun session11491/log /tmp/hippo-rag-replay-model-green.log pending. Earlier command named nonexistent test_simulate.py; corrected to test_analysis_simulate.py.
+
+Projection agent completed new knowledge/projection.py and tests/unit/test_evidence_projection.py. Independent rag_task2 review PASS after closed AssertionVersion guard. Requires exact active-generation/pointer/profile/revision/text/vector binding; canonical object/span IDs; no native labels/body/edge/tuning inheritance. Common identical attributes only across open observations; complete supported active/open registered traversal assertions. Unbound vectors omitted. Composition preserves legacy ordering/boosts/specificity/degrees/community semantics, rebuilds allowed lookups. 22projection tests including actual Ladybug binding and legacy PPR equivalence. Parent attaches proof callback. Root still needs real backend context/ask integration.
+
+Current agent ownership:
+- rag_contract_design: NEW knowledge/eval_access.py and tests/unit/test_eval_access.py; web/routes/evals.py; evals/question_maker.py and runner.py ownership/snapshot capture; store/evals.py only if needed. Safe EvalAccess mirrors get/list sets/questions/runs/results plus get_result/results_for_question for root analyze. New ownership uses transactionally-created per-set Settings key eval_owner:<id>; generatedsets also pin complete generating input fingerprint and source ID. Authenticated unowned legacy sets denied; pre-user open/internal compatible. Questions authorized before text release; answer/judgement/metrics reuse only with matching current input. Root must wire analyze_result/simulate/history and review.
+- rag_task2: status/aggregate implementation complete and extending source/user/role read surfaces plus narrow MCP sources_tool. New authorized-source DTO helper planned in status.py. Managed source counts/content from projection; hide raw meta/errors/progress/evalsets; preserve lifecycle CRUD. Caller-visible counts only. Also fixes scope_note global total, staleprincipal source metadata through current_access, old tests expecting hidden counts. NoNeo4j.
+- adaptive_graph_papers: query helper + durablemarker done; files released. 75Fake query/epochs/ask/access and39Ladybug related tests passed. Free for independent root context/replay review.
+
+Status implementation uses system_status(ctx,fresh=False,*,access=None), noarg internal compatibility; health cached per context, audience inventory always recomputed. Graph-derived counts, scoped legacy metadata/jobs, managed and eval jobs withheld, global embed profile withheld for readers, epoch/proof rechecked. Render/API/settings callers pass principal; MCPwhoami total=visible. Newstatus13Fake+13Ladybug tests pass; real web/MCP/header invariance covered. Root adhoc+web suite only2expected old global-count failures; agent updating assertions.
+
+FullTask4 still needs source/eval surface completion, root saved analysis/simulation/changeset/export integration, graph/code/API response boundaries, positive actual managed projection/context/ask, fullbackend/MCP/regression gates and independent reviews. Tasks5–16 remain unstarted. Owned devserver8011/session49768 still runs old no-reload code/schema; eventual smoke must restart only isolated store, never user data or ignored credentials.
+
+## Continued Task 4 reader integration verification
+
+Still on rag-it-all-tibs at published8296759. CI34647130746 finished with all jobs passing except a single inherited Neo4j relationship-order assertion in test_graph_index.py. The code has no relationship enumeration ordering contract; changed assertion to sorted(edge.kinds), independently reviewed PASS. Root full graph-index Fake suite and55-case Neo4j changeset/graph-index suite passed. No new commit yet.
+
+Reader integration is implemented but awaiting final gates/reviews. New projection, query_access, replay, EvalAccess and ChangesetAccess modules are wired to context/query/HTTP/MCP/pages. Managed publication->query citation and cached-view revocation/profile changes pass real stores. Root reader suite65cases: Ladybug all passed; Neo4j projection/context/query/replay passed but3draft routes exposed unsupported dict metadata; corrected ownership to versioned JSON string and verified3draft+52graph-index tests onNeo4j. Later root Neo4j surface suite passed (context/drafts/evals/graph/status); finaldeltas session97696 also completed its output100percent, poll exit before claiming.
+
+ChangesetAccess now owner-gates before loading payload, lists IDs only, verifies current operation endpoint IDs and originating eval owner, holds authorization lock/transaction for save/apply/delete, refuses canonical managed IDs in legacy edit writers, formats names from scoped graph and omits global graph_version. Additional tests cover rollback when ownership write fails and denial after node-source revocation. Independent rag_task2 changeset review PASS;33Fake+33Ladybug related checks passed.
+
+Reader GraphIndex.version now derives from the complete authorized input fingerprint, retaining internal global graph counter semantics. Root RED showed private-only counter changes leaking through version, nowGREEN. Independent reviewer found CodeNode.in_degree still copied from full graph; adaptive_graph_papers owns narrow scopedcopy/recompute correction and test_access regression. Complete fingerprint remains used for cached-answer provenance.
+
+EvalAccess records immutable ownership/source/origin/input-view metadata in JSON Settings keys. Generated questions require original approved generation target/source/fingerprint. Saved questions authorized before payload; stale answer/judgement/metric prose withheld and traces reconstructed. All source names resolve through SourceView. Read_scope guards assembled eval DTOs/comparisons. rag_task2 review PASS after fixes;49Fake+49Ladybug status/eval checks. Root found a remaining saved-question dispatch race in runner between outervalidate and fresh search/answer queryepoch; rag_task2 reproduced4RED cases (source revoke/question delete at search/answer entry) and owns narrow originalguard propagation through ask.search/answer_from_trace andrunner.
+
+Graph/code transport slice passed independent rag_contract_design SPEC/QUALITY review;81Fake +33Ladybug +2finalpreview checks. Graph full/node/lightup/neighborhood/entity search/source dropdowns and HTTP/MCP code paths now use authorized graph and final outputguards. Preview checks refresh original actor capability/rank and carry original epoch before each modelcall. A stale preview-menu role was corrected with a regression.
+
+Renderer now acquires its own status queryguard even when route has no contentcallback, revalidating aftertemplate rendering. Offline rendering forces fresh offline health to avoid cached corpus inventory. adaptive_graph_papers owns remaining finaltests/review. Saved-analysis simulation now takes original authorization_check, wraps modelcalls and reanswers using same index/model; root39replay/simulation/webanalyze tests passed. Adaptive RED demonstrated stale savedquestion reachedmodel beforefinaldenial; now zero dispatch.
+
+Root fullFake suite excluding real MCP HTTP completed100percent (session29980). Initial fullFake run had only8sandbox socket errors and old reindex response assertion; reindex test now expects accepted:true and still asserts both sourcesready. Separate realHTTP MCP19tests passed outside sandbox (/tmp/hippo-rag-task4-mcp-live.log). FullLadybug session81672 remainsrunning, startedbefore latestrunner/scopeddegree fixes, log /tmp/hippo-rag-task4-full-ladybug.log; it needs finaldelta tests, and realHTTP MCP socket restrictions may require separate authorized rerun. Neo4j is owned disposable local32774 only; poll97696 before nextNeo4j run.
+
+Live agents: adaptive_graph_papers final renderer/scopeddegree review/fixes; rag_task2 runner originalquestion guard fix; rag_contract_design read-only Task5 seam map. Root owns remaining Task4 gates, integration verification, publication and runtime restart. Owned isolateddevserver8011/session49768 still runs old no-reload app/schema. Task5+ remain unimplemented. No estimate or timing-based prioritization added.
+
+## Task 4 complete and ready to publish
+
+All seven Task4 gates met. docs/rag_it_all.md Task4 marked complete. G4R195integration tests passed after final privacy fixes. FullFake unit suite excluding19HTTP MCP cases passed /tmp/hippo-rag-task4-full-fake-reviewed.log;19realHTTP passed separately. Final Ladybug reader/settings206cases passed /tmp/hippo-rag-task4-reader-final-ladybug.log;39realHTTP+replay/render/draft deltas passed /tmp/hippo-rag-task4-live-and-deltas-ladybug.log;73runner/ask/simulation tests independently passed. Initial fullLadybug run's only8socket errors and preloaded oldreindex assertion were reconciled by those current authorized runs. Do not describe initial fullLadybug command itself as passing.
+
+Neo4j finalsource/eval/graphsurfaces, runner dispatch, and renderer/draft/replay checks passed. Root accidentally started a second scoped DB test while the first was still running: both contaminated results (/tmp/hippo-rag-task4-scoped-final-neo4j.log and /tmp/hippo-rag-task4-hidden-bridge-neo4j.log) were discarded. Second ownedprocess stopped, firstexited; a fresh SERIAL91case access/graphindex/context run passed exit0 /tmp/hippo-rag-task4-scoped-serial-neo4j.log (session83959complete). DB is FREE. No application DB was touched.
+
+Final scoped fixes: hide orphan entities/code nodes and unstated facts even when allpassagesvisible; recompute CodeNode.in_degree oncopies; remove completelyunsupported copiedzero edges beforefingerprinting whilepreservingexplicit tuned0. NativeinternalGraph remainsavailable. Newreader version depends onlyonvisiblegraph; publiconlybaseline behavior retained. Rootreviewed allfinalagentfixes; agents independentlyreviewed other slices. Ruffcheck/format189files andgitdiffcheck pass.
+
+Owned devserver was gracefully stopped (oldpid55354/session49768). Backed up isolatedDB+WAL into ignored .rag-dev-data/pre-task4-eb970885. Newserverpid90096/session56688 runs reviewed currentcode withschema3 at127.0.0.1:8011;log /tmp/hippo-rag-dev-server-task4.log. Authenticated smoke passed store/modelsready andcontracts, unauthenticated accessdenied. Smokeexplicitlydoesnotexercise retrieval/embedding/generation. Credentials remaininignored0600smoke-credentials.json and were neverprinted. Do not stopuserOllama.
+
+Next is Task5 (stagedgenerations/pinnedquerysnapshots), stillunimplemented. Read-only seammap fromrag_contract_design identifies: input-onlyGeneration.manifest_hash avoidsnativeIDcycle; optionalnamespace mustpropagatethroughallwalkers/resolver/Git/Chunk.defines whilelogicalsource_id staysconstant; stagedindexer mustsuppressglobalembedding/synonym/community/publicationeffects; extendstorefencing/leases/immutablepublishedmemberships/nativegenerationcolumns withschema4preservingv3checksum; requestsneedbundleofworkspaceQuerySnapshots plusseparatelypinnedlegacyview; activequeryandretainedsnapshot referencesblockcollection; publicationcontentchangesmustnotactlikeACLrevocations; oldleasedgenerationprojectionmustsurviveactivepointerchange. Managedreindex/delete/startuprecoverymustnevercalllegacysource-widecleanup. Structural/localadaptersremainTask6, temporalhistoryselectionTask5A, durableschedulerTask9A.
+
+## Task 5 identity increment
+
+Task4 published39871ea2dac0f161a789483d050da9c923266c09. CI34651043247 is in_progress at lastcheck. NewTask5namespace increment implemented byrag_namespace and independentlyreviewed byadaptive_graph_papers, root reviewedtoo. Optional keyword-onlynode_namespace preservesalllegacyIDs/signatures, retainslogicalsource_id, propagatesfivewalkers/resolverSQL+collections/Gitoldblobs/MODIFIES/PRECEDES/Chunk.defines. Legacyregistered3argwalkers remaincompatible. Pureknowledge/lifecycle.py generation_for_inputs computescanonicalinput-onlymanifest fromsortedacceptedartifact/revision/contenthash+profiles/config beforeoutputs; rejectswrongsource/workspace/revisionowner/duplicates, explicitworkspaceevenempty. generation_namespace hashessource+generationID. Root16inputtests plus19namespace and315existing extraction/history/chunker tests total350pass, independently350pass. Namespace/inputgateledgerallmet; fullTask5remainsOPEN, no stagedwriter/leases/snapshotservice yet.
+
+Storagepreflightprogress: rag_contract_design iswritingai_docs/plans/rag-it-all-task-5-storage.md proposalonly, nocode. UseMaintenanceJob(kindrebuild,inputfingerprintgenerationID) but sourceactivebuildID+monotonicfence preventsdistinctjobowners. AddSnapshotReference foractivequery/saved/retained leases andGenerationEvidenceMember exactimmutableclosure (GenerationMember revision-only leaks newinterpretationswhenrawrevisionreused). Snapshotprojectionmustfilterexactclosure whilecurrentACLpolicyindependent. FirstArtifact/Generation insertion switcheslegacysource tomanaged andmuststillinvalidateoldlegacyACLview; subsequentstagedcontent/publication usescontentinvalidation, notACLepoch. Freeze publishedderivedpayloads/nativerows, allowidempotentduplicates, freshinterpretationsgetnewIDs. Task5A lateraddscontrolledrecorded_to closurewithknowledge-cutoffsemantics. Proposalnotyetapproved/implemented.
+
+
+## Task 5 syntax cache increment and storage implementation
+
+Namespace/input increment published as 2d46f53. Optional syntax cache implemented in codegraph/syntax_cache.py and extract.py. Caches bounded strict JSON unresolved facts without source/native IDs; rematerializes new objects/IDs for the requested namespace; reruns source configuration and whole-source resolution. Key includes source text/path/language/grammar/package versions and walker rules version. Independent review found runtime overridden walkers and unavailable parsers could bypass invalidation; both were reproduced RED, fixed and independently verified. Root combined extraction/history/chunker/namespace/cache regression passed357cases (/tmp/hippo-rag-task5-cache-root.log). Cache SPEC/QUALITY PASS and ledger2/2MET. Pipeline wiring remains pending, fullTask5 OPEN.
+
+Storage contract ai_docs/plans/rag-it-all-task-5-storage.md approved after root review. rag_generation_store owns schema4/store/fake/model lease/seal/snapshot reference/GC slice per task-5-store ledger. rag_generation_loader owns new knowledge/graph_loader.py adapter and test_generation_graph_loader.py, filtering staging before vector matrices. Root owns exact EvidenceSelection closure (8new regressions,48focusedpassing) and request snapshot lifecycle/context wiring. adaptive_graph_papers reviewing closure. No concurrent Neo4j processes; disposable32774 DB FREE until reservation. CurrentCI34651693725(2d46f53) and34651043247(39871ea) in_progress at lastcheck.
+
+
+## Task 5 staged-store and pinned-reader work in progress
+
+Published syntaxcache increment2b6fbc1737a563a3a797c50989068ffa96de50f2. CI39871ea run34651043247 SUCCESS;2d46f53 run34651693725 and2b6fbc1 run34652678464 stillin_progress atlastcheck. Userapprovedpublicationpersists. FullTask5notcomplete.
+
+Storageagent rag_generation_store implemented schema4 with frozenv3checksum ffc12b6f274a5b5573eed4dde9798f8b4abe9d37d68a570247a5c281c10d3ddc, exact GenerationEvidenceMember and SnapshotReference, epochs, lease/fence/writecontext, sealchecksums, strictpublish, conservativeGC/recovery. Independentadaptive_graph_papers reviewPASS afterfixing crossgenerationbindings, TUNED/SYNONYM/MENTIONS/STATES immutablecontributions, iterablebatch bypass, genericMaintenanceJoblease resurrection, unclaimedexact/nativewrite bypass. LateragentaddedsharedEntitypayloadviaTUNED/SYNONYM checksum andfailed-generation expiredlease recovery regression; needfinalreviewthese additions. Fake/Ladybugstorage/migration/policy/model checks passing. AgentOWNSNEO4Jreservation, serial tests32774;48storage/query/context Neo4jpassed, finalmigrationrunstillpending. RootMUSTNOTstartNeo4juntilagentexplicitlyreleases.
+
+Rootadded EvidenceSelection.require_exact_membership and exactmembershipfilterbeforeACL; trustedoldrevision-onlyfixturesretaincompatibility. Selectedrawrevisions limitartifactproofinventory so newstagedartifactdoesnotchangeheldproof.8new tests+40existingauthorizationpassed. generation_passage_id(gen,revision,span,ordinal) canonicalSHA256 helperadded+tested;strictstorewritersuseit. Projection acceptsretiredgenerationonlywithlivesnapshotbundle; normalcurrentpointerchecksremain.
+
+rag_generation_loader implemented knowledge/graph_loader.py,6tests+52GraphIndex testsPASS. Filtersnativegenerations BEFOREvectors, rebuildsmentions/factweight/support/codein_degree, endpointfiltersallrelations. Rootcontextusesadapterformanagedsources;neverloadsunfilteredfullgraphfirst. Strictgensget requestQuerySnapshotBundle withoneworkspaceSnapshot each anddurableactivequeryrefs; compatibilityonlygensretaincache. BundlevalidatescurrentACL/leaseeachuse,renewsliveref,releasesdeterministically; graphweakreffinalizer iscrash/otherreaderfallback, expirationboundsretention. Actualtest_query_snapshots.py provesG1heldwhileG2publish, GCblockeduntilrelease, suppressiondenial, andaskmidembeddingpublishstillcitesG1/releasesrefs. Root65Ladybugreader/pin/projection/context/service tests passed /tmp/hippo-rag-task5-root-pins-ladybug.log.
+
+rag_query_session ownsquery_access/ask/HTTP/MCP/CLI/HTML/pages/render/statussessionwiring. Allcorequeries acquireonegraphthroughmodelandDTOandreleasefinally, preservingoriginalsaved-inputguards. Rootalso convertedgraphlight_up toonesessionthroughsourceinventory. Independentrag_generation_loader reviewfoundsettingsfingerprintdefaultsoverridesmismatch andgraph_forpostbuildfailureleavingrefuntilGC. RootreproducedbothRED in test_query_snapshots.py; rootfixedgraph_for try/close;queryagentfixedimmutableeffectiveQuerySession.settings captureandaskconsumption,HTTPacquisition400handling. Root84Fake query/snapshot/session/graphsurface casespassed /tmp/hippo-rag-task5-settings-root.log. Needindependentre-reviewfixes; queryagentfinalLadybugrunpending. Readerledgercreatedtask-5-reader GATES pendingfinalverification.
+
+rag_embedding_cache newlyowns ONLYknowledge/embedding_cache.py andtests/unit/test_embedding_cache.py, implementing explicitimmutableprofile(digest/dimension/preprocessing/options),boundedvector-onlycache,batchedmisses/dedupe/order/corruption/diskfallback tests. NoOllama/config/pipelinewiring. APIapproved;rootcallerwillresolveactualOllamadigest beforeuse. Codeinprogress.
+
+StillrequiredTask5: stagedindexer/lifecyclecoordinator withnoglobalpublish/synonymsideeffects; embeddingcacheproductionprofilewiring; manageddelete/reindex/bulk/startupdispatch (storesnowrefuselegacycleanup); durable savedsnapshotrefs/applicationretention wiringwhereappropriate; remainingnoncoreanalysis/evaldirectquery_access lifetimes mustbeaudited. Task5Aand6-16remainopen. Roothasnotimplementedstagedpipelineyet. Originalisolateddevserverpid90096/session56688 port8011 stillschema3 reviewedcode no-reload; do not restartagainstunreviewedschema4 untilbackup/checks. Never touchapplicationdataorstopuserOllama.
+
+
+## Task 5 storage and reader increment verified
+
+Embedding cache primitive independently reviewed and published as 89f3e13. Root and independent reviewer each passed 96 cache/Ollama tests; ledger 2/2 met. Production digest resolution and cache wiring remain pending. Previous published commits 39871ea, 2d46f53 and 2b6fbc1 all have successful CI.
+
+Storage and reader ledgers now 4/4 met each. Root full Fake unit suite passed /tmp/hippo-rag-task5-full-fake.log before final storage deltas; final storage Fake gate reruns passed. Root Neo4j reader/storage integration passed 128 tests (/tmp/hippo-rag-task5-root-neo4j.log, session67521 exit0). Latest final Neo4j storage/migration run passed 58, skipped 2 Ladybug-only, deselected 3 legacy-version cases (/tmp/hippo-rag-task5-storage-final-neo4j.log, session21533 exit0). Root final Ladybug storage/migration run passed60 with3deselected, plus2frozen-v3/reopen tests separately. Prior full Ladybug migration/policy79 and prior Neo4j migration coverage remain applicable. No application data touched.
+
+Final hardening includes: published exact-membership tombstones survive collection, preserving immutable interpretations; never-published failed generations retry after scoped cleanup under a fresh source fence; collected published generations cannot reopen; snapshots accept only previously published active/retired generations, even for historical acquisition; claim/check/renew reread state after durable source lock. Minimum nonempty-text dense coverage is enforced, with complete per-view coverage still owned by pipeline. Independent adaptive_graph_papers storage SPEC/QUALITY PASS with86pass6backend-skips. Reader independent rag_generation_loader SPEC/QUALITY PASS with128Fake tests, including captured effective settings and cleanup on post-acquisition authorization failure.
+
+Full Task5 remains OPEN. Pipeline is still legacy. Next contract drafts: rag_generation_loader owns ai_docs/plans/rag-it-all-task-5-pipeline.md; adaptive_graph_papers owns ai_docs/plans/rag-it-all-task-5-embedding-profile.md. Drafting uncovered managed projection currently omits prose OpenIE facts/native control edges, and legacy code chunks can contain synthesized text; strict migration must preserve retrieval parity and bind generated views separately from original source spans. Root owns contract review and integration. rag_generation_store is implementing NEW store/generation_counts.py + tests/unit/test_generation_counts.py + task-5-counts ledger only, leaving reviewed files stable. Neo4j is FREE unless counts agent explicitly reserves it. Isolated dev server8011 remains schema3 old process90096; back up before schema4 restart.
+
+
+## Task 5 inventory and saved evaluation increment
+
+Storage/readers published7a6b5e270c30af0272bdd6f2c1d0d84a098847b1; cache89f3e1320fc9098d26fbe7596edef8f350a802aa. Latest CI check showed both in_progress (runs34655367820/34655145560); no failure observed. Generation counts published4cd8c52 after independent review and7tests each onFake/Ladybug/isolatedNeo. It remains an internal standalone helper, not the indexer's nine write diagnostics or public audience counts.
+
+Root took over interrupted agents' eval/counts tests when their turns hit usage limits. After the user's latest please-continue message, agents became available again. Saved snapshot helper and eval lifetimes now implemented/reviewed: Trace.snapshot_ids tuple survives serialization, reconstruction uses current graph IDs; save_evaluation_result atomically saves result+saved references inside the live borrowed query session; delete run/question/set releases only those result keys. EvalAccess supports borrowed sessions and collection read scopes close deterministically. run_question pins once through search/answer/grade/metrics, and background _run_all retains before closing. Independent review found stale generatedG1 evaluations could not be deleted afterG2; root reproduced3RED cases and fixed deletion-specific current owner/source/workspace authorization without old evidence-fingerprint/gold visibility requirements. Read authorization remains unchanged.
+
+Independent final reviewSPEC/QUALITYPASS99Fake tests plus extra wrong-owner/source-revocation/targeted-release checks. RootLadybug58eval/retention tests passed plus3finaldeletion tests. RootNeo24counts/eval/retention tests passed then3finaldeletion tests (/tmp/hippo-task5-counts-saved-neo4j.log,/tmp/hippo-saved-deletion-final-neo4j.log), sessions62341/60593 exited0. Saved/eval ledgers3/3met each; countsledger4/4met. Existing tests for current graph replacement now distinguish allowed publication from mutation of the actual held evidence; old narrow graph_for mocks accept settings keyword.
+
+Owned development server90096 was gracefully stopped; isolated DB/WAL backed up under .rag-dev-data/pre-task5-7a6b5e2. New no-reload server session36640 runs reviewed7a6b5e2 schema4 on8011, log/tmp/hippo-rag-dev-server-task5.log. Authenticated smoke passed contracts/store/model readiness and anonymous denial; retrieval/model generation not exercised. Never print ignored credentials or touch application data/.
+
+Next work: adaptive_graph_papers owns embedding_profile.py + additive Ollama HTTP helpers + test_embedding_profile and ledger; initial149tests pass but hardening/read-only identity fields and safe descriptor persistence are in progress, then needs independent review. rag_generation_store owns newly approved schema5 storage slice per ai_docs/plans/rag-it-all-task-5-derived-evidence.md: freezev4checksum af3234c2ffd6aa2a5c935b06352ad91c92b8c44f80926969a6c3a775a4d5dfd7 and original seals, add Passage.retrieval_view_id/ProseExtraction + derivationclosure. No access/projection/consumer edits bystorageagent. rag_generation_loader designs derived reader integration, then independently reviews profile when ready. Root owns lifecycle and remaining integration. Neo is FREE unless storage agent explicitly reserves it; root released60593. FullTask5 stillOPEN; legacy ingestion stillactive; Tasks5A/6–16 notimplemented.
+
+
+## Task 5 resolved embedding profile increment
+
+Saved evaluation increment published95fe2b0. Resolver/guarded adapter now independently SPEC/QUALITY PASS from rag_generation_loader; root gate checker2/2met and164tests with warnings as errors. Chat retry review found legacy retries could resend a private prompt after revocation; six RED HTTP/transport/capability cases led to explicit per-attempt guards, with stable legacy behavior. Safe descriptor excludes endpoint/client state. Metadata bracketing detects observable drift but does not attest individual executions. Production query/build profile wiring remains pending.
+
+Schema5 storage review is in progress, owned by rag_generation_store; adaptive_graph_papers independently reviewing. rag_generation_loader owns bounded derived authorization closure only, not projection/consumers. Root owns analysis/simulation single-session conversion, tests in progress. Storage agent reserves disposable Neo4j32774; no concurrent root Neo permitted until explicit release. FullTask5 remains OPEN.
+
+
+## Task 5 analysis integration verified
+
+Published embedding profile e208d25; Python fenced-example formatting correction8f7c200 also published. CI89f3e13 SUCCESS. CI7a6b5e2's Fake Python3.11/3.12 jobs passed, formatting failed on Markdown Python examples (fixed8f7c200); Ladybug/Neo still running at last check. Do not report a fully green CI matrix.
+
+Analysis/simulation now own or borrow one QuerySession through saved-result reads, retrieval, answer, explanation and HTML/JSON materialization. Captured settings remain stable; explicit simulation overrides and saved baseline settings are preserved. Baseline/trace bind to the held snapshot; old trace stays unchanged. Independent reviewer caught saved deletion during final success/error DTO construction, fixed by validating after materialization. Root13Fake+13Ladybug+87compatibility gates4/4MET, independentSPEC/QUALITYPASS.
+
+Root fullFake run /tmp/hippo-task5-current-full-fake.log: 2300passed23skipped, 8failed2errors. Diagnosed one baseline object-identity regression (now fixed with conditional copy), one stale graph_for lambda not accepting settings in test_status_access (fixed), and8 loopback-permission failures/errors. Final affected suites rerun with authorized sockets:64passed /tmp/hippo-task5-full-fake-failures-rerun.log. No other full-suite failures were observed.
+
+Storage/access independent reviews PASS. Root gate reverify running: derived-store session97283 owns disposableNeo reservation; derived-access42784. Storage agent's finalNeo33pass and broader120pass2skip completed before root reservation. Projection reader agent now implements GraphIndex lineage/citation resolver and prose projection; temporarily inconsistent files must not be committed. Root implements query heartbeat, code/tests in progress; reviewer found partial Thread.start ownership gap, fixed with pre-start ownership and stop-on-start-error. Managed heartbeat rerun awaits projection stability. FullTask5 remains open; legacy production ingestion unchanged.
+
+
+## Task 5 derived storage and authorization verified
+
+Analysis published525d67e. Root final derived storage gate checker5/5MET:33Fake focused,251Fake8backend skips compatibility,75Ladybug,33Neo; session97283 exited0 and Neo is FREE. Access gate checker3/3MET:16Fake focused,61Fake combined,16Ladybug; session42784 exited0. Independent adaptive reviews SPEC/QUALITYPASS for both slices. Old v4 descriptor/checksum and existing original seals are preserved, including previously unbound metadata. New controlled derived_evidence_version=1 coverage marker seals every selected dependency group, preventing unused malformed views from entering a sealed generation. All original inputs and intermediate derivations must remain authorized; missing selected records fail closed.
+
+These are storage/authorization increments only. Derived projection and original citations remain in progress under rag_generation_loader; no derived production ingestion enabled. Root heartbeat partial-start correction reviewed, pure8tests passed; initial11Ladybug passed before startup fix. Awaiting stable projection for final managed heartbeat12cases. No application data touched, development server still reviewed schema4.
+
+
+## Task 5 long-query lease renewal verified
+
+Derived storage/authorization published27d47e8. Root heartbeat ledger4/4MET after projection stabilized:12Fake/12Ladybug with warnings as errors,77query/eval/analysis compatibility cases, plus68combinedFake. Independent adaptive review found and verified partial-thread-start fix; no remaining findings after final integration rerun. A strict QuerySession renews during outstanding model work, records sticky renewal failure and joins before reference release. Controlled-clock test crosses original lease expiry, publishesG2, and provesG1 cannot be collected until output completes. Legacy sessions start no worker. Build coordinator use remains pending.
+
+Projection/citation agent still owns GraphIndex/knowledge projection/citations/replay. Root core answer now resolves original citations and has new uncommitted API/MCP/HTML consumer tests/helpers. Do not publish those before projection and consumer reviews. Root consumer run98311 underway, /tmp/hippo-citation-consumers-green.log. Provenance preparation design assigned to storage agent; no implementation there yet. Neo is FREE. FullTask5 and subsequent tasks remain open.
+
+
+## Task 5 derived projection and original answer evidence verified
+
+Query heartbeat published e37a7e3. Derived projection and citation consumers independently SPEC/QUALITY PASS after two review fixes: normalize temporary synonym vectors for true cosine comparison; deduplicate shared originals in multi-hop generation and require distinct evidence on both sides. Root final gate checker7/7MET:18 projection Fake/18Ladybug,99 projection compatibility,11citationFake/11Ladybug,149consumer compatibility, scoped Ruff. Combined isolatedNeo projection/citations/heartbeat41passed (/tmp/hippo-derived-citation-heartbeat-neo4j.log); Neo is FREE. API/MCP/HTML answers render original evidence with locator metadata, keeping retrieval IDs separate. Search and analysis label derived text; question-generation model inputs use originals.
+
+Raw artifact primitive remains uncommitted pending race fix/review: substituted staging name must not publish wrong bytes or be deleted as owned. Storage agent owns fix, adaptive reviewer available. Loader begins bounded immutable provenance DTO/plain-reader mapping work under the accepted input contract; no production dispatch. FullTask5 remains OPEN and legacy ingestion remains active. Latest published CI runs still in progress; no claim of full CI completion. Application data untouched.
+
+
+## Task 5 immutable raw bytes primitive verified
+
+Projection/citations published303c4f2. RawArtifactStore provides explicit-root bounded immutable content-addressed bytes, strict references/hash/length, verified reads and atomic no-replace publication. Review caught staging-name substitution; two RED regressions led to retaining file descriptor ownership through publication, verifying final inode/digest, and skipping observed foreign staging entries during cleanup. Root gate checker3/3MET,46tests; independent finalSPEC/QUALITYPASS plus adversarial replacement probe. Directory root/ancestors must exclude untrusted local writers; portable POSIX cannot guarantee inode-conditional unlink against a hostile concurrent writer. No default/app wiring, authorization grant, GC or delete API was added.
+
+Approved input-provenance contract accompanies this increment. Loader owns new provenance/plain-reader mapping; storage agent begins shared index preparation helpers; root converts remaining lookup lifetimes. FullTask5 remains OPEN.
+
+
+## Task 5 code/graph lookup and standalone rendering verified
+
+Raw primitive published7b70a32. HTTP code/entity/neighborhood, MCP code tools, graph full/node detail and standalone render now own a QuerySession through materialized DTO/HTML and every error path. Path settings remain captured; source views and status borrow the selected graph. Viewer authorization validates on errors too. Root4gatesMET:28Fake/28Ladybug,173compatibility, Ruff; isolatedNeo28passed (/tmp/hippo-lookup-final-neo4j.log), session36233complete and NeoFREE. Independent SPEC/QUALITYPASS for lookup/render (113Fake) and graph full/node (50Fake). Updated stale graph_for test mock to accept settings so its revocation probe still runs.
+
+Source-page/read inventory integration remains uncommitted under root with10RED new lifetime tests; loader's plain provenance maps and storage agent shared index preparation are still under development/review. LatestCIe37a7e3 Ruff+Fakepy3.11/3.12SUCCESS, Ladybug/Neo jobs still in progress at check. FullTask5 remains OPEN; no managed production ingestion enabled.
+
+
+## Task 5 plain original mappings and shared preparation verified
+
+Lookup/render publishedc15477b. Plain provenance adds frozen RawInput/original units/segments/document mappings, exact legacy plain decode/trim behavior, real complete-line locators and Unicode parser-byte mappings; empty/binary outcomes explicit, rich formats/archive unsupported in this new seam. Review found mutable nested duck-typed ranges/locators inside frozen DTOs; five RED cases led to exact immutable nested type checks. Root final provenance3gatesMET with81reader/limit tests; independent72reader cases plus20,000randomdecoder cases and finalSPEC/QUALITYPASS. No chunker/capture/production wiring claimed.
+
+Shared index preparation extracts explicit-input passage vectors, code rows, prose gating/extraction and normalized fact payload computation without store handles. Legacy indexer retains existing-ID decisions, writer locks/counters and publication. Root3gatesMET:7focused,66Fake+66Ladybug, Ruff. Independent66Fake/66LadybugSPEC/QUALITYPASS plus exact committed/current two-run row/vector/model/progress/count comparison (hash6c5fcc9d729d26f7e7e92bf9b6a3f7969338b1e49bf99517552ea27e08521200). Native managed writer still pending.
+
+Root source/inventory16tests awaiting final gates/review; isolatedNeo46924 reserved, fullFake45875 running. Loader now prepares mapped prose chunks, storage agent accepted raw text/file inventory; new modules need review before publication. No production managed ingestion enabled, Task5 remains OPEN.
+
+
+## Task 5 source presentation and inventory verified
+
+Plain provenance/shared preparation publishedc4dbf0b. Source library/detail/status/list/read helpers now own or borrow one query session through code details, evaluation lists and HTML/header. Standalone audience inventory and MCP source lists release their snapshots deterministically. Graph landing page holds its source inventory; role previews retain distinct preview/actor header sessions, with durable success/error/revocation tests. Review found offline-to-online second-ping acquisition leak, fixed by creating the source view only when a session was actually acquired; reconnect tests pass. Root4gatesMET:19Fake/19Ladybug,140compatibility,Ruff; isolatedNeo16original+3previewtests passed. Independent source review57Fake plus broader98FakeSPEC/QUALITYPASS and preview probe.
+
+Full Fake suite at this integration point passed2490tests,23skipped,17third-partywarnings (/tmp/hippo-task5-full-fake-latest.log). It ran before account/user changes and newly added preview tests, so those have separate focused checks. Account/user source-derived presentation now implemented,12RED->80Fakegreen, review and real-storegatespending. Neo61994 reserved for account12; do not parallelize. Loader mapped prose chunks and storageagent accepted byte/file inputs in progress; adaptive drafts actual dense/graph-only profile activation design. FullTask5 remains OPEN, production ingestion legacy.
+
+
+## Task 5 account and user inventory verified
+
+Source/inventory published4858d17. Account/user/role pages and source-derived DTOs now own or borrow one snapshot through rendering; ladder helper closes its own session when standalone. Post-mutation user/role inventory opens after the authorized mutation, preserving intentional authorization epoch changes. Root4gatesMET:12Fake/12Ladybug/68auth-access-status compatibility, Ruff; isolatedNeo12passed (/tmp/hippo-account-final-neo4j.log),61994complete NeoFREE. IndependentSPEC/QUALITYPASS56Fake.
+
+Remaining direct ownership gaps: ChangesetAccess eagerly uses query_access and intentionally bumps authorization epoch during mutations; naive query_session wrapping would reject its own writes. EvalAccess standalone graph()/get_source and set creation also need deliberate ownership treatment. Bulk reindex inventory still uses two raw source_views and awaits managed lifecycle dispatch.
+
+Root adds original-citation labels/closures to graph-node browsing and source pages (2RED->51Fakegreen), not reviewed/published yet. Loader mapped prose chunker and storage acceptedinputs in progress. Adaptive dense-session design draft requires amendments for explicit trusted tag-only compatibility, validated stored descriptors and immutable ID-bound vector sidecars before implementation. No production managed ingestion enabled, Task5 remainsOPEN.
+
+## Task 5 accepted byte/file inventory verified
+
+Account/user lifetimes published a406c71. Accepted raw-input capture now creates immutable, canonical, source-scoped manifests with explicit limits and accepted/excluded/empty outcomes. Capture verifies complete bytes, rejects changed or unsafe file inputs, preserves cancellation, and distinguishes source read failures from storage failures. Root independent SPEC/QUALITY PASS after the diagnostic correction; all three gates reverified, 51 focused and 97 combined raw/capture tests pass with warnings as errors. No production dispatch or raw-object GC enabled.
+
+Mapped plain prose chunks independently SPEC/QUALITY PASS with 187 tests and 2,000 parity cases against the committed legacy chunker; root gates pending. Browse citations independently PASS; root gates running. Dense-session step1 capability/immutable vector sidecar contract approved for bounded implementation; storage binding, routing and activation remain pending. Loader prepares the pure input-to-evidence binding contract. Task5 remains OPEN.
+
+## Task 5 original citation browsing verified
+
+Accepted input capture published 1c69e99. Graph node DTO/panel and managed source passage pages now distinguish derived retrieval text from its complete original citation closure, including exact text and human-readable locators. Independent SPEC/QUALITY PASS; root three gates MET with 38 Fake regressions, 2 Ladybug cases, Python lint/format and browser JavaScript syntax. Existing held-session authorization guards cover final DTO/HTML construction. No runtime deployment or production ingestion activation claimed.
+
+## Task 5 mapped plain prose chunks verified
+
+Shared legacy prose chunking now supports immutable mapped text without changing public Chunk output. PreparedChunk preserves exact ordered original ranges, generated separator dependencies, title dependencies and honest complete-line original closure. Root all three gates MET with 187 reader/chunker tests and Ruff; independent SPEC/QUALITY PASS included 2,000 seeded parity cases against the committed implementation. Code/rich/remapped inputs explicitly reject in this new preparation seam. Pure chunk-to-evidence binding is now approved for implementation; no managed persistence or model calls are part of chunk preparation. Task5 remains OPEN.
+
+## Task 5 changeset snapshot lifetimes verified
+
+Provenance chunks published 60e5c20; citation browsing published 2b06dd9. Changeset get/list/page views now own or borrow a session through final output. Mutations acquire before the transaction and close afterward without a heartbeat or stale post-write epoch check; apply rebuilds its evidence-derived response under a fresh postcommit proof. Root4gatesMET:19Fake/19Ladybug/35compatibility/Ruff; isolatedNeo19passed (/tmp/hippo-changeset-neo4j.log), session80030complete, NeoFREE. Independent final SPEC/QUALITY PASS19Fake. Initial10RED reproduced leaked references and missing render ownership; extra tests cover pre-lock revocation and release outside transactions on success/rollback.
+
+Browse gate B1 now explicitly selects HIPPO_TEST_STORE=fake because this repository defaults to Ladybug. Root reverified38Fake+2Ladybug+lint/syntax; previous implicit-default broad run was38Ladybug, not Fake. Accepted-input and plain-chunk tests are backend-independent. EvalAccess standalone lifetime fixes are under agent implementation. Input binding review caught missing revision closure/duplicate passage construction and added4RED cases; final31 cases pending root verification. Dense capability/sidecar step1 and pure stored embedding descriptor validation are in progress. FullTask5 remains OPEN; application data and production ingestion remain untouched.
+
+## Task 5 plain chunk-to-evidence materialization verified
+
+Changeset lifetimes published3778d87. Pure input binding now checks source/workspace/path/raw-hash/provider/revision identity and converts PreparedChunk original line closures into exact EvidenceSpans or schema5 derived views. It emits immutable revision/evidence members, vector-free native passage adapters and extraction input/support bindings; no model output is fabricated. Root independent final SPEC/QUALITY PASS after four output-construction regressions: revision coverage/uniqueness, duplicate passage inventory and non-staging generation. Final validation also enforces one plain unit, consistent generations and linear ID lookups.
+
+Root3gatesMET139Fake/34Ladybug/Ruff; isolatedNeo34passed (/tmp/hippo-input-binding-neo4j.log),47575complete NeoFREE. Only two of the34 cases use a real store; others are pure contract tests. Full original-only and rendered seal/projection flows pass; suppressing a heading original hides the complete derived passage. Raw authenticity is established by accepted capture/reader, not re-proved by this no-I/O materializer. Code, rich formats, history, model preparation and managed writer remain pending. Task5 remains OPEN.
+
+## Task 5 persisted embedding descriptor validation verified
+
+Input binding committed d4a916f. StoredEmbeddingProfile and validate_profile_descriptor now reconstruct the closed schema1 profile/spec/fingerprint emitted by the existing resolver, rejecting unknown/missing fields, noncanonical options, digest/dimension/prefix/config mismatches and requested-output dimension disagreement. The detached frozen result contains no HTTP client or endpoint. Validation is pure internal consistency, not a live model attestation or generation grant.
+
+Root3gatesMET21focused/139profile-cache/Ruff. IndependentSPEC/QUALITYPASS138cases plus nondefault Unicode/nested-options round trips and72 malformed-field probes; root added the21st focused positive explicit-options case afterward. Controlled accepted-manifest binding and production routing remain pending. Dense step1 under independent review; EvalAccess26Fake/26Ladybug/112compatibility agent checks passed and root real-store gates running. Task5 remains OPEN.
+
+## Task 5 standalone evaluation lifetimes verified
+
+Stored descriptor validator published39527f7. EvalAccess now requires explicit graph ownership, single-item methods own/borrow one read scope, and set creation acquires/closes outside its intentional epoch-changing transaction. Add-question/create-run writes validate after writing and before commit; root review's two RED cases now roll back instead of committing then rejecting output. Manual source-free creation and stale-set deletion remain graph-free. Borrowed generation/model sessions retain ownership. The old fixture cleanup that masked setup leaks is replaced by an assertion of no live references.
+
+Root independent final SPEC/QUALITY PASS;4gatesMET26Fake/26Ladybug/66compatibility/Ruff. E3 initially referenced a nonexistent test filename; correcting it to test_evals_question_maker.py ran66cases, without code changes. IsolatedNeo26passed (/tmp/hippo-eval-access-neo4j.log),13201complete. Agent broader112Fake also passed. FullFake88799 in progress on stable code. Dense capability/derived projection Neo verification now owns container; no parallel Neo tests. Task5 remains OPEN.
+
+## Task 5 dense capability and canonical vector fingerprints verified
+
+Evaluation lifetimes published231178e. GraphIndex now declares legacy, verified or unavailable dense execution and retains immutable ID/generation/profile-bound passage and source-local inferred Fact vectors. Structural matrices are N-by-zero; fingerprints use canonical retained vectors so the same evidence hashes identically in structural and verified views. Scope/composition retain exact provenance and existing legacy/original-only fingerprints. Retriever rejects unavailable/mismatched execution before embedding, including supplied query vectors and empty graphs. Root review added zero-vector rejection and authorization before model-profile property access; scaled nonzero vectors remain valid.
+
+IndependentSPEC/QUALITYPASS41focused/210regression plus mixed-dimension/scoping probes; root3gatesMET,59Ladybug and59isolatedNeo (/tmp/hippo-dense-capability-neo4j.log),22033complete NeoFREE. Some cases are pure values; projection cases use the selected real backend. No context/profile marker/routing activation is included. Populated legacy plus structural composition explicitly rejects until the approved step2 adapter exists.
+
+Full Fake run on this stable code:2739passed,23skipped,6failed,2errors; all eight unsuccessful cases were PermissionError at localhost socket.bind in test_mcp_http.py (/tmp/hippo-rag-full-fake-current.log). Re-ran that complete file with local socket permission:19passed (/tmp/hippo-rag-mcp-http-final.log), resolving every failed/error case without code changes. Third-party Starlette/httpx warnings remain. GitHub latest published CI runs were queued at last check, not claimed green.
+
+Next approved work: storage agent step2 opt-in structural loading/snapshot grouping with a separate faithful legacy-vector sidecar (legacy-only behavior preserved; no production default switch), loader managed plain-prose model preparation/staged writer contract under review. Root owns lifecycle/profile binding integration. FullTask5 and subsequent tasks remain OPEN; production ingestion still legacy and application data untouched.
+
+
+## Task 5 static fixture evaluator lifetime verified
+
+Dense capability published de3a213. Each evaluated fixture question now holds one query session through retrieval, metrics and candidate DTO construction. Error and revocation paths close the same view. The harness still advertises its static legacy-only evaluation scope. Root2gatesMET59Fake/Ruff; independent SPEC/QUALITY PASS59Fake (/tmp/hippo-rag-eval-independent.log). No extra model calls or managed evaluation capability are claimed.
+
+Approved parallel work now implements opt-in structural loading, controlled accepted-manifest profile binding, and managed plain-prose preparation/staged writing. All are uncommitted pending independent reviews and root gates. Production ingestion remains legacy; Task5 remains OPEN.
+
+
+## Task 5 controlled generation embedding profiles verified
+
+Fixture evaluator published ad7ef86. The controlled binding operation now validates one canonical accepted-input manifest against the complete generation revision set and immutable embedding descriptor. It binds the verified mode under the live build fence, commits profile/config identity into new seals, and enforces descriptor dimensions. Existing unmarked/tag-compatible seals keep their serialization; mutable Artifact URI/policy metadata does not invalidate immutable identity. No filesystem/model call occurs inside binding or seal validation.
+
+Root independent SPEC/QUALITY PASS;4gatesMET33Fake/33Ladybug/84storage compatibility/Ruff. Additional122profile tests pass after the malformed-pointer correction. IsolatedNeo33passed (/tmp/hippo-profile-binding-neo4j.log),33869complete NeoFREE. The earlier122-case independent run captured the newly introduced pointer RED; final run resolved it (/tmp/hippo-profile-independent-final.log). GitHub CI remains queued for recent published commits.
+
+Structural loading now adds retention for code supported by an original span without a dense Passage; immutable code/original provenance and source scoping are under implementation. Plain-prose writer now requires the controlled verified binding; independent review found a guard-close/callback interleaving and loader is fixing it. Captured OpenIE runtime contract is drafted for review, not implemented or activated. Task5 remains OPEN, production ingestion remains legacy.
+
+
+## Task 5 managed plain-prose preparation and staged writer verified
+
+Controlled profiles published1d46f00. Detached preparation now reuses actual shared OpenIE, captures exact input/profile/configuration identity, creates immutable passage/inferred-prose vectors and records complete successful coverage. Successful empty extraction remains distinct from failure; skipped or partial mandatory outputs cannot seal. The writer requires controlled verified_v1 binding, compares exact persisted inventory, checks authorization/suppression epochs inside fenced batches and final seal, and invokes external guards only outside transactions. Its callback-free core supports future atomic legacy bootstrap; it does not publish.
+
+Root6gatesMET:32preparation/61shared/86writer-binding-derived Fake,19writerLadybug and Ruff/format. IndependentSPEC/QUALITYPASS147Fake/19Ladybug; agent51combinedLadybug. IsolatedNeo19passed (/tmp/hippo-prose-writer-neo4j.log),97530complete NeoFREE. Independent event-controlled tests found and fixed a closed-guard race after a blocking callback; restored authority cannot resume failed preparation.
+
+Structural initial26Neo passed but additional shared-canonical-object regression remains under active implementation; do not publish that slice yet. GuardedOpenIE root implementation has3gatesMET41focused/187regressions/Ruff and independentSPEC/QUALITYPASS, awaiting its own commit after this dependency. Coordinator and verified retrieval-session exact contracts are being drafted separately. No production managed ingestion activation; Task5 remains OPEN.
+
+
+## Task 5 captured OpenIE runtime verified
+
+Managed prose preparation/writer committed ffc46b6. New resolve_openie_profile and GuardedOpenIE capture the actual chat model digest/name/context/capabilities, preserve the existing prompt parser and think-block handling, and construct explicit captured requests without reading or changing the shared capability cache. Every attempt checks current authorization and installed identity; errors are sticky across concurrent workers. Resolver uses fresh metadata only, with explicit completion capability and no inference probe. The captured safe profile has no transport state.
+
+Root3gatesMET41focused/187preparation-Ollama-embedding regressions/Ruff. IndependentSPEC/QUALITYPASS41plus transport probes: drift/revocation on success or connection error sent source text once; a successful503 retry used the identical NER request and then completed triples without recursive guards. Event-driven tests cover failure while authorization/request callbacks block. Raw metadata bracketing is not digest execution attestation; the trusted local server assumption is explicit.
+
+Initial38RED missing-module failures led to implementation; one mutable-capability RED added strict canonical tuple validation. Initial lint gate failed import ordering only; final reverified3gates pass. No store access, source publication or production activation in this adapter. Task5 remains OPEN.
+
+
+## Reviewed integration regression checkpoint
+
+All commits through a9f0b52 are published on rag-it-all-tibs. Full regression from an isolated git-archive snapshot of exactly a9f0b52 passed2875tests,23skipped,17third-party warnings (/tmp/hippo-reviewed-a9f0b52-full-fake.log). HIPPO_TEST_STORE=fake was explicit; localhost HTTP tests had permission, so this was a clean full command, unlike the earlier sandbox-bound run. Snapshot /tmp/hippo-rag-reviewed.upWdAL contains no application data;26579completed.
+
+Structural loading remains uncommitted. Initial26Fake/26Ladybug/26Neo passed, but a genuine shared canonical repository-symbol case exposed per-source projection collisions. Approved refinement: workspace structural projection with exact per-generation profiles, source-local prose vectors/synonyms, equal shared-code contributions, explicit conflict errors, immutable per-source code/original provenance and complete assertion support provenance. Source scoping must remove unsupported relations and rebuild weights even when both canonical endpoints survive via another source. Storage agent owns this refinement and final gates.
+
+Loader designs verified retrieval_session/dense_session around one held structural session and explicit tag_compatible capability; no metadata-based advisory routing or duplicate eligibility logic. Retain all provenance and zero legacy vectors, require uniform positive matrix width; truly empty legacy needs no model, tag-only code without a legitimate width explicitly denies dense use. Verified and tag-compatible mixtures deny. Production routing remains separate.
+
+Adaptive coordinator design saved ai_docs/plans/rag-it-all-task-5-prose-coordinator.md. Detached bootstrap uses no durable reservation/Generation until final atomic install, with captured authority/control-config CAS. Refresh claims a normal fenced job before inference. Owned policy/managed transitions may advance authorization epoch only under the admission lock after validating the original baseline, followed by explicit fresh local checks. First implementation boundary is a reviewed build-authority API reusing EvidenceAccess through prospective immutable records, not duplicated policy logic. No coordinator/store code yet.
+
+Application data untouched. Isolated dev runtime remains the previously reviewed7a6b5e2 on .rag-dev-data port8011; it has not been updated to these new primitives. Neo disposable test database is free. All Task5 production lifecycle/deletion/reindex and code/rich/history obligations remain OPEN, followed by Tasks5A and6–16.
+
+
+## Task 5 structural loading and build lifecycle controls verified
+
+Prospective build authority published as 5a401db. It captures reader or explicit trusted-local authority, source controls and authorization/suppression epochs before accepting immutable local originals. The read-only overlay reuses EvidenceAccess policies without fabricating query evidence or persisting prospective rows. Root gates pass44Fake/44Ladybug/92combined access cases and Ruff;18 focused authority/failure cases also passed Neo4j. A source-scoped recovery filter and fenced non-collecting failure transition published as a5eba67 after17Fake/17Ladybug/18Neo4j plus59 compatibility cases and independent SPEC/QUALITY PASS. Failed attempts retain staged inventory for audited recovery while a fresh fence performs controlled cleanup; G1 is untouched.
+
+Structural loading published as9078a6e after an independent review found and reproduced original-only typed entity loss during source scoping. StructuralObjectEvidence now records exact authorized observations, source/generation binding and original spans. Shared symbols, typed catalog objects and assertion support contributed by a third source retain complete provenance; scope removal cannot recreate endpoints from relation support. Final gates pass43Fake/43Ladybug/43Neo4j,170compatibility and Ruff, with independent SPEC/QUALITY PASS. Opt-in structural sessions perform no model access and production routes remain unchanged.
+
+Dense-session dispatch published as26f9a55. It classifies only evidence retained in one held structural graph, including relation-only, typed-object and shared-code contributors. Verified generations require one exact controlled descriptor and live model identity; tag-compatible generations retain canonical managed and legacy vectors without claiming a digest. Mixed modes/profiles and unknown widths fail before private model dispatch. Direct model-profile reads, supplied query vectors and empty routes remain guarded by the captured audience and tag. Root gates pass73Fake/73Ladybug/73Neo4j,254 broader Fake regressions and Ruff; independent SPEC/QUALITY PASS. Existing production routes remain unchanged.
+
+A clean git archive of exact commit26f9a55 at `/tmp/hippo-reviewed-26f9a55.ACLTYv` passed the complete Fake suite:3011passed,23skipped,17third-party Starlette/httpx warnings. Local HTTP fixtures had permission; `/tmp/hippo-reviewed-26f9a55-full-fake.log` records the run. This result excludes all uncommitted coordinator and temporal work.
+
+Plain-prose coordination is implementing detached atomic legacy bootstrap, fenced refresh and guarded receipts. Production activation remains a separate reviewed increment; CI runs for newly published commits were queued at the last check and are not claimed green.
+
+
+## Fleet wave: coordinator, Task 5A pure increment, activation Tasks 1–2
+
+Orchestrated as a herdr fleet after the Codex root session ended on a usage limit mid-review (end state recorded in `ai_docs/handoffs/codex-root-session-end-state.md`). Every slice below had a fresh independent SPEC/QUALITY review before merge; reviews live under `ai_docs/reports/2026-09-11-*-review.md`.
+
+- Plain-prose coordinator (`c3333ca`): the detached Ladybug gate that had finished red after the root died (2 failed) was root-caused to backend-sized harness budgets; production fixes were a single heartbeat read under `pause()`, a now-tested post-publication authority recheck, cancellation preserved through renewal and a shared source-presentation helper. Gates at review time: PC1 65 Fake, PC2 66 Ladybug, PC3 136, PC4 Ruff, one Neo4j parity run 65 passed. The review also found that every ambient-transaction probe read the process-global transaction depth, so concurrent builds in different threads rejected each other.
+- Per-thread transaction ownership (`afb8960`): every store records the thread that opened its outermost transaction and answers `in_ambient_transaction()` for the calling thread only; `BuildAuthority.check` uses it. 242 Fake and 120 Ladybug cases; the coordinator's own probe and the staged-writer wrapper probe are switched in the following commit with a final Ladybug and Neo4j pass.
+- Task 5A pure increment (`cb92ba7`, `25a011d`): the first review failed SPEC and QUALITY (a late duplicate guard rejected ordinary multi-source corroboration; point/interval predicates ignored precision; `OrderingRelation` unimplemented; series keys omitted the adapter). Fixes were RED-first; re-review passed; coarse effective precision now makes conflict overlap unprovable. T5A1/T5A2/T5A5/T5A6 met by the gate checker; T5A3/T5A4 integration is not started and depends on the shared store/access files.
+- Activation Task 1 (`5564d73`, follow-up `7c0cecb`): reviewed local workspace memberships via the shared `permission_mutation` decorator, and a managed tombstone that suppresses the current view, fences the builder and cancels only the exact unpublished attempt. Review found that `claim_generation_build` ignored a committed tombstone (now a store-level barrier), that the membership bootstrap's epoch bump on the first lazy `ping()` killed an already-open query session (the additive bootstrap now never bumps; plan amended), that `apply_source_tombstone`'s guard was a process-global false negative, and an existence oracle in the denial message; all fixed with tests.
+- Activation Task 2 (`82bd317`): `GraphIndex.selected_managed_generations` proven from exact authorized `GenerationMember` manifest revisions, preserved through scoping, composition, dense replacement and fingerprints; `status.source_view` renders an authorized empty generation with zero counts from held-graph provenance and withholds denied or tombstoned ones. Full Fake suite 3036 passed on the branch; Ladybug reopen proven.
+
+Full Fake unit suite at `c3333ca` with `-W error` plus the exact AnyIO ignore: 3233 passed, 27 skipped, 14 failed, all fourteen the pre-existing `test_cli.py` Starlette `timeout` deprecation (`/tmp/hippo-orch-full-fake-c3333ca.log`); no other file failed. Earlier full-suite figures in this file were recorded without `-W error`.
+
+Known `-W error` environment facts: importing `fastapi.testclient` under anyio 4.15 raises the `BlockingPortal` deprecation; the per-test marker handles function-level imports and the exact command-line ignore handles module-level importers (fifteen files). `test_cli.py` additionally hits a Starlette `timeout` deprecation in fourteen tests; Task 4 fixes the usage. Remaining Task 5 work: activation Task 3 (pipeline adapter, delete/reindex/bulk dispatch), Task 4 (actor propagation, structural default, public errors), code/rich/history capture; then 5A integration and Tasks 6–16.
+
+Published `26f9a55..158ebf2` to `origin/rag-it-all-tibs` after the coordinator ledger reached PC1–PC4 MET (final Ladybug 67 passed, Neo4j parity 204 passed across coordinator, staged writer, transaction ownership, tombstone, membership and inventory files). Activation Task 3a (managed adapter, eligibility, add/refresh dispatch) merged as `c668688` with an independent SPEC/QUALITY PASS; Task 5A integration part 1 (history selection, manifests, snapshot pinning) merged as `043ca51` but its review found two blockers (audience-correct snapshot proof; atomic selection) that are being fixed before publication. Task 3b, Task 4a and those fixes are in flight. CI for the published commits is not claimed green until checked.
+
+Import-order incident: merging Task 3a made `ingest/pipeline.py` import `managed_activation` at module level, which through the coordinator reaches `hippo.knowledge`, whose modules import `hippo.ingest.accepted_inputs`; importing any knowledge module before `hippo.ingest` then failed on a partially initialised `generation_profiles`. Order-dependent, so the slice's own gates passed. Fixed at `da51784` with a lazy accessor and a fresh-interpreter import test over the entry modules; the underlying knowledge-to-ingest dependency is recorded as a layering follow-up.
+
+Published `158ebf2..fe711e2`: activation Task 3a (managed adapter, eligibility, add/refresh dispatch; independent SPEC/QUALITY PASS), activation Task 4a (closed public failures, structural query-session default, a 70-row session audit assigning every remaining low-level graph call to Tasks 4b–4d), Task 5A integration part 1 (authorized history selection, canonical manifests with coverage in their identity, caller-audience snapshot pinning, bookkeeping classification for manifests and conflict sets, replayable cutoffs on every selector mode with an identity carve-out that keeps stored snapshot IDs stable; two review rounds), the purge-marker fail-open fix, and the import-cycle fix. The Task 5A ledger is 6/6 MET by the checker with T5A3/T5A4 explicitly partial: the recorded_correction half is integration part 2, in flight. Task 3b, Tasks 4b–4d and 5A part 2 are in flight on worktrees; production routes are not yet activated.
+
+Integration sweep at `a0f811f` (Tasks 4a, 4b-ii, 4c, 4d merged; 4b-i, 3b, 5A part 2 and the Ladybug fact-order fix in flight): full Fake unit suite 9 failed, all one class: tests asserting raw exceptions from MCP tool paths, which now raise `ToolError` with the closed public codes. Four rows belong to 4b-i (already adapting), five to a small test-adaptation task. No other regression from merging four Task 4 branches.
+
+Fact-order determinism (`e709aad`): LadybugDB and Neo4j return extracted facts in arbitrary order, so the view fingerprint of an unchanged corpus differed between loads on the primary backend, which denied generated evaluation sets their stored evidence fingerprint and withheld saved answers (found by activation Task 4d). Facts, their vector rows and each fact's passage IDs are now canonically ordered by fact ID at every `GraphIndex` construction site; the golden legacy fingerprint test passes unchanged. Evidence fingerprints persisted before the fix are stale by construction; earlier generated evaluation sets must be recreated. Arrow order within code vertices is the same defect one layer over and is being fixed separately. Task 5A integration part 2 (`758e679`) adds append-only correction publication inside the fenced publish transaction with six failpoints; independent review in progress.
+
+Task 5A integration parts 1 and 2 are merged and independently reviewed (each with a fix round): authorized history selection with caller-audience snapshot pinning, canonical manifests, bookkeeping classification for manifests and conflict sets, replayable cutoffs on every selector mode, append-only correction publication inside the fenced publish transaction with capability-bound closures and six failpoints, per-series supersession. The Task 5A ledger is 6/6 MET by the gate checker at `a9512a2`. Still owed: chronological JSONL fixture loading (in flight) and the root-only disposable-Neo4j repeat (queued behind the activation-slice parity run). Activation Tasks 3b, 4a, 4b-i, 4b-ii, 4c and 4d are merged; 4c's review failed on four majors now being fixed; 4b-i's review is in progress; the two wrap-up tasks (web, evaluation) are in flight.
+
+CI for the published `fe711e2`: the Ruff job failed on Markdown fenced examples (fixed locally at `2fa6312`) and the Fake py3.11 job failed on the Task 4a breakage rows (analysis simulation, changesets, replay access) that the structural default flip introduced and Tasks 4b–4d closed on the local branch; the sibling jobs were cancelled by fail-fast. The public branch is therefore red until the next push, which carries all of Task 4 and its reviews. Neo4j parity of the merged slices is being run locally on the disposable container before that push.
+
+Neo4j parity (root, disposable container) for the merged activation store, ordering and pipeline slices: 313 passed, 4 skipped, no failures (`ai_docs/gates/rag-it-all/task-5-production-activation/neo4j-parity.md`). The temporal, snapshot and generation slices run next on the same container.
+
+Neo4j parity run 2 (temporal, snapshot, generation): 160 passed, no failures. With every merged slice independently reviewed (3b, 4b-i, 4b-ii with its follow-up, 4c with its follow-up and re-review, 4d, 5A parts 1 and 2 with their fix rounds) and both parity runs green, the branch is published up to this point. Still in flight: the 5A chronological fixture loader, the evaluation wrap-up (decisions 1–4 complete), the web wrap-up, then a combined wrap-up review with a PA1–PA8 ledger pass and the knowledge/ingest layering cleanup.
+
+Task 4 wrap-ups merged: web (`65fbcab`: one public-failure helper with Accept negotiation, exact-type ingress catches, `bulk_refused` 409 for a refused managed preflight, bounded legacy Source errors with the closed-validator vocabulary kept, the restart sweep releasing a crashed build holder, a preview notice for managed corpora, `ProjectionError` raised at its source) and evaluation (`b5a5086`, `a4595ee`: public failure reasons on results, runs and sets, the dense dispatch rule promoted into `retrieval_session`, bounded logging, the static evaluator late-bound). Task 5A: the chronological fixture loader was reviewed, fixed (`f6ea424`: ordinal-only closure, preserved offsets, no invented instants, purge markers reachable) and the ledger is 6/6 MET (`db662bc`). Layering (`0d4d2ec`): `hippo.knowledge` no longer imports `hippo.ingest` except two allowlisted non-cyclic residuals; the ingest package is lazy and the pipeline's lazy accessor is gone. Neo4j parity run 3 covered the restart sweep and bulk dispatch. A combined Task 4 wrap-up review with a PA1–PA8 ledger pass is in progress.
+
+Full Fake unit suite at `0d4d2ec` with `-W error` plus the exact AnyIO ignore: 3871 passed, 28 skipped in 283.58s (0:04:43) (no failures; `/tmp/hippo-orch-full-fake-0d4d2ec.log`). The fourteen former `test_cli.py` failures are gone since the remote client stopped passing a timeout to an injected test client.
+
+Task 4 wrap-up review (`ai_docs/reports/2026-09-12-pa4-wrapup-review.md`): 4e SPEC PASS on seven of eight decisions (the `str(exc)` grep in decision 1 is not yet true; 33 sites, two leak-class) and QUALITY PASS with findings; 4f SPEC and QUALITY PASS with findings; PA1–PA7 pass verbatim at `f96c01f` (PA7 Ladybug 484 passed in 39 minutes) and PA8's static half passes, but PA8 cannot be signed while nineteen review findings stay open. The activation gate lines PA5–PA7 now include the wrap-up test files. Published `b0351ed..4a8bbb2`. A final cleanup batch (the four mediums and the lows, all one-to-three-line changes) is in flight; PA8 is signed after it and one more independent pass.
+
+Direction change (2026-09-15). The user imported the Enterprise Graph-RAG unified specification v1.0 as the direction of record (`docs/spec/enterprise-graph-rag-v1.md`, committed at `d6d9a6c`) and asked for a generalized Connector Developer Kit as another v1.0 output: an SDK that connects data of any type, classifies it as a type when it connects, and ingests it through one contract. The kit's design of record is `docs/spec/connector-developer-kit.md`; its gates are CK1–CK7 in `ai_docs/gates/rag-it-all/cdk/GATES.md`; its slices S1a, S1b, S2–S6 are listed there and planned in `ai_docs/plans/cdk-*.md`. The verification wave that was next before the change (the CD10 round-2 review after r21a–r21w, the PA7-alone reverify, the PA8 round-5 sign-off, and the push that waited on them) is parked, not abandoned: HEAD `54c8e33` equals `origin/rag-it-all-tibs`, the tree was clean, both ledgers' checker runs are recorded, and the CD10 verdict stands as NOT SIGNABLE from round 1 until a round-2 review is scheduled. The one decision the kit does not make is the retrieval stack (LadybugDB/Neo4j, igraph PageRank and Ollama, versus the specification's CSR tier, Qdrant and Cohere Embed v4, and OpenIE's fate); it is recorded as open for the user in the design's §14.
+
+**CDK planning state (2026-09-15, later).** The design was corrected before planning encoded it
+(`d1b7bb2`, `f7b14ee`, `ef143b1`: `SAME_OBJECT_AS` instead of `ALIAS_OF` for alias candidates,
+`owner_families`, `Generation.registry_fingerprint` outside `configuration_json`, the three `Unit`
+hashes, `Connector.classification_json` in v8). Plans committed: S4/S5/S6 at `937fbb8`, S1 at
+`5bae615`; S2 and S3 pending from the second planner. Orchestrator rulings R1–R23 in
+`ai_docs/plans/cdk-rulings.md` bind the implementer briefs and the review (R1: the local and git port
+is a coordinator lane; R15: discovery is S4's; R16: one current registry). CK1 CHECK lines, CK5
+wording and CK7 lint applied to the ledger; `neo4j-parity.md` created. Next: commit S2/S3, spawn the
+architect review with `ai_docs/handoffs/briefs/review-cdk-plans.md`, then implementer briefs per
+slice (S1a first). Everything through this commit is pushed to `origin/rag-it-all-tibs`.
+
+**CDK implementation state (2026-09-15, evening).** Plan review `ai_docs/reports/2026-09-15-cdk-plan-review.md`
+(4 blockers, 16 majors, 22 minors; S4 rejected on §3.1 plus the missing loader) applied through
+rulings R39–R56 (`ai_docs/plans/cdk-rulings.md`), design §3/§4/§8 edits and the CK1–CK4 rows.
+S1a merged at `d0bd052` (registry, leaf modules, built-ins, `Registry.check_record`; vocabulary never
+validated on read; evidence `ai_docs/gates/rag-it-all/cdk/evidence-s1a.md`); the root-tree CK1 Fake
+line plus layering passed (308 passed, 7 skipped). Running: S1b (`wp/s1b`, brief `cdk-s1b.md`), S2a
+(`wp/s2a`, brief `cdk-s2a.md`), the S4 re-plan (in-place edit of `ai_docs/plans/cdk-s4-kit.md`, brief
+`cdk-plan-s4-replan.md`). Next: merge S1b and S2a, write S2b/S3a/S3b briefs (S2b carries R40 and the
+`evidence_source_definition` accessor; S3 carries coverage placement of the exclusion counts and
+`ArtifactRevision.metadata_json["span_policy_id"]`), re-review S4 §3.1 and S4c only, then S3c, S4,
+S5, S6. Everything through this commit is pushed.
+
+**CDK implementation state (2026-09-15, night).** Merged on `rag-it-all-tibs`: S1a `d0bd052`, S2a
+`96eda9f`, S1b `9e5b93c`, S4c `c0664a9`, S3a `94761f2`. CK1 Neo4j parity passed on the disposable
+container (114 passed, 4 skipped; `neo4j-parity.md`). Root HEAD after `94761f2` is unpushed until
+S4c-fix merges (three loader tests red because S1b's write-path vocabulary check refuses the tests'
+unregistered seeded kinds; fix is test-side, brief `cdk-s4c-fix.md`). Running: S3b (`wp/s3b`),
+S1b-fix (`wp/s1b-fix`: B1/R47, `evidence_source_definition`, the exclusions one-liner), S4c-fix
+(`wp/s4c-fix`). Ready briefs: `cdk-s2b.md` (after S1b-fix), `cdk-s3c.md` (after S2b, S3a, S3b).
+Rulings through R65. Not yet briefed: S4a, S4b, S5a, S5b, S6.
+
+
+**CDK implementation state (2026-09-15, late).** Merged and pushed: S1b-fix `335d4e3`, S4c-fix
+`95bb105` (origin in sync at `2a9913a`). Running: S3b (`wp/s3b`), S2b (`wp/s2b`), S5a (`wp/s5a`,
+early under R67). Every implementer brief exists (`cdk-s2b.md`, `cdk-s3c.md`, `cdk-s4a.md`,
+`cdk-s4b.md`, `cdk-s5a.md`, `cdk-s5b.md`, `cdk-s6.md`). Remaining order: S3c after S2b and S3b; S4a
+after S3c; S4b after S4a; S5b after S5a, S3b and S4a; S6 after S4b and S5b; then the gate checker
+over CK1–CK7, the CD9 line at N=8 (root-owned, one process), Neo4j parity for CK3 and CK5, and the
+independent review (CK7). Rulings through R67.
+
+**CDK implementation state (2026-09-16, early).** Merged: S3b `fd9e840`, S2b `6f90f96`, S2b-fix
+`61757cb`, S5a `8f91969` (prose path byte-identical through the lane; fingerprint the only
+difference). Running: S3c (`wp/s3c`, brief `cdk-s3c.md` with amendments through R70). Next: S4a
+after S3c; S5b after S4a (brief amended through R72); S4b after S4a; S6 after S4b and S5b (brief
+amended through R71). Rulings through R72. Root-owned still to run: CD9 at N=8, Neo4j parity for
+CK3 and CK5, the gate checker over CK1–CK7, and the independent code review.
+
+
+**CDK implementation state (2026-09-16, morning).** Merged: S3c `94c891f`, S4a `d2906ae`, S4b
+`833feed`, S5b `01a121e`, S4a-fix `8ce4544` (plus S2b-fix `61757cb`). Root-owned proofs done: CK1
+Neo4j (114 passed), CK3 Neo4j (108 passed), CK5 Neo4j (54 passed), all in `neo4j-parity.md`; CD9 at
+N=8 running (`/tmp/hippo-orch-cd9-n8.log`). Running: S6 (`wp/s6`, brief `cdk-s6.md` with amendments
+through R79). Next: merge S6; run the gate checker over CK1–CK7 (CK7 after the review); spawn the
+CK7 review with `ai_docs/handoffs/briefs/review-cdk-code.md`; close or assign its findings; final
+report to the user. Rulings through R79.
+
+**CDK gates (2026-09-16, midday).** Every slice merged (S6 at `972f269`); the gate checker passed
+CK1–CK7 CHECK lines at `2cff093` (ledger status line is the revision of record; one CHECK line per
+gate, LadybugDB joined with `&&`). Neo4j parity for CK1, CK3, CK5, CK6 and the CD9 acceptance at N=8
+recorded. Pending: the CK7 independent review (`architect-reviewer-3`, brief
+`ai_docs/handoffs/briefs/review-cdk-code.md`, report `ai_docs/reports/2026-09-16-cdk-code-review.md`),
+then closing or assigning its findings, the final report to the user, and the user's stack decision
+(design §14). Rulings R1–R80.
+
+**CDK complete (2026-09-16, afternoon).** CK1–CK7 MET: the checker's second pass at `8206795` after
+the CK7 review (`ai_docs/reports/2026-09-15-cdk-code-review.md`, PASS WITH CHANGES) and its fix slice
+`r7-fix` (`7c8f132`). Ledger status line is the revision of record; Neo4j parity (CK1, CK3, CK5, CK6)
+and CD9 at N=8 recorded. Rulings R1–R81. Assigned onward by name: F4 and F12 (Task 15), F9 (the slice
+that retires the pre-kit writers), F13 (Task 11). Open for the user: the retrieval stack decision
+(design §14.1; recommendation recorded there), connector isolation (§14.2, v1 in-process with the
+guard, R36), third-party trust (§14.3, answered conservatively for v1 by R51: enabled kind and
+instance required). The pre-change verification wave (CD10 round 2, PA7, PA8 round 5) stays parked.
+
+**CDK closed out (2026-09-16, night).** After the CK7 review's fix slice, an independent confirmation (`ai_docs/reports/2026-09-16-cdk-r7-confirmation.md`) ruled all eight code findings CLOSED and opened one MINOR, N1 (a swallowed guard refusal followed by an ordinary raise was counted as `emit_failed` and the run published). Slice `n1-fix` closed it (merged at `e2a6f48`, R82) and a second confirmation (`2026-09-16-cdk-n1-confirmation.md`) ruled it CLOSED (R83). The checker's third pass is ALL MET at source revision `0a248b5`; CK3's Neo4j parity was rerun there (113 passed, 2 skipped). The design of record now carries an amendments paragraph pointing at the rulings. Fleet idle; worktrees under `.worktrees/` left in place, inert. Open for the user: the retrieval stack (design §14.1), isolation (§14.2, v1 in-process, R36) and third-party trust (§14.3, R51); the parked verification wave (CD10 round 2, PA7 alone, PA8 round 5) is unchanged.

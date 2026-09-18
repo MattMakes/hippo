@@ -40,6 +40,14 @@ class Config:
     # nothing to install or run. "neo4j" talks to a Neo4j server at neo4j_uri instead.
     store_backend: str = "ladybug"
     db_path: Path | None = None  # the .lbug file; None means <data_dir>/hippo.lbug
+    # Most memory LadybugDB may use to cache the file, in bytes. None means a quarter of physical
+    # memory, at most 4 GiB, worked out when the file opens. A limit is always passed, because
+    # LadybugDB's own default is about 80% of the machine's memory.
+    ladybug_buffer_pool_bytes: int | None = None
+    # How many parameterised statements one LadybugDB connection runs before the store swaps in a fresh
+    # one on the same file. The driver keeps a copy of every such statement until its connection closes.
+    # None means the store's default (`hippo.store.ladybug.DEFAULT_CONNECTION_RECYCLE_STATEMENTS`).
+    ladybug_connection_recycle_statements: int | None = None
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "hippo-password"
@@ -47,6 +55,7 @@ class Config:
     # Where the language model lives.
     ollama_url: str = "http://localhost:11434"
     llm_model: str = "qwen3:8b"  # extracts facts, filters facts, answers, judges
+    qa_model: str | None = None  # optional stronger model for the final grounded answer only
     embed_model: str = "nomic-embed-text"  # turns text into vectors
     num_ctx: int = 8192  # context window we ask Ollama for (qwen3 defaults to 4k, too small)
     llm_timeout_seconds: float = 600.0  # local 8B models on CPU can be slow; be patient
@@ -95,17 +104,44 @@ def parse_store_backend(text: str) -> str:
     return value
 
 
+def parse_buffer_pool_bytes(text: str) -> int:
+    """HIPPO_LADYBUG_BUFFER_POOL_BYTES as a whole number of bytes. Zero is refused: LadybugDB reads it as ~80% of memory."""
+    value = text.strip()
+    if not (value.isascii() and value.isdigit()) or int(value) == 0:
+        raise ValueError(f"HIPPO_LADYBUG_BUFFER_POOL_BYTES must be a positive number of bytes, not {text!r}")
+    return int(value)
+
+
+def parse_connection_recycle_statements(text: str) -> int:
+    """HIPPO_LADYBUG_CONNECTION_RECYCLE_STATEMENTS as a whole number of statements. Zero and negatives are refused."""
+    value = text.strip()
+    if not (value.isascii() and value.isdigit()) or int(value) == 0:
+        raise ValueError(
+            "HIPPO_LADYBUG_CONNECTION_RECYCLE_STATEMENTS must be a positive whole number of statements, "
+            f"not {text!r}"
+        )
+    return int(value)
+
+
 def load_config() -> Config:
     """Build a Config from environment variables (falling back to the defaults above)."""
     db_path = _env("HIPPO_DB_PATH", "")
+    buffer_pool = _env("HIPPO_LADYBUG_BUFFER_POOL_BYTES", "")
+    recycle = _env("HIPPO_LADYBUG_CONNECTION_RECYCLE_STATEMENTS", "")
+    qa_model = os.environ.get("HIPPO_QA_MODEL", "").strip() or None
     return Config(
         store_backend=parse_store_backend(_env("HIPPO_STORE", Config.store_backend)),
         db_path=Path(db_path) if db_path else None,
+        ladybug_buffer_pool_bytes=parse_buffer_pool_bytes(buffer_pool) if buffer_pool else None,
+        ladybug_connection_recycle_statements=parse_connection_recycle_statements(recycle)
+        if recycle
+        else None,
         neo4j_uri=_env("NEO4J_URI", Config.neo4j_uri),
         neo4j_user=_env("NEO4J_USER", Config.neo4j_user),
         neo4j_password=_env("NEO4J_PASSWORD", Config.neo4j_password),
         ollama_url=_env("OLLAMA_URL", Config.ollama_url).rstrip("/"),
         llm_model=_env("HIPPO_LLM_MODEL", Config.llm_model),
+        qa_model=qa_model,
         embed_model=_env("HIPPO_EMBED_MODEL", Config.embed_model),
         num_ctx=int(_env("HIPPO_NUM_CTX", str(Config.num_ctx))),
         llm_timeout_seconds=float(_env("HIPPO_LLM_TIMEOUT", str(Config.llm_timeout_seconds))),

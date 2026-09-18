@@ -26,6 +26,7 @@ services:
       # ./hippo up sets OLLAMA_URL to the host's Ollama when it finds one; otherwise the ollama container.
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       HIPPO_LLM_MODEL: ${HIPPO_LLM_MODEL:-qwen3:8b}
+      HIPPO_QA_MODEL: ${HIPPO_QA_MODEL:-}
       HIPPO_EMBED_MODEL: ${HIPPO_EMBED_MODEL:-nomic-embed-text}
       HIPPO_DATA_DIR: /app/data
       HIPPO_HOST: 0.0.0.0   # inside the container; the host-side binding below decides who can reach it

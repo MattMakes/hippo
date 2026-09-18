@@ -38,7 +38,10 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..access import CAPABILITIES, Principal, top_role
 from ..context import AppContext
-from .render import ctx_of, render
+from ..knowledge.build_authority import BuildActor
+from ..knowledge.query_access import query_session
+from ..status import source_view
+from .render import caller_error, ctx_of, render
 
 log = logging.getLogger(__name__)
 
@@ -131,7 +134,7 @@ def _gated(ctx: AppContext) -> bool | None:
     return True
 
 
-def resolve_principal(ctx: AppContext, headers: Headers) -> Principal | None:
+def resolve_principal(ctx: AppContext, headers: Headers, *, require_online: bool = False) -> Principal | None:
     """
     The Principal for a request, or None when users exist and the request carries no valid
     credential. Open mode (no users) always yields the open principal. Raises StoreDown when
@@ -139,6 +142,8 @@ def resolve_principal(ctx: AppContext, headers: Headers) -> Principal | None:
     """
     gated = _gated(ctx)
     if gated is None:
+        if require_online:
+            raise StoreDown()
         # Nothing can be read while Neo4j is down and no user was ever seen; the pages only show
         # status. Treat as open so the header and the Settings page still say what is wrong.
         return Principal.open()
@@ -158,10 +163,14 @@ def resolve_principal(ctx: AppContext, headers: Headers) -> Principal | None:
     return _principal_for(ctx, user)
 
 
-def principal_from_bearer(ctx: AppContext, token: str | None) -> Principal | None:
+def principal_from_bearer(
+    ctx: AppContext, token: str | None, *, require_online: bool = False
+) -> Principal | None:
     """The Principal behind a bearer token (MCP, scripts). Same open-mode and outage rules as above."""
     gated = _gated(ctx)
     if gated is None:
+        if require_online:
+            raise StoreDown()
         return Principal.open()
     if gated is False:
         return Principal.open(top_role(ctx.store.list_roles()))
@@ -208,6 +217,22 @@ def require(request: Request, capability: str) -> Principal:
             f"({CAPABILITIES[capability].rstrip('.')}). Ask an admin.",
         )
     return principal
+
+
+def build_actor_of(principal: Principal) -> BuildActor | None:
+    """
+    The caller's own build actor, or None for an identity that may not build managed evidence.
+
+    Open mode and role previews are not readers: a new source of theirs keeps the legacy
+    lane (the dispatch table's "no actor" column), and `plan_dispatch` refuses them before
+    it touches an existing managed one. `BuildActor.trusted_local()` is for explicit
+    internal calls; web code must never manufacture it as an authentication fallback, so it
+    is not reachable from here.
+    """
+    try:
+        return BuildActor.reader(principal)
+    except ValueError:
+        return None
 
 
 def require_capability(capability: str):
@@ -320,19 +345,23 @@ def logout(request: Request):
 def account_page(request: Request, saved: str = "", error: str = ""):
     principal = principal_of(request)
     ctx = ctx_of(request)
-    user = ctx.store.get_user(principal.user_id) if principal.user_id else None
-    return render(
-        request,
-        "account.html",
-        nav="account",
-        user=public_user(user) if user else None,
-        token=(user or {}).get("token"),
-        role=principal.role,
-        capabilities=CAPABILITIES,
-        saved=saved,
-        error=error,
-        mcp_url=str(request.base_url).rstrip("/") + "/mcp",
-    )
+    with query_session(ctx, principal.access) as session:
+        view = source_view(ctx, principal.access, session=session)
+        user = ctx.store.get_user(principal.user_id) if principal.user_id else None
+        return render(
+            request,
+            "account.html",
+            session=session,
+            nav="account",
+            user=public_user(user, sources=view.sources) if user else None,
+            token=(user or {}).get("token"),
+            role=principal.role,
+            capabilities=CAPABILITIES,
+            saved=saved,
+            error=error,
+            mcp_url=str(request.base_url).rstrip("/") + "/mcp",
+            authorization_check=view.validate,
+        )
 
 
 @router.post("/account/password")
@@ -350,6 +379,11 @@ def change_password(request: Request, current: str = Form(""), new: str = Form("
     try:
         ctx.store.update_user(principal.user_id, password=new)
     except ValueError as exc:
+        # Exact type only: a password rule the store refused is this caller's own mistake
+        # and its sentence is what they need. Anything else is re-raised to the mapper,
+        # because a query string is a place an exception's words are easy to forget about.
+        if not caller_error(exc):
+            raise
         return RedirectResponse("/account?error=" + quote(str(exc)), status_code=303)
     return RedirectResponse("/account?saved=password", status_code=303)
 
@@ -369,25 +403,35 @@ def rotate_own_token(request: Request):
 def me(request: Request) -> dict[str, Any]:
     """Who am I, as the API sees it: role, rank, capabilities, and whether hippo is still open."""
     principal = principal_of(request)
-    return {
-        "open_mode": principal.is_open,
-        "user": public_user(principal.user) if principal.user else None,
-        "role": {k: principal.role.get(k) for k in ("id", "name", "rank", "capabilities")},
-        "capabilities": sorted(c for c in CAPABILITIES if principal.can(c)),
-    }
+    with query_session(ctx_of(request), principal.access) as session:
+        view = source_view(ctx_of(request), principal.access, session=session)
+        result = {
+            "open_mode": principal.is_open,
+            "user": public_user(principal.user, sources=view.sources) if principal.user else None,
+            "role": {k: principal.role.get(k) for k in ("id", "name", "rank", "capabilities")},
+            "capabilities": sorted(c for c in CAPABILITIES if principal.can(c)),
+        }
+        view.validate()
+        return result
 
 
-def public_user(user: dict[str, Any] | None) -> dict[str, Any] | None:
-    """A user row without its secrets (the password hash never leaves the store; tokens only via /account)."""
+def public_user(
+    user: dict[str, Any] | None, *, sources: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
+    """Remove secrets and raw inventory; ownership counts require authorized source DTOs."""
     if user is None:
         return None
-    return {k: v for k, v in user.items() if k not in ("password_hash", "token")}
+    row = {k: v for k, v in user.items() if k not in ("password_hash", "token", "sources")}
+    if sources is not None:
+        row["sources"] = sum(source.get("owner_id") == user["id"] for source in sources)
+    return row
 
 
 __all__ = [
     "AuthGate",
     "StoreDown",
     "SESSION_COOKIE",
+    "build_actor_of",
     "principal_from_bearer",
     "principal_of",
     "public_user",

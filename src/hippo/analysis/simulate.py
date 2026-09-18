@@ -9,23 +9,76 @@ the two traces.
 To keep simulations cheap and repeatable, the LLM fact filter is *replayed*
 from the baseline trace (the same facts are kept) unless you ask to rerun
 it. Re-generating the answer is also opt-in, because it costs an LLM call.
+
+A simulation embeds the question and re-scores dense candidates, so it is a
+model/dense owner: it reaches its graph through the same `retrieval_session`
+dispatch `ask` uses, over the one session it owns or borrows. Nothing below
+this layer acquires a second graph.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..access import Access
-from ..ask import answer_from_trace
+from ..ask import _answer_from_trace
 from ..context import AppContext
 from ..hipporag.answerer import Answer
 from ..hipporag.graph_index import EdgeEdit
-from ..hipporag.retriever import FactFilter, Retriever, Trace, trace_from_dict
+from ..hipporag.retriever import (
+    FactFilter,
+    RankedPassage,
+    Retriever,
+    SelectFn,
+    SelectResult,
+    Trace,
+    trace_from_dict,
+)
+from ..knowledge import dense_session
+from ..knowledge.query_access import AuthorizedModel, QuerySession
+from ..knowledge.replay import can_reuse_answer, reconstruct_trace, view_fingerprint
 from ..store.base import validate_settings
 from .explain import TOP_PASSAGES
 
 DIFF_TOP = TOP_PASSAGES  # the diff covers the same passages the Analyze page explains
+
+# Which settings a simulation may change. An explicit allow-list rather than "everything in
+# SETTING_RULES", because a few settings only take effect while *indexing*: as sliders on the
+# Analyze page they would render as knobs that cannot move any ranking, on the page whose whole
+# purpose is explaining one. A new setting is not simulatable until it is named here.
+SIMULATABLE_SETTINGS = frozenset(
+    {
+        "linking_top_k",
+        "passage_node_weight",
+        "damping",
+        "node_specificity",
+        "synonymy_threshold",
+        "retrieval_top_k",
+        "qa_top_k",
+        "code_seed_weight",
+        "code_structural_scale",
+        "code_theta",
+        "code_dense_seeds",
+        "code_triples_chars",
+        "code_community_boost",
+        "code_select",
+        "code_expand_max",
+    }
+)
+
+# The rest: read once, while indexing, and never looked at again by a search.
+INGEST_SETTINGS = frozenset({"code_history_depth", "code_git_timeout_s", "code_history_total_s"})
+
+
+def validate_simulation_settings(changes: dict[str, Any]) -> dict[str, Any]:
+    """`validate_settings`, but refusing the settings a simulation cannot act on."""
+    not_simulatable = sorted(set(changes) & INGEST_SETTINGS)
+    if not_simulatable:
+        raise ValueError(
+            f"{', '.join(not_simulatable)} only applies while indexing, so a simulation cannot change it"
+        )
+    return validate_settings(changes)
 
 
 @dataclass
@@ -44,7 +97,7 @@ class Overrides:
     def from_dict(cls, d: dict[str, Any] | None) -> Overrides:
         d = d or {}
         return cls(
-            settings=validate_settings(dict(d.get("settings") or {})),
+            settings=validate_simulation_settings(dict(d.get("settings") or {})),
             force_include=[str(x) for x in d.get("force_include") or []],
             force_exclude=[str(x) for x in d.get("force_exclude") or []],
             node_boosts={str(k): float(v) for k, v in (d.get("node_boosts") or {}).items()},
@@ -90,36 +143,81 @@ def simulate(
     overrides: Overrides,
     baseline: Trace | None = None,
     access: Access | None = None,
+    *,
+    authorization_check=None,
+    session: QuerySession | None = None,
 ) -> Simulation:
     """
     Run the search again with `overrides` and diff it against `baseline` (or a fresh plain search).
     `access` keeps the simulation inside the caller's slice of the graph (hippo/access.py).
-    """
-    index = ctx.graph_for(access)
-    retriever = Retriever(index, ctx.ollama)
 
-    base_settings = dict(baseline.settings) if baseline is not None else ctx.store.get_settings()
+    The owner is acquired (or the caller's is borrowed) through the public dense dispatch, so
+    the retriever below runs on evidence this audience proved, and an already dispatched
+    session is passed straight through rather than re-resolving its embedding profile. A
+    borrowed session carries its own audience, so `access` is only forwarded when this call
+    owns the session; the dispatcher refuses the two together.
+    """
+    with dense_session.retrieval_session(
+        ctx, None if session is not None else access, session=session
+    ) as query:
+        return _simulate(question, overrides, baseline, query, authorization_check)
+
+
+def _simulate(question, overrides, baseline, query, authorization_check):
+    index, model, validate_query = query.graph, query.model, query.validate
+
+    def validate():
+        if authorization_check is not None:
+            authorization_check()
+        validate_query()
+
+    validate()
+    model = AuthorizedModel(model, validate)
+    if baseline is not None and not can_reuse_answer(index, baseline.evidence_fingerprint):
+        baseline = reconstruct_trace(index, baseline, question=question)
+    elif baseline is not None and baseline.snapshot_ids != tuple(getattr(index, "snapshot_ids", ())):
+        baseline = replace(baseline, snapshot_ids=tuple(getattr(index, "snapshot_ids", ())))
+    retriever = Retriever(index, model)
+
+    base_settings = dict(baseline.settings) if baseline is not None else dict(query.settings)
     settings = {**base_settings, **overrides.settings}
 
     # No baseline (ad-hoc question)? Run the real filter once so we have something to replay and diff.
     # With rerun_filter the simulated search runs the LLM itself, so we skip the extra call.
     if baseline is None and not overrides.rerun_filter:
-        baseline = retriever.retrieve(question, base_settings)
+        baseline = retriever.retrieve(question, base_settings, select_fn=retriever.llm_select)
+        baseline.evidence_fingerprint = view_fingerprint(index)
+        baseline.snapshot_ids = tuple(getattr(index, "snapshot_ids", ()))
 
-    fact_filter = None if overrides.rerun_filter or baseline is None else replay_filter(baseline)
-    graph = index.graph_with_edits(overrides.edge_edit_objects()) if overrides.edge_edits else None
+    replaying = not overrides.rerun_filter and baseline is not None
+    fact_filter = replay_filter(baseline) if replaying else None
+    # The select pass is replayed exactly as the fact filter is. `simulate()` re-runs the whole
+    # retrieval on every slider move, so without this a code question would cost one LLM call per
+    # move - which is what putting the pass in the retriever was supposed to make replayable.
+    select_fn = replay_select(baseline) if replaying else retriever.llm_select
+    # The scale composes with the edits inside one rebuild. Applying it anywhere else would be
+    # silently discarded the moment a simulation also edited an edge, because `retrieve(graph=)`
+    # then runs on *this* igraph.
+    scale = float(settings.get("code_structural_scale", 1.0))
+    graph = index.graph_with_edits(overrides.edge_edit_objects(), scale) if overrides.edge_edits else None
 
     trace = retriever.retrieve(
         question,
         settings,
         fact_filter=fact_filter,
+        select_fn=select_fn,
         force_include=set(overrides.force_include),
         force_exclude=set(overrides.force_exclude),
         node_boosts=dict(overrides.node_boosts) or None,
         graph=graph,
     )
-    answer = answer_from_trace(ctx, trace, access) if overrides.reanswer else None
-    return Simulation(trace=trace, answer=answer, diff=diff_traces(baseline, trace), baseline=baseline)
+    trace.evidence_fingerprint = view_fingerprint(index)
+    trace.snapshot_ids = tuple(getattr(index, "snapshot_ids", ()))
+    validate()
+    answer = _answer_from_trace(index, model, trace) if overrides.reanswer else None
+    outcome = Simulation(trace=trace, answer=answer, diff=diff_traces(baseline, trace), baseline=baseline)
+    validate()
+    return outcome
 
 
 def replay_filter(baseline: Trace) -> FactFilter:
@@ -130,6 +228,20 @@ def replay_filter(baseline: Trace) -> FactFilter:
         # Only triples that are candidates again. The retriever fuzzy-matches unknown triples to the
         # closest candidate (meant for sloppy LLM output), which would keep a random fact here.
         return [t for t in kept if t in candidates], "replayed"
+
+    return replay
+
+
+def replay_select(baseline: Trace) -> SelectFn:
+    """The keep/drop/expand the baseline's LLM chose, replayed without calling it again."""
+    decided = dict(baseline.select or {})
+
+    def replay(question: str, ranked: list[RankedPassage]) -> SelectResult:
+        # Only ids that are candidates again: a slider move can push a passage out of the window,
+        # and re-applying a decision about a passage nobody is reading would be a silent edit.
+        known = {p.passage_id for p in ranked}
+        pick = lambda key: [pid for pid in decided.get(key) or [] if pid in known]  # noqa: E731
+        return SelectResult(keep=pick("keep"), drop=pick("drop"), expand=pick("expand"), raw="replayed")
 
     return replay
 
@@ -201,4 +313,12 @@ def _kept_rows(trace: Trace | None) -> list[dict[str, Any]]:
     return [{"fact_id": c.fact_id, "triple": list(c.triple)} for c in trace.fact_candidates if c.kept]
 
 
-__all__ = ["Overrides", "Simulation", "simulate", "diff_traces", "replay_filter", "trace_from_dict"]
+__all__ = [
+    "Overrides",
+    "Simulation",
+    "diff_traces",
+    "replay_filter",
+    "replay_select",
+    "simulate",
+    "trace_from_dict",
+]

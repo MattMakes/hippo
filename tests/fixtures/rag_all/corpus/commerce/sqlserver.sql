@@ -1,0 +1,2 @@
+CREATE TABLE dbo.customers (tenant_id UNIQUEIDENTIFIER NOT NULL, customer_id UNIQUEIDENTIFIER NOT NULL, PRIMARY KEY (tenant_id, customer_id));
+CREATE TABLE dbo.orders (tenant_id UNIQUEIDENTIFIER NOT NULL, order_id UNIQUEIDENTIFIER NOT NULL, customer_id UNIQUEIDENTIFIER, PRIMARY KEY (tenant_id, order_id), CONSTRAINT orders_customer_fk FOREIGN KEY (tenant_id, customer_id) REFERENCES dbo.customers(tenant_id, customer_id));

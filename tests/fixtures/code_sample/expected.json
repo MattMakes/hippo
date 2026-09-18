@@ -1,0 +1,7761 @@
+{
+  "commits": [
+    {
+      "author": "Hippo Fixture",
+      "date": "2024-01-03T09:00:00+00:00",
+      "message": "Raise on save, add the ts app",
+      "ordinal": 0,
+      "subject": "Raise on save, add the ts app"
+    },
+    {
+      "author": "Hippo Fixture",
+      "date": "2024-01-02T09:00:00+00:00",
+      "message": "Total, invoice and log in place",
+      "ordinal": 1,
+      "subject": "Total, invoice and log in place"
+    },
+    {
+      "author": "Hippo Fixture",
+      "date": "2024-01-01T09:00:00+00:00",
+      "message": "Add the order service",
+      "ordinal": 2,
+      "subject": "Add the order service"
+    }
+  ],
+  "data_objects": [
+    {
+      "dialect": "mongo",
+      "kind": "collection",
+      "mentions": [
+        [
+          "tsapp/index.ts",
+          7
+        ],
+        [
+          "tsapp/models/order.ts",
+          17
+        ]
+      ],
+      "name": "Order",
+      "qualname": "Order"
+    },
+    {
+      "dialect": "mongo",
+      "kind": "collection",
+      "mentions": [
+        [
+          "csapp/Orders/OrderService.cs",
+          50
+        ],
+        [
+          "goapp/orders/service.go",
+          45
+        ],
+        [
+          "pyapp/orders.py",
+          35
+        ],
+        [
+          "rsapp/src/orders.rs",
+          36
+        ]
+      ],
+      "name": "archive_orders",
+      "qualname": "archive_orders"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          2
+        ]
+      ],
+      "name": "id",
+      "qualname": "customers.id"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          2
+        ]
+      ],
+      "name": "name",
+      "qualname": "customers.name"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          1
+        ]
+      ],
+      "name": "id",
+      "qualname": "orders.id"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          1
+        ]
+      ],
+      "name": "status",
+      "qualname": "orders.status"
+    },
+    {
+      "dialect": "sql",
+      "kind": "column",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          1
+        ]
+      ],
+      "name": "total",
+      "qualname": "orders.total"
+    },
+    {
+      "dialect": "cypher",
+      "kind": "label",
+      "mentions": [
+        [
+          "csapp/Orders/OrderService.cs",
+          55
+        ],
+        [
+          "goapp/orders/service.go",
+          49
+        ],
+        [
+          "pyapp/orders.py",
+          38
+        ],
+        [
+          "rsapp/src/orders.rs",
+          40
+        ]
+      ],
+      "name": "Customer",
+      "qualname": "Customer"
+    },
+    {
+      "dialect": "cypher",
+      "kind": "label",
+      "mentions": [
+        [
+          "csapp/Orders/OrderService.cs",
+          55
+        ],
+        [
+          "goapp/orders/service.go",
+          49
+        ],
+        [
+          "pyapp/orders.py",
+          38
+        ],
+        [
+          "rsapp/src/orders.rs",
+          40
+        ]
+      ],
+      "name": "Order",
+      "qualname": "Order"
+    },
+    {
+      "dialect": "cypher",
+      "kind": "rel_type",
+      "mentions": [
+        [
+          "csapp/Orders/OrderService.cs",
+          55
+        ],
+        [
+          "goapp/orders/service.go",
+          49
+        ],
+        [
+          "pyapp/orders.py",
+          38
+        ],
+        [
+          "rsapp/src/orders.rs",
+          40
+        ]
+      ],
+      "name": "PLACED_BY",
+      "qualname": "PLACED_BY"
+    },
+    {
+      "dialect": "sql",
+      "kind": "table",
+      "mentions": [
+        [
+          "schema/orders.sql",
+          2
+        ]
+      ],
+      "name": "customers",
+      "qualname": "customers"
+    },
+    {
+      "dialect": "sql",
+      "kind": "table",
+      "mentions": [
+        [
+          "csapp/Orders/OrderService.cs",
+          39
+        ],
+        [
+          "csapp/Orders/OrderService.cs",
+          44
+        ],
+        [
+          "goapp/orders/service.go",
+          35
+        ],
+        [
+          "goapp/orders/service.go",
+          39
+        ],
+        [
+          "pyapp/orders.py",
+          14
+        ],
+        [
+          "pyapp/orders.py",
+          28
+        ],
+        [
+          "pyapp/orders.py",
+          31
+        ],
+        [
+          "rsapp/src/orders.rs",
+          27
+        ],
+        [
+          "rsapp/src/orders.rs",
+          31
+        ],
+        [
+          "schema/orders.sql",
+          1
+        ]
+      ],
+      "name": "orders",
+      "qualname": "orders"
+    }
+  ],
+  "definitions": [
+    {
+      "node": [
+        "data",
+        "collection",
+        "Order"
+      ],
+      "passage": "tsapp/index.ts :: tsapp.index.main (lines 3-8)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "Order"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order (lines 1-17)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Archive (lines 48-51)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Archive (lines 43-46)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)"
+    },
+    {
+      "node": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.archive (lines 35-37)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "customers.id"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "customers.name"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "orders.id"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "orders.status"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "column",
+        "orders.total"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+    },
+    {
+      "node": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
+    },
+    {
+      "node": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)"
+    },
+    {
+      "node": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
+    },
+    {
+      "node": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+    },
+    {
+      "node": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "customers"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.ListOpen (lines 37-40)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Save (lines 42-46)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.ListOpen (lines 34-36)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Save (lines 38-41)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.list_open (lines 27-28)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.save (lines 30-32)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.list_open (lines 26-28)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.save (lines 30-33)"
+    },
+    {
+      "node": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "passage": "schema/orders.sql (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing"
+      ],
+      "passage": "csapp/Billing/Billing.cs :: csapp.Billing.Billing.Billing (lines 4-23)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.SendInvoice"
+      ],
+      "passage": "csapp/Billing/Billing.cs :: csapp.Billing.Billing.Billing.SendInvoice (lines 19-22)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.Total"
+      ],
+      "passage": "csapp/Billing/Billing.cs :: csapp.Billing.Billing.Billing.Total (lines 7-16)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "csapp.Billing.Billing"
+      ],
+      "passage": "csapp/Billing/Billing.cs :: csapp.Billing.Billing (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests"
+      ],
+      "passage": "csapp/Orders.Tests/OrderServiceTests.cs :: csapp.Orders.Tests.OrderServiceTests.OrderServiceTests (lines 5-12)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "passage": "csapp/Orders.Tests/OrderServiceTests.cs :: csapp.Orders.Tests.OrderServiceTests.OrderServiceTests.Place_totals (lines 7-11)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "csapp.Orders.Tests.OrderServiceTests"
+      ],
+      "passage": "csapp/Orders.Tests/OrderServiceTests.cs :: csapp.Orders.Tests.OrderServiceTests (lines 1-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService (lines 10-57)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Archive"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Archive (lines 48-51)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Graph (lines 53-56)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.ListOpen"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.ListOpen (lines 37-40)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Log"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Log (lines 32-35)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Place (lines 16-30)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Save"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService.OrderService.Save (lines 42-46)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "passage": "csapp/Orders/OrderService.cs :: csapp.Orders.OrderService (lines 1-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Program.cs",
+        "csapp.Program"
+      ],
+      "passage": "csapp/Program.cs :: csapp.Program (lines 1-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base"
+      ],
+      "passage": "csapp/Store/Base.cs :: csapp.Store.Base.Base (lines 4-11)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base.Log"
+      ],
+      "passage": "csapp/Store/Base.cs :: csapp.Store.Base.Base.Log (lines 7-10)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "OrderError"
+      ],
+      "passage": "csapp/Store/Base.cs :: csapp.Store.Base.OrderError (lines 14-16)"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "csapp.Store.Base"
+      ],
+      "passage": "csapp/Store/Base.cs :: csapp.Store.Base (lines 1-13)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "SendInvoice"
+      ],
+      "passage": "goapp/billing/billing.go :: goapp.billing.billing.SendInvoice (lines 16-18)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "Total"
+      ],
+      "passage": "goapp/billing/billing.go :: goapp.billing.billing.Total (lines 7-13)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "goapp.billing.billing"
+      ],
+      "passage": "goapp/billing/billing.go :: goapp.billing.billing (lines 1-15)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "goapp.cmd.main"
+      ],
+      "passage": "goapp/cmd/main.go :: goapp.cmd.main (lines 1-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "main"
+      ],
+      "passage": "goapp/cmd/main.go :: goapp.cmd.main.main (lines 5-8)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service (lines 15-19)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Archive"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Archive (lines 43-46)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Graph (lines 48-50)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.ListOpen"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.ListOpen (lines 34-36)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Log"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Log (lines 30-32)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Place (lines 23-28)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Save"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service.Service.Save (lines 38-41)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "passage": "goapp/orders/service.go :: goapp.orders.service (lines 1-22)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "passage": "goapp/orders/service_test.go :: goapp.orders.service_test.TestPlace (lines 5-7)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "goapp.orders.service_test"
+      ],
+      "passage": "goapp/orders/service_test.go :: goapp.orders.service_test (lines 1-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base"
+      ],
+      "passage": "goapp/store/base.go :: goapp.store.base.Base (lines 5-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base.Log"
+      ],
+      "passage": "goapp/store/base.go :: goapp.store.base.Base.Log (lines 8-10)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/store/base.go",
+        "OrderError"
+      ],
+      "passage": "goapp/store/base.go :: goapp.store.base.OrderError (lines 13-13)"
+    },
+    {
+      "node": [
+        "symbol",
+        "goapp/store/base.go",
+        "goapp.store.base"
+      ],
+      "passage": "goapp/store/base.go :: goapp.store.base (lines 1-12)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/__init__.py",
+        "pyapp.__init__"
+      ],
+      "passage": "pyapp/__init__.py :: pyapp.__init__ (lines 1-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/billing.py",
+        "pyapp.billing"
+      ],
+      "passage": "pyapp/billing.py :: pyapp.billing (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/billing.py",
+        "send_invoice"
+      ],
+      "passage": "pyapp/billing.py :: pyapp.billing.send_invoice (lines 8-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/billing.py",
+        "total"
+      ],
+      "passage": "pyapp/billing.py :: pyapp.billing.total (lines 4-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/cli.py",
+        "main"
+      ],
+      "passage": "pyapp/cli.py :: pyapp.cli.main (lines 4-6)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/cli.py",
+        "pyapp.cli"
+      ],
+      "passage": "pyapp/cli.py :: pyapp.cli (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService (lines 9-15)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.archive"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.archive (lines 34-35)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.graph (lines 37-38)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.list_open"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.list_open (lines 27-28)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.log"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.log (lines 25-25)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.place (lines 16-23)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.run (lines 40-40)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders.OrderService.save (lines 30-32)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "passage": "pyapp/orders.py :: pyapp.orders (lines 1-8)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "passage": "pyapp/store.py :: pyapp.store.Base (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/store.py",
+        "Base.log"
+      ],
+      "passage": "pyapp/store.py :: pyapp.store.Base.log (lines 4-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "passage": "pyapp/store.py :: pyapp.store.OrderError (lines 8-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/store.py",
+        "pyapp.store"
+      ],
+      "passage": "pyapp/store.py :: pyapp.store.Base (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "rsapp.src.billing"
+      ],
+      "passage": "rsapp/src/billing.rs :: rsapp.src.billing (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "send_invoice"
+      ],
+      "passage": "rsapp/src/billing.rs :: rsapp.src.billing.send_invoice (lines 7-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "total"
+      ],
+      "passage": "rsapp/src/billing.rs :: rsapp.src.billing.total (lines 3-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/lib.rs",
+        "rsapp.src.lib"
+      ],
+      "passage": "rsapp/src/lib.rs :: rsapp.src.lib (lines 1-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "main"
+      ],
+      "passage": "rsapp/src/main.rs :: rsapp.src.main.main (lines 3-6)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "rsapp.src.main"
+      ],
+      "passage": "rsapp/src/main.rs :: rsapp.src.main (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService (lines 7-9)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.archive"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.archive (lines 35-37)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.graph (lines 39-41)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.list_open"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.list_open (lines 26-28)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.log"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.log (lines 12-14)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.place (lines 19-24)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.save"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.OrderService.save (lines 30-33)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders (lines 1-42)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.tests (lines 44-52)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests.place_totals"
+      ],
+      "passage": "rsapp/src/orders.rs :: rsapp.src.orders.tests.place_totals (lines 48-51)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base"
+      ],
+      "passage": "rsapp/src/store.rs :: rsapp.src.store.Base (lines 2-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base.log"
+      ],
+      "passage": "rsapp/src/store.rs :: rsapp.src.store.Base.log (lines 3-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "OrderError"
+      ],
+      "passage": "rsapp/src/store.rs :: rsapp.src.store.OrderError (lines 6-6)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "rsapp.src.store"
+      ],
+      "passage": "rsapp/src/store.rs :: rsapp.src.store (lines 1-1)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "rsapp.tests.orders"
+      ],
+      "passage": "rsapp/tests/orders.rs :: rsapp.tests.orders (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "passage": "rsapp/tests/orders.rs :: rsapp.tests.orders.test_place (lines 3-6)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "passage": "tests/test_orders.py :: tests.test_orders.test_place (lines 4-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tests/test_orders.py",
+        "tests.test_orders"
+      ],
+      "passage": "tests/test_orders.py :: tests.test_orders (lines 1-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tools/build.go",
+        "main"
+      ],
+      "passage": "tools/build.go :: tools.build.main (lines 3-3)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tools/build.go",
+        "tools.build"
+      ],
+      "passage": "tools/build.go :: tools.build (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "passage": "tsapp/index.ts :: tsapp.index.main (lines 3-8)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/index.ts",
+        "tsapp.index"
+      ],
+      "passage": "tsapp/index.ts :: tsapp.index (lines 1-2)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "passage": "tsapp/models/base.ts :: tsapp.models.base.Base (lines 1-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base.log"
+      ],
+      "passage": "tsapp/models/base.ts :: tsapp.models.base.Base.log (lines 2-4)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "tsapp.models.base"
+      ],
+      "passage": "tsapp/models/base.ts :: tsapp.models.base.Base (lines 1-5)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order.Order (lines 7-11)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order.total"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order.Order.total (lines 8-10)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "compute"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order.compute (lines 13-15)"
+    },
+    {
+      "node": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "tsapp.models.order"
+      ],
+      "passage": "tsapp/models/order.ts :: tsapp.models.order (lines 1-17)"
+    }
+  ],
+  "edges": [
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "OrderError"
+      ],
+      "kind": "CATCHES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "kind": "CATCHES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "customers"
+      ],
+      "b": [
+        "data",
+        "column",
+        "customers.id"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "customers"
+      ],
+      "b": [
+        "data",
+        "column",
+        "customers.name"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "b": [
+        "data",
+        "column",
+        "orders.id"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "b": [
+        "data",
+        "column",
+        "orders.status"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "b": [
+        "data",
+        "column",
+        "orders.total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.SendInvoice"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.Total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "csapp.Billing.Billing"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "csapp.Orders.Tests.OrderServiceTests"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Archive"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.ListOpen"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Save"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base.Log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "csapp.Store.Base"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "csapp.Store.Base"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "OrderError"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "goapp.billing.billing"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "SendInvoice"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "goapp.billing.billing"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "Total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "goapp.cmd.main"
+      ],
+      "b": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "main"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Archive"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.ListOpen"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Save"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "goapp.orders.service_test"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base.Log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/store/base.go",
+        "goapp.store.base"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/store/base.go",
+        "goapp.store.base"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "OrderError"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/billing.py",
+        "pyapp.billing"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "send_invoice"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/billing.py",
+        "pyapp.billing"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/cli.py",
+        "pyapp.cli"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/cli.py",
+        "main"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.archive"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.list_open"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/store.py",
+        "pyapp.store"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/store.py",
+        "pyapp.store"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "rsapp.src.billing"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "send_invoice"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "rsapp.src.billing"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "rsapp.src.main"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "main"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.archive"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.list_open"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.save"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests.place_totals"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "rsapp.src.store"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "rsapp.src.store"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "OrderError"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "rsapp.tests.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tests/test_orders.py",
+        "tests.test_orders"
+      ],
+      "b": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tools/build.go",
+        "tools.build"
+      ],
+      "b": [
+        "symbol",
+        "tools/build.go",
+        "main"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "tsapp.index"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base.log"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "tsapp.models.base"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order.total"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "tsapp.models.order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "tsapp.models.order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "compute"
+      ],
+      "kind": "CONTAINS",
+      "omega": 1.0,
+      "provenance": "syntax"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "csapp.Orders.Tests.OrderServiceTests"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "csapp.Billing.Billing"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "csapp.Store.Base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Program.cs",
+        "csapp.Program"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "goapp.cmd.main"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "goapp.billing.billing"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "goapp.store.base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/__init__.py",
+        "pyapp.__init__"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/cli.py",
+        "pyapp.cli"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.9,
+      "provenance": "reexport"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "pyapp.billing"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "send_invoice"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/lib.rs",
+        "rsapp.src.lib"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "rsapp.src.billing"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/lib.rs",
+        "rsapp.src.lib"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/lib.rs",
+        "rsapp.src.lib"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "rsapp.src.store"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "rsapp.src.main"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "send_invoice"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "total"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "OrderError"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "rsapp.tests.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "tests/test_orders.py",
+        "tests.test_orders"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "tsapp.index"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "tsapp.models.order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "kind": "IMPORTS",
+      "omega": 0.95,
+      "provenance": "import_path"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/base.ts",
+        "Base"
+      ],
+      "kind": "INHERITS",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 10,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "new Order()"
+        },
+        "call_line": 10,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.SendInvoice"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 21,
+        "in_branch": true,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Billing/Billing.cs",
+        "Billing.Total"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 18,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Log"
+      ],
+      "extra": {
+        "arg_binding": {
+          "message": "\"x\""
+        },
+        "call_line": 28,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Program.cs",
+        "csapp.Program"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 3,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Program.cs",
+        "csapp.Program"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "new Order()"
+        },
+        "call_line": 4,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/cmd/main.go",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "orders.Order{}"
+        },
+        "call_line": 7,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "SendInvoice"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 25,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "b": [
+        "symbol",
+        "goapp/billing/billing.go",
+        "Total"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 24,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Log"
+      ],
+      "extra": {
+        "arg_binding": {
+          "message": "\"x\""
+        },
+        "call_line": 26,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "Order{}"
+        },
+        "call_line": 6,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_scope"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/cli.py",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/cli.py",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "{\"id\": 1, \"lines\": [1]}"
+        },
+        "call_line": 6,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "extra": {
+        "arg_binding": {
+          "sql": "\"MATCH (o:Order)-[:PLACED_BY]->(c:Customer) RETURN c\""
+        },
+        "call_line": 38,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.5,
+      "provenance": "fuzzy_name"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.list_open"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "extra": {
+        "arg_binding": {
+          "sql": "\"SELECT id, total FROM orders WHERE status = 'open'\""
+        },
+        "call_line": 28,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "send_invoice"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 19,
+        "in_branch": true,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/billing.py",
+        "total"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 18,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.log"
+      ],
+      "extra": {
+        "arg_binding": {
+          "msg": "os.path.join(\"a\", \"b\")"
+        },
+        "call_line": 21,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.run"
+      ],
+      "extra": {
+        "arg_binding": {
+          "sql": "\"INSERT INTO orders (id, total) VALUES (?, ?)\""
+        },
+        "call_line": 31,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/main.rs",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "&Order::default()"
+        },
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "send_invoice"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 21,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/billing.rs",
+        "total"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "order"
+        },
+        "call_line": 20,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.log"
+      ],
+      "extra": {
+        "arg_binding": {
+          "message": "\"x\""
+        },
+        "call_line": 22,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests.place_totals"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "&Order::default()"
+        },
+        "call_line": 50,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "&Order::default()"
+        },
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "extra": {
+        "arg_binding": {
+          "order": "{\"id\": 1, \"lines\": [1]}"
+        },
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 4,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order.total"
+      ],
+      "extra": {
+        "arg_binding": {},
+        "call_line": 5,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 0.9,
+      "provenance": "via_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "Order.total"
+      ],
+      "b": [
+        "symbol",
+        "tsapp/models/order.ts",
+        "compute"
+      ],
+      "extra": {
+        "arg_binding": {
+          "o": "this"
+        },
+        "call_line": 9,
+        "in_branch": false,
+        "is_await": false
+      },
+      "kind": "INVOKES",
+      "omega": 1.0,
+      "provenance": "same_file"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Log"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "Base.Log"
+      ],
+      "kind": "OVERRIDES",
+      "omega": 0.9,
+      "provenance": "mro"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Log"
+      ],
+      "b": [
+        "symbol",
+        "goapp/store/base.go",
+        "Base.Log"
+      ],
+      "kind": "OVERRIDES",
+      "omega": 0.9,
+      "provenance": "mro"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.log"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "Base.log"
+      ],
+      "kind": "OVERRIDES",
+      "omega": 0.9,
+      "provenance": "mro"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.log"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "Base.log"
+      ],
+      "kind": "OVERRIDES",
+      "omega": 0.9,
+      "provenance": "mro"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Save"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Store/Base.cs",
+        "OrderError"
+      ],
+      "kind": "RAISES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "b": [
+        "symbol",
+        "pyapp/store.py",
+        "OrderError"
+      ],
+      "kind": "RAISES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "OrderError"
+      ],
+      "kind": "RAISES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.save"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/store.rs",
+        "OrderError"
+      ],
+      "kind": "RAISES",
+      "omega": 0.9,
+      "provenance": "resolved"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Graph"
+      ],
+      "b": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.ListOpen"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Graph"
+      ],
+      "b": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.ListOpen"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.6,
+      "provenance": "bare_identifier"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.list_open"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Customer"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "label",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.graph"
+      ],
+      "b": [
+        "data",
+        "rel_type",
+        "PLACED_BY"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "cypher_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.list_open"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "tsapp/index.ts",
+        "main"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "Order"
+      ],
+      "kind": "READS",
+      "omega": 0.85,
+      "provenance": "mongoose_model"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Place"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "OrderServiceTests.Place_totals"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "b": [
+        "symbol",
+        "csapp/Orders.Tests/OrderServiceTests.cs",
+        "csapp.Orders.Tests.OrderServiceTests"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.75,
+      "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.6,
+      "provenance": "test_mention"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Place"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "TestPlace"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "goapp.orders.service"
+      ],
+      "b": [
+        "symbol",
+        "goapp/orders/service_test.go",
+        "goapp.orders.service_test"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.75,
+      "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "tests/test_orders.py",
+        "test_place"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "pyapp.orders"
+      ],
+      "b": [
+        "symbol",
+        "tests/test_orders.py",
+        "tests.test_orders"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.75,
+      "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.6,
+      "provenance": "test_mention"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "tests.place_totals"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "test_place"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.85,
+      "provenance": "test_import"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "rsapp.src.orders"
+      ],
+      "b": [
+        "symbol",
+        "rsapp/tests/orders.rs",
+        "rsapp.tests.orders"
+      ],
+      "kind": "TESTED_BY",
+      "omega": 0.75,
+      "provenance": "test_filename"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Archive"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "mongo_chain"
+    },
+    {
+      "a": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService.Save"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Archive"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "mongo_chain"
+    },
+    {
+      "a": [
+        "symbol",
+        "goapp/orders/service.go",
+        "Service.Save"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.archive"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "mongo_chain"
+    },
+    {
+      "a": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.save"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.archive"
+      ],
+      "b": [
+        "data",
+        "collection",
+        "archive_orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "mongo_chain"
+    },
+    {
+      "a": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.save"
+      ],
+      "b": [
+        "data",
+        "table",
+        "orders"
+      ],
+      "kind": "WRITES",
+      "omega": 0.85,
+      "provenance": "sql_literal"
+    }
+  ],
+  "modifies": [
+    {
+      "hunk": {
+        "churn": 1,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          32,
+          1
+        ],
+        "old_range": [
+          31,
+          0
+        ]
+      },
+      "ordinal": 0,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.save"
+    },
+    {
+      "hunk": {
+        "churn": 8,
+        "file": "tsapp/index.ts",
+        "new_range": [
+          1,
+          8
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 0,
+      "path": "tsapp/index.ts",
+      "qualname": "main"
+    },
+    {
+      "hunk": {
+        "churn": 8,
+        "file": "tsapp/index.ts",
+        "new_range": [
+          1,
+          8
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 0,
+      "path": "tsapp/index.ts",
+      "qualname": "tsapp.index"
+    },
+    {
+      "hunk": {
+        "churn": 4,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          19,
+          4
+        ],
+        "old_range": [
+          18,
+          0
+        ]
+      },
+      "ordinal": 1,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.place"
+    },
+    {
+      "hunk": {
+        "churn": 23,
+        "file": "csapp/Billing/Billing.cs",
+        "new_range": [
+          1,
+          23
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing"
+    },
+    {
+      "hunk": {
+        "churn": 23,
+        "file": "csapp/Billing/Billing.cs",
+        "new_range": [
+          1,
+          23
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing.SendInvoice"
+    },
+    {
+      "hunk": {
+        "churn": 23,
+        "file": "csapp/Billing/Billing.cs",
+        "new_range": [
+          1,
+          23
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing.Total"
+    },
+    {
+      "hunk": {
+        "churn": 23,
+        "file": "csapp/Billing/Billing.cs",
+        "new_range": [
+          1,
+          23
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "csapp.Billing.Billing"
+    },
+    {
+      "hunk": {
+        "churn": 12,
+        "file": "csapp/Orders.Tests/OrderServiceTests.cs",
+        "new_range": [
+          1,
+          12
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "OrderServiceTests"
+    },
+    {
+      "hunk": {
+        "churn": 12,
+        "file": "csapp/Orders.Tests/OrderServiceTests.cs",
+        "new_range": [
+          1,
+          12
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "OrderServiceTests.Place_totals"
+    },
+    {
+      "hunk": {
+        "churn": 12,
+        "file": "csapp/Orders.Tests/OrderServiceTests.cs",
+        "new_range": [
+          1,
+          12
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "csapp.Orders.Tests.OrderServiceTests"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Archive"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Graph"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.ListOpen"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Log"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Place"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Save"
+    },
+    {
+      "hunk": {
+        "churn": 57,
+        "file": "csapp/Orders/OrderService.cs",
+        "new_range": [
+          1,
+          57
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "csapp.Orders.OrderService"
+    },
+    {
+      "hunk": {
+        "churn": 4,
+        "file": "csapp/Program.cs",
+        "new_range": [
+          1,
+          4
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Program.cs",
+      "qualname": "csapp.Program"
+    },
+    {
+      "hunk": {
+        "churn": 16,
+        "file": "csapp/Store/Base.cs",
+        "new_range": [
+          1,
+          16
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Store/Base.cs",
+      "qualname": "Base"
+    },
+    {
+      "hunk": {
+        "churn": 16,
+        "file": "csapp/Store/Base.cs",
+        "new_range": [
+          1,
+          16
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Store/Base.cs",
+      "qualname": "Base.Log"
+    },
+    {
+      "hunk": {
+        "churn": 16,
+        "file": "csapp/Store/Base.cs",
+        "new_range": [
+          1,
+          16
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Store/Base.cs",
+      "qualname": "OrderError"
+    },
+    {
+      "hunk": {
+        "churn": 16,
+        "file": "csapp/Store/Base.cs",
+        "new_range": [
+          1,
+          16
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "csapp/Store/Base.cs",
+      "qualname": "csapp.Store.Base"
+    },
+    {
+      "hunk": {
+        "churn": 18,
+        "file": "goapp/billing/billing.go",
+        "new_range": [
+          1,
+          18
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/billing/billing.go",
+      "qualname": "SendInvoice"
+    },
+    {
+      "hunk": {
+        "churn": 18,
+        "file": "goapp/billing/billing.go",
+        "new_range": [
+          1,
+          18
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/billing/billing.go",
+      "qualname": "Total"
+    },
+    {
+      "hunk": {
+        "churn": 18,
+        "file": "goapp/billing/billing.go",
+        "new_range": [
+          1,
+          18
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/billing/billing.go",
+      "qualname": "goapp.billing.billing"
+    },
+    {
+      "hunk": {
+        "churn": 8,
+        "file": "goapp/cmd/main.go",
+        "new_range": [
+          1,
+          8
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/cmd/main.go",
+      "qualname": "goapp.cmd.main"
+    },
+    {
+      "hunk": {
+        "churn": 8,
+        "file": "goapp/cmd/main.go",
+        "new_range": [
+          1,
+          8
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/cmd/main.go",
+      "qualname": "main"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Archive"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Graph"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.ListOpen"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Log"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Place"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Save"
+    },
+    {
+      "hunk": {
+        "churn": 50,
+        "file": "goapp/orders/service.go",
+        "new_range": [
+          1,
+          50
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service.go",
+      "qualname": "goapp.orders.service"
+    },
+    {
+      "hunk": {
+        "churn": 7,
+        "file": "goapp/orders/service_test.go",
+        "new_range": [
+          1,
+          7
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service_test.go",
+      "qualname": "TestPlace"
+    },
+    {
+      "hunk": {
+        "churn": 7,
+        "file": "goapp/orders/service_test.go",
+        "new_range": [
+          1,
+          7
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/orders/service_test.go",
+      "qualname": "goapp.orders.service_test"
+    },
+    {
+      "hunk": {
+        "churn": 13,
+        "file": "goapp/store/base.go",
+        "new_range": [
+          1,
+          13
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/store/base.go",
+      "qualname": "Base"
+    },
+    {
+      "hunk": {
+        "churn": 13,
+        "file": "goapp/store/base.go",
+        "new_range": [
+          1,
+          13
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/store/base.go",
+      "qualname": "Base.Log"
+    },
+    {
+      "hunk": {
+        "churn": 13,
+        "file": "goapp/store/base.go",
+        "new_range": [
+          1,
+          13
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/store/base.go",
+      "qualname": "OrderError"
+    },
+    {
+      "hunk": {
+        "churn": 13,
+        "file": "goapp/store/base.go",
+        "new_range": [
+          1,
+          13
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "goapp/store/base.go",
+      "qualname": "goapp.store.base"
+    },
+    {
+      "hunk": {
+        "churn": 5,
+        "file": "pyapp/__init__.py",
+        "new_range": [
+          1,
+          5
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/__init__.py",
+      "qualname": "pyapp.__init__"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "pyapp/billing.py",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/billing.py",
+      "qualname": "pyapp.billing"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "pyapp/billing.py",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/billing.py",
+      "qualname": "send_invoice"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "pyapp/billing.py",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/billing.py",
+      "qualname": "total"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "pyapp/cli.py",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/cli.py",
+      "qualname": "main"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "pyapp/cli.py",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/cli.py",
+      "qualname": "pyapp.cli"
+    },
+    {
+      "hunk": {
+        "churn": 35,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          1,
+          35
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService"
+    },
+    {
+      "hunk": {
+        "churn": 35,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          1,
+          35
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.archive"
+    },
+    {
+      "hunk": {
+        "churn": 35,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          1,
+          35
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.graph"
+    },
+    {
+      "hunk": {
+        "churn": 35,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          1,
+          35
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.list_open"
+    },
+    {
+      "hunk": {
+        "churn": 35,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          1,
+          35
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.log"
+    },
+    {
+      "hunk": {
+        "churn": 35,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          1,
+          35
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.place"
+    },
+    {
+      "hunk": {
+        "churn": 35,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          1,
+          35
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.run"
+    },
+    {
+      "hunk": {
+        "churn": 35,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          1,
+          35
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.save"
+    },
+    {
+      "hunk": {
+        "churn": 35,
+        "file": "pyapp/orders.py",
+        "new_range": [
+          1,
+          35
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/orders.py",
+      "qualname": "pyapp.orders"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "pyapp/store.py",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/store.py",
+      "qualname": "Base"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "pyapp/store.py",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/store.py",
+      "qualname": "Base.log"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "pyapp/store.py",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/store.py",
+      "qualname": "OrderError"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "pyapp/store.py",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "pyapp/store.py",
+      "qualname": "pyapp.store"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "rsapp/src/billing.rs",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/billing.rs",
+      "qualname": "rsapp.src.billing"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "rsapp/src/billing.rs",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/billing.rs",
+      "qualname": "send_invoice"
+    },
+    {
+      "hunk": {
+        "churn": 9,
+        "file": "rsapp/src/billing.rs",
+        "new_range": [
+          1,
+          9
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/billing.rs",
+      "qualname": "total"
+    },
+    {
+      "hunk": {
+        "churn": 5,
+        "file": "rsapp/src/lib.rs",
+        "new_range": [
+          1,
+          5
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/lib.rs",
+      "qualname": "rsapp.src.lib"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/main.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/main.rs",
+      "qualname": "main"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/main.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/main.rs",
+      "qualname": "rsapp.src.main"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.archive"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.graph"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.list_open"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.log"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.place"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.save"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "rsapp.src.orders"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "tests"
+    },
+    {
+      "hunk": {
+        "churn": 52,
+        "file": "rsapp/src/orders.rs",
+        "new_range": [
+          1,
+          52
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/orders.rs",
+      "qualname": "tests.place_totals"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/store.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/store.rs",
+      "qualname": "Base"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/store.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/store.rs",
+      "qualname": "Base.log"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/store.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/store.rs",
+      "qualname": "OrderError"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/src/store.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/src/store.rs",
+      "qualname": "rsapp.src.store"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/tests/orders.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/tests/orders.rs",
+      "qualname": "rsapp.tests.orders"
+    },
+    {
+      "hunk": {
+        "churn": 6,
+        "file": "rsapp/tests/orders.rs",
+        "new_range": [
+          1,
+          6
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "rsapp/tests/orders.rs",
+      "qualname": "test_place"
+    },
+    {
+      "hunk": {
+        "churn": 5,
+        "file": "tests/test_orders.py",
+        "new_range": [
+          1,
+          5
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tests/test_orders.py",
+      "qualname": "test_place"
+    },
+    {
+      "hunk": {
+        "churn": 5,
+        "file": "tests/test_orders.py",
+        "new_range": [
+          1,
+          5
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tests/test_orders.py",
+      "qualname": "tests.test_orders"
+    },
+    {
+      "hunk": {
+        "churn": 3,
+        "file": "tools/build.go",
+        "new_range": [
+          1,
+          3
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tools/build.go",
+      "qualname": "main"
+    },
+    {
+      "hunk": {
+        "churn": 3,
+        "file": "tools/build.go",
+        "new_range": [
+          1,
+          3
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tools/build.go",
+      "qualname": "tools.build"
+    },
+    {
+      "hunk": {
+        "churn": 5,
+        "file": "tsapp/models/base.ts",
+        "new_range": [
+          1,
+          5
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tsapp/models/base.ts",
+      "qualname": "Base"
+    },
+    {
+      "hunk": {
+        "churn": 5,
+        "file": "tsapp/models/base.ts",
+        "new_range": [
+          1,
+          5
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tsapp/models/base.ts",
+      "qualname": "Base.log"
+    },
+    {
+      "hunk": {
+        "churn": 17,
+        "file": "tsapp/models/order.ts",
+        "new_range": [
+          1,
+          17
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tsapp/models/order.ts",
+      "qualname": "Order"
+    },
+    {
+      "hunk": {
+        "churn": 17,
+        "file": "tsapp/models/order.ts",
+        "new_range": [
+          1,
+          17
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tsapp/models/order.ts",
+      "qualname": "Order.total"
+    },
+    {
+      "hunk": {
+        "churn": 17,
+        "file": "tsapp/models/order.ts",
+        "new_range": [
+          1,
+          17
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tsapp/models/order.ts",
+      "qualname": "compute"
+    },
+    {
+      "hunk": {
+        "churn": 17,
+        "file": "tsapp/models/order.ts",
+        "new_range": [
+          1,
+          17
+        ],
+        "old_range": [
+          0,
+          0
+        ]
+      },
+      "ordinal": 2,
+      "path": "tsapp/models/order.ts",
+      "qualname": "tsapp.models.order"
+    }
+  ],
+  "refers_to": [
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "OrderService"
+      ],
+      "omega": 0.6,
+      "passage": "Code sample",
+      "token": "order service"
+    },
+    {
+      "node": [
+        "symbol",
+        "csapp/Orders/OrderService.cs",
+        "csapp.Orders.OrderService"
+      ],
+      "omega": 0.6,
+      "passage": "Code sample",
+      "token": "order service"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService"
+      ],
+      "omega": 0.6,
+      "passage": "Code sample",
+      "token": "order service"
+    },
+    {
+      "node": [
+        "symbol",
+        "pyapp/orders.py",
+        "OrderService.place"
+      ],
+      "omega": 0.85,
+      "passage": "Code sample",
+      "token": "OrderService.place"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService"
+      ],
+      "omega": 0.6,
+      "passage": "Code sample",
+      "token": "order service"
+    },
+    {
+      "node": [
+        "symbol",
+        "rsapp/src/orders.rs",
+        "OrderService.place"
+      ],
+      "omega": 0.85,
+      "passage": "Code sample",
+      "token": "OrderService.place"
+    }
+  ],
+  "symbols": [
+    {
+      "display": "csapp.Billing.Billing.Billing",
+      "doc": "Billing totals orders and sends their invoices.",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 23,
+      "line_start": 4,
+      "params": [],
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing",
+      "raises": [],
+      "signature": "public static class Billing",
+      "statement_lines": [
+        7,
+        19
+      ]
+    },
+    {
+      "display": "csapp.Billing.Billing.Billing.SendInvoice",
+      "doc": "SendInvoice mails the invoice for one order.",
+      "header_end": 22,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 22,
+      "line_start": 19,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing.SendInvoice",
+      "raises": [],
+      "signature": "public static void SendInvoice(Order order)",
+      "statement_lines": [
+        21
+      ]
+    },
+    {
+      "display": "csapp.Billing.Billing.Billing.Total",
+      "doc": "Total adds up an order's lines.",
+      "header_end": 16,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 16,
+      "line_start": 7,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "Billing.Total",
+      "raises": [],
+      "signature": "public static int Total(Order order)",
+      "statement_lines": [
+        9,
+        10,
+        15
+      ]
+    },
+    {
+      "display": "csapp.Billing.Billing",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 23,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Billing/Billing.cs",
+      "qualname": "csapp.Billing.Billing",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        4
+      ]
+    },
+    {
+      "display": "csapp.Orders.Tests.OrderServiceTests.OrderServiceTests",
+      "doc": "",
+      "header_end": 6,
+      "is_test": true,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 12,
+      "line_start": 5,
+      "params": [],
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "OrderServiceTests",
+      "raises": [],
+      "signature": "public class OrderServiceTests",
+      "statement_lines": [
+        7
+      ]
+    },
+    {
+      "display": "csapp.Orders.Tests.OrderServiceTests.OrderServiceTests.Place_totals",
+      "doc": "",
+      "header_end": 11,
+      "is_test": true,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 11,
+      "line_start": 7,
+      "params": [],
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "OrderServiceTests.Place_totals",
+      "raises": [],
+      "signature": "public void Place_totals()",
+      "statement_lines": [
+        10
+      ]
+    },
+    {
+      "display": "csapp.Orders.Tests.OrderServiceTests",
+      "doc": "",
+      "header_end": 4,
+      "is_test": true,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 12,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Orders.Tests/OrderServiceTests.cs",
+      "qualname": "csapp.Orders.Tests.OrderServiceTests",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        3,
+        5
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService",
+      "doc": "Keeps orders. Every order is totalled by the billing namespace, written to Postgres as one\nrow and copied into the archive collection the reporting team reads.",
+      "header_end": 15,
+      "is_test": false,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 57,
+      "line_start": 10,
+      "params": [],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService",
+      "raises": [],
+      "signature": "public class OrderService : Base",
+      "statement_lines": [
+        16,
+        32,
+        37,
+        42,
+        48,
+        53
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Archive",
+      "doc": "",
+      "header_end": 51,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 51,
+      "line_start": 48,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Archive",
+      "raises": [],
+      "signature": "public void Archive(Order order)",
+      "statement_lines": [
+        50
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Graph",
+      "doc": "",
+      "header_end": 56,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 56,
+      "line_start": 53,
+      "params": [],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Graph",
+      "raises": [],
+      "signature": "public void Graph()",
+      "statement_lines": [
+        55
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.ListOpen",
+      "doc": "",
+      "header_end": 40,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 40,
+      "line_start": 37,
+      "params": [],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.ListOpen",
+      "raises": [],
+      "signature": "public void ListOpen()",
+      "statement_lines": [
+        39
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Log",
+      "doc": "",
+      "header_end": 35,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 35,
+      "line_start": 32,
+      "params": [
+        "message"
+      ],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Log",
+      "raises": [],
+      "signature": "public string Log(string message)",
+      "statement_lines": [
+        34
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Place",
+      "doc": "Place totals an order with billing, sends its invoice and logs the route the order took\nbefore handing back the amount the customer owes.",
+      "header_end": 30,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 30,
+      "line_start": 16,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Place",
+      "raises": [
+        "InvalidOperationException"
+      ],
+      "signature": "public int Place(Order order)",
+      "statement_lines": [
+        18,
+        19,
+        28,
+        29
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService.OrderService.Save",
+      "doc": "",
+      "header_end": 46,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 46,
+      "line_start": 42,
+      "params": [
+        "order"
+      ],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "OrderService.Save",
+      "raises": [],
+      "signature": "public void Save(Order order)",
+      "statement_lines": [
+        44,
+        45
+      ]
+    },
+    {
+      "display": "csapp.Orders.OrderService",
+      "doc": "",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 57,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Orders/OrderService.cs",
+      "qualname": "csapp.Orders.OrderService",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        3,
+        4,
+        10
+      ]
+    },
+    {
+      "display": "csapp.Program",
+      "doc": "",
+      "header_end": 4,
+      "is_test": false,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 4,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Program.cs",
+      "qualname": "csapp.Program",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "display": "csapp.Store.Base.Base",
+      "doc": "A tiny base type every service derives from.",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 11,
+      "line_start": 4,
+      "params": [],
+      "path": "csapp/Store/Base.cs",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "public class Base",
+      "statement_lines": [
+        7
+      ]
+    },
+    {
+      "display": "csapp.Store.Base.Base.Log",
+      "doc": "Log hands back the message it was given.",
+      "header_end": 10,
+      "is_test": false,
+      "kind": "method",
+      "lang": "csharp",
+      "line_end": 10,
+      "line_start": 7,
+      "params": [
+        "message"
+      ],
+      "path": "csapp/Store/Base.cs",
+      "qualname": "Base.Log",
+      "raises": [],
+      "signature": "public string Log(string message)",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "csapp.Store.Base.OrderError",
+      "doc": "OrderError is what an order throws when it will not save.",
+      "header_end": 16,
+      "is_test": false,
+      "kind": "class",
+      "lang": "csharp",
+      "line_end": 16,
+      "line_start": 14,
+      "params": [],
+      "path": "csapp/Store/Base.cs",
+      "qualname": "OrderError",
+      "raises": [],
+      "signature": "public class OrderError : Exception",
+      "statement_lines": []
+    },
+    {
+      "display": "csapp.Store.Base",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "module",
+      "lang": "csharp",
+      "line_end": 16,
+      "line_start": 1,
+      "params": [],
+      "path": "csapp/Store/Base.cs",
+      "qualname": "csapp.Store.Base",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        4,
+        14
+      ]
+    },
+    {
+      "display": "goapp.billing.billing.SendInvoice",
+      "doc": "SendInvoice mails the invoice for one order.",
+      "header_end": 18,
+      "is_test": false,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 18,
+      "line_start": 16,
+      "params": [
+        "order"
+      ],
+      "path": "goapp/billing/billing.go",
+      "qualname": "SendInvoice",
+      "raises": [],
+      "signature": "func SendInvoice(order Order)",
+      "statement_lines": [
+        17
+      ]
+    },
+    {
+      "display": "goapp.billing.billing.Total",
+      "doc": "Total adds up an order's lines.",
+      "header_end": 13,
+      "is_test": false,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 13,
+      "line_start": 7,
+      "params": [
+        "order"
+      ],
+      "path": "goapp/billing/billing.go",
+      "qualname": "Total",
+      "raises": [],
+      "signature": "func Total(order Order) int",
+      "statement_lines": [
+        8,
+        9,
+        12
+      ]
+    },
+    {
+      "display": "goapp.billing.billing",
+      "doc": "Package billing totals orders and sends their invoices.",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 18,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/billing/billing.go",
+      "qualname": "goapp.billing.billing",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        2,
+        4,
+        7,
+        16
+      ]
+    },
+    {
+      "display": "goapp.cmd.main",
+      "doc": "",
+      "header_end": 4,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 8,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/cmd/main.go",
+      "qualname": "goapp.cmd.main",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        5
+      ]
+    },
+    {
+      "display": "goapp.cmd.main.main",
+      "doc": "",
+      "header_end": 8,
+      "is_test": false,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 8,
+      "line_start": 5,
+      "params": [],
+      "path": "goapp/cmd/main.go",
+      "qualname": "main",
+      "raises": [],
+      "signature": "func main()",
+      "statement_lines": [
+        6,
+        7
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service",
+      "doc": "Service keeps orders. Every order is totalled by the billing package, written to Postgres as\none row and copied into the archive collection the reporting team reads.",
+      "header_end": 19,
+      "is_test": false,
+      "kind": "class",
+      "lang": "go",
+      "line_end": 19,
+      "line_start": 15,
+      "params": [],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service",
+      "raises": [],
+      "signature": "type Service struct",
+      "statement_lines": [
+        16,
+        18
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Archive",
+      "doc": "",
+      "header_end": 46,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 46,
+      "line_start": 43,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Archive",
+      "raises": [],
+      "signature": "func (s *Service) Archive(order Order)",
+      "statement_lines": [
+        44,
+        45
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Graph",
+      "doc": "",
+      "header_end": 50,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 50,
+      "line_start": 48,
+      "params": [
+        "self"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Graph",
+      "raises": [],
+      "signature": "func (s *Service) Graph()",
+      "statement_lines": [
+        49
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.ListOpen",
+      "doc": "",
+      "header_end": 36,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 36,
+      "line_start": 34,
+      "params": [
+        "self"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.ListOpen",
+      "raises": [],
+      "signature": "func (s *Service) ListOpen()",
+      "statement_lines": [
+        35
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Log",
+      "doc": "",
+      "header_end": 32,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 32,
+      "line_start": 30,
+      "params": [
+        "self",
+        "message"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Log",
+      "raises": [],
+      "signature": "func (s *Service) Log(message string) string",
+      "statement_lines": [
+        31
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Place",
+      "doc": "Place totals an order with billing, sends its invoice and logs the route the order took\nbefore handing back the amount the customer owes.",
+      "header_end": 28,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 28,
+      "line_start": 23,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Place",
+      "raises": [],
+      "signature": "func (s *Service) Place(order Order) int",
+      "statement_lines": [
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "display": "goapp.orders.service.Service.Save",
+      "doc": "",
+      "header_end": 41,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 41,
+      "line_start": 38,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "goapp/orders/service.go",
+      "qualname": "Service.Save",
+      "raises": [],
+      "signature": "func (s *Service) Save(order Order) error",
+      "statement_lines": [
+        39,
+        40
+      ]
+    },
+    {
+      "display": "goapp.orders.service",
+      "doc": "Package orders places, stores and archives customer orders.",
+      "header_end": 14,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 50,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/orders/service.go",
+      "qualname": "goapp.orders.service",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        2,
+        4,
+        15,
+        23,
+        30,
+        34,
+        38,
+        43,
+        48
+      ]
+    },
+    {
+      "display": "goapp.orders.service_test.TestPlace",
+      "doc": "",
+      "header_end": 7,
+      "is_test": true,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 7,
+      "line_start": 5,
+      "params": [
+        "t"
+      ],
+      "path": "goapp/orders/service_test.go",
+      "qualname": "TestPlace",
+      "raises": [],
+      "signature": "func TestPlace(t *testing.T)",
+      "statement_lines": [
+        6
+      ]
+    },
+    {
+      "display": "goapp.orders.service_test",
+      "doc": "",
+      "header_end": 4,
+      "is_test": true,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 7,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/orders/service_test.go",
+      "qualname": "goapp.orders.service_test",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        5
+      ]
+    },
+    {
+      "display": "goapp.store.base.Base",
+      "doc": "Base is a tiny base type.",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "class",
+      "lang": "go",
+      "line_end": 5,
+      "line_start": 5,
+      "params": [],
+      "path": "goapp/store/base.go",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "type Base struct",
+      "statement_lines": []
+    },
+    {
+      "display": "goapp.store.base.Base.Log",
+      "doc": "Log returns the message it was handed.",
+      "header_end": 10,
+      "is_test": false,
+      "kind": "method",
+      "lang": "go",
+      "line_end": 10,
+      "line_start": 8,
+      "params": [
+        "self",
+        "message"
+      ],
+      "path": "goapp/store/base.go",
+      "qualname": "Base.Log",
+      "raises": [],
+      "signature": "func (b *Base) Log(message string) string",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "goapp.store.base.OrderError",
+      "doc": "OrderError is what an order returns when it will not save.",
+      "header_end": 13,
+      "is_test": false,
+      "kind": "class",
+      "lang": "go",
+      "line_end": 13,
+      "line_start": 13,
+      "params": [],
+      "path": "goapp/store/base.go",
+      "qualname": "OrderError",
+      "raises": [],
+      "signature": "type OrderError struct",
+      "statement_lines": []
+    },
+    {
+      "display": "goapp.store.base",
+      "doc": "Package store holds what every service embeds.",
+      "header_end": 4,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 13,
+      "line_start": 1,
+      "params": [],
+      "path": "goapp/store/base.go",
+      "qualname": "goapp.store.base",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        2,
+        5,
+        8,
+        13
+      ]
+    },
+    {
+      "display": "pyapp.__init__",
+      "doc": "The pyapp package.",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/__init__.py",
+      "qualname": "pyapp.__init__",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        5
+      ]
+    },
+    {
+      "display": "pyapp.billing",
+      "doc": "Billing helpers.",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 9,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/billing.py",
+      "qualname": "pyapp.billing",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        4,
+        8
+      ]
+    },
+    {
+      "display": "pyapp.billing.send_invoice",
+      "doc": "",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "function",
+      "lang": "python",
+      "line_end": 9,
+      "line_start": 8,
+      "params": [
+        "order"
+      ],
+      "path": "pyapp/billing.py",
+      "qualname": "send_invoice",
+      "raises": [],
+      "signature": "def send_invoice(order)",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "pyapp.billing.total",
+      "doc": "",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "function",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 4,
+      "params": [
+        "order"
+      ],
+      "path": "pyapp/billing.py",
+      "qualname": "total",
+      "raises": [],
+      "signature": "def total(order)",
+      "statement_lines": [
+        5
+      ]
+    },
+    {
+      "display": "pyapp.cli.main",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "function",
+      "lang": "python",
+      "line_end": 6,
+      "line_start": 4,
+      "params": [],
+      "path": "pyapp/cli.py",
+      "qualname": "main",
+      "raises": [],
+      "signature": "def main()",
+      "statement_lines": [
+        5,
+        6
+      ]
+    },
+    {
+      "display": "pyapp.cli",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 6,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/cli.py",
+      "qualname": "pyapp.cli",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        4
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService",
+      "doc": "Keeps orders. Acme Robotics is headquartered in Boulder. Priya Natarajan lives in Boulder.\n\nSecond paragraph, not part of the first.",
+      "header_end": 15,
+      "is_test": false,
+      "kind": "class",
+      "lang": "python",
+      "line_end": 40,
+      "line_start": 9,
+      "params": [],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService",
+      "raises": [],
+      "signature": "class OrderService(Base)",
+      "statement_lines": [
+        10,
+        14,
+        16,
+        25,
+        27,
+        30,
+        34,
+        37,
+        40
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.archive",
+      "doc": "",
+      "header_end": 35,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 35,
+      "line_start": 34,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.archive",
+      "raises": [],
+      "signature": "def archive(self, order)",
+      "statement_lines": [
+        35
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.graph",
+      "doc": "",
+      "header_end": 38,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 38,
+      "line_start": 37,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.graph",
+      "raises": [],
+      "signature": "def graph(self, order)",
+      "statement_lines": [
+        38
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.list_open",
+      "doc": "",
+      "header_end": 28,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 28,
+      "line_start": 27,
+      "params": [
+        "self"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.list_open",
+      "raises": [],
+      "signature": "def list_open(self)",
+      "statement_lines": [
+        28
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.log",
+      "doc": "",
+      "header_end": 25,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 25,
+      "line_start": 25,
+      "params": [
+        "self",
+        "msg"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.log",
+      "raises": [],
+      "signature": "def log(self, msg)",
+      "statement_lines": [
+        25
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.place",
+      "doc": "Place an order: total it with billing, send the invoice and log the path. Acme Robotics ships from Boulder.",
+      "header_end": 23,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 23,
+      "line_start": 16,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.place",
+      "raises": [
+        "ValueError"
+      ],
+      "signature": "def place(self, order)",
+      "statement_lines": [
+        17,
+        18,
+        19,
+        21,
+        22,
+        23
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.run",
+      "doc": "",
+      "header_end": 40,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 40,
+      "line_start": 40,
+      "params": [
+        "self",
+        "sql"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.run",
+      "raises": [],
+      "signature": "def run(self, sql)",
+      "statement_lines": [
+        40
+      ]
+    },
+    {
+      "display": "pyapp.orders.OrderService.save",
+      "doc": "",
+      "header_end": 32,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 32,
+      "line_start": 30,
+      "params": [
+        "self",
+        "order"
+      ],
+      "path": "pyapp/orders.py",
+      "qualname": "OrderService.save",
+      "raises": [],
+      "signature": "def save(self, order)",
+      "statement_lines": [
+        31,
+        32
+      ]
+    },
+    {
+      "display": "pyapp.orders",
+      "doc": "",
+      "header_end": 8,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 40,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/orders.py",
+      "qualname": "pyapp.orders",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        2,
+        3,
+        4,
+        6,
+        9
+      ]
+    },
+    {
+      "display": "pyapp.store.Base",
+      "doc": "A tiny base class.",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "class",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/store.py",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "class Base",
+      "statement_lines": [
+        2,
+        4
+      ]
+    },
+    {
+      "display": "pyapp.store.Base.log",
+      "doc": "",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "method",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 4,
+      "params": [
+        "self",
+        "msg"
+      ],
+      "path": "pyapp/store.py",
+      "qualname": "Base.log",
+      "raises": [],
+      "signature": "def log(self, msg)",
+      "statement_lines": [
+        5
+      ]
+    },
+    {
+      "display": "pyapp.store.OrderError",
+      "doc": "",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "class",
+      "lang": "python",
+      "line_end": 9,
+      "line_start": 8,
+      "params": [],
+      "path": "pyapp/store.py",
+      "qualname": "OrderError",
+      "raises": [],
+      "signature": "class OrderError(Exception)",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "pyapp.store",
+      "doc": "",
+      "header_end": 0,
+      "is_test": false,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 9,
+      "line_start": 1,
+      "params": [],
+      "path": "pyapp/store.py",
+      "qualname": "pyapp.store",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        8
+      ]
+    },
+    {
+      "display": "rsapp.src.billing",
+      "doc": "Billing helpers.",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 9,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/billing.rs",
+      "qualname": "rsapp.src.billing",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        3,
+        7
+      ]
+    },
+    {
+      "display": "rsapp.src.billing.send_invoice",
+      "doc": "",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 9,
+      "line_start": 7,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/billing.rs",
+      "qualname": "send_invoice",
+      "raises": [],
+      "signature": "pub fn send_invoice(order: &Order)",
+      "statement_lines": [
+        8
+      ]
+    },
+    {
+      "display": "rsapp.src.billing.total",
+      "doc": "",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 5,
+      "line_start": 3,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/billing.rs",
+      "qualname": "total",
+      "raises": [],
+      "signature": "pub fn total(order: &Order) -> i64",
+      "statement_lines": [
+        4
+      ]
+    },
+    {
+      "display": "rsapp.src.lib",
+      "doc": "The rsapp crate.",
+      "header_end": 5,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/lib.rs",
+      "qualname": "rsapp.src.lib",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "display": "rsapp.src.main.main",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 3,
+      "params": [],
+      "path": "rsapp/src/main.rs",
+      "qualname": "main",
+      "raises": [],
+      "signature": "fn main()",
+      "statement_lines": [
+        4,
+        5
+      ]
+    },
+    {
+      "display": "rsapp.src.main",
+      "doc": "",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/main.rs",
+      "qualname": "rsapp.src.main",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService",
+      "doc": "Keeps orders. The crate stores every order in Postgres and mails each invoice to the buyer.\n\nSecond paragraph, not part of the first.",
+      "header_end": 9,
+      "is_test": false,
+      "kind": "class",
+      "lang": "rust",
+      "line_end": 9,
+      "line_start": 7,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService",
+      "raises": [],
+      "signature": "pub struct OrderService",
+      "statement_lines": [
+        8
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.archive",
+      "doc": "",
+      "header_end": 37,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 37,
+      "line_start": 35,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.archive",
+      "raises": [],
+      "signature": "pub fn archive(&self, order: &Order)",
+      "statement_lines": [
+        36
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.graph",
+      "doc": "",
+      "header_end": 41,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 41,
+      "line_start": 39,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.graph",
+      "raises": [],
+      "signature": "pub fn graph(&self)",
+      "statement_lines": [
+        40
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.list_open",
+      "doc": "",
+      "header_end": 28,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 28,
+      "line_start": 26,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.list_open",
+      "raises": [],
+      "signature": "pub fn list_open(&self)",
+      "statement_lines": [
+        27
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.log",
+      "doc": "",
+      "header_end": 14,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 14,
+      "line_start": 12,
+      "params": [
+        "message"
+      ],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.log",
+      "raises": [],
+      "signature": "fn log(&self, message: &str) -> String",
+      "statement_lines": [
+        13
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.place",
+      "doc": "Place an order: total it with billing, send the invoice and log the route the order took.",
+      "header_end": 24,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 24,
+      "line_start": 19,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.place",
+      "raises": [],
+      "signature": "pub fn place(&self, order: &Order) -> Result<i64, OrderError>",
+      "statement_lines": [
+        20,
+        21,
+        22,
+        23
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.OrderService.save",
+      "doc": "",
+      "header_end": 33,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 33,
+      "line_start": 30,
+      "params": [
+        "order"
+      ],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "OrderService.save",
+      "raises": [],
+      "signature": "pub fn save(&self, order: &Order) -> Result<(), OrderError>",
+      "statement_lines": [
+        31,
+        32
+      ]
+    },
+    {
+      "display": "rsapp.src.orders",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 52,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "rsapp.src.orders",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        2,
+        7,
+        11,
+        17,
+        44,
+        45
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.tests",
+      "doc": "",
+      "header_end": 47,
+      "is_test": true,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 52,
+      "line_start": 44,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "tests",
+      "raises": [],
+      "signature": "mod tests",
+      "statement_lines": [
+        46,
+        48,
+        49
+      ]
+    },
+    {
+      "display": "rsapp.src.orders.tests.place_totals",
+      "doc": "",
+      "header_end": 51,
+      "is_test": true,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 51,
+      "line_start": 48,
+      "params": [],
+      "path": "rsapp/src/orders.rs",
+      "qualname": "tests.place_totals",
+      "raises": [],
+      "signature": "fn place_totals()",
+      "statement_lines": [
+        50
+      ]
+    },
+    {
+      "display": "rsapp.src.store.Base",
+      "doc": "A tiny base trait.",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "class",
+      "lang": "rust",
+      "line_end": 4,
+      "line_start": 2,
+      "params": [],
+      "path": "rsapp/src/store.rs",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "pub trait Base",
+      "statement_lines": [
+        3
+      ]
+    },
+    {
+      "display": "rsapp.src.store.Base.log",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "method",
+      "lang": "rust",
+      "line_end": 3,
+      "line_start": 3,
+      "params": [
+        "message"
+      ],
+      "path": "rsapp/src/store.rs",
+      "qualname": "Base.log",
+      "raises": [],
+      "signature": "fn log(&self, message: &str) -> String",
+      "statement_lines": []
+    },
+    {
+      "display": "rsapp.src.store.OrderError",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "class",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 6,
+      "params": [],
+      "path": "rsapp/src/store.rs",
+      "qualname": "OrderError",
+      "raises": [],
+      "signature": "pub struct OrderError",
+      "statement_lines": []
+    },
+    {
+      "display": "rsapp.src.store",
+      "doc": "",
+      "header_end": 1,
+      "is_test": false,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/src/store.rs",
+      "qualname": "rsapp.src.store",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        2,
+        6
+      ]
+    },
+    {
+      "display": "rsapp.tests.orders",
+      "doc": "",
+      "header_end": 2,
+      "is_test": true,
+      "kind": "module",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 1,
+      "params": [],
+      "path": "rsapp/tests/orders.rs",
+      "qualname": "rsapp.tests.orders",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "display": "rsapp.tests.orders.test_place",
+      "doc": "",
+      "header_end": 6,
+      "is_test": true,
+      "kind": "function",
+      "lang": "rust",
+      "line_end": 6,
+      "line_start": 3,
+      "params": [],
+      "path": "rsapp/tests/orders.rs",
+      "qualname": "test_place",
+      "raises": [],
+      "signature": "fn test_place()",
+      "statement_lines": [
+        5
+      ]
+    },
+    {
+      "display": "tests.test_orders.test_place",
+      "doc": "",
+      "header_end": 5,
+      "is_test": true,
+      "kind": "function",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 4,
+      "params": [],
+      "path": "tests/test_orders.py",
+      "qualname": "test_place",
+      "raises": [],
+      "signature": "def test_place()",
+      "statement_lines": [
+        5
+      ]
+    },
+    {
+      "display": "tests.test_orders",
+      "doc": "",
+      "header_end": 3,
+      "is_test": true,
+      "kind": "module",
+      "lang": "python",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "tests/test_orders.py",
+      "qualname": "tests.test_orders",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        4
+      ]
+    },
+    {
+      "display": "tools.build.main",
+      "doc": "",
+      "header_end": 3,
+      "is_test": false,
+      "kind": "function",
+      "lang": "go",
+      "line_end": 3,
+      "line_start": 3,
+      "params": [],
+      "path": "tools/build.go",
+      "qualname": "main",
+      "raises": [],
+      "signature": "func main()",
+      "statement_lines": []
+    },
+    {
+      "display": "tools.build",
+      "doc": "",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "module",
+      "lang": "go",
+      "line_end": 3,
+      "line_start": 1,
+      "params": [],
+      "path": "tools/build.go",
+      "qualname": "tools.build",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3
+      ]
+    },
+    {
+      "display": "tsapp.index.main",
+      "doc": "",
+      "header_end": 8,
+      "is_test": false,
+      "kind": "function",
+      "lang": "typescript",
+      "line_end": 8,
+      "line_start": 3,
+      "params": [],
+      "path": "tsapp/index.ts",
+      "qualname": "main",
+      "raises": [],
+      "signature": "function main()",
+      "statement_lines": [
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "display": "tsapp.index",
+      "doc": "",
+      "header_end": 2,
+      "is_test": false,
+      "kind": "module",
+      "lang": "typescript",
+      "line_end": 8,
+      "line_start": 1,
+      "params": [],
+      "path": "tsapp/index.ts",
+      "qualname": "tsapp.index",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        3
+      ]
+    },
+    {
+      "display": "tsapp.models.base.Base",
+      "doc": "",
+      "header_end": 1,
+      "is_test": false,
+      "kind": "class",
+      "lang": "typescript",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "tsapp/models/base.ts",
+      "qualname": "Base",
+      "raises": [],
+      "signature": "class Base",
+      "statement_lines": [
+        2
+      ]
+    },
+    {
+      "display": "tsapp.models.base.Base.log",
+      "doc": "",
+      "header_end": 4,
+      "is_test": false,
+      "kind": "method",
+      "lang": "typescript",
+      "line_end": 4,
+      "line_start": 2,
+      "params": [
+        "msg"
+      ],
+      "path": "tsapp/models/base.ts",
+      "qualname": "Base.log",
+      "raises": [],
+      "signature": "log(msg: string): string",
+      "statement_lines": [
+        3
+      ]
+    },
+    {
+      "display": "tsapp.models.base",
+      "doc": "",
+      "header_end": 0,
+      "is_test": false,
+      "kind": "module",
+      "lang": "typescript",
+      "line_end": 5,
+      "line_start": 1,
+      "params": [],
+      "path": "tsapp/models/base.ts",
+      "qualname": "tsapp.models.base",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1
+      ]
+    },
+    {
+      "display": "tsapp.models.order.Order",
+      "doc": "An order. This class is long enough to have a real doc comment, over eighty characters.",
+      "header_end": 7,
+      "is_test": false,
+      "kind": "class",
+      "lang": "typescript",
+      "line_end": 11,
+      "line_start": 7,
+      "params": [],
+      "path": "tsapp/models/order.ts",
+      "qualname": "Order",
+      "raises": [],
+      "signature": "class Order extends Base",
+      "statement_lines": [
+        8
+      ]
+    },
+    {
+      "display": "tsapp.models.order.Order.total",
+      "doc": "",
+      "header_end": 10,
+      "is_test": false,
+      "kind": "method",
+      "lang": "typescript",
+      "line_end": 10,
+      "line_start": 8,
+      "params": [],
+      "path": "tsapp/models/order.ts",
+      "qualname": "Order.total",
+      "raises": [],
+      "signature": "total(): number",
+      "statement_lines": [
+        9
+      ]
+    },
+    {
+      "display": "tsapp.models.order.compute",
+      "doc": "",
+      "header_end": 15,
+      "is_test": false,
+      "kind": "function",
+      "lang": "typescript",
+      "line_end": 15,
+      "line_start": 13,
+      "params": [
+        "o"
+      ],
+      "path": "tsapp/models/order.ts",
+      "qualname": "compute",
+      "raises": [],
+      "signature": "compute = (o: Order): number",
+      "statement_lines": [
+        14
+      ]
+    },
+    {
+      "display": "tsapp.models.order",
+      "doc": "",
+      "header_end": 6,
+      "is_test": false,
+      "kind": "module",
+      "lang": "typescript",
+      "line_end": 17,
+      "line_start": 1,
+      "params": [],
+      "path": "tsapp/models/order.ts",
+      "qualname": "tsapp.models.order",
+      "raises": [],
+      "signature": "",
+      "statement_lines": [
+        1,
+        2,
+        7,
+        13,
+        17
+      ]
+    }
+  ]
+}

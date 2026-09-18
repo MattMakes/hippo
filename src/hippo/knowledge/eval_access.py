@@ -1,0 +1,600 @@
+"""Owned evaluation DTOs, checked against current source and evidence permissions.
+
+Low-level store evaluation methods remain internal. Ownership is immutable,
+versioned JSON at a unique Settings key, committed with set creation. ID-only
+joins establish the owner before a question or saved answer is loaded.
+"""
+
+from __future__ import annotations
+
+import json
+from contextlib import contextmanager
+from copy import deepcopy
+from functools import wraps
+from types import MappingProxyType
+
+from hippo.access import EVERYTHING, Access, Principal
+from hippo.hipporag.retriever import Trace, trace_from_dict
+from hippo.store.authorization import lock_authorization
+from hippo.store.migrations import DEFAULT_WORKSPACE_ID
+
+from .access import AuthorizationChanged
+from .identity import canonical_json
+from .public_errors import (
+    INVALID_SOURCE_SIZE,
+    INVALID_SOURCE_TYPE,
+    OPERATION_FAILED,
+    REBUILD_REQUIRED,
+    RETRIEVAL_UNAVAILABLE,
+)
+from .query_access import QuerySession, current_access, query_access, query_session
+from .replay import reconstruct_trace, view_fingerprint
+from .saved_snapshots import release_saved_evaluations
+
+
+class EvalAccessDenied(ValueError):
+    """The evaluation is missing or unavailable to this audience."""
+
+
+# Every code `public_failure` can return, which is everything an evaluation row can carry.
+_PUBLIC_CODES = frozenset(
+    failure.code
+    for failure in (
+        REBUILD_REQUIRED,
+        RETRIEVAL_UNAVAILABLE,
+        INVALID_SOURCE_TYPE,
+        INVALID_SOURCE_SIZE,
+        OPERATION_FAILED,
+    )
+)
+
+
+def failure_code_of(stored: str | None) -> str | None:
+    """The closed public code for an evaluation row that is presenting a failure, else `None`.
+
+    A failed run, question set or result stores `f"{code}: {type(exc).__name__}: {exc}"`, the
+    shape a failed managed build already stores on its Source row: the code is the half a
+    reader may see and the rest is the operator's. `store.add_result` and `update_run` write
+    fixed property lists, so the first segment is where a closed field can live without a
+    schema change -- but only a real code is ever read back out of it. Every row written
+    before this convention holds `f"{type(exc).__name__}: {exc}"`, and publishing that prefix
+    would disclose an exception class name, or whatever else a caller once put there.
+
+    Such a row cannot fall silent either -- it is still presenting a failure -- so it takes
+    the caller fallback `public_errors` documents, `operation_failed`.
+    """
+    if type(stored) is not str or not stored.strip():
+        return None
+    code = stored.split(":", 1)[0].strip()
+    return code if code in _PUBLIC_CODES else OPERATION_FAILED.code
+
+
+def _guarded_collection(function):
+    """Earlier authorized rows cannot outlive the proof for the whole response."""
+
+    @wraps(function)
+    def guarded(self, *args, **kwargs):
+        with self.read_scope():
+            return function(self, *args, **kwargs)
+
+    return guarded
+
+
+def _guarded_item(function):
+    """Keep absent-item behavior for a principal already denied before the read."""
+    guarded_read = _guarded_collection(function)
+
+    @wraps(function)
+    def guarded(self, *args, **kwargs):
+        if self._session is None:
+            try:
+                self._current()
+            except AuthorizationChanged:
+                return None
+        return guarded_read(self, *args, **kwargs)
+
+    return guarded
+
+
+class EvalAccess:
+    def __init__(self, ctx, access: Access | None, *, session: QuerySession | None = None):
+        self.ctx, self.store, self.access = ctx, ctx.store, access
+        self._session = session
+
+    def _open(self):
+        return self.store.count_users() == 0 and not self.store.get_meta("has_had_users")
+
+    def _current(self):
+        access = self.access
+        if access is None:
+            return Principal.open().access if self._open() else EVERYTHING
+        access = current_access(self.store, access)
+        if access.audience_kind == "open" and not self._open():
+            raise AuthorizationChanged("Open evaluation access is no longer available")
+        return access
+
+    def graph(self):
+        if self._session is not None:
+            self._current()
+            self._session.validate()
+            return self._session.graph
+        raise RuntimeError("Evaluation graph requires an active read scope")
+
+    @_guarded_collection
+    def get_source(self, source_id):
+        """Resolve source presentation exclusively from the current audience view."""
+        from hippo.status import source_view
+
+        view = source_view(self.ctx, self._current(), session=self._session)
+        row = next((row for row in view.sources if row["id"] == source_id), None)
+        view.validate()
+        return deepcopy(row)
+
+    @contextmanager
+    def read_scope(self):
+        """Bracket complete response assembly across several authorized reads."""
+        if self._session is None:
+            with query_session(self.ctx, self._current()) as session:
+                self._session = session
+                try:
+                    with self.read_scope():
+                        yield self
+                finally:
+                    self._session = None
+            return
+        epoch = self.store.authorization_epoch()
+        self.graph()
+        try:
+            yield self
+        finally:
+            self._session.validate()
+            self._boundary(epoch)
+
+    @contextmanager
+    def _creation_scope(self, *, evidence):
+        # Set creation deliberately advances the epoch. Own a short, no-model
+        # view outside the mutation transaction; close only after it exits.
+        if self._session is not None:
+            raise RuntimeError("Evaluation creation requires its own evidence scope")
+        if not evidence:
+            yield
+            return
+        settings = self.store.get_settings()
+        graph, model, validate = query_access(self.ctx, self._current(), settings=settings)
+        self._session = QuerySession(graph, model, validate, MappingProxyType(settings))
+        try:
+            yield
+        finally:
+            self._session = None
+            close = getattr(graph, "close_snapshot", None)
+            if close is not None:
+                close()
+
+    def _boundary(self, epoch):
+        self._current()
+        if self.store.authorization_epoch() != epoch:
+            raise AuthorizationChanged("Evaluation permissions changed during the operation")
+
+    def _metadata(self, set_id):
+        raw = self.store.get_meta("eval_owner:" + set_id)
+        if raw is None:
+            return None
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return False
+        required = {
+            "version",
+            "workspace_id",
+            "owner_id",
+            "audience",
+            "source_id",
+            "origin",
+            "evidence_fingerprint",
+        }
+        if (
+            not isinstance(data, dict)
+            or set(data) != required
+            or type(data["version"]) is not int
+            or data["version"] != 1
+            or not isinstance(data["workspace_id"], str)
+            or not data["workspace_id"]
+        ):
+            return False
+        if (
+            not isinstance(data["audience"], str)
+            or data["audience"] not in {"owner", "open", "internal"}
+            or not isinstance(data["origin"], str)
+            or data["origin"] not in {"manual", "generated"}
+        ):
+            return False
+        if data["audience"] == "owner":
+            if not isinstance(data["owner_id"], str) or not data["owner_id"]:
+                return False
+        elif data["owner_id"] is not None:
+            return False
+        if data["source_id"] is not None and (
+            not isinstance(data["source_id"], str) or not data["source_id"]
+        ):
+            return False
+        if not isinstance(data["evidence_fingerprint"], str):
+            return False
+        return data
+
+    def _authorized(self, set_id, *, for_deletion=False):
+        try:
+            epoch = self.store.authorization_epoch()
+            access = self._current()
+            metadata = self._metadata(set_id)
+            if metadata is False:
+                return None
+            if metadata is None:
+                if access.audience_kind != "internal" and not (
+                    access.audience_kind == "open" and self._open()
+                ):
+                    return None
+            elif access.audience_kind != "internal":
+                owner = (
+                    metadata["audience"] == "owner"
+                    and access.audience_kind == "reader"
+                    and metadata["owner_id"] == access.user_id
+                )
+                open_audience = (
+                    metadata["audience"] == "open" and access.audience_kind == "open" and self._open()
+                )
+                if not (owner or open_audience):
+                    return None
+            row = self.store.get_question_set(set_id)
+            if row is None:
+                return None
+            source_id = metadata["source_id"] if metadata else row.get("source_id")
+            if source_id:
+                source = self.store.get_source(source_id, access)
+                if source is None or (metadata and source.get("workspace_id") != metadata["workspace_id"]):
+                    return None
+                if not for_deletion and self.get_source(source_id) is None:
+                    return None
+            if not for_deletion and metadata and metadata["origin"] == "generated":
+                if not metadata["evidence_fingerprint"] or metadata[
+                    "evidence_fingerprint"
+                ] != view_fingerprint(self.graph()):
+                    return None
+            self._boundary(epoch)
+            return metadata or {}, row, epoch
+        except AuthorizationChanged:
+            return None
+
+    @_guarded_collection
+    def require_set(self, set_id):
+        authorized = self._authorized(set_id)
+        if authorized is None:
+            raise EvalAccessDenied("unknown question set or access denied")
+        return authorized[1]
+
+    def _require_deletion(self, set_id):
+        # Deletion exercises current ownership/source administration authority;
+        # it does not disclose the old question, gold evidence or answer. A stale
+        # content fingerprint must not prevent releasing its retained inputs.
+        if self._authorized(set_id, for_deletion=True) is None:
+            raise EvalAccessDenied("unknown question set or access denied")
+
+    @_guarded_collection
+    def require_generation_target(self, set_id, source_id):
+        authorized = self._authorized(set_id)
+        if (
+            authorized is None
+            or authorized[0].get("origin") != "generated"
+            or authorized[0].get("source_id") != source_id
+        ):
+            raise EvalAccessDenied("Question generation requires its verified source and input view")
+        return authorized[1]
+
+    def _ids(self, kind, *, parent=None):
+        if self.store.knowledge_backend == "fake":
+            if kind == "sets":
+                return list(self.store.question_sets)
+            if kind == "runs":
+                return [
+                    key for key, row in self.store.runs.items() if parent is None or row["set_id"] == parent
+                ]
+            if kind == "results":
+                return [key for key, row in self.store.results.items() if row["run_id"] == parent]
+            if kind == "question_results":
+                return [key for key, row in self.store.results.items() if row["question_id"] == parent]
+        queries = {
+            "sets": "MATCH (qs:QuestionSet) RETURN qs.id AS id ORDER BY qs.created_at DESC",
+            "runs": "MATCH (r:EvalRun)-[:OF]->(qs:QuestionSet) WHERE $parent IS NULL OR qs.id=$parent RETURN r.id AS id ORDER BY r.started_at DESC",
+            "results": "MATCH (:EvalRun {id:$parent})-[:RESULT]->(r:EvalResult) RETURN r.id AS id ORDER BY r.created_at",
+            "question_results": "MATCH (r:EvalResult)-[:FOR]->(:Question {id:$parent}) RETURN r.id AS id ORDER BY r.created_at DESC",
+        }
+        return [
+            row["id"]
+            for row in self.store.run(queries[kind], **({} if kind == "sets" else {"parent": parent}))
+        ]
+
+    def _refs(self, kind, identity):
+        if self.store.knowledge_backend == "fake":
+            rows = {"question": self.store.questions, "run": self.store.runs, "result": self.store.results}
+            row = rows[kind].get(identity)
+            if row is None:
+                return None
+            return {key: row[key] for key in (("run_id", "question_id") if kind == "result" else ("set_id",))}
+        query = {
+            "question": "MATCH (qs:QuestionSet)-[:HAS]->(:Question {id:$id}) RETURN qs.id AS set_id",
+            "run": "MATCH (:EvalRun {id:$id})-[:OF]->(qs:QuestionSet) RETURN qs.id AS set_id",
+            "result": "MATCH (run:EvalRun)-[:RESULT]->(:EvalResult {id:$id})-[:FOR]->(q:Question) RETURN run.id AS run_id,q.id AS question_id",
+        }[kind]
+        return self.store.run_one(query, id=identity)
+
+    @_guarded_item
+    def get_question_set(self, set_id):
+        authorized = self._authorized(set_id)
+        if authorized is None:
+            return None
+        _, row, epoch = authorized
+        graph = self.graph()
+        result = deepcopy(row)
+        if row.get("source_id"):
+            source = self.get_source(row["source_id"])
+            if source is None:
+                return None
+            result["source_name"] = source["name"]
+        result["question_count"] = len(self.list_questions(set_id))
+        result["run_count"] = len(self._ids("runs", parent=set_id))
+        result["failure_code"] = failure_code_of(result.get("error"))
+        if authorized[0]:
+            result["error"] = None  # exception strings may embed model/provider input
+        graph.validate_authorization()
+        self._boundary(epoch)
+        return result
+
+    @_guarded_collection
+    def list_question_sets(self):
+        return [row for identity in self._ids("sets") if (row := self.get_question_set(identity)) is not None]
+
+    def _question_visible(self, row, graph):
+        return set(row.get("gold_passage_ids") or []) <= {passage.id for passage in graph.passages}
+
+    @_guarded_collection
+    def list_questions(self, set_id):
+        authorized = self._authorized(set_id)
+        if authorized is None:
+            return []
+        graph = self.graph()
+        rows = [
+            deepcopy(row) for row in self.store.list_questions(set_id) if self._question_visible(row, graph)
+        ]
+        graph.validate_authorization()
+        self._boundary(authorized[2])
+        return rows
+
+    @_guarded_item
+    def get_question(self, question_id):
+        refs = self._refs("question", question_id)
+        authorized = self._authorized(refs["set_id"]) if refs else None
+        if authorized is None:
+            return None
+        row = self.store.get_question(question_id)
+        graph = self.graph()
+        if row is None or not self._question_visible(row, graph):
+            return None
+        graph.validate_authorization()
+        self._boundary(authorized[2])
+        return deepcopy(row)
+
+    @_guarded_item
+    def get_result(self, result_id):
+        refs = self._refs("result", result_id)
+        run_refs = self._refs("run", refs["run_id"]) if refs else None
+        authorized = self._authorized(run_refs["set_id"]) if run_refs else None
+        if authorized is None:
+            return None
+        question = self.get_question(refs["question_id"])
+        if question is None or question["set_id"] != run_refs["set_id"]:
+            return None
+        row = self.store.get_result(result_id)
+        if row is None:
+            return None
+        graph = self.graph()
+        result = deepcopy(row)
+        raw_trace = row.get("trace") or {}
+        reusable = (
+            isinstance(raw_trace, dict)
+            and bool(raw_trace.get("evidence_fingerprint"))
+            and raw_trace["evidence_fingerprint"] == view_fingerprint(graph)
+        )
+        try:
+            original = trace_from_dict(raw_trace)
+            trace = reconstruct_trace(graph, original, question=question["text"])
+        except (ValueError, TypeError, KeyError, AttributeError):
+            trace = Trace(question=question["text"], settings={}, graph_version=graph.version)
+            reusable = False
+        result["trace"] = trace.to_dict()
+        result.update(
+            question=question["text"],
+            expected_answer=question.get("expected_answer", ""),
+            gold_passage_ids=list(question.get("gold_passage_ids") or []),
+            answer_withheld=not reusable,
+        )
+        # The closed half of the stored string survives; the private half never leaves here.
+        result["failure_code"] = failure_code_of(result.get("error"))
+        result["error"] = None
+        # A question that failed before it retrieved saved no trace and no answer, so there is
+        # nothing to withhold. "Withheld" has to mean "a saved answer exists and this audience
+        # may not see it": otherwise a run of routing failures reads to `get_run` as a run of
+        # hidden answers, and it blanks the whole summary -- including the error count that is
+        # the only thing left to say about it. A failure that happened later does have a saved
+        # trace, and that one is withheld like any other.
+        if result["failure_code"] is not None and not raw_trace:
+            result["answer_withheld"] = False
+        if not reusable:
+            for key in ("answer", "thought", "verdict", "judge_reason"):
+                result[key] = ""
+            for key in ("judge_score", "exact_match", "f1", "gold_rank", "latency_ms"):
+                result[key] = None
+            result["recall"] = {}
+            result["used_dpr_fallback"] = False
+        graph.validate_authorization()
+        self._boundary(authorized[2])
+        return result
+
+    @_guarded_collection
+    def list_results(self, run_id):
+        refs = self._refs("run", run_id)
+        if not refs or self._authorized(refs["set_id"]) is None:
+            return []
+        return [
+            row
+            for identity in self._ids("results", parent=run_id)
+            if (row := self.get_result(identity)) is not None
+        ]
+
+    @_guarded_collection
+    def results_for_question(self, question_id):
+        if self.get_question(question_id) is None:
+            return []
+        return [
+            row
+            for identity in self._ids("question_results", parent=question_id)
+            if (row := self.get_result(identity)) is not None
+        ]
+
+    @_guarded_item
+    def get_run(self, run_id):
+        refs = self._refs("run", run_id)
+        authorized = self._authorized(refs["set_id"]) if refs else None
+        if authorized is None:
+            return None
+        graph = self.graph()
+        row = self.store.get_run(run_id)
+        if row is None:
+            return None
+        results = self.list_results(run_id)
+        result = deepcopy(row)
+        result["failure_code"] = failure_code_of(result.get("error"))
+        if authorized[0]:
+            result["error"] = None
+        visible_questions = len(self.list_questions(refs["set_id"]))
+        # Progress counts owned questions, independently of whether their saved
+        # answers can still be shown. Hide progress if some inputs are hidden.
+        result["progress_total"] = visible_questions
+        result["progress_done"] = (
+            min(row.get("progress_done") or 0, visible_questions)
+            if visible_questions == authorized[1].get("question_count")
+            else len(results)
+        )
+        if any(item["answer_withheld"] for item in results) or len(results) != len(
+            self._ids("results", parent=run_id)
+        ):
+            result["summary"] = {}
+        else:
+            from hippo.evals.runner import summarize
+
+            result["summary"] = summarize(results) if results else {}
+        graph.validate_authorization()
+        self._boundary(authorized[2])
+        return result
+
+    @_guarded_collection
+    def list_runs(self, set_id=None):
+        if set_id is not None and self._authorized(set_id) is None:
+            return []
+        return [
+            row
+            for identity in self._ids("runs", parent=set_id)
+            if (row := self.get_run(identity)) is not None
+        ]
+
+    def create_question_set(self, name, source_id=None, origin="manual"):
+        if origin not in {"manual", "generated"}:
+            raise ValueError("Unknown evaluation origin")
+        with (
+            self._creation_scope(evidence=bool(source_id) or origin == "generated"),
+            self.store.transaction(),
+        ):
+            lock_authorization(self.store)
+            if self._session is not None:
+                self._session.validate()
+            access = self._current()
+            if access.audience_kind not in {"reader", "open", "internal"} or (
+                access.audience_kind == "reader" and not access.user_id
+            ):
+                raise EvalAccessDenied("An evaluation owner is required")
+            source = self.store.get_source(source_id, access) if source_id else None
+            source_dto = self.get_source(source_id) if source_id else None
+            if source_id and (source is None or source_dto is None):
+                raise EvalAccessDenied("unknown source or access denied")
+            if not name and origin == "generated" and source_dto:
+                name = f"Sample questions: {source_dto['name']}"
+            if not isinstance(name, str) or not name:
+                raise ValueError("An evaluation name is required")
+            fingerprint = view_fingerprint(self.graph()) if origin == "generated" else ""
+            metadata = dict(
+                version=1,
+                workspace_id=source.get("workspace_id") if source else DEFAULT_WORKSPACE_ID,
+                owner_id=access.user_id if access.audience_kind == "reader" else None,
+                audience="owner" if access.audience_kind == "reader" else access.audience_kind,
+                source_id=source_id,
+                origin=origin,
+                evidence_fingerprint=fingerprint,
+            )
+            if self._session is not None:
+                self._session.validate()
+            identity = self.store.create_question_set(name, source_id, origin)
+            self.store.set_meta("eval_owner:" + identity, canonical_json(metadata))
+            self.store._bump_authorization_epoch()
+            return identity
+
+    def add_questions(self, set_id, questions):
+        with self.read_scope(), self.store.transaction():
+            lock_authorization(self.store)
+            self.require_set(set_id)
+            graph = self.graph()
+            if any(not self._question_visible(row, graph) for row in questions):
+                raise EvalAccessDenied("Question evidence is not available")
+            graph.validate_authorization()
+            result = self.store.add_questions(set_id, questions)
+            self._session.validate()
+            return result
+
+    def delete_question_set(self, set_id):
+        with self.store.transaction():
+            lock_authorization(self.store)
+            self._require_deletion(set_id)
+            result_ids = [
+                result_id
+                for run_id in self._ids("runs", parent=set_id)
+                for result_id in self._ids("results", parent=run_id)
+            ]
+            release_saved_evaluations(self.store, result_ids)
+            self.store.delete_question_set(set_id)
+            self.store.set_meta("eval_owner:" + set_id, None)
+            self.store._bump_authorization_epoch()
+
+    def delete_question(self, question_id):
+        with self.store.transaction():
+            lock_authorization(self.store)
+            refs = self._refs("question", question_id)
+            if refs is None:
+                raise EvalAccessDenied("unknown question or access denied")
+            self._require_deletion(refs["set_id"])
+            release_saved_evaluations(self.store, self._ids("question_results", parent=question_id))
+            self.store.delete_question(question_id)
+
+    def delete_run(self, run_id):
+        with self.store.transaction():
+            lock_authorization(self.store)
+            refs = self._refs("run", run_id)
+            if refs is None:
+                raise EvalAccessDenied("unknown run or access denied")
+            self._require_deletion(refs["set_id"])
+            release_saved_evaluations(self.store, self._ids("results", parent=run_id))
+            self.store.delete_run(run_id)
+
+    def create_run(self, set_id, name, settings):
+        with self.read_scope(), self.store.transaction():
+            lock_authorization(self.store)
+            self.require_set(set_id)
+            result = self.store.create_run(set_id, name, settings)
+            self._session.validate()
+            return result

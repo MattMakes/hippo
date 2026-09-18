@@ -10,7 +10,14 @@ import pytest
 
 from hippo.ingest import readers
 from hippo.ingest.html_text import html_to_text
-from hippo.ingest.readers import Document, is_probably_binary, is_supported, read_file, read_zip
+from hippo.ingest.readers import (
+    Document,
+    is_probably_binary,
+    is_supported,
+    is_supported_name,
+    read_file,
+    read_zip,
+)
 
 # ------------------------------------------------------------------ helpers
 
@@ -117,6 +124,22 @@ def test_extensionless_text_is_supported(tmp_path: Path) -> None:
     (doc,) = read_file(readme)
     assert doc.title == "README"
     assert doc.is_code is False
+
+
+def test_go_mod_is_read_but_is_not_code(tmp_path: Path) -> None:
+    """
+    `go.mod` is read for its `module` line, which is how the Go walker turns an import path
+    into a directory (`LanguageRules.source_setup`). It is known by its whole name, not by
+    `.mod` -- Fortran and half a dozen other things use that suffix -- so it is not code and
+    the code graph never tries to parse it.
+    """
+    path = tmp_path / "go.mod"
+    path.write_text("module example.com/goapp\n\ngo 1.22\n")
+    assert is_supported_name("goapp/go.mod")
+    assert is_supported(path)
+    (doc,) = read_file(path)
+    assert doc.is_code is False
+    assert readers.lang_of("go.mod") is None
 
 
 def test_extensionless_binary_is_not_supported(tmp_path: Path) -> None:
@@ -342,3 +365,52 @@ def test_walk_repo_does_not_swallow_too_large(tmp_path: Path) -> None:
     assert len(walk_repo(tmp_path, readers.TextBudget(limit=80))) == 2
     with pytest.raises(readers.TooLarge):
         walk_repo(tmp_path, readers.TextBudget(limit=79))
+
+
+# ------------------------------------------------------- the code-graph language
+
+
+def test_lang_of() -> None:
+    """Which language the code graph knows a file as; None for everything else."""
+    for name in ("a.py", "pkg/mod.pyi", "src/hippo/store/ladybug.py"):
+        assert readers.lang_of(name) == "python"
+    for name in ("a.ts", "a.tsx", "a.js", "a.jsx", "a.mjs", "a.cjs"):
+        assert readers.lang_of(name) == "typescript"
+    assert readers.lang_of("schema/orders.sql") == "sql"
+    # Naming a language is not the same as parsing it: C# and Rust are registered and have
+    # no walker yet, so `extract_code` skips their files as `unsupported` and they keep line
+    # windows. Go has one, which is why `tools/build.rb` is the unparsed-code fixture now.
+    assert readers.lang_of("tool.go") == "go"
+    assert readers.lang_of("App/Orders/OrderService.cs") == "csharp"
+    assert readers.lang_of("main.rs") == "rust"
+    # Code with no grammar at all, prose, and files with no extension are None.
+    for name in ("tool.rb", "app.css", "README.md", "notes.txt", "Makefile"):
+        assert readers.lang_of(name) is None, name
+
+
+def test_lang_of_only_claims_files_is_code_name_claims() -> None:
+    """A file can never be code for the chunker and unknown to the extractor, or vice versa."""
+    known = (
+        readers.PYTHON_EXTENSIONS
+        | readers.TYPESCRIPT_EXTENSIONS
+        | readers.GO_EXTENSIONS
+        | readers.CSHARP_EXTENSIONS
+        | readers.RUST_EXTENSIONS
+        | readers.SQL_EXTENSIONS
+    )
+    for suffix in known:
+        assert suffix in readers.CODE_EXTENSIONS, suffix
+        assert readers.is_code_name(f"file{suffix}")
+        assert readers.lang_of(f"file{suffix}") is not None
+
+
+def test_lang_of_agrees_with_the_codegraph_side() -> None:
+    """
+    `codegraph.model.lang_of` is the same table on the other side of the dependency line
+    (codegraph may not import ingest). The two are kept in step by convention and by this.
+    """
+    from hippo.codegraph.model import lang_of as codegraph_lang_of
+
+    for suffix in sorted(readers.CODE_EXTENSIONS | readers.PROSE_EXTENSIONS | {""}):
+        name = f"pkg/file{suffix}"
+        assert readers.lang_of(name) == codegraph_lang_of(name), suffix

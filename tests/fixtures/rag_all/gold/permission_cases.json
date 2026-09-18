@@ -1,0 +1,30 @@
+[
+  {
+    "id": "hidden-link-reader",
+    "principal": "reader",
+    "visible_sources": [
+      "commerce-owners",
+      "commerce-route",
+      "commerce-other-service"
+    ],
+    "forbidden_evidence_ids": [
+      "e-commerce-hidden-link"
+    ],
+    "forbidden_paths": [
+      {
+        "subject": "commerce:service:billing",
+        "predicate": "DEPENDS_ON",
+        "object": "commerce:service:checkout"
+      }
+    ],
+    "expected": "No text, metadata, score, path or citation from the restricted comment; not executed by Task 1"
+  },
+  {
+    "id": "hidden-link-operator",
+    "principal": "operator",
+    "allowed_evidence_ids": [
+      "e-commerce-hidden-link"
+    ],
+    "expected": "Restricted comment may supply evidence after provider ACL integration; not executed by Task 1"
+  }
+]

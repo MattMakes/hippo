@@ -1,0 +1,21 @@
+{
+  "P7Q2X1": {
+    "state": "known",
+    "mode": "workspace"
+  },
+  "P7Q2X2": {
+    "state": "known",
+    "mode": "restricted",
+    "allow_users": [
+      "pd-user-7"
+    ],
+    "allow_groups": []
+  },
+  "P7Q2X3": {
+    "state": "known",
+    "mode": "workspace"
+  },
+  "line-sha256:cc472f0575360d677573a95b6c551e472cf87bdb3d4cf9d28986f2ab148e6387": {
+    "state": "unknown"
+  }
+}

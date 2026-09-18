@@ -22,6 +22,14 @@ The modules in this package follow the paper's pipeline, in order:
     retriever.py    step 4: question -> facts -> LLM filter -> PPR -> ranked passages
     answerer.py     step 5: the LLM reads the top passages and answers
 
+Two modules sit beside step 4 and exist only because code is a first-class kind
+of memory here (the reference has no counterpart for either):
+
+    anchors.py      which symbols a question *names*, and how it splits into
+                    prose and pasted code. Pure, deterministic, no model call.
+    paths.py        walking the directed code relations - callers, blast radius,
+                    exception routes, history - and rendering them for an answer.
+
 Everything is written to match the reference implementation at
 https://github.com/OSU-NLP-Group/HippoRAG (HippoRAG 2). Where we had to
 adapt something for a small local model, the code says so in a comment.
