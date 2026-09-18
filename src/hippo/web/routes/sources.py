@@ -32,6 +32,7 @@ from ...knowledge.eval_access import EvalAccess
 from ...knowledge.public_errors import INVALID_SOURCE_TYPE
 from ...knowledge.query_access import QuerySession, query_session
 from ...status import source_view
+from ...store.base import now_iso
 from ..auth import build_actor_of, principal_of, require
 from ..render import (
     STOP_POLLING,
@@ -46,7 +47,7 @@ from . import graph as graph_routes
 
 router = APIRouter()
 
-# Two stable codes these routes own. Neither is one of the closed retrieval codes --
+# The stable codes these routes own. None is one of the closed retrieval codes --
 # nothing failed and nothing is stale -- so they live with the routes that answer them, like
 # `web/app.py`'s `authorization_changed`.
 #
@@ -54,6 +55,8 @@ router = APIRouter()
 # sentence to the generic `operation_failed` fallback whatever its status says. That is why
 # the bounded messages below gain a code rather than being replaced by the closed table's.
 BULK_REFUSED = "bulk_refused"
+# A domain outside `buildable_families` for the source (plan 3.5): refused, and nothing is written.
+DOMAIN_NOT_ALLOWED = "domain_not_allowed"
 INDEXING_BUSY = "indexing_busy"
 # The plan's transport table assigns the closed input validators one code: the upload byte
 # cap, the unsupported type, the empty text and the malformed git URL are all this row.
@@ -483,6 +486,79 @@ def access_form(request: Request, source_id: str, visibility: str = Form(""), ba
     return RedirectResponse(target, status_code=303)
 
 
+@router.post("/sources/{source_id}/domain")
+def domain_form(request: Request, source_id: str, family: str = Form(""), back: str = Form("/")):
+    """Confirm (empty `family`) or correct a source's domain; the Library row and the Source page post here.
+
+    Only the refusal a manager can act on comes back as `?error=`. A hidden, missing or withheld
+    source is a 404 and a caller who may not manage it gets a 403, as from the JSON route.
+    """
+    target = back if back.startswith("/") and not back.startswith("//") else "/"
+    try:
+        write_domain(request, source_id, family or None)
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+        sep = "&" if "?" in target else "?"
+        return RedirectResponse(f"{target}{sep}error={quote(str(exc.detail))}", status_code=303)
+    return RedirectResponse(target, status_code=303)
+
+
+def write_domain(request: Request, source_id: str, family: str | None) -> dict[str, Any]:
+    """Plan 3.5's write rule for both domain routes; it starts no build and mints no actor.
+
+    `family` None confirms the family the row shows. Any other family is re-checked against
+    `buildable_families` with the server's own descriptor families (invariant I4), and one outside
+    it is a 400 that writes nothing. The natural family is written as no override, so naming it
+    confirms and clears an earlier correction. An override the source can no longer build (a
+    connector that stopped declaring it, OD7) is cleared by a confirm, not kept.
+    """
+    ctx = ctx_of(request)
+    principal = principal_of(request)
+    manageable_source(request, source_id)
+    families = descriptor_families(request)
+    source = domain_source(request, source_id, families)
+    allowed = source["domain_allowed"]
+    if family is None:
+        family = source["domain"] if source["domain"] in allowed else source["domain_natural"]
+    elif family not in allowed:
+        raise HTTPException(400, f"This source can only be built as {' or '.join(allowed)}")
+    ctx.store.set_source_domain(
+        source_id,
+        override=None if family == source["domain_natural"] else family,
+        confirmed_at=now_iso(),
+        confirmed_by=principal.user_id,
+    )
+    fresh = domain_source(request, source_id, families)
+    # Only a connector correction waits for a rebuild, and only a sync, run from the CLI, makes it.
+    pending = fresh["domain_state"] == "pending_rebuild"
+    return {
+        "source": fresh,
+        "rebuild": {
+            "needed": pending,
+            "started": False,
+            "command": fresh["resync_command"] if pending else None,
+        },
+    }
+
+
+def domain_source(
+    request: Request, source_id: str, families: dict[str, tuple[str, ...]] | None
+) -> dict[str, Any]:
+    """`visible_source`, with the descriptor families the domain check needs (plan 2.5).
+
+    A withheld row has no domain; it may be neither shown nor changed, so it is a 404 too (P1).
+    """
+    ctx = ctx_of(request)
+    access = principal_of(request).access
+    with query_session(ctx, access) as session:
+        view = source_view(ctx, access, session=session, descriptor_families=families)
+        source = next((row for row in view.sources if row["id"] == source_id), None)
+    if source is None or source["domain"] is None:
+        raise HTTPException(404, "no such source")
+    return source
+
+
 # ------------------------------------------------------------------ JSON
 
 api = APIRouter(prefix="/api/sources")
@@ -503,6 +579,10 @@ class RepoBody(BaseModel):
 
 class AccessBody(BaseModel):
     role_id: str | None = None  # None / "everyone": open to every user
+
+
+class DomainBody(BaseModel):
+    family: str | None = None  # None: confirm the family the source shows
 
 
 @api.get("")
@@ -631,6 +711,17 @@ def set_access(request: Request, source_id: str, body: AccessBody):
     ctx.store.set_source_access(source_id, role_id)
     ctx.invalidate_scoped()
     return visible_source(request, source_id)
+
+
+@api.put("/{source_id}/domain")
+def set_domain(request: Request, source_id: str, body: DomainBody):
+    """Confirm (`family` null) or correct a source's domain; a correction never starts a build."""
+    try:
+        return write_domain(request, source_id, body.family)
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+        return coded_response(str(exc.detail), DOMAIN_NOT_ALLOWED, 400)
 
 
 @api.delete("/{source_id}")

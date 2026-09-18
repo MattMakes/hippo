@@ -1,0 +1,9 @@
+{# The Library row's Confirm (plan T3, design D1): only while the domain is automatic and the caller may
+   manage the source. A correction needs the explanation on the source page, so the row has no select. #}
+{% if s.can_manage and s.domain_state == 'auto' %}
+<form method="post" action="/sources/{{ s.id }}/domain" class="inline row" title="Confirm that {{ s.domain }} is the right domain">
+  <input type="hidden" name="family" value="">
+  <input type="hidden" name="back" value="/">
+  <button class="btn small" {% if busy_ids is defined and s.id in busy_ids %}disabled title="Wait until indexing has finished"{% endif %}>Confirm</button>
+</form>
+{% endif %}

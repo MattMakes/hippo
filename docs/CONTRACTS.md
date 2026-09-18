@@ -112,6 +112,7 @@ rows, a managed row counted from the caller's graph, each with these keys (plan 
   lane                 'legacy' | 'managed' | 'connector', the build lane (managed-lane rows also keep `managed: True`)
   domain               the effective family from `knowledge.domain.resolve_domain` ('prose', 'code', a connector family, or
                        'custom' when a connector partition has no stored classification)
+  domain_natural       the family automatic classification chose, ignoring any override (`DomainDecision.natural`)
   domain_origin        'lane' | 'declared' | 'content' | 'name' | 'fallback' | 'user'
   domain_state         'auto' | 'confirmed' | 'corrected' | 'pending_rebuild'
   domain_allowed       list: `buildable_families`, the families a rebuild can build; one entry except for a connector whose
