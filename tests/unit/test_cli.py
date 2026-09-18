@@ -106,7 +106,10 @@ def test_sources_prints_a_table(cli_ctx: AppContext, sample_text: str, capsys):
     assert cli.main(["sources"]) == 0
     out = capsys.readouterr().out
     header, rows = out.splitlines()[0], out.splitlines()[2:]
-    assert header.split() == ["id", "name", "kind", "status", "stage", "passages", "facts", "created"]
+    # "last sync" is one column with a space in its name, so it splits into two tokens.
+    assert header.split() == [
+        "id", "name", "kind", "status", "stage", "passages", "facts", "domain", "last", "sync", "created",
+    ]  # fmt: skip
     assert len(rows) == 1
     assert source_id in rows[0] and "Acme guide" in rows[0] and "sample" in rows[0]
 

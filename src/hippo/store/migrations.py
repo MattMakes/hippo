@@ -15,7 +15,7 @@ from typing import Annotated, Literal, Union, get_args, get_origin
 from ..knowledge.identity import canonical_json, text_hash
 from ..knowledge.model import RECORD_TYPES, Workspace
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 # Published by 4246f5e: never derive v2 from the evolving models.
 V2_DESCRIPTOR = json.loads(
     """[2, {
@@ -134,6 +134,9 @@ SOURCE_COLUMNS = {
     "managed": "BOOLEAN",
     "active_build_id": "STRING",
     "build_fencing_token": "INT64",
+    "domain_override": "STRING",
+    "domain_confirmed_at": "STRING",
+    "domain_confirmed_by": "STRING",
 }
 PASSAGE_COLUMNS = {
     "retrieval_view_id": "STRING",
@@ -244,6 +247,56 @@ V7_DESCRIPTOR = json.loads(
 {"Commit":{"generation_id":"STRING"},"DataObject":{"generation_id":"STRING"},"Symbol":{"generation_id":"STRING"}}]"""
 )
 V7_CHECKSUM = text_hash(canonical_json(V7_DESCRIPTOR))
+# Published by 8e261a9. Frozen before v9 widens Source, so v8 stops tracking the models too. Unlike
+# the v7 literal it keeps model key order: `schema_steps(version=8)` builds the Unit DDL from it, and
+# `canonical_json` sorts before hashing, so the order moves no checksum.
+V8_DESCRIPTOR = json.loads(
+    """[8, {
+"Workspace": {"id":"STRING","identity_key":"STRING","name":"STRING"},
+"WorkspaceMembership": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","principal_id":"STRING","enabled":"BOOLEAN","mapping_authority":"STRING","policy_epoch":"INT64"},
+"GroupMembership": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","group_id":"STRING","principal_id":"STRING","enabled":"BOOLEAN","mapping_authority":"STRING","policy_epoch":"INT64"},
+"Connector": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","kind":"STRING","instance_url":"STRING","config_json":"STRING","credential_ref":"STRING","enabled":"BOOLEAN","capabilities_json":"STRING","classification_json":"STRING"},
+"Artifact": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","source_id":"STRING","connector_id":"STRING","provider_instance":"STRING","kind":"STRING","external_id":"STRING","canonical_uri":"STRING","policy_id":"STRING","deleted_at":"TIMESTAMP"},
+"ArtifactRevision": {"id":"STRING","identity_key":"STRING","artifact_id":"STRING","provider_revision":"STRING","content_hash":"STRING","raw_uri":"STRING","source_updated_at":"TIMESTAMP","source_timestamp_original":"STRING","source_timezone":"STRING","source_precision":"STRING","observed_at":"TIMESTAMP","lifecycle":"STRING","metadata_json":"STRING"},
+"Generation": {"id":"STRING","identity_key":"STRING","source_id":"STRING","parent_id":"STRING","status":"STRING","parser_version":"STRING","linker_version":"STRING","embedding_profile":"STRING","created_at":"TIMESTAMP","published_at":"TIMESTAMP","manifest_hash":"STRING","coverage_json":"STRING","registry_fingerprint":"STRING"},
+"GenerationMember": {"id":"STRING","identity_key":"STRING","generation_id":"STRING","artifact_revision_id":"STRING"},
+"GenerationEvidenceMember": {"id":"STRING","identity_key":"STRING","generation_id":"STRING","record_kind":"STRING","record_id":"STRING"},
+"EvidenceSpan": {"id":"STRING","identity_key":"STRING","revision_id":"STRING","locator_kind":"STRING","locator_json":"STRING","text_hash":"STRING","text":"STRING","policy_id":"STRING"},
+"KnowledgeObject": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","kind":"STRING","canonical_key":"STRING"},
+"ObjectObservation": {"id":"STRING","identity_key":"STRING","valid_from":"TIMESTAMP","valid_to":"TIMESTAMP","validity_kind":"STRING","recorded_from":"TIMESTAMP","recorded_to":"TIMESTAMP","temporal_basis":"STRING","temporal_precision":"STRING","source_timestamp_original":"STRING","source_timezone":"STRING","object_id":"STRING","revision_id":"STRING","span_id":"STRING","attributes_json":"STRING","evidence_class":"STRING"},
+"Assertion": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","subject_id":"STRING","predicate":"STRING","object_id":"STRING","scope_key":"STRING"},
+"AssertionVersion": {"id":"STRING","identity_key":"STRING","valid_from":"TIMESTAMP","valid_to":"TIMESTAMP","validity_kind":"STRING","recorded_from":"TIMESTAMP","recorded_to":"TIMESTAMP","temporal_basis":"STRING","temporal_precision":"STRING","source_timestamp_original":"STRING","source_timezone":"STRING","assertion_id":"STRING","evidence_class":"STRING","rule_version":"STRING","confidence":"DOUBLE","status":"STRING","family":"STRING","source":"STRING","rule":"STRING","weight":"DOUBLE","statement":"STRING","unit_id":"STRING"},
+"AssertionSupport": {"id":"STRING","identity_key":"STRING","assertion_version_id":"STRING","span_id":"STRING","derivation_group":"STRING"},
+"NativeBinding": {"id":"STRING","identity_key":"STRING","generation_id":"STRING","object_id":"STRING","native_kind":"STRING","native_id":"STRING","span_id":"STRING"},
+"Unit": {"id":"STRING","identity_key":"STRING","generation_id":"STRING","passage_id":"STRING","span_id":"STRING","ordinal":"INT64","kind":"STRING","text":"STRING","content_hash":"STRING","prefix":"STRING","embed_text":"STRING","embed_hash":"STRING","mentions_json":"STRING","template":"STRING"},
+"AccessPolicy": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","origin":"STRING","scope_key":"STRING","mode":"STRING","allow_users":"STRING[]","allow_groups":"STRING[]","deny_users":"STRING[]","deny_groups":"STRING[]","verified_at":"TIMESTAMP","expires_at":"TIMESTAMP"},
+"SyncState": {"id":"STRING","identity_key":"STRING","connector_id":"STRING","partition_key":"STRING","cursor_json":"STRING","watermark":"STRING","last_success_at":"TIMESTAMP","last_reconciled_at":"TIMESTAMP","error_code":"STRING"},
+"SyncRun": {"id":"STRING","identity_key":"STRING","source_id":"STRING","scope_key":"STRING","phase":"STRING","expected_parent_id":"STRING","cursor_json":"STRING","lease_owner":"STRING","lease_expires_at":"TIMESTAMP","fencing_token":"INT64","attempt_count":"INT64","retry_at":"TIMESTAMP","input_fingerprint":"STRING","error_code":"STRING","status":"STRING","connector_id":"STRING","run_key":"STRING"},
+"MaintenanceJob": {"id":"STRING","identity_key":"STRING","source_id":"STRING","scope_key":"STRING","phase":"STRING","expected_parent_id":"STRING","cursor_json":"STRING","lease_owner":"STRING","lease_expires_at":"TIMESTAMP","fencing_token":"INT64","attempt_count":"INT64","retry_at":"TIMESTAMP","input_fingerprint":"STRING","error_code":"STRING","status":"STRING","kind":"STRING","job_key":"STRING"},
+"SourceEvent": {"id":"STRING","identity_key":"STRING","connector_id":"STRING","artifact_id":"STRING","provider_instance":"STRING","provider_artifact_id":"STRING","delivery_id":"STRING","provider_revision":"STRING","provider_sequence":"STRING","operation":"STRING","received_at":"TIMESTAMP","payload_hash":"STRING","acceptance_state":"STRING","dedupe_key":"STRING"},
+"IndexManifest": {"id":"STRING","identity_key":"STRING","generation_id":"STRING","profile_fingerprint":"STRING","config_fingerprint":"STRING","required_representations":"STRING[]","checksums":"STRING","ready":"BOOLEAN","missing_optional":"STRING[]"},
+"LinkGeneration": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","input_manifest_hash":"STRING","linker_version":"STRING","assertion_version_ids":"STRING[]","coverage_json":"STRING","created_at":"TIMESTAMP"},
+"HistoryManifest": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","revision_ids":"STRING[]","assertion_version_ids":"STRING[]","link_generation_ids":"STRING[]","knowledge_cutoff":"TIMESTAMP","temporal_selector_json":"STRING","coverage_json":"STRING","retention_gaps":"STRING[]"},
+"DerivedRecord": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","view_kind":"STRING","rule_version":"STRING","model_version":"STRING","input_revision_ids":"STRING[]","input_binding_ids":"STRING[]","dependency_fingerprint":"STRING","state":"STRING"},
+"DerivedDependency": {"id":"STRING","identity_key":"STRING","derived_record_id":"STRING","input_kind":"STRING","input_id":"STRING","input_version":"STRING"},
+"Suppression": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","target_kind":"STRING","target_id":"STRING","scope_key":"STRING","principal_ids":"STRING[]","all_principals":"BOOLEAN","view_applicability":"STRING","reason":"STRING","epoch":"INT64","created_at":"TIMESTAMP","restoration_barrier":"STRING"},
+"PurgeJob": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","scope_key":"STRING","request_key":"STRING","phase":"STRING","removal_manifest_ids":"STRING[]","raw_status":"STRING","derived_status":"STRING","saved_output_status":"STRING","backup_disposition":"STRING","audit_code":"STRING","created_at":"TIMESTAMP","completed_at":"TIMESTAMP"},
+"IndexEvent": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","generation_id":"STRING","kind":"STRING","payload_json":"STRING","state":"STRING","aggregate_id":"STRING","sequence":"INT64","dedupe_key":"STRING","created_at":"TIMESTAMP"},
+"ConsumerAck": {"id":"STRING","identity_key":"STRING","event_id":"STRING","consumer_id":"STRING","state":"STRING","attempt_count":"INT64","lease_owner":"STRING","lease_expires_at":"TIMESTAMP","fencing_token":"INT64","retry_at":"TIMESTAMP","acknowledged_at":"TIMESTAMP"},
+"RetrievalView": {"id":"STRING","identity_key":"STRING","object_id":"STRING","span_id":"STRING","view_kind":"STRING","text":"STRING","text_profile":"STRING","vector_profile":"STRING","source_revision_id":"STRING","derivation_version":"STRING","dependency_fingerprint":"STRING","derived_record_id":"STRING"},
+"ProseExtraction": {"id":"STRING","identity_key":"STRING","generation_id":"STRING","derived_record_id":"STRING","input_kind":"STRING","input_id":"STRING","input_text_hash":"STRING","support_passage_ids":"STRING[]","extractor_profile":"STRING","embedding_profile":"STRING","payload":"STRING","payload_hash":"STRING"},
+"Section": {"id":"STRING","identity_key":"STRING","source_revision_id":"STRING","original_heading":"STRING","ordinal":"INT64","parent_section_id":"STRING","breadcrumb":"STRING[]","original_span_ids":"STRING[]"},
+"SectionMember": {"id":"STRING","identity_key":"STRING","section_id":"STRING","child_id":"STRING","child_kind":"STRING","ordinal":"INT64"},
+"ConflictSet": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","scope_key":"STRING","assertion_version_ids":"STRING[]","valid_from":"TIMESTAMP","valid_to":"TIMESTAMP","resolution_status":"STRING","support_span_ids":"STRING[]","resolution_rule":"STRING"},
+"Alias": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","namespace":"STRING","alias_key":"STRING","target_object_id":"STRING","authority":"STRING","support_span_ids":"STRING[]","status":"STRING"},
+"QuerySnapshot": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","sources":"STRING","history_manifest_ids":"STRING[]","link_generation_id":"STRING","knowledge_cutoff":"TIMESTAMP","temporal":"STRING","profile_fingerprint":"STRING","settings_fingerprint":"STRING","policy_fingerprint":"STRING","suppression_epoch":"INT64","created_at":"TIMESTAMP"},
+"SnapshotReference": {"id":"STRING","identity_key":"STRING","workspace_id":"STRING","snapshot_id":"STRING","kind":"STRING","reference_key":"STRING","created_at":"TIMESTAMP","lease_owner":"STRING","lease_expires_at":"TIMESTAMP","released_at":"TIMESTAMP"}
+}, [["SUBJECT_OBJECT","Assertion","KnowledgeObject"],["TARGET_OBJECT","Assertion","KnowledgeObject"],["VERSION_OF","AssertionVersion","Assertion"],["SUPPORT_VERSION","AssertionSupport","AssertionVersion"],["SUPPORT_SPAN","AssertionSupport","EvidenceSpan"],["REVISION_OF","ArtifactRevision","Artifact"],["SPAN_REVISION","EvidenceSpan","ArtifactRevision"],["OBSERVED_OBJECT","ObjectObservation","KnowledgeObject"],["OBSERVATION_SPAN","ObjectObservation","EvidenceSpan"],["MEMBER_GENERATION","GenerationMember","Generation"],["MEMBER_REVISION","GenerationMember","ArtifactRevision"],["BINDING_OBJECT","NativeBinding","KnowledgeObject"],["BINDING_SPAN","NativeBinding","EvidenceSpan"],["SECTION_PARENT","SectionMember","Section"],["EVIDENCE_GENERATION","GenerationEvidenceMember","Generation"],["REFERENCE_SNAPSHOT","SnapshotReference","QuerySnapshot"]],
+{"workspace_id":"STRING","active_generation_id":"STRING","generation_version":"INT64","generation_lock":"INT64","managed":"BOOLEAN","active_build_id":"STRING","build_fencing_token":"INT64"},
+{"retrieval_view_id":"STRING","generation_id":"STRING","artifact_revision_id":"STRING","span_id":"STRING","parent_passage_id":"STRING","content_kind":"STRING","embedding_profile":"STRING"},
+{"Symbol":{"generation_id":"STRING"},"DataObject":{"generation_id":"STRING"},"Commit":{"generation_id":"STRING"}}]"""
+)
+V8_CHECKSUM = text_hash(canonical_json(V8_DESCRIPTOR))
 MIGRATION_CHECKSUM = text_hash(
     canonical_json(
         [
@@ -264,7 +317,8 @@ SUPPORTED_CHECKSUMS = {
     5: V5_CHECKSUM,
     6: V6_CHECKSUM,
     7: V7_CHECKSUM,
-    8: MIGRATION_CHECKSUM,
+    8: V8_CHECKSUM,
+    9: MIGRATION_CHECKSUM,
 }
 
 
@@ -282,8 +336,10 @@ def _descriptor(version):
     if version == 7:
         return V7_DESCRIPTOR
     if version == 8:
-        # Live while v8 is current; freeze it as a literal before v9.
-        return [8, KNOWLEDGE_COLUMNS, KNOWLEDGE_RELATIONS, SOURCE_COLUMNS, PASSAGE_COLUMNS, NATIVE_COLUMNS]
+        return V8_DESCRIPTOR
+    if version == 9:
+        # Live while v9 is current; freeze it as a literal before v10.
+        return [9, KNOWLEDGE_COLUMNS, KNOWLEDGE_RELATIONS, SOURCE_COLUMNS, PASSAGE_COLUMNS, NATIVE_COLUMNS]
     raise SchemaCompatibilityError("Unsupported migration version")
 
 
@@ -575,9 +631,20 @@ V8_ADDED_COLUMNS = (
     ("Generation", "registry_fingerprint"),
     ("Connector", "classification_json"),
 )
+# Design D3: the domain decision on a Source. Null in all three reads back as automatic (invariant I5).
+V9_ADDED_SOURCE_COLUMNS = ("domain_override", "domain_confirmed_at", "domain_confirmed_by")
 
 
 def schema_steps(store, *, version=CURRENT_SCHEMA_VERSION) -> list[str]:
+    if version == 9:
+        if store.knowledge_backend == "ladybug":
+            columns = _descriptor(9)[3]
+            return [
+                f"ALTER TABLE Source ADD IF NOT EXISTS {field} {columns[field]}"
+                for field in V9_ADDED_SOURCE_COLUMNS
+            ]
+        # Neo4j properties need no DDL, and v9 declares no index.
+        return []
     if version == 8:
         columns = _descriptor(8)[1]
         if store.knowledge_backend == "ladybug":
@@ -664,6 +731,14 @@ def schema_steps(store, *, version=CURRENT_SCHEMA_VERSION) -> list[str]:
 
 
 def _data_transform(store, *, version=CURRENT_SCHEMA_VERSION):
+    if version == 9:
+        # Added columns read back null, and null means automatic, so no stored row is rewritten.
+        # A Fake row is a plain dict, so it gets the keys that LadybugDB and Neo4j read back as null.
+        if store.knowledge_backend == "fake":
+            for source in store.sources.values():
+                for column in V9_ADDED_SOURCE_COLUMNS:
+                    source.setdefault(column, None)
+        return
     if version == 8:
         # Added columns read back null, which every widened field accepts except the connector
         # classification, whose default is an empty object (the v3 `origin` backfill's pattern).

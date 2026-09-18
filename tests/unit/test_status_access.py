@@ -1,12 +1,27 @@
 """Status inventory follows the caller's graph, independently of cached health."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace as NS
 from unittest.mock import ANY, Mock
 
 import pytest
 
 from hippo.access import Access
+from hippo.knowledge import model as k
 from hippo.status import system_status
+
+
+def staging_generation(source_id):
+    """A real staging `Generation` row: the inventory indexes generations by id (plan table 3.4)."""
+    return k.Generation(
+        source_id=source_id,
+        status="staging",
+        parser_version="p",
+        linker_version="l",
+        embedding_profile="p",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        manifest_hash=source_id,
+    )
 
 
 def status_context():
@@ -99,7 +114,7 @@ def test_generation_only_source_without_legacy_rows_is_hidden_until_it_publishes
     ctx = status_context()
     ctx.store.list_sources.return_value.append({"id": "staging", "meta": {"secret": "unpublished"}})
     ctx.store._knowledge_rows.side_effect = lambda kind: (
-        [NS(source_id="staging")] if kind == "Generation" else []
+        [staging_generation("staging")] if kind == "Generation" else []
     )
     ctx.jobs.running_keys.return_value.append("index:staging")
     value = system_status(ctx, access=Access(user_id="reader"))
@@ -119,7 +134,7 @@ def test_converting_source_with_legacy_rows_keeps_the_legacy_lane_until_it_publi
     ctx = status_context()
     ctx.store.list_sources.return_value.append({"id": "converting", "meta": {"secret": "unpublished"}})
     ctx.store._knowledge_rows.side_effect = lambda kind: (
-        [NS(source_id="converting")] if kind == "Generation" else []
+        [staging_generation("converting")] if kind == "Generation" else []
     )
     ctx.store._native_rows.side_effect = lambda kind, **keys: (
         [{"id": "converting:0", "source_id": "converting", "generation_id": None}]
@@ -412,6 +427,9 @@ def test_proven_selected_pair_renders_the_source_control_presentation(ctx, monke
         assert row["error"] == ""
         assert row["passages"] == 1
         assert row["meta"] == {}
+        # A proven pair authorizes the Source's own kind and its inventory (plan table 3.4).
+        assert (row["kind"], row["origin"], row["lane"]) == ("text", "text", "managed")
+        assert (row["domain"], row["domain_origin"], row["domain_state"]) == ("prose", "lane", "auto")
         assert "SECRET" not in client.get(f"/api/sources/{sid}").text
 
 
@@ -464,6 +482,9 @@ def test_managed_source_surfaces_render_only_projected_evidence(ctx, monkeypatch
         assert "Allowed body" in detail
         row = client.get(f"/api/sources/{sid}").json()
         assert row["passages"] == 1 and row["progress_total"] == 0 and row["status"] == "ready"
+        # Withheld: the true kind, the domain and the sync times would all say too much (P1).
+        assert row["kind"] == "managed" and row["origin"] is None and row["lane"] is None
+        assert row["domain"] is None and row["domain_allowed"] == [] and row["last_sync_at"] is None
         assert "SECRET" not in repr(sources_tool(ctx, principal))
         monkeypatch.setattr(ctx, "graph_for", lambda access, **kwargs: graph([], []))
         assert client.get("/api/sources").json() == []

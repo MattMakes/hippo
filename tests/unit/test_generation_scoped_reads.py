@@ -835,14 +835,16 @@ def test_the_frozen_v5_descriptor_is_preserved(store):
     """A v5 store must still validate against the checksum it recorded."""
     assert migrations._descriptor(5)[0] == 5
     assert migrations.SUPPORTED_CHECKSUMS[5] == migrations.V5_CHECKSUM
-    assert [*migrations.SUPPORTED_CHECKSUMS] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [*migrations.SUPPORTED_CHECKSUMS] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 
 def test_a_migrated_store_reports_the_current_version(store):
     store.ensure_schema()
     assert store.schema_version()["version"] == migrations.CURRENT_SCHEMA_VERSION
     assert store.schema_version()["state"] == "complete"
-    assert [item["version"] for item in store.schema_history()] == list(range(1, 9))
+    assert [item["version"] for item in store.schema_history()] == list(
+        range(1, migrations.CURRENT_SCHEMA_VERSION + 1)
+    )
 
 
 def test_sealed_generations_still_verify_their_manifest(store):

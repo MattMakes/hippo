@@ -1487,6 +1487,9 @@ def _golden_records(store, generation_id: str) -> dict[str, list]:
 
     generation = store._knowledge_get("Generation", generation_id)
     coverage = json.loads(generation.coverage_json or "{}")
+    # The family the build used is the Library's record (`sync._coverage_json`), not a golden: every
+    # package's `coverage.json` stays as it was recorded before that key existed.
+    coverage.pop("domain", None)
     failures = [
         {"family": entry.get("family"), "parser": entry.get("parser"), "count": entry.get("count")}
         for entry in _parse_failures(coverage)

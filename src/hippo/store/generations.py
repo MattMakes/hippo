@@ -139,6 +139,26 @@ class GenerationQueries:
                 **fields,
             )
 
+    def set_source_domain(
+        self,
+        source_id: str,
+        *,
+        override: str | None,
+        confirmed_at: str,
+        confirmed_by: str | None,
+    ) -> None:
+        """Write the three domain columns only; never bumps `updated_at`."""
+        # Every backend refuses an unknown id alike: the SET alone matches nothing on LadybugDB and
+        # Neo4j, and raises KeyError on Fake.
+        if self.get_source(source_id) is None:
+            raise ValueError("Unknown source")
+        self._source_fields(
+            source_id,
+            domain_override=override,
+            domain_confirmed_at=confirmed_at,
+            domain_confirmed_by=confirmed_by,
+        )
+
     def _lock_source(self, source_id):
         self._lock_authorization()
         if self.knowledge_backend != "fake":
@@ -1439,9 +1459,17 @@ class GenerationQueries:
         manifests = self._knowledge_rows("IndexManifest", generation_id=gen.id)
         if gen.status != "ready" or len(manifests) != 1 or not manifests[0].ready:
             raise ValueError("Generation requires a complete ready index manifest")
-        self._write_knowledge(gen.replace(status="active", published_at=published_at))
+        published = gen.replace(status="active", published_at=published_at)
+        self._write_knowledge(published)
         sequence = int(source.get("generation_version") or 0) + 1
-        self._source_fields(gen.source_id, active_generation_id=gen.id, generation_version=sequence)
+        # Design D6: the source's last activity is its publication. `Instant` refuses a naive value
+        # and normalises to UTC, so this string has the `now_iso()` shape of `created_at`.
+        self._source_fields(
+            gen.source_id,
+            active_generation_id=gen.id,
+            generation_version=sequence,
+            updated_at=published.published_at.isoformat(timespec="microseconds"),
+        )
         if fault_hook:
             fault_hook("pointer")
         if active:

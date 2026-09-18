@@ -65,6 +65,53 @@
   </section>
 </div>
 
+{# Read-only. Plan table 3.4 row keys, and `generations`, the view's history of this source (newest
+   first). A withheld managed row has no domain and no history, so both cards stay empty (P1). #}
+{% set history = generations if generations is defined else [] %}
+{% set active = history | selectattr('status', 'equalto', 'active') | list | first %}
+<div class="grid two">
+  <section class="card">
+    <h3>Domain</h3>
+    {% if source.domain %}
+    <p><span class="badge">{{ source.domain }}</span> <span class="muted small">{{ source.domain_state | replace('_', ' ') }}</span></p>
+    <p class="muted small">Decided by: {{ source.domain_origin }}
+      {% if source.domain_confirmed_at %}<br>Confirmed {{ source.domain_confirmed_at[:16] | replace('T', ' ') }}{% if source.domain_confirmed_by %} by {{ source.domain_confirmed_by }}{% endif %}{% endif %}</p>
+    {% if source.domain_fixed_reason %}<p class="muted small">{{ source.domain_fixed_reason }}</p>{% endif %}
+    {% if source.lane == 'connector' and active and active.nodes_by_family %}
+    <p class="muted small">Nodes the last sync added, by domain:</p>
+    <p class="row wrap small">{% for family, n in active.nodes_by_family | dictsort %}<span class="badge">{{ family }} {{ n }}</span>{% endfor %}</p>
+    {% endif %}
+    {% include "partials/domain_actions.html" ignore missing %}
+    {% else %}
+    <p class="muted small">–</p>
+    {% endif %}
+  </section>
+  <section class="card">
+    <h3>Sync</h3>
+    <p>{% if source.last_sync_at %}{{ source.last_sync_at[:16] | replace('T', ' ') }} <span class="muted small">{{ source.last_sync_label }}</span>{% else %}<span class="muted">–</span>{% endif %}</p>
+    {% if source.last_error %}<div class="callout bad small">Last error: {{ source.last_error }}</div>{% endif %}
+    {% if source.resync_command %}
+    <p class="muted small">To sync it again, run this where hippo can open the store. A LadybugDB store is open while <code>hippo serve</code> runs, so stop the server first.</p>
+    <p class="small"><code>{{ source.resync_command }}</code></p>
+    {% endif %}
+    {% if history %}
+    <table class="table compact">
+      <thead><tr><th>Version</th><th>Status</th><th>Created</th><th>Published</th></tr></thead>
+      <tbody>
+      {% for g in history %}
+      <tr>
+        <td class="small"><code>{{ g.version }}</code></td>
+        <td><span class="pill {{ 'ok' if g.status == 'active' else 'bad' if g.status == 'failed' }}">{{ g.status }}</span></td>
+        <td class="muted small">{{ g.created_at[:16] | replace('T', ' ') }}</td>
+        <td class="muted small">{{ (g.published_at or '')[:16] | replace('T', ' ') or '–' }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+</div>
+
 {% set code = source.meta.code %}
 {% if code %}
 <section class="card">

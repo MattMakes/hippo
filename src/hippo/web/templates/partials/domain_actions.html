@@ -1,0 +1,35 @@
+{# Confirm and correct a source's domain (plan T3, design D4 and D5), inside the source page's Domain card.
+   The card above already shows `domain_fixed_reason`; a fixed domain gets no select. Only a connector
+   whose descriptor declares several families can be changed, and a change is built by the next sync,
+   never by this page. Without the connector's families only the confirm shows, and it keeps a correction.
+   Hidden from a caller who may not manage the source. #}
+{% if source.can_manage %}
+{% set changeable = source.domain_families_known and not source.domain_fixed_reason and source.domain_allowed | length > 1 %}
+{% set pending = source.domain_state == 'pending_rebuild' %}
+{% if pending %}
+<div class="callout small">The change to {{ source.domain }} waits for a rebuild. Until then the last build keeps answering.</div>
+{% endif %}
+<p>Is this the right domain?</p>
+<form method="post" action="/sources/{{ source.id }}/domain" class="inline row">
+  <input type="hidden" name="family" value="">
+  <input type="hidden" name="back" value="/sources/{{ source.id }}">
+  <button class="btn small">Yes, confirm</button>
+</form>
+{% if changeable %}
+<form method="post" action="/sources/{{ source.id }}/domain" class="row">
+  <input type="hidden" name="back" value="/sources/{{ source.id }}">
+  <label class="small">Change to
+    <select name="family" class="small">
+      {% for family in source.domain_allowed %}<option value="{{ family }}"{% if family == source.domain %} selected{% endif %}>{{ family }}</option>{% endfor %}
+    </select>
+  </label>
+  <button class="btn small">Apply</button>
+</form>
+<p class="muted small">{% if source.lane == 'connector' %}A change applies on the next sync of this partition; the last sync keeps answering until then.{% else %}A change applies when this source is next rebuilt.{% endif %}</p>
+{% endif %}
+{% if source.lane == 'connector' and source.resync_command and (changeable or pending) %}
+<p class="muted small">To sync now, run:</p>
+<p class="small"><code>{{ source.resync_command }}</code></p>
+{% if config is defined and config.store_backend == 'ladybug' %}<p class="muted small">Stop <code>hippo serve</code> first.</p>{% endif %}
+{% endif %}
+{% endif %}

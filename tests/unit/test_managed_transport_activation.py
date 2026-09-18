@@ -526,6 +526,10 @@ def test_cli_source_listing_uses_the_shared_source_view(cli_ctx, monkeypatch, ca
         "stage",
         "passages",
         "facts",
+        "domain",
+        # The `last sync` header is two words, so the split reads it as two cells.
+        "last",
+        "sync",
         "created",
     ]
 

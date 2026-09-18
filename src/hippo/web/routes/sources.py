@@ -32,6 +32,7 @@ from ...knowledge.eval_access import EvalAccess
 from ...knowledge.public_errors import INVALID_SOURCE_TYPE
 from ...knowledge.query_access import QuerySession, query_session
 from ...status import source_view
+from ...store.base import now_iso
 from ..auth import build_actor_of, principal_of, require
 from ..render import (
     STOP_POLLING,
@@ -46,7 +47,7 @@ from . import graph as graph_routes
 
 router = APIRouter()
 
-# Two stable codes these routes own. Neither is one of the closed retrieval codes --
+# The stable codes these routes own. None is one of the closed retrieval codes --
 # nothing failed and nothing is stale -- so they live with the routes that answer them, like
 # `web/app.py`'s `authorization_changed`.
 #
@@ -54,6 +55,14 @@ router = APIRouter()
 # sentence to the generic `operation_failed` fallback whatever its status says. That is why
 # the bounded messages below gain a code rather than being replaced by the closed table's.
 BULK_REFUSED = "bulk_refused"
+# A domain outside `buildable_families` for the source (plan 3.5): refused, and nothing is written.
+DOMAIN_NOT_ALLOWED = "domain_not_allowed"
+# A change on a corrected connector source whose declared families this process does not know
+# (its package did not load): refused, and nothing is written; a confirm keeps the override.
+DOMAIN_FAMILIES_UNKNOWN = "domain_families_unknown"
+FAMILIES_UNKNOWN = (
+    "This process does not know the connector's declared domains; confirm keeps the current domain."
+)
 INDEXING_BUSY = "indexing_busy"
 # The plan's transport table assigns the closed input validators one code: the upload byte
 # cap, the unsupported type, the empty text and the malformed git URL are all this row.
@@ -165,12 +174,35 @@ def manageable_source(request: Request, source_id: str) -> dict[str, Any]:
     return source
 
 
+def descriptor_families(request: Request) -> dict[str, tuple[str, ...]] | None:
+    """Connector kind -> the families its descriptor declares, from the server's own load.
+
+    Plan section 2.5: the load exists only after the lifespan ran, and an entry that is not loaded
+    raises `ConnectorLoadError`; both mean "families unknown", so its domain reads as fixed. A
+    request never loads connector packages itself.
+    """
+    from ...connectors.loader import ConnectorLoadError
+
+    load = getattr(request.app.state, "connector_load", None)
+    if load is None:
+        return None
+    families: dict[str, tuple[str, ...]] = {}
+    for entry in load.entries:
+        try:
+            families[entry.name] = tuple(load.connector_class(entry.name).descriptor.families)
+        except ConnectorLoadError:
+            continue
+    return families
+
+
 @router.get("/sources/{source_id}")
 def source_page(request: Request, source_id: str, page: int = 1):
     ctx = ctx_of(request)
     principal = principal_of(request)
     with query_session(ctx, principal.access) as session:
-        view = source_view(ctx, principal.access, session=session)
+        view = source_view(
+            ctx, principal.access, session=session, descriptor_families=descriptor_families(request)
+        )
         source = next((row for row in view.sources if row["id"] == source_id), None)
         if source is None:
             raise HTTPException(404, "no such source")
@@ -234,6 +266,7 @@ def source_page(request: Request, source_id: str, page: int = 1):
             session=session,
             nav="library",
             source=with_manage_flags([source], principal)[0],
+            generations=view.generations.get(source_id, []),
             passages=passages,
             code_details=code_details,
             passage_evidence=passage_evidence,
@@ -459,6 +492,93 @@ def access_form(request: Request, source_id: str, visibility: str = Form(""), ba
     return RedirectResponse(target, status_code=303)
 
 
+@router.post("/sources/{source_id}/domain")
+def domain_form(request: Request, source_id: str, family: str = Form(""), back: str = Form("/")):
+    """Confirm (empty `family`) or correct a source's domain; the Library row and the Source page post here.
+
+    Only the refusal a manager can act on comes back as `?error=`. A hidden, missing or withheld
+    source is a 404 and a caller who may not manage it gets a 403, as from the JSON route.
+    """
+    target = back if back.startswith("/") and not back.startswith("//") else "/"
+    try:
+        write_domain(request, source_id, family or None)
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+        sep = "&" if "?" in target else "?"
+        return RedirectResponse(f"{target}{sep}error={quote(str(exc.detail))}", status_code=303)
+    return RedirectResponse(target, status_code=303)
+
+
+def write_domain(request: Request, source_id: str, family: str | None) -> dict[str, Any]:
+    """Plan 3.5's write rule for both domain routes; it starts no build and mints no actor.
+
+    `family` None confirms the family the row shows. Any other family is re-checked against
+    `buildable_families` with the server's own descriptor families (invariant I4), and one outside
+    it is a 400 that writes nothing. The natural family is written as no override, so naming it
+    confirms and clears an earlier correction. An override the source can no longer build (a
+    connector that stopped declaring it, OD7) is cleared by a confirm, not kept.
+
+    The family the stored override already names writes nothing, so a confirm of a correction
+    neither restamps it nor moves its state. While a corrected connector's families are unknown,
+    `allowed` cannot say whether the override still builds: a confirm keeps it, and any other
+    family is a 400 that writes nothing.
+
+    An empty `family` is a confirm too, on both routes and before any rule reads it.
+    """
+    family = family or None
+    ctx = ctx_of(request)
+    principal = principal_of(request)
+    manageable_source(request, source_id)
+    families = descriptor_families(request)
+    source = domain_source(request, source_id, families)
+    allowed = source["domain_allowed"]
+    override = (ctx.store.get_source(source_id) or {}).get("domain_override")
+    if override is not None and source["lane"] == "connector" and not source["domain_families_known"]:
+        if family and family != override:
+            raise HTTPException(400, FAMILIES_UNKNOWN)
+        family = override
+    elif family is None:
+        family = source["domain"] if source["domain"] in allowed else source["domain_natural"]
+    elif family not in allowed:
+        raise HTTPException(400, f"This source can only be built as {' or '.join(allowed)}")
+    if family != override:
+        ctx.store.set_source_domain(
+            source_id,
+            override=None if family == source["domain_natural"] else family,
+            confirmed_at=now_iso(),
+            confirmed_by=principal.user_id,
+        )
+    fresh = domain_source(request, source_id, families)
+    # Only a connector change waits for a rebuild, and only a sync, run from the CLI, makes it.
+    pending = fresh["domain_state"] == "pending_rebuild"
+    return {
+        "source": fresh,
+        "rebuild": {
+            "needed": pending,
+            "started": False,
+            "command": fresh["resync_command"] if pending else None,
+        },
+    }
+
+
+def domain_source(
+    request: Request, source_id: str, families: dict[str, tuple[str, ...]] | None
+) -> dict[str, Any]:
+    """`visible_source`, with the descriptor families the domain check needs (plan 2.5).
+
+    A withheld row has no domain; it may be neither shown nor changed, so it is a 404 too (P1).
+    """
+    ctx = ctx_of(request)
+    access = principal_of(request).access
+    with query_session(ctx, access) as session:
+        view = source_view(ctx, access, session=session, descriptor_families=families)
+        source = next((row for row in view.sources if row["id"] == source_id), None)
+    if source is None or source["domain"] is None:
+        raise HTTPException(404, "no such source")
+    return source
+
+
 # ------------------------------------------------------------------ JSON
 
 api = APIRouter(prefix="/api/sources")
@@ -479,6 +599,10 @@ class RepoBody(BaseModel):
 
 class AccessBody(BaseModel):
     role_id: str | None = None  # None / "everyone": open to every user
+
+
+class DomainBody(BaseModel):
+    family: str | None = None  # None: confirm the family the source shows
 
 
 @api.get("")
@@ -607,6 +731,18 @@ def set_access(request: Request, source_id: str, body: AccessBody):
     ctx.store.set_source_access(source_id, role_id)
     ctx.invalidate_scoped()
     return visible_source(request, source_id)
+
+
+@api.put("/{source_id}/domain")
+def set_domain(request: Request, source_id: str, body: DomainBody):
+    """Confirm (`family` null) or correct a source's domain; a correction never starts a build."""
+    try:
+        return write_domain(request, source_id, body.family)
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+        code = DOMAIN_FAMILIES_UNKNOWN if exc.detail == FAMILIES_UNKNOWN else DOMAIN_NOT_ALLOWED
+        return coded_response(str(exc.detail), code, 400)
 
 
 @api.delete("/{source_id}")

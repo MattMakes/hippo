@@ -2,12 +2,23 @@
 <div class="empty">Nothing here yet. Upload something above, or load the sample.</div>
 {% else %}
 <table class="table">
-  <thead><tr><th>Name</th><th>Kind</th><th>Status</th><th class="num">Passages</th><th class="num">Facts</th><th>Visible to</th><th>Added</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Kind</th><th>Domain</th><th>Status</th><th class="num">Passages</th><th class="num">Facts</th><th>Visible to</th><th>Last sync</th><th>Added</th><th></th></tr></thead>
   <tbody>
   {% for s in sources %}
   <tr>
     <td><a href="/sources/{{ s.id }}"><b>{{ s.name | short(60) }}</b></a></td>
-    <td><span class="badge">{{ s.kind }}</span></td>
+    {# `origin` is the Source's own kind; `managed` is the build lane, never a kind. A withheld row
+       has no origin and shows the `managed` kind it always did (plan table 3.4, P1). #}
+    <td>
+      <span class="badge">{{ s.origin or s.kind }}</span>{% if s.lane == 'managed' %} <span title="Built as managed generations" class="pill small">managed</span>{% endif %}
+      {% if s.origin_detail %}<div class="muted small" title="{{ s.origin_detail }}">{{ s.origin_detail | short(60) }}</div>{% endif %}
+    </td>
+    <td>
+      {% if s.domain %}
+      <span class="badge"{% if s.domain_fixed_reason %} title="{{ s.domain_fixed_reason }}"{% endif %}>{{ s.domain }}</span>
+      <div class="muted small">{{ s.domain_state | replace('_', ' ') }}</div>
+      {% else %}<span class="muted">–</span>{% endif %}
+    </td>
     <td>{% include "partials/source_status.html" with context %}</td>
     <td class="num">{{ s.passages }}</td>
     <td class="num">{{ s.fact_links }}</td>
@@ -26,9 +37,15 @@
       {% endif %}
       {% if s.owner_name %}<div class="muted small">by {{ s.owner_name }}{% if s.is_mine %} (you){% endif %}</div>{% endif %}
     </td>
+    <td>
+      {% if s.last_sync_at %}<span class="muted">{{ s.last_sync_at[:16] | replace('T', ' ') }}</span>
+      <div class="muted small">{{ s.last_sync_label }}</div>{% else %}<span class="muted">–</span>{% endif %}
+      {% if s.last_error %}<div><span class="pill bad" title="{{ s.last_error }}">{{ s.last_error | short(40) }}</span></div>{% endif %}
+    </td>
     <td class="muted">{{ s.created_at[:16] | replace('T', ' ') }}</td>
     <td class="row">
       <a class="btn small" href="/ask" title="Ask a question">Ask</a>
+      {% include "partials/domain_row_action.html" ignore missing %}
       {% if s.can_manage %}
       <button class="btn small danger" data-delete="/api/sources/{{ s.id }}" data-confirm="Forget '{{ s.name }}' and everything learned from it?" {% if busy_ids is defined and s.id in busy_ids %}disabled title="Wait until indexing has finished"{% endif %}>Delete</button>
       {% endif %}

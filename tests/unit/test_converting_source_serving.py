@@ -300,7 +300,7 @@ def test_a_converting_source_appears_once_in_inventory_with_its_legacy_counts(co
     audience = Access(rank=0, unrestricted=True, audience_kind="open")
     before_status = system_status(ctx, access=audience)
     before_row = row_of(source_view(ctx, EVERYTHING), source)
-    assert before_row is not None and before_row["kind"] != "managed"
+    assert before_row is not None and before_row["lane"] == "legacy"
 
     stage(ctx.store, source, profile=ctx.ollama.embed_model, vector=embed_text(MANAGED_TEXT))
 
@@ -329,7 +329,9 @@ def test_publication_flips_the_lane_the_pointer_and_the_presentation_together(co
         assert not {row.id for row in selected} & legacy_passages
         assert not [node for node in session.graph.code_nodes if node.source_id == source]
         row = row_of(source_view(ctx, EVERYTHING, session=session), source)
-    assert row["kind"] == "managed" and row["managed"] is True
+    # The lane is its own key; the kind stays the Source's own (plan table 3.4).
+    assert row["lane"] == "managed" and row["managed"] is True
+    assert row["kind"] == ctx.store.get_source(source)["kind"]
     assert row["passages"] == 1
     assert source not in source_view(ctx, EVERYTHING).legacy_ids
 
@@ -503,4 +505,4 @@ def test_a_failed_generation_leaves_the_converting_source_serving_its_legacy_row
         # Inside the client, because leaving its lifespan closes the store connection.
         view = source_view(ctx, EVERYTHING)
         assert source in view.legacy_ids
-        assert row_of(view, source) is not None and row_of(view, source)["kind"] != "managed"
+        assert row_of(view, source) is not None and row_of(view, source)["lane"] == "legacy"

@@ -6,23 +6,49 @@ recomputed from the authorized graph on every request.
 
 from __future__ import annotations
 
+import json
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from .access import Access
 from .codegraph.model import CODE_EDGE_KINDS
+from .connectors.base import Classification
 from .context import AppContext, legacy_lane
 from .hipporag.graph_index import GraphIndex
+from .ingest.managed_activation import CONNECTOR_KIND, source_shape
+from .knowledge import model as k
 from .knowledge.access import AuthorizationChanged
+from .knowledge.domain import resolve_domain
 from .knowledge.public_errors import OPERATION_FAILED, public_failure_for_code
 from .knowledge.query_access import QuerySession, current_access, query_session
 from .ollama import OllamaError
 
 CACHE_SECONDS = 8.0
+
+# Plan table 3.4: what a row shows when its Source's own presentation is withheld (P1).
+WITHHELD_INVENTORY: dict[str, Any] = {
+    "origin": None,
+    "origin_detail": None,
+    "lane": None,
+    "domain": None,
+    "domain_natural": None,
+    "domain_origin": None,
+    "domain_state": None,
+    "domain_allowed": [],
+    "domain_fixed_reason": None,
+    "domain_families_known": None,
+    "domain_confirmed_at": None,
+    "domain_confirmed_by": None,
+    "last_sync_at": None,
+    "last_sync_label": None,
+    "last_error": None,
+    "resync_command": None,
+}
 
 
 @dataclass
@@ -33,14 +59,27 @@ class SourceView:
     sources: list[dict[str, Any]]
     legacy_ids: set[str]
     validate: Callable[[], None]
+    # Each presented source's generations, newest first, for the source page's Sync card. Kept off
+    # the rows, so neither the Library's poll nor `/api/sources` carries the history.
+    generations: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
 
-def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None = None) -> SourceView:
+def source_view(
+    ctx: AppContext,
+    access: Access,
+    *,
+    session: QuerySession | None = None,
+    descriptor_families: Mapping[str, tuple[str, ...]] | None = None,
+) -> SourceView:
     """Keep source controls separate from managed evidence labels and inventory.
 
     A supplied session is the caller's; when this owns the view it loads a structural one,
     because `selected_managed_generations` is the only proof that an authorized generation
     which produced no evidence at all exists, and nothing else can represent it.
+
+    `descriptor_families` maps a connector kind to the families its descriptor declares. Only
+    the source page has it (`app.state.connector_load`); without it a connector source's domain
+    reads as fixed, and the listing never loads a connector package (invariant I1).
     """
     epoch = ctx.store.authorization_epoch()
     access = current_access(ctx.store, access)
@@ -61,7 +100,8 @@ def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None
     # has nothing to present there and waits for that publication in the managed set, where
     # only a proven pair represents it.
     records = {row.source_id for row in ctx.store._knowledge_rows("Artifact")}
-    records.update(row.source_id for row in ctx.store._knowledge_rows("Generation"))
+    generations = ctx.store._knowledge_rows("Generation")
+    records.update(row.source_id for row in generations)
     records.update(
         source["id"]
         for source in sources
@@ -88,8 +128,181 @@ def source_view(ctx: AppContext, access: Access, *, session: QuerySession | None
         for source in sources
         if source["id"] in legacy_ids or source["id"] in represented
     ]
+    history = _add_inventory(
+        ctx.store,
+        rows,
+        sources,
+        generations,
+        legacy_ids=legacy_ids,
+        proven=legacy_ids | set(selected),
+        descriptor_families=descriptor_families,
+    )
     validate()
-    return SourceView(graph, rows, legacy_ids, validate)
+    return SourceView(graph, rows, legacy_ids, validate, history)
+
+
+def _add_inventory(
+    store,
+    rows: list[dict[str, Any]],
+    sources: list[dict[str, Any]],
+    generations: list[k.Generation],
+    *,
+    legacy_ids: set[str],
+    proven: set[str],
+    descriptor_families: Mapping[str, tuple[str, ...]] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Write plan table 3.4's keys on every row, and return each presented source's history.
+
+    One pass, with the Generation list `source_view` already holds and at most two new reads:
+    `Connector` and `SyncState`, each by `ids=` for every connector row at once, and each skipped
+    when no row asks. Per-row work is `source_shape` and `resolve_domain`, which read nothing.
+
+    A row whose Source presentation is withheld (a managed row without a proven pair) gets
+    `WITHHELD_INVENTORY` and keeps `kind == "managed"`: its true kind, domain and sync times
+    would say what the audience may not see (P1).
+    """
+    stored = {source["id"]: source for source in sources}
+    shown = {row["id"] for row in rows if row["id"] in proven}
+    partitions: dict[str, tuple[str, str]] = {}
+    for identity in shown:
+        source = stored[identity]
+        meta = source.get("meta") or {}
+        if source.get("kind") == CONNECTOR_KIND and isinstance(meta, Mapping):
+            connector_id, partition = meta.get("connector_id"), meta.get("partition")
+            if connector_id and partition and isinstance(connector_id, str) and isinstance(partition, str):
+                partitions[identity] = (connector_id, partition)
+    connector_ids = sorted({connector_id for connector_id, _ in partitions.values()})
+    connectors = (
+        {row.id: row for row in store._knowledge_rows("Connector", ids=connector_ids)}
+        if connector_ids
+        else {}
+    )
+    # The identity `connectors/sync.py` gives one partition's SyncState.
+    state_ids = {
+        identity: k.SyncState(connector_id=connector_id, partition_key=partition).id
+        for identity, (connector_id, partition) in partitions.items()
+    }
+    states = (
+        {row.id: row for row in store._knowledge_rows("SyncState", ids=sorted(set(state_ids.values())))}
+        if state_ids
+        else {}
+    )
+    by_id = {generation.id: generation for generation in generations}
+    classifications: dict[str, Classification | None] = {}
+    for row in rows:
+        identity = row["id"]
+        if identity not in shown:
+            row.update(deepcopy(WITHHELD_INVENTORY))
+            continue
+        source = stored[identity]
+        kind = source.get("kind")
+        lane = "connector" if kind == CONNECTOR_KIND else "legacy" if identity in legacy_ids else "managed"
+        active = by_id.get(source.get("active_generation_id"))
+        connector = state = entry = partition = None
+        if identity in partitions:
+            connector_id, partition = partitions[identity]
+            connector = connectors.get(connector_id)
+            state = states.get(state_ids[identity])
+            entry = _partition_classification(connector, partition, classifications)
+        families = (
+            descriptor_families.get(connector.kind)
+            if connector is not None and descriptor_families is not None
+            else None
+        )
+        decision = resolve_domain(
+            source,
+            source_shape(source),
+            classification=entry,
+            descriptor_families=families,
+            active_generation=active,
+            sync_state=state,
+            connector_kind=connector.kind if connector is not None else None,
+        )
+        last_sync_at, last_sync_label = _last_sync(lane, source, active, state)
+        row.update(
+            kind=kind,
+            origin=kind,
+            origin_detail=f"{connector.kind} · {connector.id} · {partition}" if connector else None,
+            lane=lane,
+            domain=decision.family,
+            domain_natural=decision.natural,
+            domain_origin=decision.origin,
+            domain_state=decision.state,
+            domain_allowed=list(decision.allowed),
+            domain_fixed_reason=decision.fixed_reason,
+            domain_families_known=decision.families_known,
+            domain_confirmed_at=decision.confirmed_at,
+            domain_confirmed_by=decision.confirmed_by,
+            last_sync_at=last_sync_at,
+            last_sync_label=last_sync_label,
+            last_error=(state.error_code if state is not None else None) or row.get("error") or None,
+            # An instance whose Connector row is gone has nothing a sync could run.
+            resync_command=f"hippo connector sync {connector.id} --partition {partition}"
+            if connector
+            else None,
+        )
+    history: dict[str, list[dict[str, Any]]] = {}
+    owned = [generation for generation in generations if generation.source_id in shown]
+    for generation in sorted(owned, key=lambda row: row.created_at, reverse=True):
+        history.setdefault(generation.source_id, []).append(
+            {
+                "id": generation.id,
+                "version": generation.parser_version,
+                "status": generation.status,
+                "created_at": _instant(generation.created_at),
+                "published_at": _instant(generation.published_at),
+                "nodes_by_family": _nodes_by_family(generation) if generation.source_id in partitions else {},
+            }
+        )
+    return history
+
+
+def _partition_classification(connector, partition: str, parsed: dict[str, Classification | None]):
+    """One partition's stored probe result, or None when there is none to read (then `custom`).
+
+    Read the way `connectors.sync.load_classification` reads it, but a missing or unreadable
+    probe is an answer here, never a refusal: the Library must render every other row.
+    """
+    if connector is None:
+        return None
+    if connector.id not in parsed:
+        try:
+            parsed[connector.id] = Classification.model_validate_json(connector.classification_json)
+        except ValueError:
+            parsed[connector.id] = None
+    classification = parsed[connector.id]
+    if classification is None:
+        return None
+    return next((entry for entry in classification.partitions if entry.partition == partition), None)
+
+
+def _last_sync(lane: str, source: dict, active: k.Generation | None, state: k.SyncState | None):
+    """Design D6: `(instant, label)`, from the record that is each lane's own last sync."""
+    if lane == "connector":
+        instant, label = (state.last_success_at if state is not None else None), "synced"
+    elif lane == "managed":
+        instant, label = (active.published_at if active is not None else None), "published"
+    else:
+        instant, label = source.get("updated_at") or None, "last activity"
+    return (_instant(instant), label) if instant is not None else (None, None)
+
+
+def _instant(value: datetime | str | None) -> str | None:
+    """A stored instant in the `now_iso()` shape of `created_at`; Source columns already are."""
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="microseconds")
+    return value
+
+
+def _nodes_by_family(generation: k.Generation) -> dict[str, int]:
+    """The connector emission's per-family node counts (`connectors/emit.py`, `EmissionCoverage`)."""
+    try:
+        coverage = json.loads(generation.coverage_json or "{}")
+    except ValueError:
+        return {}
+    emission = coverage.get("emission") if isinstance(coverage, dict) else None
+    counts = emission.get("nodes_by_family") if isinstance(emission, dict) else None
+    return dict(counts) if isinstance(counts, dict) else {}
 
 
 def _legacy_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
@@ -150,7 +363,8 @@ def _managed_source(source: dict, graph: GraphIndex) -> dict[str, Any]:
         **controls,
         "id": identity,
         "name": (source.get("name") or "") if proven else (names[0] if names else "Managed source"),
-        "kind": "managed",
+        # The lane is `lane`, never the kind (plan table 3.4); withheld, the kind would say too much.
+        "kind": source.get("kind") if proven else "managed",
         "managed": True,
         "owner_name": (source.get("owner_name") or "") if proven else "",
         "created_at": (source.get("created_at") or "") if proven else "",

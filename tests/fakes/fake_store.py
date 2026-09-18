@@ -261,6 +261,9 @@ class FakeStore(KnowledgeQueries, GenerationQueries, SnapshotQueries):
             "owner_id": owner_id,
             "access_role_id": role["id"] if role else None,
             "min_rank": int(role["rank"]) if role else EVERYONE_RANK,
+            "domain_override": None,
+            "domain_confirmed_at": None,
+            "domain_confirmed_by": None,
         }
         return sid
 

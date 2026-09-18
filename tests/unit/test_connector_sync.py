@@ -49,6 +49,7 @@ from hippo.knowledge.query_access import query_session
 from hippo.knowledge.raw_artifacts import RawArtifactStore
 from hippo.knowledge.registry import Registry, extension_scope, use_registry
 from hippo.ollama import Ollama
+from hippo.store.base import now_iso
 from tests.fakes.fixture_connector import (
     FixtureConfig,
     FixtureConnector,
@@ -464,6 +465,99 @@ def test_emit_receives_the_stored_mapping(world):
     world.sync(connector=connector)
     stored = sync.load_classification(world.row, world.partition).mapping
     assert seen and all(mapping == stored for _, mapping in seen)
+
+
+# ------------------------------------------------------------------ the domain override (plan 3.3)
+
+
+def _set_domain_override(store, source_id, family):
+    """The Fake row directly (brief T1b); the store's own writer on a real backend (task T1a)."""
+    if isinstance(getattr(store, "sources", None), dict):
+        store.sources[source_id]["domain_override"] = family
+        store.sources[source_id]["domain_confirmed_at"] = now_iso()
+        return
+    store.set_source_domain(source_id, override=family, confirmed_at=now_iso(), confirmed_by=None)
+
+
+def test_domain_override_reaches_the_mapping(world):
+    seen = []
+    connector = _TwoFamilySpyConnector(world.connector_impl, seen)
+    _set_domain_override(world.store, world.source, "service")
+    receipt = world.sync(connector=connector)
+    assert receipt.outcome == "published"
+    stored = sync.load_classification(world.row, world.partition).mapping
+    assert stored.family == FIXTURE_FAMILY
+    assert seen and all(mapping == stored.replace(family="service") for _, mapping in seen)
+    assert _configuration(world, world.generation(receipt.generation_id))["mapping"]["family"] == "service"
+
+
+def test_the_generation_records_the_family_it_built_and_the_kit_golden_does_not(world):
+    """Fix wave 1 (review F1, F3): the Library reads `coverage_json["domain"]`; no golden pins it."""
+    from hippo.connectors import testing
+
+    plain = world.sync()
+    assert json.loads(world.generation(plain.generation_id).coverage_json)["domain"] == FIXTURE_FAMILY
+    _set_domain_override(world.store, world.source, "service")
+    corrected = world.sync(connector=_TwoFamilySpyConnector(world.connector_impl, []))
+    assert corrected.outcome == "published" and corrected.generation_id != plain.generation_id
+    assert json.loads(world.generation(corrected.generation_id).coverage_json)["domain"] == "service"
+    record = testing._golden_records(world.store, corrected.generation_id)["coverage.json"]
+    assert "domain" not in record and record["partition"] == world.partition
+
+
+def test_no_domain_override_leaves_the_mapping_unchanged(world):
+    seen = []
+    connector = _TwoFamilySpyConnector(world.connector_impl, seen)
+    assert world.store.get_source(world.source).get("domain_override") is None
+    receipt = world.sync(connector=connector)
+    assert receipt.outcome == "published"
+    stored = sync.load_classification(world.row, world.partition)
+    assert sync.load_classification(world.row, world.partition, domain_override=None) == stored
+    assert seen and all(mapping == stored.mapping for _, mapping in seen)
+    assert canonical_json(seen[0][1].model_dump(mode="json")) == canonical_json(
+        stored.mapping.model_dump(mode="json")
+    )
+
+
+def test_load_classification_returns_the_override_as_both_families(world):
+    entry = sync.load_classification(world.row, world.partition, domain_override="service")
+    assert (entry.family, entry.mapping.family) == ("service", "service")
+
+
+@pytest.mark.parametrize(
+    ("two_families", "override"),
+    [(False, "service"), (False, "Not A Family"), (True, "db")],
+    ids=["undeclared-family", "not-a-family-name", "undeclared-on-a-two-family-connector"],
+)
+def test_a_stale_domain_override_is_refused_before_any_lease(world, two_families, override):
+    """OD7: a family the connector no longer declares refuses loudly rather than being ignored."""
+    connector = _TwoFamilySpyConnector(world.connector_impl, []) if two_families else world.connector_impl
+    _set_domain_override(world.store, world.source, override)
+    with pytest.raises(
+        sync.ConnectorSyncRefused,
+        match="The domain override is not a family this connector declares; change or confirm the domain first",
+    ):
+        world.sync(connector=connector)
+    assert world.rows("SyncRun") == []
+    assert world.sync_state() is None
+    assert world.active() is None
+
+
+def test_find_connector_source_finds_the_partition_source_without_creating_one(world):
+    found = sync.find_connector_source(world.store, connector_id=world.row.id, partition=world.partition)
+    assert found is not None and found["id"] == world.source
+    before = [source["id"] for source in world.store.list_sources()]
+    for connector_id, partition in ((world.row.id, "other"), ("connector-x", world.partition)):
+        assert sync.find_connector_source(world.store, connector_id=connector_id, partition=partition) is None
+    assert [source["id"] for source in world.store.list_sources()] == before
+    again = sync.connector_source(world.store, connector=world.row, partition=world.partition, name="ignored")
+    assert again == world.source
+
+
+def test_an_unprobed_partition_is_refused_before_its_source_exists(world):
+    with pytest.raises(sync.ConnectorSyncRefused, match="Probe the connector before syncing partition"):
+        world.sync(partition="unprobed")
+    assert sync.find_connector_source(world.store, connector_id=world.row.id, partition="unprobed") is None
 
 
 def test_a_reader_actor_is_refused_for_a_connector_sync(world):
@@ -1237,6 +1331,14 @@ class _DriftedConnector(_Delegating):
         super().__init__(inner)
         drifted = _bumped_extension()
         self.descriptor = inner.descriptor.model_copy(update={"extension": drifted})
+
+
+class _TwoFamilySpyConnector(_SpyConnector):
+    """A spy that declares two families, so a user's domain override has a family to choose."""
+
+    def __init__(self, inner, seen):
+        super().__init__(inner, seen)
+        self.descriptor = inner.descriptor.model_copy(update={"families": ("service", FIXTURE_FAMILY)})
 
 
 class _TwoFamilyFailingConnector(_Delegating):

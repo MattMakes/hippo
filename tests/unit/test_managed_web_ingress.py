@@ -553,8 +553,8 @@ def test_revoking_between_the_dto_and_the_response_is_the_existing_409(web, monk
 
     real = source_routes.source_view
 
-    def revoked(ctx, access, *, session=None):
-        view = real(ctx, access, session=session)
+    def revoked(ctx, access, *, session=None, **keys):
+        view = real(ctx, access, session=session, **keys)
         ctx.store._bump_authorization_epoch()
         return view
 

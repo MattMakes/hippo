@@ -286,6 +286,46 @@ def test_source_management_is_for_owners_and_manage_sources(client, app_ctx):
     assert client.get("/api/sources", headers=ivy).json()[0]["name"] == "Mine"
 
 
+def test_confirming_a_domain_is_for_managers_and_a_hidden_source_is_404(client, app_ctx):
+    tokens = make_users(app_ctx)
+    ivy = {"Authorization": f"Bearer {tokens['ivy']}"}
+    lena = {"Authorization": f"Bearer {tokens['lena']}"}
+    columns = ("domain_override", "domain_confirmed_at", "domain_confirmed_by")
+
+    def domain(source_id):
+        return {column: app_ctx.store.get_source(source_id).get(column) for column in columns}
+
+    before = {source_id: domain(source_id) for source_id in (app_ctx.open_id, app_ctx.restricted_id)}
+    # Ivy sees the open source but may not manage it; the restricted one she cannot see at all.
+    confirm = {"family": None}
+    form = {"family": "", "back": "/"}
+    assert client.put(f"/api/sources/{app_ctx.open_id}/domain", json=confirm, headers=ivy).status_code == 403
+    assert (
+        client.post(
+            f"/sources/{app_ctx.open_id}/domain", data=form, headers=ivy, follow_redirects=False
+        ).status_code
+        == 403
+    )
+    assert (
+        client.put(f"/api/sources/{app_ctx.restricted_id}/domain", json=confirm, headers=ivy).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/sources/{app_ctx.restricted_id}/domain", data=form, headers=ivy, follow_redirects=False
+        ).status_code
+        == 404
+    )
+    assert {source_id: domain(source_id) for source_id in before} == before
+    # Lena (manage_sources) may confirm it, and is recorded as the one who did.
+    confirmed = client.put(f"/api/sources/{app_ctx.restricted_id}/domain", json=confirm, headers=lena)
+    assert confirmed.status_code == 200 and confirmed.json()["source"]["domain_state"] == "confirmed"
+    assert (
+        domain(app_ctx.restricted_id)["domain_confirmed_by"]
+        == app_ctx.store.get_user_by_username("lena")["id"]
+    )
+
+
 # ------------------------------------------------------------- users page
 
 

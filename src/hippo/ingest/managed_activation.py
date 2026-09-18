@@ -45,6 +45,7 @@ from ..connectors.lanes import CoordinatorLane, run_coordinator_lane
 from ..connectors.local.connector import LocalConnector, LocalSourceConfig
 from ..knowledge.access import AuthorizationChanged
 from ..knowledge.build_authority import BuildActor
+from ..knowledge.domain import Lane, SourceShape
 from ..knowledge.embedding_cache import EmbeddingCache
 from ..knowledge.embedding_profile import (
     EmbeddingProfileChanged,
@@ -177,6 +178,37 @@ def is_code_source(source: Source) -> bool:
     """Whether a saved Source is built by the code coordinator rather than the plain-prose one."""
     kind = source.get("kind")
     return kind in ("repo", "archive") or (kind == "file" and is_code_name(stored_filename(source)))
+
+
+# `managed_eligibility` -> the lanes a rebuild can still take (plan section 3.2).
+_ELIGIBILITY_LANES: dict[Eligibility, frozenset[Lane]] = {
+    "managed": frozenset({"managed"}),
+    "eligible_legacy": frozenset({"legacy", "managed"}),
+    "unsupported": frozenset({"legacy"}),
+    "tombstoned": frozenset(),
+}
+
+
+def source_shape(source: Source) -> SourceShape:
+    """The coordinator's lane facts for `knowledge.domain`, which may not import this module.
+
+    A `connector` row is never coordinator-built (`run_managed_build` refuses it, ruling R43), so
+    it can take no lane.
+    """
+    kind = source.get("kind")
+    name = stored_filename(source)
+    if is_plain_prose_name(name):
+        name_class = "prose_name"
+    elif is_code_name(name):
+        name_class = "code_name"
+    else:
+        name_class = "other"
+    return SourceShape(
+        kind=str(kind),
+        lane_family="code" if is_code_source(source) else "prose",
+        name_class=name_class,
+        lanes=frozenset() if kind == CONNECTOR_KIND else _ELIGIBILITY_LANES[managed_eligibility(source)],
+    )
 
 
 def new_operation_id() -> str:

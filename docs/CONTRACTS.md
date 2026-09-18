@@ -95,10 +95,48 @@ matched_by, n_matches, ambiguous, kept, specificity, boost), `used_code_seeds` (
 **Every one of those is defaulted and none may ever be removed**: evals store traces permanently and
 `trace_from_dict` rebuilds each row with `Cls(**row)`.
 
-Source rows (`store.get_source`/`list_sources`): id, kind ('text'|'file'|'archive'|'repo'|'sample'), name, status
-('queued'|'reading'|'indexing'|'ready'|'failed'), stage (free text), progress_done, progress_total, error, meta (dict),
-created_at, updated_at, passages (count), fact_links (count), owner_id, owner_name, access_role_id (None = everyone),
-access_role_name ('Everyone' when open), min_rank (the role's rank, copied).
+Source rows (`store.get_source`/`list_sources`): id, kind ('text'|'file'|'archive'|'repo'|'sample'|'connector'), name,
+status ('queued'|'reading'|'indexing'|'ready'|'failed'), stage (free text), progress_done, progress_total, error, meta
+(dict), created_at, updated_at, passages (count), fact_links (count), owner_id, owner_name, access_role_id (None =
+everyone), access_role_name ('Everyone' when open), min_rank (the role's rank, copied), and the schema v9 domain columns
+domain_override (None = automatic), domain_confirmed_at (ISO), domain_confirmed_by (user id; None in open mode), written
+only by `set_source_domain`, which never bumps updated_at.
+Inventory rows (`status.source_view(ctx, access, *, session=None, descriptor_families=None).sources`, what the Library,
+`GET /api/sources`, `GET /api/sources/{id}`, `hippo sources` and `hippo_sources` present): the caller's visible Source
+rows, a managed row counted from the caller's graph, each with these keys (plan table 3.4):
+  kind                 the Source's own kind; 'managed' only on a withheld row (a managed row with no proven generation
+                       pair: its Source presentation is withheld, and every key below is None, domain_allowed [])
+  origin               = kind
+  origin_detail        connector rows: "<connector kind> · <connector id> · <partition>"; None otherwise, and None when the
+                       Connector row is gone
+  lane                 'legacy' | 'managed' | 'connector', the build lane (managed-lane rows also keep `managed: True`)
+  domain               the effective family from `knowledge.domain.resolve_domain` ('prose', 'code', a connector family, or
+                       'custom' when a connector partition has no stored classification)
+  domain_natural       the family automatic classification chose, ignoring any override (`DomainDecision.natural`)
+  domain_origin        'lane' | 'declared' | 'content' | 'name' | 'fallback' | 'user'
+  domain_state         'auto' | 'confirmed' | 'corrected' | 'pending_rebuild'; a cleared correction is 'pending_rebuild'
+                       until a sync builds the natural family: a confirmed connector row without an override whose
+                       active build recorded another family (coverage_json "domain")
+  domain_allowed       list: `buildable_families`, the families a rebuild can build; one entry except for a connector whose
+                       descriptor declares several, and only where the descriptor families are known (the source page
+                       and the two domain routes)
+  domain_fixed_reason  one sentence when domain_allowed has one entry ("Repositories are always built as code.", "This
+                       process does not know the connector's declared domains.", ...), else None
+  domain_families_known  True for every coordinator row; for a connector row True only when this call had the
+                       descriptor families for its kind (the source page and the two domain routes), else False
+  domain_confirmed_at, domain_confirmed_by   the Source columns
+  last_sync_at         ISO: connector SyncState.last_success_at, managed lane active Generation.published_at, legacy lane
+                       Source.updated_at; None when that record or value is missing
+  last_sync_label      'synced' | 'published' | 'last activity'; None when last_sync_at is None
+  last_error           connector SyncState.error_code, else the row's public error; None when there is none
+  resync_command       connector rows with a Connector row: "hippo connector sync <connector id> --partition <partition>"
+The pass reads the Generation list the view already holds, plus `Connector` and `SyncState` once each by `ids=`, and only
+when a connector row is shown: the cost of a poll does not grow with the number of rows. `descriptor_families` (connector
+kind -> declared families) comes from `app.state.connector_load` through `descriptor_families(request)`, which the source
+page and the two domain routes call; the Library poll, the CLI and MCP never pass it, so there a connector's domain reads
+as fixed. `SourceView.generations` maps each shown source to its generations, newest first (id, version =
+parser_version, status, created_at, published_at, nodes_by_family for a connector generation); only the source page reads
+it, so neither the Library poll nor the API carries the history.
 Role rows: id, name, rank, description, capabilities (list), builtin, users (count), sources (count).
 User rows: id, username, display_name, role_id, role_name, rank, disabled, created_at, sources (count), token, password_hash
 (the web layer strips the last two with auth.public_user before anything leaves the server).
@@ -619,25 +657,69 @@ routes/pages.py   the pages that fit nowhere else
                                        embed model warning; the POST (edit_graph) saves the settings and renders the same page
 routes/sources.py  the Library (everything scoped to the caller; adding needs add_sources; delete/reindex/reclassify need
                    ownership or manage_sources; a source may only be restricted to a tier at or below the caller's own)
-    GET  /                             sources table (name, kind, status+stage+progress, passages, facts, "visible to" with an inline
-                                       tier picker for sources the caller may manage, owner, created); upload forms (file, zip, paste
-                                       text, git URL, "Load the sample"), each with a "Visible to" picker defaulting to the caller's tier
+    GET  /                             sources table (name, kind = origin with a "managed" lane marker and, for a connector, its
+                                       kind, id and partition; domain badge with its state, the fixed reason as the badge title;
+                                       status+stage+progress, passages, facts, "visible to" with an inline tier picker for sources
+                                       the caller may manage, owner; last sync with its label and any last error; created; the row
+                                       action cell includes `partials/domain_row_action.html`, a Confirm button that posts to
+                                       /sources/{id}/domain and shows only while domain_state is 'auto' and the caller may manage
+                                       the source, disabled while that source is indexing); upload forms
+                                       (file, zip, paste text, git URL, "Load the sample"), each with a "Visible to" picker
+                                       defaulting to the caller's tier
     POST /sources/{id}/access          the tier pickers post here (visibility=<role id>|everyone, back=<path>)
+    POST /sources/{id}/domain          confirm or correct a source's domain; the Library row and the source page's Domain card post
+                                       here (family=<family>, empty means confirm; back=<path>); same rule and same refusals as
+                                       PUT /api/sources/{id}/domain below. 303 to `back` on success. Only a 400
+                                       (`domain_not_allowed` or `domain_families_unknown`) redirects, to `back?error=...`, and
+                                       nothing is written; a 404 (hidden, missing or withheld source) and a 403 (caller may not
+                                       manage it) are not caught here
     GET  /partials/sources             the sources table, polled while something is indexing (HTMX)
     GET  /sources/{id}                 Source detail: meta (for a repository, a code card: symbols, data objects, edges by kind,
                                        languages, files parsed/skipped, unresolved calls, commits, history_skipped), progress,
                                        passages (paged) with the entities/triples the LLM extracted, an "In the code graph"
                                        <details> under each symbol passage (signature, relations, tests, commits),
-                                       "Make sample questions" button (-> generation job), question sets about this source, "Reindex", "Delete"
+                                       "Make sample questions" button (-> generation job), question sets about this source, "Reindex", "Delete";
+                                       a Domain card (family, state, origin, confirmed at/by, fixed reason, and for a
+                                       connector the last sync's nodes by family; it ends with `partials/domain_actions.html`,
+                                       shown only to a caller who may manage the source: the question "Is this the right
+                                       domain?" with a "Yes, confirm" button, and "Change to" with a select of `domain_allowed`
+                                       plus Apply only when `domain_allowed` has more than one entry; a callout while
+                                       domain_state is 'pending_rebuild'; for a connector, the resync command while a change is
+                                       possible or pending) and a Sync card (last sync and label, last error, the resync
+                                       command, generation history: version, status, created, published). This page and the
+                                       two domain routes pass `descriptor_families` from `app.state.connector_load`; a
+                                       missing load or a `ConnectorLoadError` means the families are unknown
     GET  /partials/sources/{id}/status the progress block of the source page, polled while it is busy (HTMX)
     POST /sources/upload | /sources/text | /sources/repo | /sources/sample     the Library forms; redirect back to / (with ?error=)
     api (prefix /api/sources):
-    GET    /api/sources                list every source (same rows as store.list_sources)
+    GET    /api/sources                the caller's inventory rows (`status.source_view`: Source rows plus the inventory keys
+                                       above; a managed row is counted from the caller's graph)
     POST   /api/sources/text {name, text} | /api/sources/upload (multipart file) | /api/sources/repo {url} | /api/sources/sample
                                        -> {source_id}; 400 with {error} when refused (unsupported type, empty, too big)
     POST   /api/sources/reindex-all    -> {started: n}
-    GET    /api/sources/{id}           status/progress JSON for polling (404 when hidden from the caller)
+    GET    /api/sources/{id}           one inventory row, for polling (404 when hidden from the caller)
     PUT    /api/sources/{id}/access {role_id|null|"everyone"}   change who may see it -> the source row
+    PUT    /api/sources/{id}/domain {family: str|null}   confirm (null or "") or correct a source's domain; needs ownership or
+                                       manage_sources -> 200 {source: <inventory row>, rebuild: {needed: bool, started: false,
+                                       command: str|null}}. `needed` is true, and `command` is the row's `resync_command`, only
+                                       while the row's domain_state is 'pending_rebuild'; the route never starts a build
+                                       (`started` is always false). Errors: 404 when the source is hidden, missing or withheld;
+                                       403 when the caller may not manage it; 400 {error, code: "domain_not_allowed"} when
+                                       `family` is not in the source's `domain_allowed` (the server checks its own connector
+                                       load, not the request), and nothing is written; 400 {error: "This process does not know
+                                       the connector's declared domains; confirm keeps the current domain.", code:
+                                       "domain_families_unknown"} when a connector row has an override, `domain_families_known`
+                                       is false, and `family` names any other family (its natural one too), and nothing is
+                                       written.
+                                       The write rule: a `family` equal to the stored override writes nothing, so a confirm of
+                                       a correction keeps its `domain_confirmed_at` and its state. Otherwise a `family` equal to
+                                       `domain_natural` writes no override and confirms, and any other allowed family writes the
+                                       override. Both stamp `domain_confirmed_at` and `domain_confirmed_by` (a null user id in
+                                       open mode). A null or empty `family` confirms the family the row shows when `domain_allowed` still
+                                       holds it, and `domain_natural` otherwise, so a confirm clears an override the connector
+                                       no longer declares. While a connector row's families are unknown, a null or empty
+                                       `family` keeps its override and writes nothing: a confirm clears an override only when
+                                       the known families do not hold it.
     DELETE /api/sources/{id}           -> {deleted}; 409 with {error} while another source is being indexed (pipeline.Busy)
     POST   /api/sources/{id}/reindex   -> {started: bool}; 409 as above
 routes/evals.py    question sets and runs (every route needs run_evals)
