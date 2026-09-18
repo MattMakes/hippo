@@ -236,7 +236,8 @@ Texts bigger than `HIPPO_MAX_UPLOAD_BYTES` (50 MB) are refused with a tool error
 
 ### `hippo_sources()`
 
-List what is in the memory and whether it is indexed yet.
+List what is in the memory, whether it is indexed yet, which domain it added
+to the graph, and when it last synced.
 
 ```json
 {"name": "hippo_sources", "arguments": {}}
@@ -244,10 +245,28 @@ List what is in the memory and whether it is indexed yet.
 
 ```json
 [
-  {"id": "...", "name": "Acme guide", "kind": "sample", "status": "ready", "stage": "linking synonyms",
+  {"id": "...", "name": "Acme guide", "kind": "sample", "origin": "sample", "domain": "prose",
+   "domain_origin": "lane", "domain_state": "auto", "last_sync_at": "2026-09-06T17:21:10.482113+00:00",
+   "last_sync_label": "last activity", "status": "ready", "stage": "linking synonyms",
    "progress_done": 1, "progress_total": 1, "passages": 8, "error": null, "created_at": "2026-09-06T17:20:00"}
 ]
 ```
+
+- `kind` and `origin` are the source's own kind: `text`, `file`, `archive`,
+  `repo`, `sample` or `connector`. `kind` is `managed` only for a managed
+  source whose details you may not see. Then `origin`, the domain fields and
+  the sync fields are `null`.
+- `domain` is the family the source added to the graph: `prose`, `code`, or
+  the family of a connector's partition (`custom` when the partition has no
+  classification).
+- `domain_origin` says how hippo chose it: `lane` (the build lane decides),
+  `declared`, `content` or `name` (a connector's classification), `fallback`,
+  or `user` (a person corrected it).
+- `domain_state` is `auto`, `confirmed`, `corrected` or `pending_rebuild`
+  (a correction waits for the next connector sync).
+- `last_sync_at` is an ISO time. `last_sync_label` says what it measures:
+  `synced` (a connector's last successful sync), `published` (a managed
+  build's publication) or `last activity` (a source built the older way).
 
 Empty questions and empty texts come back as tool errors with a plain
 message; the client shows it verbatim.

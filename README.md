@@ -66,7 +66,7 @@ Everything listens on this machine only: port 8000 (the UI, API and MCP) and, un
 
 | Page | URL | What it is for |
 | --- | --- | --- |
-| Library | `/` | Everything hippo remembers. Add a file, a zip, pasted text or a git URL; watch indexing progress; delete sources. |
+| Library | `/` | Everything hippo remembers. Add a file, a zip, pasted text or a git URL; watch indexing progress; delete sources. Each row shows where the source came from, the domain it added to the graph, and when it last synced. |
 | Source | `/sources/{id}` | One source: its passages and the entities and facts the model pulled out of each. For a repository, what the parser found, and an "In the code graph" panel under each symbol passage: its signature, relations, tests and commits. "Make sample questions" writes an evaluation set about it. |
 | Ask | `/ask` | Type a question, get the answer, the model's reasoning, the top passages, the facts it kept and the seed entities. Paste a stack trace or an identifier and a **Code graph** card shows the relations behind the answer, separating what the question named from what similarity also reached. "Analyze this question" goes deeper. |
 | Graph | `/graph` | The whole memory you can see as a 3D picture. Search names, filter by source or kind — symbols, data objects and commits included — colour by tier, kind, source or **subsystem**, then type a question and watch activation spread to the passages it picks. Click a symbol for its signature, callers, callees, tests and commits. Admins can view it as any tier below them. |
@@ -78,6 +78,8 @@ Everything listens on this machine only: port 8000 (the UI, API and MCP) and, un
 | Analyze | `/analyze/{result_id}`, or the "Analyze this question" link on any answer | The deep dive: candidate facts, the filter's reply, seeds, a picture of the graph, ranked passages with a one-sentence "why", and a panel to tweak settings and re-run the search without touching anything. For a code question it also shows which symbols were seeded and why, and the relations it walked. |
 | Changesets | `/changesets` | Edits you saved from the analyze page (setting changes, entity boosts, edge weights, synonyms). Apply or delete them. |
 | Settings | `/settings` | Ollama and graph store status, model downloads, the retrieval knobs with one-line explanations. |
+
+**Domain and last sync.** The Library's Domain column shows the domain each source added to the graph: `prose`, `code`, or the family a connector declares, such as `incident`. Under the badge is its state: `auto` (hippo chose it), `confirmed` (someone checked it), `corrected`, or `pending rebuild` (a correction waits for the next connector sync). When the domain cannot change, the badge's tooltip says why. Uploads, repositories and pasted text always keep the domain hippo builds them in (`code` or `prose`); only a connector that declares more than one domain can take another. Every source offers Confirm to anyone who may manage it. The Last sync column shows a connector's last successful sync, a managed build's publication, or, for a source built the older way, its last activity. The source page shows the same in a Domain card and a Sync card, with the generation history and, for a connector, the `hippo connector sync` command to run.
 
 There is also a JSON API under `/api` (docs at `/api/docs`) and a CLI:
 `hippo serve | mcp | pull-models | index <path-or-git-url> | ask "<question>" | sources | settings | users | user add|token|role|remove`,

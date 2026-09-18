@@ -165,12 +165,35 @@ def manageable_source(request: Request, source_id: str) -> dict[str, Any]:
     return source
 
 
+def descriptor_families(request: Request) -> dict[str, tuple[str, ...]] | None:
+    """Connector kind -> the families its descriptor declares, from the server's own load.
+
+    Plan section 2.5: the load exists only after the lifespan ran, and an entry that is not loaded
+    raises `ConnectorLoadError`; both mean "families unknown", so its domain reads as fixed. A
+    request never loads connector packages itself.
+    """
+    from ...connectors.loader import ConnectorLoadError
+
+    load = getattr(request.app.state, "connector_load", None)
+    if load is None:
+        return None
+    families: dict[str, tuple[str, ...]] = {}
+    for entry in load.entries:
+        try:
+            families[entry.name] = tuple(load.connector_class(entry.name).descriptor.families)
+        except ConnectorLoadError:
+            continue
+    return families
+
+
 @router.get("/sources/{source_id}")
 def source_page(request: Request, source_id: str, page: int = 1):
     ctx = ctx_of(request)
     principal = principal_of(request)
     with query_session(ctx, principal.access) as session:
-        view = source_view(ctx, principal.access, session=session)
+        view = source_view(
+            ctx, principal.access, session=session, descriptor_families=descriptor_families(request)
+        )
         source = next((row for row in view.sources if row["id"] == source_id), None)
         if source is None:
             raise HTTPException(404, "no such source")
@@ -234,6 +257,7 @@ def source_page(request: Request, source_id: str, page: int = 1):
             session=session,
             nav="library",
             source=with_manage_flags([source], principal)[0],
+            generations=view.generations.get(source_id, []),
             passages=passages,
             code_details=code_details,
             passage_evidence=passage_evidence,

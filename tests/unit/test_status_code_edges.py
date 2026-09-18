@@ -189,6 +189,6 @@ def test_a_legacy_repository_keeps_the_count_its_source_row_has_always_presented
     with query_session(ctx, EVERYTHING, structural=True) as session:
         view = source_view(ctx, EVERYTHING, session=session)
         assert source in view.legacy_ids
-        assert row_of(view, source) == presented
+        assert {key: row_of(view, source)[key] for key in presented} == presented
     assert row_of(view, source)["meta"] == meta
     assert reads == []

@@ -580,7 +580,7 @@ def cmd_sources(args: argparse.Namespace) -> int:
         print("The memory is empty. Try: hippo index <file>")
         return 0
     print_table(
-        ["id", "name", "kind", "status", "stage", "passages", "facts", "created"],
+        ["id", "name", "kind", "status", "stage", "passages", "facts", "domain", "last sync", "created"],
         [
             [
                 r["id"],
@@ -590,6 +590,8 @@ def cmd_sources(args: argparse.Namespace) -> int:
                 r.get("stage") or "",
                 r.get("passages", 0),
                 r.get("fact_links", 0),
+                f"{r['domain']} ({r.get('domain_state')})" if r.get("domain") else "",
+                f"{r['last_sync_at'][:19]} ({r.get('last_sync_label')})" if r.get("last_sync_at") else "",
                 (r.get("created_at") or "")[:19],
             ]
             for r in rows
