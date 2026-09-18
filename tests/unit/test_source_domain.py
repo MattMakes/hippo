@@ -71,6 +71,16 @@ def state(last_success_at):
     return k.SyncState(connector_id="connector-1", partition_key="notes", last_success_at=last_success_at)
 
 
+def recorded(family):
+    """The partition's active generation, with the family its build used (`sync._coverage_json`)."""
+    return _generation("connector-v1").replace(coverage_json=f'{{"domain": "{family}"}}')
+
+
+def unrecorded():
+    """An active connector generation built before `coverage_json` recorded the family."""
+    return _generation("connector-v1")
+
+
 def resolve_connector(source=None, **kwargs) -> DomainDecision:
     source = connector_row() if source is None else source
     kwargs.setdefault("classification", partition("custom", evidence("name", "custom")))
@@ -256,10 +266,13 @@ def test_the_state_of_a_row_without_the_v9_columns_is_auto():
 
 
 def test_pending_rebuild_states():
+    """The time rule: the fallback for an active generation built before the family was recorded."""
     source = connector_row(domain_override="service", domain_confirmed_at=CONFIRMED)
 
     def decide(sync_state):
-        return resolve_connector(source, descriptor_families=TWO_FAMILIES, sync_state=sync_state)
+        return resolve_connector(
+            source, descriptor_families=TWO_FAMILIES, sync_state=sync_state, active_generation=unrecorded()
+        )
 
     for pending in (None, state(None), state(CONFIRMED_AT - timedelta(seconds=1))):
         decision = decide(pending)
@@ -274,11 +287,75 @@ def test_an_override_without_a_readable_confirmation_time_stays_pending_and_neve
     after = state(datetime(2030, 1, 1, tzinfo=UTC))
     for confirmed_at in (None, "not a time"):
         source = connector_row(domain_override="service", domain_confirmed_at=confirmed_at)
-        decision = resolve_connector(source, descriptor_families=TWO_FAMILIES, sync_state=after)
+        decision = resolve_connector(
+            source, descriptor_families=TWO_FAMILIES, sync_state=after, active_generation=unrecorded()
+        )
         assert decision.state == "pending_rebuild"
     naive = connector_row(domain_override="service", domain_confirmed_at="2026-09-18T10:00:00")
-    decision = resolve_connector(naive, descriptor_families=TWO_FAMILIES, sync_state=after)
+    decision = resolve_connector(
+        naive, descriptor_families=TWO_FAMILIES, sync_state=after, active_generation=unrecorded()
+    )
     assert decision.state == "corrected"
+
+
+def test_the_family_the_active_build_recorded_decides_a_connector_correction():
+    """Fix wave 1 (review F1, F3): the recorded family wins over any sync time, before or after."""
+    source = connector_row(domain_override="service", domain_confirmed_at=CONFIRMED)
+    for sync_state in (
+        None,
+        state(CONFIRMED_AT - timedelta(seconds=1)),
+        state(CONFIRMED_AT + timedelta(minutes=5)),
+    ):
+        equal = resolve_connector(
+            source,
+            descriptor_families=TWO_FAMILIES,
+            sync_state=sync_state,
+            active_generation=recorded("service"),
+        )
+        assert (equal.family, equal.state, equal.pending_rebuild) == ("service", "corrected", False)
+        other = resolve_connector(
+            source,
+            descriptor_families=TWO_FAMILIES,
+            sync_state=sync_state,
+            active_generation=recorded("custom"),
+        )
+        assert (other.family, other.state, other.pending_rebuild) == ("service", "pending_rebuild", True)
+
+
+def test_a_connector_correction_without_an_active_generation_is_pending():
+    source = connector_row(domain_override="service", domain_confirmed_at=CONFIRMED)
+    after = state(CONFIRMED_AT + timedelta(minutes=5))
+    decision = resolve_connector(
+        source, descriptor_families=TWO_FAMILIES, sync_state=after, active_generation=None
+    )
+    assert (decision.state, decision.pending_rebuild) == ("pending_rebuild", True)
+
+
+@pytest.mark.parametrize(
+    "coverage",
+    ["{}", "[]", '{"emission": {}}', '{"domain": null}', '{"domain": 3}', "not json", ""],
+    ids=["no-key", "not-an-object", "other-keys", "null", "not-a-string", "unparsable", "empty"],
+)
+def test_a_generation_without_a_recorded_family_falls_back_to_the_time_rule(coverage):
+    source = connector_row(domain_override="service", domain_confirmed_at=CONFIRMED)
+    # `model_construct` skips the `Json` check, so an unparsable value reaches the resolver too.
+    active = k.Generation.model_construct(**(unrecorded().model_dump() | {"coverage_json": coverage}))
+
+    def decide(sync_state):
+        return resolve_connector(
+            source, descriptor_families=TWO_FAMILIES, sync_state=sync_state, active_generation=active
+        )
+
+    assert decide(state(CONFIRMED_AT - timedelta(seconds=1))).state == "pending_rebuild"
+    assert decide(state(CONFIRMED_AT + timedelta(minutes=5))).state == "corrected"
+
+
+def test_without_an_override_the_recorded_family_does_not_change_the_state():
+    confirmed = connector_row(domain_confirmed_at=CONFIRMED)
+    decision = resolve_connector(
+        confirmed, descriptor_families=TWO_FAMILIES, active_generation=recorded("service")
+    )
+    assert (decision.family, decision.state) == ("custom", "confirmed")
 
 
 # ------------------------------------------------------------------ allowed and fixed reasons
@@ -332,6 +409,14 @@ def test_a_connector_without_known_families_is_fixed():
     assert decision.allowed == ("custom",)
     assert decision.fixed_reason == "This process does not know the connector's declared domains."
     assert buildable_families(shape_of(connector_row()), classification=None) == (CUSTOM_FAMILY,)
+
+
+def test_families_are_known_for_every_coordinator_row_and_a_connector_only_with_its_descriptor():
+    """Fix wave 1 (review F2): the routes keep an override the process cannot check."""
+    assert resolve_domain(row("text"), shape_of(row("text"))).families_known is True
+    assert resolve_connector(descriptor_families=None).families_known is False
+    assert resolve_connector(descriptor_families=("custom",)).families_known is True
+    assert resolve_connector(descriptor_families=TWO_FAMILIES).families_known is True
 
 
 def test_a_tombstoned_row_allows_only_its_natural_family():

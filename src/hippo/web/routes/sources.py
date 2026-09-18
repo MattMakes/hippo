@@ -57,6 +57,12 @@ router = APIRouter()
 BULK_REFUSED = "bulk_refused"
 # A domain outside `buildable_families` for the source (plan 3.5): refused, and nothing is written.
 DOMAIN_NOT_ALLOWED = "domain_not_allowed"
+# A change on a corrected connector source whose declared families this process does not know
+# (its package did not load): refused, and nothing is written; a confirm keeps the override.
+DOMAIN_FAMILIES_UNKNOWN = "domain_families_unknown"
+FAMILIES_UNKNOWN = (
+    "This process does not know the connector's declared domains; confirm keeps the current domain."
+)
 INDEXING_BUSY = "indexing_busy"
 # The plan's transport table assigns the closed input validators one code: the upload byte
 # cap, the unsupported type, the empty text and the malformed git URL are all this row.
@@ -512,6 +518,11 @@ def write_domain(request: Request, source_id: str, family: str | None) -> dict[s
     it is a 400 that writes nothing. The natural family is written as no override, so naming it
     confirms and clears an earlier correction. An override the source can no longer build (a
     connector that stopped declaring it, OD7) is cleared by a confirm, not kept.
+
+    The family the stored override already names writes nothing, so a confirm of a correction
+    neither restamps it nor moves its state. While a corrected connector's families are unknown,
+    `allowed` cannot say whether the override still builds: a confirm keeps it, and any other
+    family is a 400 that writes nothing.
     """
     ctx = ctx_of(request)
     principal = principal_of(request)
@@ -519,16 +530,22 @@ def write_domain(request: Request, source_id: str, family: str | None) -> dict[s
     families = descriptor_families(request)
     source = domain_source(request, source_id, families)
     allowed = source["domain_allowed"]
-    if family is None:
+    override = (ctx.store.get_source(source_id) or {}).get("domain_override")
+    if override is not None and source["lane"] == "connector" and not source["domain_families_known"]:
+        if family and family != override:
+            raise HTTPException(400, FAMILIES_UNKNOWN)
+        family = override
+    elif family is None:
         family = source["domain"] if source["domain"] in allowed else source["domain_natural"]
     elif family not in allowed:
         raise HTTPException(400, f"This source can only be built as {' or '.join(allowed)}")
-    ctx.store.set_source_domain(
-        source_id,
-        override=None if family == source["domain_natural"] else family,
-        confirmed_at=now_iso(),
-        confirmed_by=principal.user_id,
-    )
+    if family != override:
+        ctx.store.set_source_domain(
+            source_id,
+            override=None if family == source["domain_natural"] else family,
+            confirmed_at=now_iso(),
+            confirmed_by=principal.user_id,
+        )
     fresh = domain_source(request, source_id, families)
     # Only a connector correction waits for a rebuild, and only a sync, run from the CLI, makes it.
     pending = fresh["domain_state"] == "pending_rebuild"
@@ -721,7 +738,8 @@ def set_domain(request: Request, source_id: str, body: DomainBody):
     except HTTPException as exc:
         if exc.status_code != 400:
             raise
-        return coded_response(str(exc.detail), DOMAIN_NOT_ALLOWED, 400)
+        code = DOMAIN_FAMILIES_UNKNOWN if exc.detail == FAMILIES_UNKNOWN else DOMAIN_NOT_ALLOWED
+        return coded_response(str(exc.detail), code, 400)
 
 
 @api.delete("/{source_id}")

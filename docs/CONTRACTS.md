@@ -120,6 +120,8 @@ rows, a managed row counted from the caller's graph, each with these keys (plan 
                        and the two domain routes)
   domain_fixed_reason  one sentence when domain_allowed has one entry ("Repositories are always built as code.", "This
                        process does not know the connector's declared domains.", ...), else None
+  domain_families_known  True for every coordinator row; for a connector row True only when this call had the
+                       descriptor families for its kind (the source page and the two domain routes), else False
   domain_confirmed_at, domain_confirmed_by   the Source columns
   last_sync_at         ISO: connector SyncState.last_success_at, managed lane active Generation.published_at, legacy lane
                        Source.updated_at; None when that record or value is missing
@@ -665,9 +667,10 @@ routes/sources.py  the Library (everything scoped to the caller; adding needs ad
     POST /sources/{id}/access          the tier pickers post here (visibility=<role id>|everyone, back=<path>)
     POST /sources/{id}/domain          confirm or correct a source's domain; the Library row and the source page's Domain card post
                                        here (family=<family>, empty means confirm; back=<path>); same rule and same refusals as
-                                       PUT /api/sources/{id}/domain below. 303 to `back` on success. Only the 400
-                                       `domain_not_allowed` redirects, to `back?error=...`, and nothing is written; a 404 (hidden,
-                                       missing or withheld source) and a 403 (caller may not manage it) are not caught here
+                                       PUT /api/sources/{id}/domain below. 303 to `back` on success. Only a 400
+                                       (`domain_not_allowed` or `domain_families_unknown`) redirects, to `back?error=...`, and
+                                       nothing is written; a 404 (hidden, missing or withheld source) and a 403 (caller may not
+                                       manage it) are not caught here
     GET  /partials/sources             the sources table, polled while something is indexing (HTMX)
     GET  /sources/{id}                 Source detail: meta (for a repository, a code card: symbols, data objects, edges by kind,
                                        languages, files parsed/skipped, unresolved calls, commits, history_skipped), progress,
@@ -701,12 +704,20 @@ routes/sources.py  the Library (everything scoped to the caller; adding needs ad
                                        (`started` is always false). Errors: 404 when the source is hidden, missing or withheld;
                                        403 when the caller may not manage it; 400 {error, code: "domain_not_allowed"} when
                                        `family` is not in the source's `domain_allowed` (the server checks its own connector
-                                       load, not the request), and nothing is written.
-                                       The write rule: a `family` equal to `domain_natural` writes no override and confirms, and
-                                       any other allowed family writes the override. Both stamp `domain_confirmed_at` and
-                                       `domain_confirmed_by` (a null user id in open mode). A null `family` confirms the family
-                                       the row shows when `domain_allowed` still holds it, and `domain_natural` otherwise, so a
-                                       confirm clears an override the connector no longer declares.
+                                       load, not the request), and nothing is written; 400 {error: "This process does not know
+                                       the connector's declared domains; confirm keeps the current domain.", code:
+                                       "domain_families_unknown"} when a connector row has an override, `domain_families_known`
+                                       is false, and `family` names any other family (its natural one too), and nothing is
+                                       written.
+                                       The write rule: a `family` equal to the stored override writes nothing, so a confirm of
+                                       a correction keeps its `domain_confirmed_at` and its state. Otherwise a `family` equal to
+                                       `domain_natural` writes no override and confirms, and any other allowed family writes the
+                                       override. Both stamp `domain_confirmed_at` and `domain_confirmed_by` (a null user id in
+                                       open mode). A null `family` confirms the family the row shows when `domain_allowed` still
+                                       holds it, and `domain_natural` otherwise, so a confirm clears an override the connector
+                                       no longer declares. While a connector row's families are unknown, a null or empty
+                                       `family` keeps its override and writes nothing: a confirm clears an override only when
+                                       the known families do not hold it.
     DELETE /api/sources/{id}           -> {deleted}; 409 with {error} while another source is being indexed (pipeline.Busy)
     POST   /api/sources/{id}/reindex   -> {started: bool}; 409 as above
 routes/evals.py    question sets and runs (every route needs run_evals)

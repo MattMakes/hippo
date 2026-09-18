@@ -19,6 +19,7 @@ source shows its domain as fixed, with a one-sentence reason.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -82,6 +83,9 @@ class DomainDecision:
     allowed: tuple[Family, ...]
     fixed_reason: str | None  # one sentence when len(allowed) == 1
     pending_rebuild: bool
+    # False only for a connector row whose descriptor families this process does not know, so
+    # `allowed` cannot say whether the override still builds; the routes then keep the override.
+    families_known: bool
 
 
 # `(row_class, target)` rows, `row_class` in {"text", "file:prose_name", "unsupported"} and target
@@ -173,6 +177,7 @@ def resolve_domain(
             _fixed_reason(shape, descriptor_families, connector_kind) if len(allowed) == 1 else None
         ),
         pending_rebuild=state == "pending_rebuild",
+        families_known=shape.kind != "connector" or descriptor_families is not None,
     )
 
 
@@ -235,8 +240,18 @@ def _built(
     active_generation: Generation | None,
     sync_state: SyncState | None,
 ) -> bool:
-    """Whether the build that serves the source was made under the override (design D5)."""
+    """Whether the build that serves the source was made under the override (design D5).
+
+    A connector build records its family in `coverage_json["domain"]` (`sync._coverage_json`), so
+    neither a re-confirm nor a sync that read the old override moves the answer. A generation
+    published before that key existed falls back to comparing the last sync with the confirmation.
+    """
     if shape.kind == "connector":
+        if active_generation is None:
+            return False
+        family = _recorded_family(active_generation)
+        if family is not None:
+            return family == override
         confirmed = _instant(confirmed_at)
         synced = sync_state.last_success_at if sync_state is not None else None
         return confirmed is not None and synced is not None and synced >= confirmed
@@ -245,6 +260,16 @@ def _built(
         return MANAGED_PARSER_FAMILIES.get(parser) == override
     meta = source.get("meta") or {}
     return isinstance(meta, Mapping) and meta.get("domain") == override and source.get("status") == "ready"
+
+
+def _recorded_family(generation: Generation) -> Family | None:
+    """The family a connector build recorded; None when its coverage is unreadable or has none."""
+    try:
+        coverage = json.loads(generation.coverage_json)
+    except (TypeError, ValueError):
+        return None
+    family = coverage.get("domain") if isinstance(coverage, dict) else None
+    return family if isinstance(family, str) else None
 
 
 def _instant(value: str | None) -> datetime | None:

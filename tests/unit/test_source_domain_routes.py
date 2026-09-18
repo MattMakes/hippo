@@ -14,6 +14,8 @@ the per-test marker of rulebook form (a).
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from markupsafe import escape
 
@@ -30,6 +32,9 @@ from tests.unit.test_source_inventory import (  # noqa: F401
 
 DOMAIN_COLUMNS = ("domain_override", "domain_confirmed_at", "domain_confirmed_by")
 QUESTION = "Is this the right domain?"
+FAMILIES_UNKNOWN = (
+    "This process does not know the connector's declared domains; confirm keeps the current domain."
+)
 
 
 def _columns(store, source_id):
@@ -249,8 +254,141 @@ def test_a_confirm_clears_an_override_the_connector_no_longer_declares(inventory
     assert response.status_code == 200, response.text
     source = response.json()["source"]
     assert (source["domain"], source["domain_state"]) == ("custom", "confirmed")
+    # The families are known and do not hold the override, so the confirm cleared it.
+    assert source["domain_families_known"] is True
     assert response.json()["rebuild"]["needed"] is False
     assert _columns(inv.store, inv.connector)["domain_override"] is None
+
+
+# ------------------------------------------------------------------ fix wave 1: F1, F2, F3
+
+
+@pytest.mark.filterwarnings(ANYIO)
+def test_a_confirm_of_the_current_correction_keeps_it_and_does_not_restamp(inventory):  # noqa: F811
+    """Review F1: a confirm, or an Apply of the family already applied, writes nothing."""
+    inv = inventory
+    client = _client(inv, connector_load=_load(_TwoFamilyConnector))
+    assert client.put(f"/api/sources/{inv.connector}/domain", json={"family": "service"}).status_code == 200
+    stored = _columns(inv.store, inv.connector)
+    for family in (None, "service"):
+        response = client.put(f"/api/sources/{inv.connector}/domain", json={"family": family})
+        assert response.status_code == 200, response.text
+        source = response.json()["source"]
+        assert (source["domain"], source["domain_origin"], source["domain_state"]) == (
+            "service",
+            "user",
+            "pending_rebuild",
+        )
+        assert source["domain_confirmed_at"] == stored["domain_confirmed_at"]
+        assert _columns(inv.store, inv.connector) == stored
+
+
+@pytest.mark.filterwarnings(ANYIO)
+def test_a_confirm_after_a_built_correction_keeps_it_corrected(inventory):  # noqa: F811
+    """Review F1: the state comes from the family the active build recorded, not from a time."""
+    inv = inventory
+    client = _client(inv, connector_load=_load(_TwoFamilyConnector))
+    assert client.put(f"/api/sources/{inv.connector}/domain", json={"family": "service"}).status_code == 200
+    receipt = inv.world.sync(connector=_TwoFamilySpyConnector(inv.world.connector_impl, []))
+    assert receipt.outcome == "published"
+    active = inv.store._knowledge_get(
+        "Generation", inv.store.get_source(inv.connector)["active_generation_id"]
+    )
+    assert json.loads(active.coverage_json)["domain"] == "service"
+    built = client.get(f"/api/sources/{inv.connector}").json()
+    assert (built["domain"], built["domain_state"]) == ("service", "corrected")
+    stored = _columns(inv.store, inv.connector)
+    for family in (None, "service"):
+        response = client.put(f"/api/sources/{inv.connector}/domain", json={"family": family})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert (body["source"]["domain"], body["source"]["domain_state"]) == ("service", "corrected")
+        assert body["rebuild"] == {"needed": False, "started": False, "command": None}
+        assert _columns(inv.store, inv.connector) == stored
+    page = f"/sources/{inv.connector}"
+    form = client.post(f"{page}/domain", data={"family": "", "back": page}, follow_redirects=False)
+    assert form.status_code == 303 and form.headers["location"] == page
+    assert _columns(inv.store, inv.connector) == stored
+    assert "waits for a rebuild" not in _card(client.get(page).text)
+
+
+@pytest.mark.filterwarnings(ANYIO)
+def test_a_generation_without_the_recorded_family_falls_back_to_the_time_rule(inventory, monkeypatch):  # noqa: F811
+    """A partition last built before `coverage_json` recorded the family reads by the sync time."""
+    from hippo.connectors import sync
+
+    inv = inventory
+    real = sync._coverage_json
+    monkeypatch.setattr(
+        sync,
+        "_coverage_json",
+        lambda *args: {key: value for key, value in real(*args).items() if key != "domain"},
+    )
+    client = _client(inv, connector_load=_load(_TwoFamilyConnector))
+    assert client.put(f"/api/sources/{inv.connector}/domain", json={"family": "service"}).status_code == 200
+    receipt = inv.world.sync(connector=_TwoFamilySpyConnector(inv.world.connector_impl, []))
+    assert receipt.outcome == "published"
+    active = inv.store._knowledge_get(
+        "Generation", inv.store.get_source(inv.connector)["active_generation_id"]
+    )
+    assert "domain" not in json.loads(active.coverage_json)
+    # The last sync ran after the confirmation.
+    assert client.get(f"/api/sources/{inv.connector}").json()["domain_state"] == "corrected"
+    # A correction confirmed after that sync is pending by the time rule, though the build used it.
+    assert client.put(f"/api/sources/{inv.connector}/domain", json={"family": "custom"}).status_code == 200
+    again = client.put(f"/api/sources/{inv.connector}/domain", json={"family": "service"}).json()
+    assert (again["source"]["domain"], again["source"]["domain_state"]) == ("service", "pending_rebuild")
+    assert again["rebuild"]["needed"] is True
+
+
+@pytest.mark.filterwarnings(ANYIO)
+def test_a_confirm_keeps_an_override_while_the_families_are_unknown(inventory):  # noqa: F811
+    """Review F2: without the connector's families, a confirm cannot tell a stale override."""
+    inv = inventory
+    two = _client(inv, connector_load=_load(_TwoFamilyConnector))
+    assert two.put(f"/api/sources/{inv.connector}/domain", json={"family": "service"}).status_code == 200
+    stored = _columns(inv.store, inv.connector)
+    # A kind the load did not register, and a process without a connector load.
+    for unknown in (_client(inv, connector_load=_load(None)), _client(inv)):
+        for family in (None, "", "service"):
+            response = unknown.put(f"/api/sources/{inv.connector}/domain", json={"family": family})
+            assert response.status_code == 200, response.text
+            source = response.json()["source"]
+            assert (source["domain"], source["domain_origin"], source["domain_families_known"]) == (
+                "service",
+                "user",
+                False,
+            )
+            assert _columns(inv.store, inv.connector) == stored
+        page = f"/sources/{inv.connector}"
+        form = unknown.post(f"{page}/domain", data={"family": "", "back": page}, follow_redirects=False)
+        assert form.status_code == 303 and form.headers["location"] == page
+        assert _columns(inv.store, inv.connector) == stored
+        card = _card(unknown.get(page).text)
+        assert "Yes, confirm" in card and "<select" not in card and "Apply" not in card
+        assert str(escape("This process does not know the connector's declared domains.")) in card
+
+
+@pytest.mark.filterwarnings(ANYIO)
+def test_a_change_is_refused_while_the_families_are_unknown(inventory):  # noqa: F811
+    """Review F2: any family but the override is a 400 that writes nothing, the natural one too."""
+    inv = inventory
+    two = _client(inv, connector_load=_load(_TwoFamilyConnector))
+    assert two.put(f"/api/sources/{inv.connector}/domain", json={"family": "service"}).status_code == 200
+    stored = _columns(inv.store, inv.connector)
+    unknown = _client(inv, connector_load=_load(None))
+    for family in ("custom", "db"):
+        response = unknown.put(f"/api/sources/{inv.connector}/domain", json={"family": family})
+        assert response.status_code == 400
+        assert (response.json()["code"], response.json()["error"]) == (
+            "domain_families_unknown",
+            FAMILIES_UNKNOWN,
+        )
+        assert _columns(inv.store, inv.connector) == stored
+    page = f"/sources/{inv.connector}"
+    form = unknown.post(f"{page}/domain", data={"family": "custom", "back": page}, follow_redirects=False)
+    assert form.status_code == 303 and form.headers["location"].startswith(f"{page}?error=")
+    assert _columns(inv.store, inv.connector) == stored
 
 
 # ------------------------------------------------------------------ what the caller may not reach

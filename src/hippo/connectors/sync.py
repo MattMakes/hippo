@@ -1154,6 +1154,9 @@ def _coverage_json(target: _Target, coverage, inventory: str) -> dict:
         "reconcile_unconfirmed": target.counters.get("reconcile_unconfirmed", 0),
         "units_embedded": "downstream",
         "excluded_vocabulary": {},
+        # The family this build used, the user's domain override included: the Library reads it to
+        # tell a built correction from a pending one (`knowledge/domain.py`).
+        "domain": target.mapping.family,
     }
 
 

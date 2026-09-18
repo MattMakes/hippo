@@ -1,9 +1,10 @@
 {# Confirm and correct a source's domain (plan T3, design D4 and D5), inside the source page's Domain card.
    The card above already shows `domain_fixed_reason`; a fixed domain gets no select. Only a connector
    whose descriptor declares several families can be changed, and a change is built by the next sync,
-   never by this page. Hidden from a caller who may not manage the source. #}
+   never by this page. Without the connector's families only the confirm shows, and it keeps a correction.
+   Hidden from a caller who may not manage the source. #}
 {% if source.can_manage %}
-{% set changeable = not source.domain_fixed_reason and source.domain_allowed | length > 1 %}
+{% set changeable = source.domain_families_known and not source.domain_fixed_reason and source.domain_allowed | length > 1 %}
 {% set pending = source.domain_state == 'pending_rebuild' %}
 {% if pending %}
 <div class="callout small">The change to {{ source.domain }} waits for a rebuild. Until then the last build keeps answering.</div>

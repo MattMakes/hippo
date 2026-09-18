@@ -491,6 +491,20 @@ def test_domain_override_reaches_the_mapping(world):
     assert _configuration(world, world.generation(receipt.generation_id))["mapping"]["family"] == "service"
 
 
+def test_the_generation_records_the_family_it_built_and_the_kit_golden_does_not(world):
+    """Fix wave 1 (review F1, F3): the Library reads `coverage_json["domain"]`; no golden pins it."""
+    from hippo.connectors import testing
+
+    plain = world.sync()
+    assert json.loads(world.generation(plain.generation_id).coverage_json)["domain"] == FIXTURE_FAMILY
+    _set_domain_override(world.store, world.source, "service")
+    corrected = world.sync(connector=_TwoFamilySpyConnector(world.connector_impl, []))
+    assert corrected.outcome == "published" and corrected.generation_id != plain.generation_id
+    assert json.loads(world.generation(corrected.generation_id).coverage_json)["domain"] == "service"
+    record = testing._golden_records(world.store, corrected.generation_id)["coverage.json"]
+    assert "domain" not in record and record["partition"] == world.partition
+
+
 def test_no_domain_override_leaves_the_mapping_unchanged(world):
     seen = []
     connector = _TwoFamilySpyConnector(world.connector_impl, seen)
